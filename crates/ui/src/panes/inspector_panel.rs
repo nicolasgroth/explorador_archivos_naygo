@@ -14,27 +14,29 @@ pub fn show(ui: &mut egui::Ui, state: &mut UiState) {
         return;
     };
 
-    egui::Grid::new("inspector_grid").num_columns(2).show(ui, |ui| {
-        ui.strong("Nombre");
-        ui.label(&entry.name);
-        ui.end_row();
-
-        ui.strong("Tipo");
-        ui.label(match entry.kind {
-            EntryKind::Directory => "Carpeta",
-            EntryKind::File => "Archivo",
-            EntryKind::Other => "Otro",
-        });
-        ui.end_row();
-
-        ui.strong("Ruta");
-        ui.label(entry.path.display().to_string());
-        ui.end_row();
-
-        if let Some(size) = entry.size {
-            ui.strong("Tamaño");
-            ui.label(format!("{size} bytes"));
+    egui::Grid::new("inspector_grid")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.strong("Nombre");
+            ui.label(&entry.name);
             ui.end_row();
-        }
-    });
+
+            ui.strong("Tipo");
+            ui.label(match entry.kind {
+                EntryKind::Directory => "Carpeta",
+                EntryKind::File => "Archivo",
+                EntryKind::Other => "Otro",
+            });
+            ui.end_row();
+
+            ui.strong("Ruta");
+            ui.label(entry.path.display().to_string());
+            ui.end_row();
+
+            if let Some(size) = entry.size {
+                ui.strong("Tamaño");
+                ui.label(format!("{size} bytes"));
+                ui.end_row();
+            }
+        });
 }

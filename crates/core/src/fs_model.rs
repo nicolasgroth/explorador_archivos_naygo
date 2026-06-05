@@ -67,7 +67,11 @@ pub struct SortSpec {
 
 impl Default for SortSpec {
     fn default() -> Self {
-        SortSpec { key: SortKey::Name, ascending: true, dirs_first: true }
+        SortSpec {
+            key: SortKey::Name,
+            ascending: true,
+            dirs_first: true,
+        }
     }
 }
 

@@ -104,7 +104,9 @@ impl UiState {
     }
 
     fn activate_focused(&mut self) {
-        let Some(entry) = self.pane.focused_entry().cloned() else { return };
+        let Some(entry) = self.pane.focused_entry().cloned() else {
+            return;
+        };
         if entry.is_dir() {
             self.navigate_to(entry.path);
         } else {
@@ -125,8 +127,7 @@ impl UiState {
             return;
         }
         self.typeahead_buf.push_str(typed);
-        let names: Vec<String> =
-            self.pane.entries.iter().map(|e| e.name.clone()).collect();
+        let names: Vec<String> = self.pane.entries.iter().map(|e| e.name.clone()).collect();
         let start = self.pane.focused.unwrap_or(0);
         if let Some(i) = crate::typeahead::find_match(&names, &self.typeahead_buf, start) {
             self.pane.focused = Some(i);
@@ -158,7 +159,10 @@ impl NaygoApp {
         };
         ui_state.navigate_to(start_dir);
 
-        NaygoApp { dock_state, ui_state }
+        NaygoApp {
+            dock_state,
+            ui_state,
+        }
     }
 
     /// Lee el teclado y aplica acciones. Se llama desde `logic` (no pinta).
@@ -222,7 +226,9 @@ impl eframe::App for NaygoApp {
             });
         });
 
-        let mut viewer = crate::docking::NaygoTabViewer { state: &mut self.ui_state };
+        let mut viewer = crate::docking::NaygoTabViewer {
+            state: &mut self.ui_state,
+        };
         DockArea::new(&mut self.dock_state)
             .style(Style::from_egui(ui.style().as_ref()))
             .show_inside(ui, &mut viewer);

@@ -64,7 +64,11 @@ mod tests {
             entry("Apple.txt", EntryKind::File, 1),
             entry("cherry.txt", EntryKind::File, 1),
         ];
-        let spec = SortSpec { key: SortKey::Name, ascending: true, dirs_first: false };
+        let spec = SortSpec {
+            key: SortKey::Name,
+            ascending: true,
+            dirs_first: false,
+        };
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["Apple.txt", "banana.txt", "cherry.txt"]);
@@ -76,10 +80,18 @@ mod tests {
             entry("zeta.txt", EntryKind::File, 1),
             entry("alpha_dir", EntryKind::Directory, 0),
         ];
-        let spec = SortSpec { key: SortKey::Name, ascending: true, dirs_first: true };
+        let spec = SortSpec {
+            key: SortKey::Name,
+            ascending: true,
+            dirs_first: true,
+        };
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha_dir", "zeta.txt"], "la carpeta va primero");
+        assert_eq!(
+            names,
+            vec!["alpha_dir", "zeta.txt"],
+            "la carpeta va primero"
+        );
     }
 
     #[test]
@@ -89,7 +101,11 @@ mod tests {
             entry("big", EntryKind::File, 100),
             entry("mid", EntryKind::File, 50),
         ];
-        let spec = SortSpec { key: SortKey::Size, ascending: false, dirs_first: false };
+        let spec = SortSpec {
+            key: SortKey::Size,
+            ascending: false,
+            dirs_first: false,
+        };
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["big", "mid", "small"]);
@@ -107,7 +123,11 @@ mod tests {
             entry("zeta.txt", EntryKind::File, 1),
             entry("beta_dir", EntryKind::Directory, 0),
         ];
-        let spec = SortSpec { key: SortKey::Name, ascending: false, dirs_first: true };
+        let spec = SortSpec {
+            key: SortKey::Name,
+            ascending: false,
+            dirs_first: true,
+        };
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         // Carpetas primero (reversadas por nombre entre sí), luego archivos (reversados).

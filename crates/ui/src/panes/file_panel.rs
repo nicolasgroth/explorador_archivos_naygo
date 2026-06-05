@@ -87,7 +87,10 @@ fn human_size(bytes: u64) -> String {
 /// legible (respetando i18n/locale) llega en una fase posterior junto con i18n.
 fn format_modified(entry: &Entry) -> String {
     use std::time::UNIX_EPOCH;
-    match entry.modified.and_then(|t| t.duration_since(UNIX_EPOCH).ok()) {
+    match entry
+        .modified
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+    {
         Some(d) => format!("{}", d.as_secs()),
         None => String::new(),
     }

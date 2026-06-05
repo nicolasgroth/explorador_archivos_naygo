@@ -96,7 +96,14 @@ fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
 
     let modified = metadata.as_ref().and_then(|m| m.modified().ok());
 
-    Entry { name, path, kind, size, modified, hidden: false }
+    Entry {
+        name,
+        path,
+        kind,
+        size,
+        modified,
+        hidden: false,
+    }
 }
 
 #[cfg(test)]
