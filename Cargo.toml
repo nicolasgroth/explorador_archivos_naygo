@@ -21,10 +21,12 @@ tracing-appender = "0.2"
 windows = "0.62"
 
 # Perfil de release optimizado para distribución: binario chico, sin símbolos,
-# pensado para correr en máquinas con pocos recursos.
+# pensado para correr en máquinas con pocos recursos. La velocidad es la prioridad
+# del proyecto, así que opt-level="s" (tamaño sin sacrificar tanto rendimiento como
+# "z") y panic=unwind (default) para poder recuperar de un panic en un worker sin
+# que la app caiga; el panic handler igual loguea.
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
