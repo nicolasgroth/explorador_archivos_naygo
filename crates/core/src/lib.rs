@@ -5,6 +5,6 @@
 //! filesystem, motor de listado por streaming, ordenamiento y cancelación.
 //! No depende de egui ni de Windows.
 
-pub fn hello() -> &'static str {
-    "naygo-core"
-}
+pub mod cancel;
+
+pub use cancel::CancellationToken;
