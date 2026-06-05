@@ -1,0 +1,9 @@
+# Naygo — normalización de fin de línea consistente entre plataformas.
+# Texto: LF en el repo, el checkout local decide (autocrlf). Evita el ruido
+# "LF will be replaced by CRLF" en cada commit en Windows.
+* text=auto eol=lf
+
+# Binarios: nunca tocar.
+*.png binary
+*.ico binary
+*.exe binary
