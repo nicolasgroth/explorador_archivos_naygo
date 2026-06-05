@@ -83,6 +83,8 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// PROVISIONAL: muestra los segundos epoch como placeholder. El formato de fecha
+/// legible (respetando i18n/locale) llega en una fase posterior junto con i18n.
 fn format_modified(entry: &Entry) -> String {
     use std::time::UNIX_EPOCH;
     match entry.modified.and_then(|t| t.duration_since(UNIX_EPOCH).ok()) {
