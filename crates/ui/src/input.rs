@@ -6,11 +6,6 @@
 //! En la Fase 1 el mapa es fijo (default estilo Windows); los atajos
 //! configurables llegan en una fase posterior.
 
-// La API pública de este módulo (`Key`, `Action`, `map_key`) será consumida por
-// `app.rs` en la Tarea 8. Hasta entonces, en un build normal (no-test) el
-// compilador la ve como código muerto; silenciamos el aviso a nivel de módulo.
-#![allow(dead_code)]
-
 /// Teclas que nos interesan en la Fase 1. Espejo reducido de `egui::Key`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
