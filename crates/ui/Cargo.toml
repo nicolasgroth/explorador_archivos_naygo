@@ -1,0 +1,20 @@
+[package]
+name = "naygo-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "naygo"
+path = "src/main.rs"
+
+[dependencies]
+naygo-core = { path = "../core" }
+naygo-platform = { path = "../platform" }
+eframe = { workspace = true }
+egui = { workspace = true }
+egui_dock = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }

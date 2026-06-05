@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/platform", "crates/ui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Nicolás Groth <ngroth@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/nicolasgroth/explorador_archivos_naygo"
+
+[workspace.dependencies]
+eframe = "0.34"
+egui = "0.34"
+egui_dock = "0.19"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+windows = "0.62"
+
+# Perfil de release optimizado para distribución: binario chico, sin símbolos,
+# pensado para correr en máquinas con pocos recursos.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
