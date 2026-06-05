@@ -7,6 +7,8 @@
 
 pub mod cancel;
 pub mod fs_model;
+pub mod sort;
 
 pub use cancel::CancellationToken;
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
+pub use sort::sort_entries;
