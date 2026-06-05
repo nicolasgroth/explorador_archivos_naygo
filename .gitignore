@@ -1,7 +1,6 @@
 # Rust
 /target
 **/*.rs.bk
-Cargo.lock        # binario de app: lo versionaremos cuando haya Cargo.toml; revisar en el plan
 
 # Config local del usuario (portable, se genera al lado del .exe)
 /config.json

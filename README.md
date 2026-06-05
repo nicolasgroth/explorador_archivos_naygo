@@ -4,8 +4,10 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** en diseño. El núcleo (Build 1) está especificado en
-> [`docs/superpowers/specs/2026-06-05-explorador-nucleo-design.md`](docs/superpowers/specs/2026-06-05-explorador-nucleo-design.md).
+> **Estado:** Fase 1 (esqueleto navegable) en desarrollo. Diseño del núcleo en
+> [`docs/superpowers/specs/2026-06-05-explorador-nucleo-design.md`](docs/superpowers/specs/2026-06-05-explorador-nucleo-design.md);
+> plan de la Fase 1 en
+> [`docs/superpowers/plans/2026-06-05-naygo-fase1-esqueleto-navegable.md`](docs/superpowers/plans/2026-06-05-naygo-fase1-esqueleto-navegable.md).
 
 ## Objetivos
 
