@@ -32,6 +32,8 @@ pub struct UiState {
     pub listing_token: CancellationToken,
     /// Texto de estado en la barra inferior.
     pub status: String,
+    /// Buffer del type-ahead acumulado entre teclas seguidas.
+    pub typeahead_buf: String,
 }
 
 impl UiState {
@@ -115,6 +117,21 @@ impl UiState {
             self.navigate_to(parent.to_path_buf());
         }
     }
+
+    /// Procesa caracteres tipeados para el type-ahead: acumula el prefijo y
+    /// mueve el foco a la primera entrada que empieza así.
+    pub fn typeahead(&mut self, typed: &str) {
+        if typed.is_empty() {
+            return;
+        }
+        self.typeahead_buf.push_str(typed);
+        let names: Vec<String> =
+            self.pane.entries.iter().map(|e| e.name.clone()).collect();
+        let start = self.pane.focused.unwrap_or(0);
+        if let Some(i) = crate::typeahead::find_match(&names, &self.typeahead_buf, start) {
+            self.pane.focused = Some(i);
+        }
+    }
 }
 
 /// Estado raíz: el dock y el estado compartido de los paneles.
@@ -137,6 +154,7 @@ impl NaygoApp {
             listing_rx: None,
             listing_token: CancellationToken::new(),
             status: String::new(),
+            typeahead_buf: String::new(),
         };
         ui_state.navigate_to(start_dir);
 
@@ -155,6 +173,7 @@ impl NaygoApp {
             (egui::Key::Escape, NaygoKey::Escape),
         ];
         let mut actions = Vec::new();
+        let mut typed = String::new();
         ctx.input(|i| {
             for (egui_key, naygo_key) in keys {
                 if i.key_pressed(egui_key) {
@@ -163,9 +182,22 @@ impl NaygoApp {
                     }
                 }
             }
+            for event in &i.events {
+                if let egui::Event::Text(t) = event {
+                    typed.push_str(t);
+                }
+            }
         });
+
+        // Las acciones de navegación reinician el buffer de type-ahead.
+        if !actions.is_empty() {
+            self.ui_state.typeahead_buf.clear();
+        }
         for action in actions {
             self.ui_state.apply_action(action);
+        }
+        if !typed.is_empty() {
+            self.ui_state.typeahead(&typed);
         }
     }
 }

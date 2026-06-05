@@ -12,6 +12,7 @@ mod docking;
 mod input;
 mod logging;
 mod panes;
+mod typeahead;
 
 use app::NaygoApp;
 
