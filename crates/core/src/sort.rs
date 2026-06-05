@@ -94,4 +94,23 @@ mod tests {
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["big", "mid", "small"]);
     }
+
+    #[test]
+    fn dirs_first_no_se_invierte_en_orden_descendente() {
+        // Contrato sutil: con ascending=false, las carpetas DEBEN seguir arriba.
+        // El reverse aplica solo dentro de cada grupo (clave), nunca al agrupado
+        // dir-vs-archivo. Un refactor que moviera el chequeo dirs_first después
+        // del reverse rompería esto y pasaría los otros tests; este lo protege.
+        let mut v = vec![
+            entry("aaa.txt", EntryKind::File, 1),
+            entry("alpha_dir", EntryKind::Directory, 0),
+            entry("zeta.txt", EntryKind::File, 1),
+            entry("beta_dir", EntryKind::Directory, 0),
+        ];
+        let spec = SortSpec { key: SortKey::Name, ascending: false, dirs_first: true };
+        sort_entries(&mut v, &spec);
+        let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
+        // Carpetas primero (reversadas por nombre entre sí), luego archivos (reversados).
+        assert_eq!(names, vec!["beta_dir", "alpha_dir", "zeta.txt", "aaa.txt"]);
+    }
 }
