@@ -83,7 +83,13 @@ impl NaygoApp {
         }
         let token = CancellationToken::new();
         let (rx, _handle) = spawn_listing(dir, token.clone());
-        self.listings.insert(id, PaneListing { rx: Some(rx), token });
+        self.listings.insert(
+            id,
+            PaneListing {
+                rx: Some(rx),
+                token,
+            },
+        );
     }
 
     /// Drena los canales de TODOS los paneles, sin bloquear.
@@ -328,6 +334,7 @@ impl eframe::App for NaygoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::toolbar::show(ui, self);
+
         egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 let dir = self
@@ -340,11 +347,31 @@ impl eframe::App for NaygoApp {
                 ui.label(&self.status);
             });
         });
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.label("(dock multi-panel en construcción — Tarea 13)");
-            ui.label(format!("Paneles: {}", self.workspace.panes().len()));
-        });
-        let _ = &self.dock_state; // se usará en la Tarea 13
+
+        let mut pending: Vec<crate::docking::PaneRequest> = Vec::new();
+        {
+            let mut viewer = crate::docking::NaygoTabViewer {
+                workspace: &mut self.workspace,
+                status: &mut self.status,
+                pending: &mut pending,
+            };
+            egui_dock::DockArea::new(&mut self.dock_state)
+                .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+                .show_inside(ui, &mut viewer);
+        }
+        for req in pending {
+            match req {
+                crate::docking::PaneRequest::Activate { id } => {
+                    self.workspace.set_active(id);
+                }
+                crate::docking::PaneRequest::NavigateTo { id, dir } => {
+                    if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        f.navigate_to(dir.clone());
+                    }
+                    self.start_listing(id, dir);
+                }
+            }
+        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -426,7 +453,12 @@ fn remap_layout(
     fn go(node: &DockNode, remap: &HashMap<PaneId, PaneId>) -> DockNode {
         match node {
             DockNode::Leaf(id) => DockNode::Leaf(*remap.get(id).unwrap_or(id)),
-            DockNode::Split { dir, fraction, first, second } => DockNode::Split {
+            DockNode::Split {
+                dir,
+                fraction,
+                first,
+                second,
+            } => DockNode::Split {
                 dir: *dir,
                 fraction: *fraction,
                 first: Box::new(go(first, remap)),
