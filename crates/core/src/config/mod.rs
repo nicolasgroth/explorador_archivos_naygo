@@ -19,6 +19,17 @@ pub enum BarPosition {
     Side,
 }
 
+/// Qué set de íconos usa la app. Flat es el default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IconSet {
+    /// Multicolor plano (default).
+    Flat,
+    /// Estilo Fluent (Microsoft).
+    Fluent,
+    /// Monocromo temable (Lucide/Tabler).
+    Mono,
+}
+
 /// Ajustes de la app (settings.json).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -26,6 +37,10 @@ pub struct Settings {
     pub bar_position: BarPosition,
     /// Botones de la barra solo con ícono (sin texto).
     pub icon_only: bool,
+    /// Set de íconos activo.
+    pub icon_set: IconSet,
+    /// Mostrar la fila virtual ".." al tope del panel de archivos.
+    pub show_parent_entry: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +49,8 @@ impl Default for Settings {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Top,
             icon_only: true,
+            icon_set: IconSet::Flat,
+            show_parent_entry: true,
         }
     }
 }
@@ -143,9 +160,18 @@ mod tests {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Side,
             icon_only: false,
+            icon_set: IconSet::Mono,
+            show_parent_entry: false,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_default_tiene_iconos_flat_y_fila_padre_on() {
+        let s = Settings::default();
+        assert_eq!(s.icon_set, IconSet::Flat);
+        assert!(s.show_parent_entry);
     }
 
     #[test]
