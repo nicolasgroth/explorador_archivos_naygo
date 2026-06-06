@@ -1903,6 +1903,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "embed-resource",
+ "image",
  "naygo-core",
  "naygo-platform",
  "tracing",
