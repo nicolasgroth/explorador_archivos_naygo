@@ -8,6 +8,8 @@
 
 pub mod detect;
 
+pub use detect::pick_default_language;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
