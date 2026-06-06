@@ -10,6 +10,7 @@ pub mod layout;
 pub mod nav_history;
 pub mod template;
 
+pub use file_pane::{FilePanePersist, FilePaneState};
 pub use nav_history::NavHistory;
 
 use serde::{Deserialize, Serialize};
