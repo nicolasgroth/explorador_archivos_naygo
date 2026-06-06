@@ -158,6 +158,72 @@ impl Workspace {
     pub fn panes_mut(&mut self) -> &mut [PaneNode] {
         &mut self.panes
     }
+
+    /// Construye un workspace desde una plantilla: crea los paneles (mapeando
+    /// índice de la plantilla → PaneId real) y arma la disposición. `home` es la
+    /// carpeta para los `TemplateDir::Home`. El primer panel `Files` queda activo.
+    /// Si la plantilla tiene un índice de hoja fuera de rango (p. ej. una plantilla
+    /// de usuario corrupta), ese leaf se ignora con un PaneId placeholder seguro
+    /// (no panica).
+    pub fn from_template(
+        tpl: &crate::workspace::template::LayoutTemplate,
+        home: &std::path::Path,
+    ) -> Self {
+        use crate::workspace::layout::DockNode;
+        use crate::workspace::template::{LayoutShape, TemplateDir};
+
+        let mut w = Workspace::new();
+        // Crear paneles, guardando el PaneId de cada índice.
+        let mut ids: Vec<PaneId> = Vec::with_capacity(tpl.panes.len());
+        for tp in &tpl.panes {
+            let dir = match &tp.dir {
+                TemplateDir::Home => home.to_path_buf(),
+                TemplateDir::Fixed(s) => std::path::PathBuf::from(s),
+            };
+            ids.push(w.add_pane(tp.purpose, dir));
+        }
+        // Activar el primer Files.
+        if let Some(first_files) = tpl
+            .panes
+            .iter()
+            .position(|p| p.purpose == PanePurpose::Files)
+        {
+            w.active = Some(ids[first_files]);
+        }
+        // Traducir LayoutShape (índices) → SerializableDockLayout (PaneId).
+        // Un índice fuera de rango cae a `ids[0]` (o no produce nodo si no hay panes).
+        fn shape_to_node(shape: &LayoutShape, ids: &[PaneId]) -> Option<DockNode> {
+            match shape {
+                LayoutShape::Leaf(i) => {
+                    let id = ids.get(*i).copied().or_else(|| ids.first().copied())?;
+                    Some(DockNode::Leaf(id))
+                }
+                LayoutShape::Split { dir, fraction, first, second } => {
+                    let f = shape_to_node(first, ids);
+                    let s = shape_to_node(second, ids);
+                    match (f, s) {
+                        (Some(first), Some(second)) => Some(DockNode::Split {
+                            dir: *dir,
+                            fraction: *fraction,
+                            first: Box::new(first),
+                            second: Box::new(second),
+                        }),
+                        // Si un lado no se pudo construir, usar el otro.
+                        (Some(only), None) | (None, Some(only)) => Some(only),
+                        (None, None) => None,
+                    }
+                }
+            }
+        }
+        w.layout = SerializableDockLayout {
+            root: if tpl.panes.is_empty() {
+                None
+            } else {
+                shape_to_node(&tpl.layout, &ids)
+            },
+        };
+        w
+    }
 }
 
 impl Default for Workspace {
@@ -218,5 +284,48 @@ mod tests {
         let mut w = Workspace::new();
         let t = w.add_pane(PanePurpose::Tree, PathBuf::new());
         assert!(w.pane(t).unwrap().files.is_none());
+    }
+
+    #[test]
+    fn from_template_minimalista_crea_un_files_activo() {
+        let tpl = crate::workspace::template::LayoutTemplate::minimalista();
+        let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
+        assert_eq!(w.panes().len(), 1);
+        assert_eq!(w.panes()[0].purpose, PanePurpose::Files);
+        assert!(w.active_id().is_some());
+        assert_eq!(
+            w.active_files().map(|f| f.current_dir.clone()),
+            Some(PathBuf::from("C:/home"))
+        );
+        assert_eq!(w.layout.pane_ids().len(), 1);
+    }
+
+    #[test]
+    fn from_template_dual_pane_crea_cuatro_paneles() {
+        let tpl = crate::workspace::template::LayoutTemplate::dual_pane();
+        let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
+        assert_eq!(w.panes().len(), 4);
+        let files = w.panes().iter().filter(|p| p.purpose == PanePurpose::Files).count();
+        assert_eq!(files, 2);
+        assert_eq!(w.layout.pane_ids().len(), 4);
+        let active = w.active_id().unwrap();
+        assert_eq!(w.pane(active).unwrap().purpose, PanePurpose::Files);
+    }
+
+    #[test]
+    fn from_template_indice_fuera_de_rango_no_panica() {
+        // Plantilla corrupta: un Leaf(5) con solo 1 panel. No debe panicar.
+        use crate::workspace::template::{LayoutShape, LayoutTemplate, TemplateDir, TemplatePane};
+        let tpl = LayoutTemplate {
+            name: "Corrupta".into(),
+            builtin: false,
+            favorite: false,
+            panes: vec![TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home }],
+            layout: LayoutShape::Leaf(5), // fuera de rango
+        };
+        let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
+        // El panel se creó; el layout cae al primer id en vez de panicar.
+        assert_eq!(w.panes().len(), 1);
+        assert_eq!(w.layout.pane_ids(), vec![w.panes()[0].id]);
     }
 }
