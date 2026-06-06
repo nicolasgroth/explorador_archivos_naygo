@@ -6,6 +6,7 @@
 //! No depende de egui ni de Windows.
 
 pub mod cancel;
+pub mod config;
 pub mod fs_model;
 pub mod listing;
 pub mod sort;
