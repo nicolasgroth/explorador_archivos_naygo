@@ -12,6 +12,7 @@ use eframe::CreationContext;
 use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
+use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, ListingMsg};
 use naygo_core::sort::sort_entries;
 use naygo_core::workspace::template::LayoutTemplate;
@@ -38,6 +39,7 @@ pub struct NaygoApp {
     pub status: String,
     typeahead_buf: String,
     icons: IconProvider,
+    i18n: I18n,
 }
 
 impl NaygoApp {
@@ -46,6 +48,22 @@ impl NaygoApp {
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
         let home = default_start_dir();
+
+        // i18n: idioma persistido si ya hubo settings; si es el primer arranque,
+        // detectar el del SO. Cargamos primero con un idioma provisional para
+        // conocer los idiomas disponibles, luego elegimos.
+        let settings_exists = config_dir.join("settings.json").exists();
+        let provisional = I18n::load(&config_dir, &settings.language);
+        let lang = if settings_exists {
+            settings.language.clone()
+        } else {
+            let locale = naygo_platform::locale::os_locale().unwrap_or_default();
+            pick_default_language(&locale, provisional.available())
+        };
+        let mut i18n = provisional;
+        i18n.set_language(&lang);
+        let mut settings = settings;
+        settings.language = lang;
 
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
@@ -62,9 +80,28 @@ impl NaygoApp {
             status: String::new(),
             typeahead_buf: String::new(),
             icons,
+            i18n,
         };
         app.start_all_listings();
         app
+    }
+
+    /// Atajo para traducir una clave con el idioma activo.
+    #[allow(dead_code)] // consumido en Tarea 6
+    pub fn tr(&self, key: &str) -> String {
+        self.i18n.t(key).to_string()
+    }
+
+    /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
+    #[allow(dead_code)] // consumido en Tarea 6
+    pub fn i18n_available(&self) -> Vec<LangId> {
+        self.i18n.available().to_vec()
+    }
+
+    /// Ruta de la carpeta de config (para la sección Avanzado).
+    #[allow(dead_code)] // consumido en Tarea 6
+    pub fn config_dir_display(&self) -> String {
+        self.config_dir.display().to_string()
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
@@ -410,6 +447,11 @@ impl eframe::App for NaygoApp {
         if self.icons.set() != self.settings.icon_set {
             let set = self.settings.icon_set;
             self.icons.reload(ui.ctx(), set);
+        }
+
+        if self.i18n.active_lang() != self.settings.language {
+            let lang = self.settings.language.clone();
+            self.i18n.set_language(&lang);
         }
 
         crate::toolbar::show(ui, self);
