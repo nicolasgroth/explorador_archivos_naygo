@@ -10,6 +10,8 @@ pub mod layout;
 pub mod nav_history;
 pub mod template;
 
+pub use nav_history::NavHistory;
+
 use serde::{Deserialize, Serialize};
 
 /// Identificador único y estable de un panel dentro del workspace.
