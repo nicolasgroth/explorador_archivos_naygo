@@ -13,6 +13,7 @@ pub mod template;
 pub use file_pane::{FilePanePersist, FilePaneState};
 pub use layout::{DockNode, SerializableDockLayout, SplitDir};
 pub use nav_history::NavHistory;
+pub use template::{LayoutShape, LayoutTemplate, RecentUse, TemplateDir, TemplatePane, TemplateStore};
 
 use serde::{Deserialize, Serialize};
 
