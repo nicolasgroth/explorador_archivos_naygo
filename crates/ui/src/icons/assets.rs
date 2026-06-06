@@ -141,4 +141,23 @@ mod tests {
         );
         assert!(!b.is_empty());
     }
+
+    #[test]
+    fn cada_clave_tiene_su_propio_asset_no_solo_el_fallback() {
+        // Más estricto que el test anterior: verifica que el NOMBRE EXACTO de cada
+        // clave está en la tabla (no que caiga al fallback "unknown"). Así un PNG
+        // faltante para una clave concreta sí se detecta.
+        for set in [IconSet::Flat, IconSet::Fluent, IconSet::Mono] {
+            let table = table_for(set);
+            for key in all_keys() {
+                let name = file_name(key);
+                assert!(
+                    table.iter().any(|(n, _)| *n == name),
+                    "falta el asset propio '{name}' para {:?}/{:?}",
+                    set,
+                    key
+                );
+            }
+        }
+    }
 }
