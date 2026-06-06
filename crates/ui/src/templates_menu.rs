@@ -14,7 +14,7 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
 
         // Recientes.
         if !app.templates.recents.is_empty() {
-            ui.label("🕘 Recientes");
+            ui.label(format!("🕘 {}", app.tr("templates.recents")));
             let recents: Vec<String> = app
                 .templates
                 .recents
@@ -22,7 +22,8 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
                 .map(|r| r.name.clone())
                 .collect();
             for name in recents {
-                if ui.button(&name).clicked() {
+                let label = builtin_label(app, &name);
+                if ui.button(label).clicked() {
                     if let Some(tpl) = find_template(app, &name) {
                         app.apply_template(&tpl, now);
                     }
@@ -41,9 +42,10 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
             .cloned()
             .collect();
         if !favs.is_empty() {
-            ui.label("★ Favoritos");
+            ui.label(format!("★ {}", app.tr("templates.favorites")));
             for t in favs {
-                if ui.button(&t.name).clicked() {
+                let label = builtin_label(app, &t.name);
+                if ui.button(label).clicked() {
                     app.apply_template(&t, now);
                     ui.close();
                 }
@@ -54,18 +56,21 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
         // Míos (con marcar favorito / borrar).
         let mine: Vec<LayoutTemplate> = app.templates.user.clone();
         if !mine.is_empty() {
-            ui.label("👤 Míos");
+            ui.label(format!("👤 {}", app.tr("templates.mine")));
+            let tip_fav = app.tr("templates.favorite");
+            let tip_del = app.tr("templates.delete");
             for t in mine {
+                let label = builtin_label(app, &t.name);
                 ui.horizontal(|ui| {
-                    if ui.button(&t.name).clicked() {
+                    if ui.button(label).clicked() {
                         app.apply_template(&t, now);
                         ui.close();
                     }
                     let star = if t.favorite { "★" } else { "☆" };
-                    if ui.small_button(star).on_hover_text("Favorito").clicked() {
+                    if ui.small_button(star).on_hover_text(&tip_fav).clicked() {
                         app.templates.set_favorite(&t.name, !t.favorite);
                     }
-                    if ui.small_button("🗑").on_hover_text("Borrar").clicked() {
+                    if ui.small_button("🗑").on_hover_text(&tip_del).clicked() {
                         app.templates.remove_user(&t.name);
                     }
                 });
@@ -74,9 +79,10 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
         }
 
         // Built-in.
-        ui.label("📋 Predefinidos");
+        ui.label(format!("📋 {}", app.tr("templates.builtin")));
         for t in LayoutTemplate::builtins() {
-            if ui.button(&t.name).clicked() {
+            let label = builtin_label(app, &t.name);
+            if ui.button(label).clicked() {
                 app.apply_template(&t, now);
                 ui.close();
             }
@@ -84,14 +90,31 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
         ui.separator();
 
         // Guardar disposición actual.
-        if ui.button("💾 Guardar disposición actual…").clicked() {
+        if ui
+            .button(format!("💾 {}", app.tr("templates.save_current")))
+            .clicked()
+        {
             let n = app.templates.user.len() + 1;
             app.save_current_as_template(&format!("Mi layout {n}"));
             ui.close();
         }
     })
     .response
-    .on_hover_text("Layouts");
+    .on_hover_text(app.tr("toolbar.layouts"));
+}
+
+/// Etiqueta a mostrar para una plantilla: las built-in se traducen; las del
+/// usuario conservan su nombre literal. El `name` real sigue usándose para la
+/// lógica (apply/record/favorite/remove); solo cambia el texto visible.
+fn builtin_label(app: &NaygoApp, name: &str) -> String {
+    let key = match name {
+        "Minimalista" => "template.minimalista",
+        "Clásico" => "template.clasico",
+        "Dual-pane" => "template.dual_pane",
+        "Power-user" => "template.power_user",
+        _ => return name.to_string(), // plantilla del usuario: nombre literal
+    };
+    app.tr(key)
 }
 
 /// Busca una plantilla por nombre entre las del usuario y las built-in.

@@ -248,7 +248,7 @@ impl NaygoApp {
                 listing.rx = None;
             }
             if let Some(e) = err {
-                self.status = format!("Error: {e}");
+                self.status = self.i18n.t("status.error").replace("{e}", &e);
             }
         }
     }
@@ -324,7 +324,10 @@ impl NaygoApp {
             }
             self.start_listing(active, entry.path);
         } else {
-            self.status = format!("Abrir: {} (pendiente platform::shell)", entry.name);
+            self.status = self
+                .i18n
+                .t("status.open_pending")
+                .replace("{name}", &entry.name);
         }
     }
 

@@ -35,16 +35,24 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
         .map(|f| (f.history.can_back(), f.history.can_forward()))
         .unwrap_or((false, false));
 
-    if icon_button(ui, "◀", "Atrás (Alt+←)", can_back) {
+    // Precalcular las etiquetas (tooltips) antes de los widgets que toman
+    // `&mut app`, para no enredar los préstamos.
+    let lbl_back = app.tr("toolbar.back");
+    let lbl_forward = app.tr("toolbar.forward");
+    let lbl_up = app.tr("toolbar.up");
+    let lbl_refresh = app.tr("toolbar.refresh");
+    let lbl_add_pane = app.tr("toolbar.add_pane");
+
+    if icon_button(ui, "◀", &lbl_back, can_back) {
         app.apply_action(Action::GoBack);
     }
-    if icon_button(ui, "▶", "Adelante (Alt+→)", can_forward) {
+    if icon_button(ui, "▶", &lbl_forward, can_forward) {
         app.apply_action(Action::GoForward);
     }
-    if icon_button(ui, "▲", "Subir un nivel (Backspace)", true) {
+    if icon_button(ui, "▲", &lbl_up, true) {
         app.apply_action(Action::GoUp);
     }
-    if icon_button(ui, "⟳", "Refrescar", true) {
+    if icon_button(ui, "⟳", &lbl_refresh, true) {
         if let (Some(id), Some(dir)) = (
             app.workspace.active_id(),
             app.workspace.active_files().map(|f| f.current_dir.clone()),
@@ -54,7 +62,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
-    if icon_button(ui, "➕", "Agregar panel de archivos", true) {
+    if icon_button(ui, "➕", &lbl_add_pane, true) {
         app.add_files_pane();
     }
 
