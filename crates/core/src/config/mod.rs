@@ -5,6 +5,7 @@
 //! (portable). Tolerante: un archivo ausente, corrupto o de versión incompatible
 //! NO crashea — se cae al default y se loguea. Cada archivo es independiente.
 
+use crate::i18n::LangId;
 use crate::workspace::template::TemplateStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,9 @@ pub struct Settings {
     /// por la misma razón que `icon_set`.
     #[serde(default = "default_show_parent_entry")]
     pub show_parent_entry: bool,
+    /// Idioma activo de la UI. Vacío/ausente → se detecta del SO al arrancar.
+    #[serde(default = "default_language")]
+    pub language: LangId,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -57,6 +61,12 @@ fn default_show_parent_entry() -> bool {
     true
 }
 
+/// Default de `language` para `#[serde(default)]`. La detección real del SO la hace
+/// la capa ui en el primer arranque; aquí un marcador neutro ("en").
+fn default_language() -> LangId {
+    LangId::new("en")
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -65,6 +75,7 @@ impl Default for Settings {
             icon_only: true,
             icon_set: IconSet::Flat,
             show_parent_entry: true,
+            language: default_language(),
         }
     }
 }
@@ -176,9 +187,31 @@ mod tests {
             icon_only: false,
             icon_set: IconSet::Mono,
             show_parent_entry: false,
+            language: default_language(),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_round_trip_con_idioma() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Settings::default();
+        s.language = crate::i18n::LangId::new("es");
+        save_settings(dir.path(), &s);
+        assert_eq!(load_settings(dir.path()).language, crate::i18n::LangId::new("es"));
+    }
+
+    #[test]
+    fn settings_v1_sin_idioma_cae_a_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"Flat","show_parent_entry":true}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.language, crate::i18n::LangId::new("en"));
     }
 
     #[test]
