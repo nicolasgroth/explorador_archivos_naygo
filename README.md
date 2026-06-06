@@ -4,11 +4,11 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Fase 2A (layout dinámico) en desarrollo. Diseño en
-> [`docs/superpowers/specs/2026-06-05-naygo-fase2a-layout-dinamico-design.md`](docs/superpowers/specs/2026-06-05-naygo-fase2a-layout-dinamico-design.md);
+> **Estado:** Fase 2B (íconos) en desarrollo. Diseño en
+> [`docs/superpowers/specs/2026-06-05-naygo-fase2b-iconos-design.md`](docs/superpowers/specs/2026-06-05-naygo-fase2b-iconos-design.md);
 > plan en
-> [`docs/superpowers/plans/2026-06-05-naygo-fase2a-layout-dinamico.md`](docs/superpowers/plans/2026-06-05-naygo-fase2a-layout-dinamico.md).
-> La Fase 1 (esqueleto navegable) está completa.
+> [`docs/superpowers/plans/2026-06-06-naygo-fase2b-iconos.md`](docs/superpowers/plans/2026-06-06-naygo-fase2b-iconos.md).
+> Fases 1 (esqueleto) y 2A (layout dinámico) completas.
 
 ## Objetivos
 
