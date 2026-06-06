@@ -136,4 +136,21 @@ mod tests {
         assert_eq!(h.current(), Some(p("C:/a/b/x").as_path()));
         assert!(!h.can_forward(), "la rama de adelante (c) se truncó");
     }
+
+    #[test]
+    fn respeta_el_tope_de_profundidad() {
+        // Empujar más allá del tope descarta las más viejas; el cursor queda en
+        // la última y `current` apunta a ella. Protege la lógica de overflow.
+        let mut h = NavHistory::new();
+        for i in 0..(MAX_DEPTH + 1) {
+            h.push(p(&format!("C:/p{i}")));
+        }
+        assert_eq!(h.current(), Some(p(&format!("C:/p{}", MAX_DEPTH)).as_path()));
+        assert!(h.can_back());
+        // Yendo atrás hasta el tope, la entrada más vieja ya no es "p0".
+        while h.can_back() {
+            h.back();
+        }
+        assert_eq!(h.current(), Some(p("C:/p1").as_path()), "p0 se descartó");
+    }
 }
