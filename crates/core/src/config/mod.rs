@@ -37,10 +37,24 @@ pub struct Settings {
     pub bar_position: BarPosition,
     /// Botones de la barra solo con ícono (sin texto).
     pub icon_only: bool,
-    /// Set de íconos activo.
+    /// Set de íconos activo. `#[serde(default)]`: un settings.json v1 previo (sin
+    /// este campo) conserva el resto y solo este cae al default (honra CONFIG_VERSION).
+    #[serde(default = "default_icon_set")]
     pub icon_set: IconSet,
-    /// Mostrar la fila virtual ".." al tope del panel de archivos.
+    /// Mostrar la fila virtual ".." al tope del panel de archivos. `#[serde(default)]`
+    /// por la misma razón que `icon_set`.
+    #[serde(default = "default_show_parent_entry")]
     pub show_parent_entry: bool,
+}
+
+/// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
+fn default_icon_set() -> IconSet {
+    IconSet::Flat
+}
+
+/// Default de `show_parent_entry` para `#[serde(default)]`.
+fn default_show_parent_entry() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -178,6 +192,24 @@ mod tests {
     fn settings_ausente_da_default() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load_settings(dir.path()), Settings::default());
+    }
+
+    #[test]
+    fn settings_v1_sin_campos_nuevos_conserva_los_viejos() {
+        // Un settings.json v1 escrito por un build previo (sin icon_set ni
+        // show_parent_entry) debe conservar bar_position/icon_only y solo caer al
+        // default en los campos nuevos, gracias a #[serde(default)] (honra CONFIG_VERSION).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Side","icon_only":false}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.bar_position, BarPosition::Side, "conserva lo viejo");
+        assert!(!s.icon_only, "conserva lo viejo");
+        assert_eq!(s.icon_set, IconSet::Flat, "campo nuevo cae al default");
+        assert!(s.show_parent_entry, "campo nuevo cae al default");
     }
 
     #[test]
