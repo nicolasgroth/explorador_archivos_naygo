@@ -7,7 +7,7 @@
 
 use crate::app::NaygoApp;
 use crate::input::Action;
-use naygo_core::config::BarPosition;
+use naygo_core::config::{BarPosition, IconSet};
 
 /// Pinta la barra en la posición configurada. Debe llamarse al inicio de `ui()`.
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
@@ -85,6 +85,16 @@ fn settings_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
         let mut icon_only = app.settings.icon_only;
         if ui.checkbox(&mut icon_only, "Solo íconos").changed() {
             app.settings.icon_only = icon_only;
+        }
+        ui.separator();
+        ui.label("Set de íconos");
+        ui.selectable_value(&mut app.settings.icon_set, IconSet::Flat, "Flat (color)");
+        ui.selectable_value(&mut app.settings.icon_set, IconSet::Fluent, "Fluent");
+        ui.selectable_value(&mut app.settings.icon_set, IconSet::Mono, "Monocromo");
+        ui.separator();
+        let mut show_parent = app.settings.show_parent_entry;
+        if ui.checkbox(&mut show_parent, "Mostrar fila ..").changed() {
+            app.settings.show_parent_entry = show_parent;
         }
     })
     .response

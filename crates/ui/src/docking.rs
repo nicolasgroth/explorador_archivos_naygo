@@ -21,6 +21,8 @@ pub struct NaygoTabViewer<'a> {
     pub workspace: &'a mut Workspace,
     pub status: &'a mut String,
     pub pending: &'a mut Vec<PaneRequest>,
+    pub icons: &'a crate::icons::IconProvider,
+    pub show_parent_entry: bool,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -52,11 +54,16 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
         let id = *tab;
         let purpose = self.workspace.pane(id).map(|p| p.purpose);
         match purpose {
-            Some(PanePurpose::Files) => {
-                crate::panes::file_panel::show(ui, self.workspace, id, self.pending)
-            }
+            Some(PanePurpose::Files) => crate::panes::file_panel::show(
+                ui,
+                self.workspace,
+                id,
+                self.pending,
+                self.icons,
+                self.show_parent_entry,
+            ),
             Some(PanePurpose::Tree) => {
-                crate::panes::tree_panel::show(ui, self.workspace, self.pending)
+                crate::panes::tree_panel::show(ui, self.workspace, self.pending, self.icons)
             }
             Some(PanePurpose::Inspector) => crate::panes::inspector_panel::show(ui, self.workspace),
             None => {
