@@ -90,6 +90,9 @@ impl UiState {
                 self.listing_token.cancel();
             }
             Action::SwitchPane => { /* multi-panel llega en fase posterior */ }
+            // GoBack/GoForward se implementan al reescribir app.rs (Tarea 12);
+            // aquí solo evitan que el match quede no-exhaustivo entre tareas.
+            Action::GoBack | Action::GoForward => {}
         }
     }
 
