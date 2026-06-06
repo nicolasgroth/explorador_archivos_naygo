@@ -50,6 +50,7 @@
   "status.open_pending": "Abrir: {name} (pendiente platform::shell)",
   "pane.tree.title": "Carpetas",
   "pane.inspector.title": "Propiedades",
+  "pane.unknown": "Panel desconocido",
   "col.name": "Nombre",
   "col.size": "Tamaño",
   "col.modified": "Modificado",

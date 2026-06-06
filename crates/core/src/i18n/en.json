@@ -50,6 +50,7 @@
   "status.open_pending": "Open: {name} (platform::shell pending)",
   "pane.tree.title": "Folders",
   "pane.inspector.title": "Properties",
+  "pane.unknown": "Unknown panel",
   "col.name": "Name",
   "col.size": "Size",
   "col.modified": "Modified",

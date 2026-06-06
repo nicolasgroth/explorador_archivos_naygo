@@ -75,7 +75,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                 crate::panes::inspector_panel::show(ui, self.workspace, self.i18n)
             }
             None => {
-                ui.label("Panel desconocido");
+                ui.label(self.i18n.t("pane.unknown"));
             }
         }
         let _ = &mut self.status;
