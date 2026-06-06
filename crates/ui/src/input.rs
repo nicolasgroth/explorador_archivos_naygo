@@ -27,6 +27,10 @@ pub enum Action {
     Activate,
     /// Subir un nivel (carpeta padre).
     GoUp,
+    /// Ir atrás en el historial del panel activo.
+    GoBack,
+    /// Ir adelante en el historial del panel activo.
+    GoForward,
     /// Cambiar el panel de archivos activo.
     SwitchPane,
     /// Cancelar el listado en curso.
@@ -43,6 +47,23 @@ pub fn map_key(key: Key) -> Option<Action> {
         Key::Tab => Action::SwitchPane,
         Key::Escape => Action::CancelListing,
     })
+}
+
+/// Botones extra del mouse (laterales). Espejo de `egui::PointerButton`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseExtra {
+    /// Botón lateral 1 (típicamente "atrás").
+    Back,
+    /// Botón lateral 2 (típicamente "adelante").
+    Forward,
+}
+
+/// Mapea un botón lateral del mouse a su acción de navegación.
+pub fn map_mouse_extra(button: MouseExtra) -> Action {
+    match button {
+        MouseExtra::Back => Action::GoBack,
+        MouseExtra::Forward => Action::GoForward,
+    }
 }
 
 #[cfg(test)]
@@ -65,5 +86,11 @@ mod tests {
     fn enter_activa_y_escape_cancela() {
         assert_eq!(map_key(Key::Enter), Some(Action::Activate));
         assert_eq!(map_key(Key::Escape), Some(Action::CancelListing));
+    }
+
+    #[test]
+    fn botones_laterales_del_mouse_navegan() {
+        assert_eq!(map_mouse_extra(MouseExtra::Back), Action::GoBack);
+        assert_eq!(map_mouse_extra(MouseExtra::Forward), Action::GoForward);
     }
 }

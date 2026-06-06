@@ -1,19 +1,32 @@
-// Naygo — panel de árbol de carpetas (esqueleto de Fase 1).
+// Naygo — panel de árbol (esqueleto de Fase 2A): ubicación del panel activo.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! En la Fase 1 el árbol es un esqueleto: muestra la carpeta actual y permite
-//! subir al padre con un botón. El árbol expandible real (con lazy-load por
-//! streaming) se construye en una fase posterior; este panel reserva el espacio
-//! arquitectónico y el lugar en el dock.
+//! Esqueleto: muestra la carpeta del panel `Files` activo y permite subir. El
+//! árbol expandible real es trabajo posterior. Emite un request de navegación
+//! sobre el panel activo.
 
-use crate::app::UiState;
-use crate::input::Action;
+use crate::docking::PaneRequest;
+use naygo_core::workspace::Workspace;
 
-pub fn show(ui: &mut egui::Ui, state: &mut UiState) {
-    ui.label("Ubicación actual:");
-    ui.monospace(state.pane.current_dir.display().to_string());
+pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace, pending: &mut Vec<PaneRequest>) {
+    let active = workspace.active_id();
+    let dir = workspace.active_files().map(|f| f.current_dir.clone());
+
+    ui.label("Panel activo en:");
+    if let Some(d) = &dir {
+        ui.monospace(d.display().to_string());
+    } else {
+        ui.label("—");
+    }
     ui.separator();
     if ui.button("⬆ Subir un nivel").clicked() {
-        state.apply_action(Action::GoUp);
+        if let (Some(id), Some(d)) = (active, dir) {
+            if let Some(parent) = d.parent() {
+                pending.push(PaneRequest::NavigateTo {
+                    id,
+                    dir: parent.to_path_buf(),
+                });
+            }
+        }
     }
 }

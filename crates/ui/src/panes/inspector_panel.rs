@@ -1,41 +1,43 @@
-// Naygo — panel inspector: metadatos básicos del elemento enfocado.
+// Naygo — inspector: metadatos del elemento enfocado en el panel Files activo.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! Muestra los metadatos que ya tenemos en el `Entry` (nombre, tipo, tamaño,
-//! fecha). Las propiedades extendidas del Shell (atributos, propietario, etc.)
-//! llegan con `platform::shell` en una fase posterior.
+//! Refleja el panel `Files` ACTIVO: muestra los metadatos del elemento enfocado.
+//! Las propiedades extendidas del Shell llegan con `platform::shell` (fase futura).
 
-use crate::app::UiState;
 use naygo_core::fs_model::EntryKind;
+use naygo_core::workspace::Workspace;
 
-pub fn show(ui: &mut egui::Ui, state: &mut UiState) {
-    let Some(entry) = state.pane.focused_entry() else {
+pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace) {
+    let Some(entry) = workspace.active_files().and_then(|f| f.focused_entry()) else {
         ui.label("Nada seleccionado.");
         return;
     };
+    let (name, kind, path, size) = (
+        entry.name.clone(),
+        entry.kind,
+        entry.path.clone(),
+        entry.size,
+    );
 
     egui::Grid::new("inspector_grid")
         .num_columns(2)
         .show(ui, |ui| {
             ui.strong("Nombre");
-            ui.label(&entry.name);
+            ui.label(&name);
             ui.end_row();
-
             ui.strong("Tipo");
-            ui.label(match entry.kind {
+            ui.label(match kind {
                 EntryKind::Directory => "Carpeta",
                 EntryKind::File => "Archivo",
                 EntryKind::Other => "Otro",
             });
             ui.end_row();
-
             ui.strong("Ruta");
-            ui.label(entry.path.display().to_string());
+            ui.label(path.display().to_string());
             ui.end_row();
-
-            if let Some(size) = entry.size {
+            if let Some(s) = size {
                 ui.strong("Tamaño");
-                ui.label(format!("{size} bytes"));
+                ui.label(format!("{s} bytes"));
                 ui.end_row();
             }
         });

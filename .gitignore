@@ -7,6 +7,9 @@
 /*.log
 /logs/
 
+# Brainstorming visual companion (mockups locales, no versionar)
+.superpowers/
+
 # Editor / OS
 .vscode/
 .idea/
