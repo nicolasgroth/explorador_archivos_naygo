@@ -39,6 +39,7 @@
   "templates.mine": "Mine",
   "templates.builtin": "Built-in",
   "templates.save_current": "Save current layout…",
+  "templates.new_name": "My layout {n}",
   "templates.favorite": "Favorite",
   "templates.delete": "Delete",
   "template.minimalista": "Minimal",

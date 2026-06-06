@@ -95,7 +95,8 @@ pub fn layouts_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
             .clicked()
         {
             let n = app.templates.user.len() + 1;
-            app.save_current_as_template(&format!("Mi layout {n}"));
+            let name = app.tr("templates.new_name").replace("{n}", &n.to_string());
+            app.save_current_as_template(&name);
             ui.close();
         }
     })

@@ -39,6 +39,7 @@
   "templates.mine": "Míos",
   "templates.builtin": "Predefinidos",
   "templates.save_current": "Guardar disposición actual…",
+  "templates.new_name": "Mi layout {n}",
   "templates.favorite": "Favorito",
   "templates.delete": "Borrar",
   "template.minimalista": "Minimalista",
