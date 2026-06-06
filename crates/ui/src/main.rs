@@ -10,6 +10,7 @@
 mod app;
 mod dock_translate;
 mod docking;
+mod icons;
 mod input;
 mod logging;
 mod panes;
