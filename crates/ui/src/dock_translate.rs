@@ -64,7 +64,8 @@ fn first_leaf_id(node: &DockNode) -> PaneId {
 }
 
 /// Recolecta los `PaneId` presentes en el dock (para verificación/persistencia).
-// Lo consume el render del dock en la Tarea 13; por ahora solo lo usan los tests.
+// Por ahora solo lo usan los tests; lo consumirá la persistencia del reacomodo
+// manual de tabs (leer el DockState de vuelta) en un pulido posterior.
 #[allow(dead_code)]
 pub fn dock_pane_ids(state: &DockState<PaneId>) -> Vec<PaneId> {
     state.iter_all_tabs().map(|(_, id)| *id).collect()

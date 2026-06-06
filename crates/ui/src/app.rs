@@ -365,10 +365,13 @@ impl eframe::App for NaygoApp {
                     self.workspace.set_active(id);
                 }
                 crate::docking::PaneRequest::NavigateTo { id, dir } => {
+                    // Solo navegar/listar si el panel es Files: evita lanzar un
+                    // worker inútil contra un panel Tree/Inspector si en el futuro
+                    // alguno de esos llega a ser el activo.
                     if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
                         f.navigate_to(dir.clone());
+                        self.start_listing(id, dir);
                     }
-                    self.start_listing(id, dir);
                 }
             }
         }
