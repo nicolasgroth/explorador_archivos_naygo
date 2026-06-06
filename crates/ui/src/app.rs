@@ -92,6 +92,28 @@ impl NaygoApp {
         );
     }
 
+    /// Re-lista un panel sin tocar su historial (refrescar).
+    pub fn refresh_pane(&mut self, id: PaneId, dir: PathBuf) {
+        if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.entries.clear();
+            f.focused = None;
+        }
+        self.start_listing(id, dir);
+    }
+
+    /// Agrega un panel de archivos nuevo en la carpeta del activo (o home) y lo
+    /// inserta en el dock.
+    pub fn add_files_pane(&mut self) {
+        let dir = self
+            .workspace
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(default_start_dir);
+        let id = self.workspace.add_pane(PanePurpose::Files, dir.clone());
+        self.dock_state.main_surface_mut().push_to_focused_leaf(id);
+        self.start_listing(id, dir);
+    }
+
     /// Drena los canales de TODOS los paneles, sin bloquear.
     fn pump_all(&mut self) {
         let ids: Vec<PaneId> = self.listings.keys().copied().collect();
