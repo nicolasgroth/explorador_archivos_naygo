@@ -62,6 +62,10 @@ pub fn show(
                 // Fila ".." (si corresponde).
                 if parent.is_some() {
                     let resp = icon_row(ui, icons, IconKey::ParentDir, "..", false);
+                    // ".." sube con UN solo clic (además del doble): no hay nada que
+                    // "seleccionar" en ella, a diferencia de una carpeta real que
+                    // selecciona con un clic y entra con doble. Asimetría intencional
+                    // (estilo Total Commander); no "corregir" a solo-doble-clic.
                     if resp.double_clicked() || resp.clicked() {
                         parent_activated = true;
                     }
@@ -116,7 +120,8 @@ pub fn show(
 }
 
 /// Pinta una fila "[ícono] nombre" como un único elemento clicable. Devuelve el
-/// `Response` del label (clic/doble clic).
+/// `Response` combinado del ícono Y el label, así clicar en cualquiera de los dos
+/// (incluida el área del ícono) selecciona/activa la fila.
 fn icon_row(
     ui: &mut egui::Ui,
     icons: &IconProvider,
@@ -126,8 +131,14 @@ fn icon_row(
 ) -> egui::Response {
     ui.horizontal(|ui| {
         let tex = icons.texture(key);
-        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE)));
-        ui.selectable_label(selected, name)
+        // `sense` clicks en la imagen para que el ícono no sea un hueco muerto.
+        let img = ui.add(
+            egui::Image::new(tex)
+                .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
+                .sense(egui::Sense::click()),
+        );
+        let label = ui.selectable_label(selected, name);
+        img.union(label)
     })
     .inner
 }
