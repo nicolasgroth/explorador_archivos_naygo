@@ -13,6 +13,11 @@ pub mod sort;
 pub mod workspace;
 
 pub use cancel::CancellationToken;
+pub use config::{BarPosition, Settings};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
 pub use listing::{spawn_listing, ListingMsg};
 pub use sort::sort_entries;
+pub use workspace::{
+    FilePaneState, LayoutTemplate, NavHistory, PaneId, PaneNode, PanePurpose, TemplateStore,
+    Workspace,
+};
