@@ -119,6 +119,11 @@ impl NaygoApp {
     /// inyectado desde la UI (core no llama a SystemTime::now).
     pub fn apply_template(&mut self, tpl: &LayoutTemplate, now: u64) {
         let home = default_start_dir();
+        // Cancelar explícitamente los workers anteriores (no solo soltar sus
+        // receptores) para abortar pronto incluso uno colgado en un disco de red.
+        for listing in self.listings.values() {
+            listing.token.cancel();
+        }
         self.workspace = Workspace::from_template(tpl, &home);
         self.dock_state = crate::dock_translate::to_dock_state(&self.workspace.layout);
         self.listings.clear();
