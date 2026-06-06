@@ -57,6 +57,38 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     if icon_button(ui, "➕", "Agregar panel de archivos", true) {
         app.add_files_pane();
     }
+
+    // Botón de ajustes: a la derecha del todo si la barra es horizontal (Top).
+    if matches!(app.settings.bar_position, BarPosition::Top) {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            settings_button(ui, app);
+        });
+    } else {
+        settings_button(ui, app);
+    }
+}
+
+/// Menú de ajustes mínimo de la Fase 2A: posición de la barra + solo-íconos.
+fn settings_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
+    ui.menu_button("⚙", |ui| {
+        ui.label("Posición de la barra");
+        if ui.button("Arriba").clicked() {
+            app.settings.bar_position = BarPosition::Top;
+            ui.close();
+        }
+        if ui.button("Al costado").clicked() {
+            app.settings.bar_position = BarPosition::Side;
+            ui.close();
+        }
+        ui.separator();
+        // efecto visual (texto en botones) llega en una fase posterior
+        let mut icon_only = app.settings.icon_only;
+        if ui.checkbox(&mut icon_only, "Solo íconos").changed() {
+            app.settings.icon_only = icon_only;
+        }
+    })
+    .response
+    .on_hover_text("Ajustes");
 }
 
 /// Un botón solo-ícono con tooltip; deshabilitado si `enabled` es false.
