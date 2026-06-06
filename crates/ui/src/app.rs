@@ -8,6 +8,7 @@
 
 use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::settings_window::SettingsSection;
 use eframe::CreationContext;
 use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
@@ -40,6 +41,8 @@ pub struct NaygoApp {
     typeahead_buf: String,
     icons: IconProvider,
     i18n: I18n,
+    pub settings_open: bool,
+    pub settings_section: SettingsSection,
 }
 
 impl NaygoApp {
@@ -81,25 +84,24 @@ impl NaygoApp {
             typeahead_buf: String::new(),
             icons,
             i18n,
+            settings_open: false,
+            settings_section: SettingsSection::Appearance,
         };
         app.start_all_listings();
         app
     }
 
     /// Atajo para traducir una clave con el idioma activo.
-    #[allow(dead_code)] // consumido en Tarea 6
     pub fn tr(&self, key: &str) -> String {
         self.i18n.t(key).to_string()
     }
 
     /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
-    #[allow(dead_code)] // consumido en Tarea 6
     pub fn i18n_available(&self) -> Vec<LangId> {
         self.i18n.available().to_vec()
     }
 
     /// Ruta de la carpeta de config (para la sección Avanzado).
-    #[allow(dead_code)] // consumido en Tarea 6
     pub fn config_dir_display(&self) -> String {
         self.config_dir.display().to_string()
     }
@@ -497,6 +499,11 @@ impl eframe::App for NaygoApp {
                     }
                 }
             }
+        }
+
+        if self.settings_open {
+            let ctx = ui.ctx().clone();
+            crate::settings_window::show_settings_viewport(self, &ctx);
         }
     }
 

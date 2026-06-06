@@ -7,7 +7,7 @@
 
 use crate::app::NaygoApp;
 use crate::input::Action;
-use naygo_core::config::{BarPosition, IconSet};
+use naygo_core::config::BarPosition;
 
 /// Pinta la barra en la posición configurada. Debe llamarse al inicio de `ui()`.
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
@@ -68,37 +68,12 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
 }
 
-/// Menú de ajustes mínimo de la Fase 2A: posición de la barra + solo-íconos.
+/// Botón de ajustes: abre la ventana de Configuración (viewport separado).
 fn settings_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    ui.menu_button("⚙", |ui| {
-        ui.label("Posición de la barra");
-        if ui.button("Arriba").clicked() {
-            app.settings.bar_position = BarPosition::Top;
-            ui.close();
-        }
-        if ui.button("Al costado").clicked() {
-            app.settings.bar_position = BarPosition::Side;
-            ui.close();
-        }
-        ui.separator();
-        // efecto visual (texto en botones) llega en una fase posterior
-        let mut icon_only = app.settings.icon_only;
-        if ui.checkbox(&mut icon_only, "Solo íconos").changed() {
-            app.settings.icon_only = icon_only;
-        }
-        ui.separator();
-        ui.label("Set de íconos");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Flat, "Flat (color)");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Fluent, "Fluent");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Mono, "Monocromo");
-        ui.separator();
-        let mut show_parent = app.settings.show_parent_entry;
-        if ui.checkbox(&mut show_parent, "Mostrar fila ..").changed() {
-            app.settings.show_parent_entry = show_parent;
-        }
-    })
-    .response
-    .on_hover_text("Ajustes");
+    let lbl = app.tr("toolbar.settings");
+    if ui.button("⚙").on_hover_text(lbl).clicked() {
+        app.settings_open = true;
+    }
 }
 
 /// Un botón solo-ícono con tooltip; deshabilitado si `enabled` es false.
