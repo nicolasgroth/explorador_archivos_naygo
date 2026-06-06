@@ -145,7 +145,10 @@ mod tests {
         for i in 0..(MAX_DEPTH + 1) {
             h.push(p(&format!("C:/p{i}")));
         }
-        assert_eq!(h.current(), Some(p(&format!("C:/p{}", MAX_DEPTH)).as_path()));
+        assert_eq!(
+            h.current(),
+            Some(p(&format!("C:/p{}", MAX_DEPTH)).as_path())
+        );
         assert!(h.can_back());
         // Yendo atrás hasta el tope, la entrada más vieja ya no es "p0".
         while h.can_back() {

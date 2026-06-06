@@ -32,7 +32,12 @@ fn build_into(tree: &mut Tree<PaneId>, at: NodeIndex, node: &DockNode) {
         DockNode::Leaf(_id) => {
             // El nodo `at` ya tiene esta hoja; nada que hacer.
         }
-        DockNode::Split { dir, fraction, first, second } => {
+        DockNode::Split {
+            dir,
+            fraction,
+            first,
+            second,
+        } => {
             // El lado nuevo arranca con UNA sola hoja (la primera del subárbol
             // `second`), igual que el DockState inicial arranca con una. Si
             // pusiéramos todas las hojas de `second` aquí, la recursión posterior
@@ -87,6 +92,9 @@ mod tests {
         let mut want = w.layout.pane_ids();
         got.sort();
         want.sort();
-        assert_eq!(got, want, "el dock contiene exactamente los paneles del layout");
+        assert_eq!(
+            got, want,
+            "el dock contiene exactamente los paneles del layout"
+        );
     }
 }

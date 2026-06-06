@@ -76,9 +76,18 @@ impl LayoutTemplate {
             builtin: true,
             favorite: false,
             panes: vec![
-                TemplatePane { purpose: PanePurpose::Tree, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Inspector, dir: TemplateDir::Home },
+                TemplatePane {
+                    purpose: PanePurpose::Tree,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Inspector,
+                    dir: TemplateDir::Home,
+                },
             ],
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
@@ -101,10 +110,22 @@ impl LayoutTemplate {
             builtin: true,
             favorite: false,
             panes: vec![
-                TemplatePane { purpose: PanePurpose::Tree, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Inspector, dir: TemplateDir::Home },
+                TemplatePane {
+                    purpose: PanePurpose::Tree,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Inspector,
+                    dir: TemplateDir::Home,
+                },
             ],
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
@@ -132,10 +153,22 @@ impl LayoutTemplate {
             builtin: true,
             favorite: false,
             panes: vec![
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home },
-                TemplatePane { purpose: PanePurpose::Inspector, dir: TemplateDir::Home },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Inspector,
+                    dir: TemplateDir::Home,
+                },
             ],
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
@@ -192,7 +225,13 @@ impl TemplateStore {
     /// duplicar) y respeta el tope. `at` es el timestamp inyectado por la ui.
     pub fn record_use(&mut self, name: &str, at: u64) {
         self.recents.retain(|r| r.name != name);
-        self.recents.insert(0, RecentUse { name: name.to_string(), at });
+        self.recents.insert(
+            0,
+            RecentUse {
+                name: name.to_string(),
+                at,
+            },
+        );
         self.recents.truncate(MAX_RECENTS);
     }
 
@@ -227,7 +266,10 @@ mod tests {
             .into_iter()
             .map(|t| t.name)
             .collect();
-        assert_eq!(names, vec!["Minimalista", "Clásico", "Dual-pane", "Power-user"]);
+        assert_eq!(
+            names,
+            vec!["Minimalista", "Clásico", "Dual-pane", "Power-user"]
+        );
     }
 
     #[test]

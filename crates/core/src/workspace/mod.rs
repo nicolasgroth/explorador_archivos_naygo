@@ -13,7 +13,9 @@ pub mod template;
 pub use file_pane::{FilePanePersist, FilePaneState};
 pub use layout::{DockNode, SerializableDockLayout, SplitDir};
 pub use nav_history::NavHistory;
-pub use template::{LayoutShape, LayoutTemplate, RecentUse, TemplateDir, TemplatePane, TemplateStore};
+pub use template::{
+    LayoutShape, LayoutTemplate, RecentUse, TemplateDir, TemplatePane, TemplateStore,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -198,7 +200,12 @@ impl Workspace {
                     let id = ids.get(*i).copied().or_else(|| ids.first().copied())?;
                     Some(DockNode::Leaf(id))
                 }
-                LayoutShape::Split { dir, fraction, first, second } => {
+                LayoutShape::Split {
+                    dir,
+                    fraction,
+                    first,
+                    second,
+                } => {
                     let f = shape_to_node(first, ids);
                     let s = shape_to_node(second, ids);
                     match (f, s) {
@@ -305,7 +312,11 @@ mod tests {
         let tpl = crate::workspace::template::LayoutTemplate::dual_pane();
         let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
         assert_eq!(w.panes().len(), 4);
-        let files = w.panes().iter().filter(|p| p.purpose == PanePurpose::Files).count();
+        let files = w
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Files)
+            .count();
         assert_eq!(files, 2);
         assert_eq!(w.layout.pane_ids().len(), 4);
         let active = w.active_id().unwrap();
@@ -320,7 +331,10 @@ mod tests {
             name: "Corrupta".into(),
             builtin: false,
             favorite: false,
-            panes: vec![TemplatePane { purpose: PanePurpose::Files, dir: TemplateDir::Home }],
+            panes: vec![TemplatePane {
+                purpose: PanePurpose::Files,
+                dir: TemplateDir::Home,
+            }],
             layout: LayoutShape::Leaf(5), // fuera de rango
         };
         let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));

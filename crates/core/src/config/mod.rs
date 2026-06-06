@@ -47,7 +47,10 @@ pub struct WorkspacePersist {
     /// El id del panel activo.
     pub active: Option<crate::workspace::PaneId>,
     /// Estado persistible de cada panel Files, indexado por PaneId.
-    pub files: Vec<(crate::workspace::PaneId, crate::workspace::file_pane::FilePanePersist)>,
+    pub files: Vec<(
+        crate::workspace::PaneId,
+        crate::workspace::file_pane::FilePanePersist,
+    )>,
     /// Tipo de cada panel del layout (para reconstruir Tree/Inspector también).
     pub purposes: Vec<(crate::workspace::PaneId, crate::workspace::PanePurpose)>,
 }
