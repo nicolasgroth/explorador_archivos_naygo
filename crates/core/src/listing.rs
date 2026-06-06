@@ -102,6 +102,7 @@ fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
         kind,
         size,
         modified,
+        created: None,
         hidden: false,
     }
 }

@@ -53,6 +53,7 @@ mod tests {
             kind,
             size: Some(size),
             modified: None,
+            created: None,
             hidden: false,
         }
     }

@@ -27,6 +27,8 @@ pub struct Entry {
     pub size: Option<u64>,
     /// Fecha de última modificación, si el SO la entrega.
     pub modified: Option<SystemTime>,
+    /// Fecha de creación, si el SO la entrega.
+    pub created: Option<SystemTime>,
     /// Atributo "oculto" (en Windows). En esta fase se rellena en fases futuras; default false.
     pub hidden: bool,
 }
@@ -119,6 +121,7 @@ mod tests {
             kind: EntryKind::Directory,
             size: None,
             modified: None,
+            created: None,
             hidden: false,
         };
         assert!(e.is_dir());
