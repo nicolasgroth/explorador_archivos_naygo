@@ -174,9 +174,25 @@ mod tests {
 
     #[test]
     fn fallback_a_es_si_falta_en_el_activo() {
-        let mut i = i18n_de_prueba();
-        i.set_language(&LangId::new("en"));
-        assert_ne!(i.t("app.loading"), "app.loading");
+        // Prueba REAL del fallback activo→ES: cargamos un `es.json` suelto con una
+        // clave que NO existe en EN; activamos EN; `t()` de esa clave debe caer al
+        // fallback ES (no a la clave cruda). Ejercita la rama de fallback de verdad.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("lang")).unwrap();
+        std::fs::write(
+            dir.path().join("lang").join("es.json"),
+            r#"{"solo.en.es": "valor en español"}"#,
+        )
+        .unwrap();
+        let mut i = I18n::load(dir.path(), &LangId::new("en"));
+        // Activo = EN (no tiene la clave); fallback = ES (sí la tiene tras el merge).
+        assert_eq!(i.active_lang(), LangId::new("en"));
+        assert_eq!(i.t("solo.en.es"), "valor en español", "cae al fallback ES");
+        // Y una clave inexistente en ambos sí devuelve la clave cruda.
+        assert_eq!(i.t("no.existe.nada"), "no.existe.nada");
+        // Sanidad: cambiar a ES la resuelve directo.
+        i.set_language(&LangId::new("es"));
+        assert_eq!(i.t("solo.en.es"), "valor en español");
     }
 
     #[test]
