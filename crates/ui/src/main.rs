@@ -13,6 +13,8 @@ mod docking;
 mod input;
 mod logging;
 mod panes;
+mod templates_menu;
+mod toolbar;
 mod typeahead;
 
 use app::NaygoApp;

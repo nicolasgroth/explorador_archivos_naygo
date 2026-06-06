@@ -6,13 +6,6 @@
 //! estrategia: arrancar el dock con la primera hoja y aplicar los splits del árbol
 //! en pre-orden. `core` permanece desacoplado; este puente vive en la UI.
 
-// Transitorio (Tarea 10 de la Fase 2A): este módulo es la primera mitad del puente
-// de docking. Sus funciones se consumen en las tareas siguientes (el `app` aún usa
-// la API de la Fase 1 y no llama a `to_dock_state` todavía). Como `naygo-ui` es un
-// crate binario, los `pub` no suprimen `dead_code`; lo silenciamos aquí hasta que
-// el `app` cablee la traducción.
-#![allow(dead_code)]
-
 use egui_dock::{DockState, NodeIndex, Tree};
 use naygo_core::workspace::layout::{DockNode, SerializableDockLayout, SplitDir};
 use naygo_core::workspace::PaneId;
@@ -66,6 +59,8 @@ fn first_leaf_id(node: &DockNode) -> PaneId {
 }
 
 /// Recolecta los `PaneId` presentes en el dock (para verificación/persistencia).
+// Lo consume el render del dock en la Tarea 13; por ahora solo lo usan los tests.
+#[allow(dead_code)]
 pub fn dock_pane_ids(state: &DockState<PaneId>) -> Vec<PaneId> {
     state.iter_all_tabs().map(|(_, id)| *id).collect()
 }
