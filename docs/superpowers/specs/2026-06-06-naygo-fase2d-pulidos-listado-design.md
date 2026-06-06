@@ -33,20 +33,22 @@ perceptible.
   sube al activarla con un clic).
 - `Entry.created: Option<SystemTime>` + captura en `listing`.
 - `SortKey::Extension` y `SortKey::Created` + su implementación en `sort_entries`.
-- Encabezados de columna clicables (Nombre / Tamaño / Modificado) → ordenar +
-  toggle asc/desc + indicador de dirección (▲/▼).
-- Menú contextual del encabezado (clic derecho): "Ordenar por" con los 5 criterios
-  (Nombre / Extensión / Tamaño / Fecha modificación / Fecha creación) + dirección +
-  "Carpetas primero". Cubre los criterios sin columna propia (extensión, creación).
+- Encabezados de columna clicables (Nombre / Tamaño / Modificado, las FIJAS
+  actuales) → ordenar + toggle asc/desc + indicador de dirección (▲/▼).
+- `SortKey::Extension` y `SortKey::Created` se agregan al **core** (testeados) y
+  quedan listos para que la UID de la sub-fase 2E (encabezados estilo Excel) los
+  exponga. En 2D NO se les da UI propia (no hay columna ni menú para ellos todavía);
+  solo las 3 columnas fijas se pueden clicar para ordenar.
 - Textos nuevos a i18n (ES + EN).
 
 ### Qué NO entra en 2D
 
-Árbol de directorios real (sub-fase aparte, siguiente); watcher / detección de
-archivos nuevos (sub-fase aparte); temas / color sets / packs (2C-ii); columnas
-visibles adicionales para extensión/creación (se acceden por el menú, no se agrega
-una columna nueva al layout); cambiar el `SortKey::Kind` existente (queda como
-está, no expuesto en UI). Nunca: reproducción de media, edición.
+Encabezados estilo Excel / columnas configurables / filtro por columna / menú
+contextual del encabezado (todo eso es la **sub-fase 2E**, con su propio brainstorm
+visual); árbol de directorios real (sub-fase aparte); watcher / detección de
+archivos nuevos (sub-fase aparte); temas / color sets / packs (2C-ii); cambiar el
+`SortKey::Kind` existente (queda como está, no expuesto en UI). Nunca: reproducción
+de media, edición.
 
 ---
 
@@ -83,23 +85,23 @@ captura el clic. La fila `..` es UI pura (no una `Entry`).
   - Si no → activar esa `SortKey` con `ascending = true`.
   - Tras el cambio, re-ordenar las entries del panel con `sort_entries` (sin
     re-listar). La selección/foco se preserva razonablemente (ver "edge cases").
-- **Menú contextual del encabezado** (clic derecho sobre la zona de encabezados):
-  un menú "Ordenar por" con los 5 criterios, "Ascendente/Descendente", y "Carpetas
-  primero" (toggle de `dirs_first`). Aplica igual que el clic de columna + re-sort.
 - La lógica "qué SortSpec resulta de clicar la columna X" se extrae a una **función
   pura testeable** (recibe el SortSpec actual + la columna clicada, devuelve el
   nuevo SortSpec) para no atar la decisión al render.
 - El `SortSpec` vive en `FilePaneState` (ya se persiste vía `FilePanePersist`).
+- `SortKey::Extension`/`Created` quedan implementados en core pero SIN UI en 2D
+  (los expondrá 2E con los encabezados estilo Excel / columnas configurables).
 
-### Mapeo columna ↔ SortKey
+### Mapeo columna ↔ SortKey (las 3 fijas clicables en 2D)
 
 | Encabezado visible | SortKey |
 |---|---|
 | Nombre | `Name` |
 | Tamaño | `Size` |
 | Modificado | `Modified` |
-| (menú) Extensión | `Extension` |
-| (menú) Fecha de creación | `Created` |
+
+`Extension` y `Created` existen en core (testeados) pero su selección por el usuario
+llega en 2E.
 
 ---
 
@@ -108,9 +110,9 @@ captura el clic. La fila `..` es UI pura (no una `Entry`).
 - **Ordenar por columna**: clic en "Nombre"/"Tamaño"/"Modificado" → ordena por esa
   columna ascendente; segundo clic en la misma → descendente; indicador ▲/▼ en la
   activa.
-- **Ordenar por extensión o fecha de creación**: clic derecho en los encabezados →
-  "Ordenar por → Extensión / Fecha de creación", o cualquiera de los 5; ahí también
-  Ascendente/Descendente y "Carpetas primero".
+- **Extensión y fecha de creación**: disponibles en el core, pero su selección por el
+  usuario llega en 2E (encabezados estilo Excel). En 2D solo se ordenan las 3
+  columnas fijas por clic.
 - **Fila `..`**: primera fila del panel (si hay padre y la opción está on), con
   ícono de carpeta normal; un clic sube al directorio padre.
 - El criterio elegido persiste por panel (al cerrar/reabrir Naygo se conserva).
@@ -147,7 +149,7 @@ Filosofía del proyecto:
   activa con ascending=true). Testeable sin egui.
 - **`listing`**: la captura de `created` no se testea fácil (depende del FS); el
   resto del motor sigue con sus tests.
-- UI (encabezados clicables, menú contextual, fila `..` normal) → validación manual;
+- UI (encabezados clicables, fila `..` normal) → validación manual;
   la lógica con estado extraída a funciones puras.
 
 Meta de siempre: build limpio + tests + clippy antes de cada commit.
@@ -164,7 +166,7 @@ crates/core/src/
 └── ...
 
 crates/ui/src/
-├── panes/file_panel.rs    # fila ".." normal; encabezados clicables; menú de orden
+├── panes/file_panel.rs    # fila ".." normal; encabezados (3 fijos) clicables p/ordenar
 ├── sort_ui.rs (nuevo, opcional)  # función pura: clic de columna → nuevo SortSpec
 │                          # (o vivir dentro de file_panel si es chico)
 ├── docking.rs             # pasa lo necesario al file_panel (ya pasa i18n, workspace)
@@ -179,12 +181,10 @@ crates/core/src/i18n/{es,en}.json  # + claves del menú de orden
 
 Sin dependencias nuevas. `std::fs::Metadata::created()` ya está en std (devuelve
 `io::Result<SystemTime>`; puede no estar soportado en algún FS → `.ok()` → `None`).
-egui ya provee menús contextuales (`response.context_menu(...)`) y los widgets
-clicables.
+egui ya provee widgets clicables para los encabezados.
 
 > A confirmar en el plan: si la función de clic-de-columna vive en un archivo nuevo
-> (`sort_ui.rs`) o dentro de `file_panel.rs`; y la API exacta de `context_menu` en
-> egui 0.34.3 (verificar contra la fuente antes de implementar el menú).
+> (`sort_ui.rs`) o dentro de `file_panel.rs`.
 
 ---
 
