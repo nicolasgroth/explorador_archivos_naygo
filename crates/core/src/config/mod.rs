@@ -182,4 +182,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_workspace(dir.path()).is_none());
     }
+
+    #[test]
+    fn workspace_round_trip_conserva_layout_y_activo() {
+        use crate::workspace::layout::SerializableDockLayout;
+        use crate::workspace::PaneId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let persist = WorkspacePersist {
+            version: CONFIG_VERSION,
+            layout: SerializableDockLayout::single(PaneId(3)),
+            active: Some(PaneId(3)),
+            files: Vec::new(),
+            purposes: vec![(PaneId(3), crate::workspace::PanePurpose::Files)],
+        };
+        save_workspace(dir.path(), &persist);
+        let loaded = load_workspace(dir.path()).expect("debe cargar");
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert_eq!(loaded.active, Some(PaneId(3)));
+        assert_eq!(loaded.layout.pane_ids(), vec![PaneId(3)]);
+        assert_eq!(loaded.purposes.len(), 1);
+    }
 }
