@@ -6,6 +6,7 @@
 //! todos los canales sin bloquear. El teclado y los botones del mouse actúan
 //! sobre el panel activo. El layout y las carpetas se persisten vía `config`.
 
+use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
 use eframe::CreationContext;
 use egui_dock::DockState;
@@ -36,10 +37,11 @@ pub struct NaygoApp {
     config_dir: PathBuf,
     pub status: String,
     typeahead_buf: String,
+    icons: IconProvider,
 }
 
 impl NaygoApp {
-    pub fn new(_cc: &CreationContext<'_>) -> Self {
+    pub fn new(cc: &CreationContext<'_>) -> Self {
         let config_dir = config::portable_dir();
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
@@ -47,6 +49,8 @@ impl NaygoApp {
 
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
+
+        let icons = IconProvider::new(&cc.egui_ctx, settings.icon_set);
 
         let mut app = NaygoApp {
             workspace,
@@ -57,6 +61,7 @@ impl NaygoApp {
             config_dir,
             status: String::new(),
             typeahead_buf: String::new(),
+            icons,
         };
         app.start_all_listings();
         app
@@ -402,6 +407,11 @@ impl eframe::App for NaygoApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.icons.set() != self.settings.icon_set {
+            let set = self.settings.icon_set;
+            self.icons.reload(ui.ctx(), set);
+        }
+
         crate::toolbar::show(ui, self);
 
         egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
@@ -423,6 +433,8 @@ impl eframe::App for NaygoApp {
                 workspace: &mut self.workspace,
                 status: &mut self.status,
                 pending: &mut pending,
+                icons: &self.icons,
+                show_parent_entry: self.settings.show_parent_entry,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))

@@ -5,11 +5,6 @@
 //! cachea por `IconKey`. Pintar una fila = referenciar una textura ya cargada
 //! (cero decodificación por frame). Cambiar de set = `reload` (operación única).
 
-// IconProvider y su API se consumen en Tarea 5 (la lista de archivos pinta filas
-// con estas texturas). Hasta entonces, naygo-ui es un binario y `pub` no suprime
-// el dead_code; se permite explícitamente para no romper `clippy -D warnings`.
-#![allow(dead_code)]
-
 pub mod assets;
 
 use naygo_core::config::IconSet;
@@ -32,7 +27,11 @@ impl IconProvider {
         for key in assets::all_keys() {
             textures.insert(key, load_texture(ctx, set, key));
         }
-        IconProvider { set, textures, fallback }
+        IconProvider {
+            set,
+            textures,
+            fallback,
+        }
     }
 
     /// El set actualmente cargado.
@@ -71,5 +70,8 @@ fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
     let img = image::load_from_memory(bytes).ok()?;
     let rgba = img.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        size,
+        rgba.as_raw(),
+    ))
 }

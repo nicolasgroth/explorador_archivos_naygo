@@ -5,11 +5,6 @@
 //! del ícono para un set y una clave; si la clave no tiene asset propio, cae a
 //! `unknown` (genérico), que siempre existe. Función pura y testeable.
 
-// `bytes_for`/`all_keys` se consumen en Tarea 5 (vía `IconProvider`); hoy solo los
-// usan los tests. naygo-ui es binario y `pub` no suprime el dead_code, así que se
-// permite explícitamente para no romper `clippy -D warnings`.
-#![allow(dead_code)]
-
 use naygo_core::config::IconSet;
 use naygo_core::icon_kind::{FileCategory, IconKey};
 
@@ -107,8 +102,7 @@ pub fn all_keys() -> Vec<IconKey> {
         IconKey::Unknown,
     ];
     for cat in [
-        Image, Video, Audio, Document, Code, Archive, Executable, Model3D, Font,
-        Generic,
+        Image, Video, Audio, Document, Code, Archive, Executable, Model3D, Font, Generic,
     ] {
         v.push(IconKey::File(cat));
     }

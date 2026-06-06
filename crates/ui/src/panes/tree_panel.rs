@@ -6,9 +6,15 @@
 //! sobre el panel activo.
 
 use crate::docking::PaneRequest;
+use crate::icons::IconProvider;
 use naygo_core::workspace::Workspace;
 
-pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace, pending: &mut Vec<PaneRequest>) {
+pub fn show(
+    ui: &mut egui::Ui,
+    workspace: &mut Workspace,
+    pending: &mut Vec<PaneRequest>,
+    _icons: &IconProvider,
+) {
     let active = workspace.active_id();
     let dir = workspace.active_files().map(|f| f.current_dir.clone());
 
