@@ -10,6 +10,11 @@
 # Brainstorming visual companion (mockups locales, no versionar)
 .superpowers/
 
+# Packs de íconos descargados (zips fuente). Solo se versionan los PNG extraídos
+# en assets/icons/{flat,fluent,mono}/, NO los archivos comprimidos originales
+# (uno pesa varios GB). Extraer lo necesario y borrar el zip.
+assets/icons/*.zip
+
 # Editor / OS
 .vscode/
 .idea/

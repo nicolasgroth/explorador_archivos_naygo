@@ -199,7 +199,10 @@ mod tests {
         let mut s = Settings::default();
         s.language = crate::i18n::LangId::new("es");
         save_settings(dir.path(), &s);
-        assert_eq!(load_settings(dir.path()).language, crate::i18n::LangId::new("es"));
+        assert_eq!(
+            load_settings(dir.path()).language,
+            crate::i18n::LangId::new("es")
+        );
     }
 
     #[test]

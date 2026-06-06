@@ -41,7 +41,10 @@ impl Catalog {
             tracing::warn!("catálogo i18n '{lang}' ilegible: {e}");
             HashMap::new()
         });
-        Catalog { lang: lang.to_string(), map }
+        Catalog {
+            lang: lang.to_string(),
+            map,
+        }
     }
 
     /// Texto de `key`, o `None` si la clave no está.
@@ -108,7 +111,12 @@ impl I18n {
             .cloned()
             .unwrap_or_default();
 
-        I18n { active, fallback, available, catalogs }
+        I18n {
+            active,
+            fallback,
+            available,
+            catalogs,
+        }
     }
 
     /// Texto de `key`: activo → fallback (ES) → la clave misma (nunca panic).
