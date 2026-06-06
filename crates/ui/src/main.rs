@@ -14,6 +14,7 @@ mod icons;
 mod input;
 mod logging;
 mod panes;
+mod settings_window;
 mod templates_menu;
 mod toolbar;
 mod typeahead;

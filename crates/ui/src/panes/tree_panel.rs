@@ -14,6 +14,7 @@ pub fn show(
     workspace: &mut Workspace,
     pending: &mut Vec<PaneRequest>,
     icons: &IconProvider,
+    i18n: &naygo_core::i18n::I18n,
 ) {
     let active = workspace.active_id();
     let dir = workspace.active_files().map(|f| f.current_dir.clone());
@@ -21,7 +22,7 @@ pub fn show(
     ui.horizontal(|ui| {
         let tex = icons.texture(IconKey::Drive(DriveKind::Unknown));
         ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(16.0, 16.0)));
-        ui.label("Ubicación actual");
+        ui.label(i18n.t("tree.location"));
     });
     if let Some(d) = &dir {
         ui.monospace(d.display().to_string());
@@ -29,7 +30,7 @@ pub fn show(
         ui.label("—");
     }
     ui.separator();
-    if ui.button("⬆ Subir un nivel").clicked() {
+    if ui.button(format!("⬆ {}", i18n.t("tree.go_up"))).clicked() {
         if let (Some(id), Some(d)) = (active, dir) {
             if let Some(parent) = d.parent() {
                 pending.push(PaneRequest::NavigateTo {

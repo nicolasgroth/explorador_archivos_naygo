@@ -21,6 +21,7 @@ pub fn show(
     pending: &mut Vec<PaneRequest>,
     icons: &IconProvider,
     show_parent_entry: bool,
+    i18n: &naygo_core::i18n::I18n,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -54,9 +55,9 @@ pub fn show(
             .num_columns(3)
             .striped(true)
             .show(ui, |ui| {
-                ui.strong("Nombre");
-                ui.strong("Tamaño");
-                ui.strong("Modificado");
+                ui.strong(i18n.t("col.name"));
+                ui.strong(i18n.t("col.size"));
+                ui.strong(i18n.t("col.modified"));
                 ui.end_row();
 
                 // Fila ".." (si corresponde).

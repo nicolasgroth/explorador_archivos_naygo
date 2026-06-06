@@ -8,6 +8,7 @@
 pub mod cancel;
 pub mod config;
 pub mod fs_model;
+pub mod i18n;
 pub mod icon_kind;
 pub mod listing;
 pub mod sort;
@@ -16,6 +17,7 @@ pub mod workspace;
 pub use cancel::CancellationToken;
 pub use config::{BarPosition, IconSet, Settings};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
+pub use i18n::{pick_default_language, I18n, LangId};
 pub use icon_kind::{category_for_extension, icon_key_for, DriveKind, FileCategory, IconKey};
 pub use listing::{spawn_listing, ListingMsg};
 pub use sort::sort_entries;

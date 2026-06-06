@@ -7,7 +7,7 @@
 
 use crate::app::NaygoApp;
 use crate::input::Action;
-use naygo_core::config::{BarPosition, IconSet};
+use naygo_core::config::BarPosition;
 
 /// Pinta la barra en la posición configurada. Debe llamarse al inicio de `ui()`.
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
@@ -35,16 +35,24 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
         .map(|f| (f.history.can_back(), f.history.can_forward()))
         .unwrap_or((false, false));
 
-    if icon_button(ui, "◀", "Atrás (Alt+←)", can_back) {
+    // Precalcular las etiquetas (tooltips) antes de los widgets que toman
+    // `&mut app`, para no enredar los préstamos.
+    let lbl_back = app.tr("toolbar.back");
+    let lbl_forward = app.tr("toolbar.forward");
+    let lbl_up = app.tr("toolbar.up");
+    let lbl_refresh = app.tr("toolbar.refresh");
+    let lbl_add_pane = app.tr("toolbar.add_pane");
+
+    if icon_button(ui, "◀", &lbl_back, can_back) {
         app.apply_action(Action::GoBack);
     }
-    if icon_button(ui, "▶", "Adelante (Alt+→)", can_forward) {
+    if icon_button(ui, "▶", &lbl_forward, can_forward) {
         app.apply_action(Action::GoForward);
     }
-    if icon_button(ui, "▲", "Subir un nivel (Backspace)", true) {
+    if icon_button(ui, "▲", &lbl_up, true) {
         app.apply_action(Action::GoUp);
     }
-    if icon_button(ui, "⟳", "Refrescar", true) {
+    if icon_button(ui, "⟳", &lbl_refresh, true) {
         if let (Some(id), Some(dir)) = (
             app.workspace.active_id(),
             app.workspace.active_files().map(|f| f.current_dir.clone()),
@@ -54,7 +62,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
-    if icon_button(ui, "➕", "Agregar panel de archivos", true) {
+    if icon_button(ui, "➕", &lbl_add_pane, true) {
         app.add_files_pane();
     }
 
@@ -68,37 +76,12 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
 }
 
-/// Menú de ajustes mínimo de la Fase 2A: posición de la barra + solo-íconos.
+/// Botón de ajustes: abre la ventana de Configuración (viewport separado).
 fn settings_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    ui.menu_button("⚙", |ui| {
-        ui.label("Posición de la barra");
-        if ui.button("Arriba").clicked() {
-            app.settings.bar_position = BarPosition::Top;
-            ui.close();
-        }
-        if ui.button("Al costado").clicked() {
-            app.settings.bar_position = BarPosition::Side;
-            ui.close();
-        }
-        ui.separator();
-        // efecto visual (texto en botones) llega en una fase posterior
-        let mut icon_only = app.settings.icon_only;
-        if ui.checkbox(&mut icon_only, "Solo íconos").changed() {
-            app.settings.icon_only = icon_only;
-        }
-        ui.separator();
-        ui.label("Set de íconos");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Flat, "Flat (color)");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Fluent, "Fluent");
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Mono, "Monocromo");
-        ui.separator();
-        let mut show_parent = app.settings.show_parent_entry;
-        if ui.checkbox(&mut show_parent, "Mostrar fila ..").changed() {
-            app.settings.show_parent_entry = show_parent;
-        }
-    })
-    .response
-    .on_hover_text("Ajustes");
+    let lbl = app.tr("toolbar.settings");
+    if ui.button("⚙").on_hover_text(lbl).clicked() {
+        app.settings_open = true;
+    }
 }
 
 /// Un botón solo-ícono con tooltip; deshabilitado si `enabled` es false.

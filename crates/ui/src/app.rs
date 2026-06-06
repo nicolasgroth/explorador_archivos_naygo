@@ -8,10 +8,12 @@
 
 use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::settings_window::SettingsSection;
 use eframe::CreationContext;
 use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
+use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, ListingMsg};
 use naygo_core::sort::sort_entries;
 use naygo_core::workspace::template::LayoutTemplate;
@@ -38,6 +40,9 @@ pub struct NaygoApp {
     pub status: String,
     typeahead_buf: String,
     icons: IconProvider,
+    i18n: I18n,
+    pub settings_open: bool,
+    pub settings_section: SettingsSection,
 }
 
 impl NaygoApp {
@@ -46,6 +51,22 @@ impl NaygoApp {
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
         let home = default_start_dir();
+
+        // i18n: idioma persistido si ya hubo settings; si es el primer arranque,
+        // detectar el del SO. Cargamos primero con un idioma provisional para
+        // conocer los idiomas disponibles, luego elegimos.
+        let settings_exists = config_dir.join("settings.json").exists();
+        let provisional = I18n::load(&config_dir, &settings.language);
+        let lang = if settings_exists {
+            settings.language.clone()
+        } else {
+            let locale = naygo_platform::locale::os_locale().unwrap_or_default();
+            pick_default_language(&locale, provisional.available())
+        };
+        let mut i18n = provisional;
+        i18n.set_language(&lang);
+        let mut settings = settings;
+        settings.language = lang;
 
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
@@ -62,9 +83,27 @@ impl NaygoApp {
             status: String::new(),
             typeahead_buf: String::new(),
             icons,
+            i18n,
+            settings_open: false,
+            settings_section: SettingsSection::Appearance,
         };
         app.start_all_listings();
         app
+    }
+
+    /// Atajo para traducir una clave con el idioma activo.
+    pub fn tr(&self, key: &str) -> String {
+        self.i18n.t(key).to_string()
+    }
+
+    /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
+    pub fn i18n_available(&self) -> Vec<LangId> {
+        self.i18n.available().to_vec()
+    }
+
+    /// Ruta de la carpeta de config (para la sección Avanzado).
+    pub fn config_dir_display(&self) -> String {
+        self.config_dir.display().to_string()
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
@@ -95,6 +134,11 @@ impl NaygoApp {
                 token,
             },
         );
+        // Feedback "Listando…" mientras el panel activo carga (se reemplaza por el
+        // conteo de elementos al terminar, en pump_one).
+        if self.workspace.active_id() == Some(id) {
+            self.status = self.i18n.t("app.loading").to_string();
+        }
     }
 
     /// Re-lista un panel sin tocar su historial (refrescar).
@@ -178,12 +222,17 @@ impl NaygoApp {
         let mut finished = false;
         let mut new_entries = Vec::new();
         let mut err = None;
+        let mut cancelled = false;
         if let Some(listing) = self.listings.get(&id) {
             if let Some(rx) = &listing.rx {
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
                         ListingMsg::Entry(e) => new_entries.push(e),
-                        ListingMsg::Done | ListingMsg::Cancelled => finished = true,
+                        ListingMsg::Done => finished = true,
+                        ListingMsg::Cancelled => {
+                            finished = true;
+                            cancelled = true;
+                        }
                         ListingMsg::Error(e) => {
                             err = Some(e);
                             finished = true;
@@ -192,6 +241,7 @@ impl NaygoApp {
                 }
             }
         }
+        let mut count_done = None;
         if let Some(pane) = self.workspace.pane_mut(id) {
             if let Some(f) = pane.files.as_mut() {
                 f.entries.extend(new_entries);
@@ -201,6 +251,9 @@ impl NaygoApp {
                     if f.focused.is_none() && !f.entries.is_empty() {
                         f.focused = Some(0);
                     }
+                    if err.is_none() && !cancelled {
+                        count_done = Some(f.entries.len());
+                    }
                 }
             }
         }
@@ -208,8 +261,22 @@ impl NaygoApp {
             if let Some(listing) = self.listings.get_mut(&id) {
                 listing.rx = None;
             }
+            // El status global refleja el feedback del panel ACTIVO (con N paneles
+            // listando en paralelo, mostrar el del activo es lo predecible).
+            let is_active = self.workspace.active_id() == Some(id);
             if let Some(e) = err {
-                self.status = format!("Error: {e}");
+                if is_active {
+                    self.status = self.i18n.t("status.error").replace("{e}", &e);
+                }
+            } else if is_active {
+                if cancelled {
+                    self.status = self.i18n.t("app.cancelled").to_string();
+                } else if let Some(n) = count_done {
+                    self.status = self
+                        .i18n
+                        .t("status.elements")
+                        .replace("{n}", &n.to_string());
+                }
             }
         }
     }
@@ -285,7 +352,10 @@ impl NaygoApp {
             }
             self.start_listing(active, entry.path);
         } else {
-            self.status = format!("Abrir: {} (pendiente platform::shell)", entry.name);
+            self.status = self
+                .i18n
+                .t("status.open_pending")
+                .replace("{name}", &entry.name);
         }
     }
 
@@ -412,6 +482,15 @@ impl eframe::App for NaygoApp {
             self.icons.reload(ui.ctx(), set);
         }
 
+        // Aplica un cambio de idioma. También sirve a la ventana de Configuración
+        // (viewport): un cambio hecho ahí este frame se aplica al inicio del
+        // siguiente (la ventana repinta cada frame, así que el relabel es inmediato
+        // a la vista).
+        if self.i18n.active_lang() != self.settings.language {
+            let lang = self.settings.language.clone();
+            self.i18n.set_language(&lang);
+        }
+
         crate::toolbar::show(ui, self);
 
         egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
@@ -435,6 +514,7 @@ impl eframe::App for NaygoApp {
                 pending: &mut pending,
                 icons: &self.icons,
                 show_parent_entry: self.settings.show_parent_entry,
+                i18n: &self.i18n,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -455,6 +535,11 @@ impl eframe::App for NaygoApp {
                     }
                 }
             }
+        }
+
+        if self.settings_open {
+            let ctx = ui.ctx().clone();
+            crate::settings_window::show_settings_viewport(self, &ctx);
         }
     }
 
