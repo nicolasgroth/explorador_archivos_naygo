@@ -53,8 +53,10 @@ pub enum ViewMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortKey {
     Name,
+    Extension,
     Size,
     Modified,
+    Created,
     Kind,
 }
 
