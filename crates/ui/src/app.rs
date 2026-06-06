@@ -451,6 +451,10 @@ impl eframe::App for NaygoApp {
             self.icons.reload(ui.ctx(), set);
         }
 
+        // Aplica un cambio de idioma. También sirve a la ventana de Configuración
+        // (viewport): un cambio hecho ahí este frame se aplica al inicio del
+        // siguiente (la ventana repinta cada frame, así que el relabel es inmediato
+        // a la vista).
         if self.i18n.active_lang() != self.settings.language {
             let lang = self.settings.language.clone();
             self.i18n.set_language(&lang);

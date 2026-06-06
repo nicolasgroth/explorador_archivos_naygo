@@ -4,7 +4,8 @@
 //! La Configuración es una segunda ventana real del SO (egui multi-viewport).
 //! `show_settings_viewport` se llama cada frame de la app principal cuando
 //! `settings_open`; usa `show_viewport_immediate` (el closure captura `&mut app`),
-//! con un `SidePanel` de secciones y un `CentralPanel` que despacha a cada una.
+//! con un panel lateral (`Panel::left`) de secciones y un `CentralPanel` que
+//! despacha a cada una.
 
 mod advanced;
 mod appearance;
