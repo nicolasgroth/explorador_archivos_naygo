@@ -114,6 +114,48 @@ impl NaygoApp {
         self.start_listing(id, dir);
     }
 
+    /// Aplica una plantilla: recompone el workspace, reconstruye el dock, registra
+    /// el uso en recientes y relanza los listados. `now` es el timestamp (epoch s)
+    /// inyectado desde la UI (core no llama a SystemTime::now).
+    pub fn apply_template(&mut self, tpl: &LayoutTemplate, now: u64) {
+        let home = default_start_dir();
+        self.workspace = Workspace::from_template(tpl, &home);
+        self.dock_state = crate::dock_translate::to_dock_state(&self.workspace.layout);
+        self.listings.clear();
+        self.templates.record_use(&tpl.name, now);
+        self.start_all_listings();
+    }
+
+    /// Guarda la disposición actual como una plantilla del usuario con `name`.
+    /// (Para 2A guardamos la forma del layout actual con carpetas = Home.)
+    pub fn save_current_as_template(&mut self, name: &str) {
+        use naygo_core::workspace::template::{LayoutTemplate, TemplateDir, TemplatePane};
+        let ids = self.workspace.layout.pane_ids();
+        let mut panes = Vec::new();
+        let mut index_of = std::collections::HashMap::new();
+        for (idx, id) in ids.iter().enumerate() {
+            let purpose = self
+                .workspace
+                .pane(*id)
+                .map(|p| p.purpose)
+                .unwrap_or(PanePurpose::Files);
+            panes.push(TemplatePane {
+                purpose,
+                dir: TemplateDir::Home,
+            });
+            index_of.insert(*id, idx);
+        }
+        let shape = layout_to_shape(&self.workspace.layout, &index_of);
+        let tpl = LayoutTemplate {
+            name: name.to_string(),
+            builtin: false,
+            favorite: false,
+            panes,
+            layout: shape,
+        };
+        self.templates.add_user(tpl);
+    }
+
     /// Drena los canales de TODOS los paneles, sin bloquear.
     fn pump_all(&mut self) {
         let ids: Vec<PaneId> = self.listings.keys().copied().collect();
@@ -494,4 +536,35 @@ fn remap_layout(
     SerializableDockLayout {
         root: layout.root.as_ref().map(|n| go(n, remap)),
     }
+}
+
+/// Traduce el SerializableDockLayout actual a un LayoutShape (índices) para
+/// guardar como plantilla.
+fn layout_to_shape(
+    layout: &naygo_core::workspace::layout::SerializableDockLayout,
+    index_of: &std::collections::HashMap<PaneId, usize>,
+) -> naygo_core::workspace::template::LayoutShape {
+    use naygo_core::workspace::layout::DockNode;
+    use naygo_core::workspace::template::LayoutShape;
+    fn go(node: &DockNode, index_of: &std::collections::HashMap<PaneId, usize>) -> LayoutShape {
+        match node {
+            DockNode::Leaf(id) => LayoutShape::Leaf(*index_of.get(id).unwrap_or(&0)),
+            DockNode::Split {
+                dir,
+                fraction,
+                first,
+                second,
+            } => LayoutShape::Split {
+                dir: *dir,
+                fraction: *fraction,
+                first: Box::new(go(first, index_of)),
+                second: Box::new(go(second, index_of)),
+            },
+        }
+    }
+    layout
+        .root
+        .as_ref()
+        .map(|n| go(n, index_of))
+        .unwrap_or(LayoutShape::Leaf(0))
 }
