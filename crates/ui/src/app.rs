@@ -134,6 +134,11 @@ impl NaygoApp {
                 token,
             },
         );
+        // Feedback "Listando…" mientras el panel activo carga (se reemplaza por el
+        // conteo de elementos al terminar, en pump_one).
+        if self.workspace.active_id() == Some(id) {
+            self.status = self.i18n.t("app.loading").to_string();
+        }
     }
 
     /// Re-lista un panel sin tocar su historial (refrescar).
@@ -217,12 +222,17 @@ impl NaygoApp {
         let mut finished = false;
         let mut new_entries = Vec::new();
         let mut err = None;
+        let mut cancelled = false;
         if let Some(listing) = self.listings.get(&id) {
             if let Some(rx) = &listing.rx {
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
                         ListingMsg::Entry(e) => new_entries.push(e),
-                        ListingMsg::Done | ListingMsg::Cancelled => finished = true,
+                        ListingMsg::Done => finished = true,
+                        ListingMsg::Cancelled => {
+                            finished = true;
+                            cancelled = true;
+                        }
                         ListingMsg::Error(e) => {
                             err = Some(e);
                             finished = true;
@@ -231,6 +241,7 @@ impl NaygoApp {
                 }
             }
         }
+        let mut count_done = None;
         if let Some(pane) = self.workspace.pane_mut(id) {
             if let Some(f) = pane.files.as_mut() {
                 f.entries.extend(new_entries);
@@ -240,6 +251,9 @@ impl NaygoApp {
                     if f.focused.is_none() && !f.entries.is_empty() {
                         f.focused = Some(0);
                     }
+                    if err.is_none() && !cancelled {
+                        count_done = Some(f.entries.len());
+                    }
                 }
             }
         }
@@ -247,8 +261,22 @@ impl NaygoApp {
             if let Some(listing) = self.listings.get_mut(&id) {
                 listing.rx = None;
             }
+            // El status global refleja el feedback del panel ACTIVO (con N paneles
+            // listando en paralelo, mostrar el del activo es lo predecible).
+            let is_active = self.workspace.active_id() == Some(id);
             if let Some(e) = err {
-                self.status = self.i18n.t("status.error").replace("{e}", &e);
+                if is_active {
+                    self.status = self.i18n.t("status.error").replace("{e}", &e);
+                }
+            } else if is_active {
+                if cancelled {
+                    self.status = self.i18n.t("app.cancelled").to_string();
+                } else if let Some(n) = count_done {
+                    self.status = self
+                        .i18n
+                        .t("status.elements")
+                        .replace("{n}", &n.to_string());
+                }
             }
         }
     }
