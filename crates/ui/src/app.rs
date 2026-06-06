@@ -483,6 +483,7 @@ impl eframe::App for NaygoApp {
                 pending: &mut pending,
                 icons: &self.icons,
                 show_parent_entry: self.settings.show_parent_entry,
+                i18n: &self.i18n,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))

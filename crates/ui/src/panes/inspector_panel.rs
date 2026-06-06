@@ -7,9 +7,9 @@
 use naygo_core::fs_model::EntryKind;
 use naygo_core::workspace::Workspace;
 
-pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace) {
+pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace, i18n: &naygo_core::i18n::I18n) {
     let Some(entry) = workspace.active_files().and_then(|f| f.focused_entry()) else {
-        ui.label("Nada seleccionado.");
+        ui.label(i18n.t("inspector.nothing"));
         return;
     };
     let (name, kind, path, size) = (
@@ -22,21 +22,21 @@ pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace) {
     egui::Grid::new("inspector_grid")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.strong("Nombre");
+            ui.strong(i18n.t("col.name"));
             ui.label(&name);
             ui.end_row();
-            ui.strong("Tipo");
+            ui.strong(i18n.t("inspector.type"));
             ui.label(match kind {
-                EntryKind::Directory => "Carpeta",
-                EntryKind::File => "Archivo",
-                EntryKind::Other => "Otro",
+                EntryKind::Directory => i18n.t("kind.folder"),
+                EntryKind::File => i18n.t("kind.file"),
+                EntryKind::Other => i18n.t("kind.other"),
             });
             ui.end_row();
-            ui.strong("Ruta");
+            ui.strong(i18n.t("inspector.path"));
             ui.label(path.display().to_string());
             ui.end_row();
             if let Some(s) = size {
-                ui.strong("Tamaño");
+                ui.strong(i18n.t("col.size"));
                 ui.label(format!("{s} bytes"));
                 ui.end_row();
             }

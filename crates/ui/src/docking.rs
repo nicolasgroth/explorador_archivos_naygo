@@ -23,6 +23,7 @@ pub struct NaygoTabViewer<'a> {
     pub pending: &'a mut Vec<PaneRequest>,
     pub icons: &'a crate::icons::IconProvider,
     pub show_parent_entry: bool,
+    pub i18n: &'a naygo_core::i18n::I18n,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -44,8 +45,8 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     .unwrap_or_default();
                 name.into()
             }
-            Some(PanePurpose::Tree) => "Carpetas".into(),
-            Some(PanePurpose::Inspector) => "Propiedades".into(),
+            Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").into(),
+            Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").into(),
             None => "—".into(),
         }
     }
@@ -61,11 +62,18 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                 self.pending,
                 self.icons,
                 self.show_parent_entry,
+                self.i18n,
             ),
-            Some(PanePurpose::Tree) => {
-                crate::panes::tree_panel::show(ui, self.workspace, self.pending, self.icons)
+            Some(PanePurpose::Tree) => crate::panes::tree_panel::show(
+                ui,
+                self.workspace,
+                self.pending,
+                self.icons,
+                self.i18n,
+            ),
+            Some(PanePurpose::Inspector) => {
+                crate::panes::inspector_panel::show(ui, self.workspace, self.i18n)
             }
-            Some(PanePurpose::Inspector) => crate::panes::inspector_panel::show(ui, self.workspace),
             None => {
                 ui.label("Panel desconocido");
             }
