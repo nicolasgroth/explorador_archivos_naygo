@@ -26,22 +26,46 @@ pub enum ListingMsg {
     Cancelled,
 }
 
+/// Qué entradas emite un listado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListingFilter {
+    /// Todas las entradas (comportamiento del file panel).
+    All,
+    /// Solo directorios (para el árbol de carpetas).
+    DirsOnly,
+}
+
 /// Lanza el listado de `dir` en un hilo worker. Devuelve el receptor del canal
 /// (la UI lo drena frame a frame) y el `JoinHandle` (por si se quiere unir).
 pub fn spawn_listing(
     dir: PathBuf,
     token: CancellationToken,
 ) -> (Receiver<ListingMsg>, JoinHandle<()>) {
+    spawn_listing_filtered(dir, token, ListingFilter::All)
+}
+
+/// Lanza el listado de `dir` con un filtro. Igual que `spawn_listing` pero pudiendo
+/// emitir solo directorios (para el árbol).
+pub fn spawn_listing_filtered(
+    dir: PathBuf,
+    token: CancellationToken,
+    filter: ListingFilter,
+) -> (Receiver<ListingMsg>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        list_into(&dir, &token, &tx);
+        list_into_filtered(&dir, &token, &tx, filter);
     });
     (rx, handle)
 }
 
-/// Cuerpo del worker: recorre el directorio emitiendo por `tx`. Extraído para
-/// poder testearlo de forma síncrona sin spawnear un hilo.
-fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg>) {
+/// Cuerpo del worker: recorre el directorio emitiendo por `tx`, aplicando `filter`.
+/// Extraído para testearlo síncrono sin spawnear un hilo.
+fn list_into_filtered(
+    dir: &Path,
+    token: &CancellationToken,
+    tx: &mpsc::Sender<ListingMsg>,
+    filter: ListingFilter,
+) {
     let read_dir = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -63,6 +87,10 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
         };
 
         let entry = entry_from_dirent(&dirent);
+        // Con DirsOnly (árbol) se omiten archivos y otros tipos no-directorio.
+        if filter == ListingFilter::DirsOnly && entry.kind != EntryKind::Directory {
+            continue;
+        }
         // Si el receptor se cayó (la UI cambió de carpeta), dejar de trabajar.
         if tx.send(ListingMsg::Entry(entry)).is_err() {
             return;
@@ -74,6 +102,12 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     } else {
         let _ = tx.send(ListingMsg::Done);
     }
+}
+
+/// Wrapper de compatibilidad para tests: lista todo.
+#[cfg(test)]
+fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg>) {
+    list_into_filtered(dir, token, tx, ListingFilter::All);
 }
 
 /// Construye un `Entry` a partir de un `DirEntry`, tolerando metadata ausente.
@@ -162,6 +196,50 @@ mod tests {
             !msgs.iter().any(|m| matches!(m, ListingMsg::Entry(_))),
             "no debe emitir entradas tras cancelar"
         );
+    }
+
+    #[test]
+    fn solo_directorios_filtra_los_archivos() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"x").unwrap();
+        fs::write(dir.path().join("b.log"), b"y").unwrap();
+        fs::create_dir(dir.path().join("sub1")).unwrap();
+        fs::create_dir(dir.path().join("sub2")).unwrap();
+
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel();
+        list_into_filtered(dir.path(), &token, &tx, ListingFilter::DirsOnly);
+        drop(tx);
+
+        let mut nombres = Vec::new();
+        for msg in rx {
+            if let ListingMsg::Entry(e) = msg {
+                nombres.push(e.name);
+            }
+        }
+        nombres.sort();
+        assert_eq!(nombres, vec!["sub1", "sub2"]);
+    }
+
+    #[test]
+    fn filtro_all_sigue_emitiendo_todo() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"x").unwrap();
+        fs::create_dir(dir.path().join("sub1")).unwrap();
+
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel();
+        list_into_filtered(dir.path(), &token, &tx, ListingFilter::All);
+        drop(tx);
+
+        let mut nombres = Vec::new();
+        for msg in rx {
+            if let ListingMsg::Entry(e) = msg {
+                nombres.push(e.name);
+            }
+        }
+        nombres.sort();
+        assert_eq!(nombres, vec!["a.txt", "sub1"]);
     }
 
     #[test]
