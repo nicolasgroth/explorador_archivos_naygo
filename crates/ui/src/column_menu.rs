@@ -74,6 +74,89 @@ pub fn to_bytes(value: f64, unit: SizeUnit) -> u64 {
     (value * mult).max(0.0) as u64
 }
 
+/// Convierte (año, mes 1-12, día 1-31) a un `SystemTime` (medianoche UTC de ese
+/// día), usando solo `std::time`. `None` si la fecha es inválida o anterior a 1970.
+pub fn ymd_to_system_time(year: i32, month: u32, day: u32) -> Option<std::time::SystemTime> {
+    let days = days_from_civil(year, month, day)?;
+    let secs = (days as u64).checked_mul(86_400)?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+}
+
+/// Días desde 1970-01-01 para una fecha civil válida (proleptic Gregorian).
+/// `None` si la fecha es inválida (mes/día fuera de rango, año < 1970, día > días
+/// del mes). Algoritmo de días civiles de Howard Hinnant.
+fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || year < 1970 {
+        return None;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let dim = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day > dim[(month - 1) as usize] {
+        return None;
+    }
+    let y = if month <= 2 { year - 1 } else { year } as i64;
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let m = month as i64;
+    let d = day as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    Some(era * 146097 + doe - 719468)
+}
+
+/// (año, mes, día) de un `SystemTime` (UTC), para mostrar un `DateRange` en los
+/// controles. `(0,0,0)` si es anterior a la época.
+pub fn system_time_to_ymd(t: std::time::SystemTime) -> (i32, u32, u32) {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    civil_from_days(days)
+}
+
+/// Inverso de `days_from_civil`: días desde 1970-01-01 → (año, mes, día).
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    (year as i32, m as u32, d as u32)
+}
+
+/// Acción al fijar un rango de fecha para una columna (Modified/Created). Ambos
+/// None → quitar filtro.
+pub fn date_filter_action(
+    kind: ColumnKind,
+    from: Option<std::time::SystemTime>,
+    to: Option<std::time::SystemTime>,
+) -> TableAction {
+    if from.is_none() && to.is_none() {
+        TableAction::ClearFilter(kind)
+    } else {
+        TableAction::SetFilter(kind, ColumnFilter::DateRange { from, to })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Render del desplegable (egui). La lógica de qué acción emitir vive en las
 // funciones puras de arriba; aquí solo dibujamos. El estado mostrado por los
@@ -228,16 +311,47 @@ fn filter_controls(
             }
         }
         ColumnKind::Modified | ColumnKind::Created => {
-            // PLACEHDER (Tarea 8 lo reemplaza por un control de fecha real). No
-            // emite ninguna acción. Sin texto hardcodeado: solo claves i18n + "—".
+            // Estado actual desde table.filters (fuente de verdad). Cada extremo se
+            // muestra como (año, mes, día); (0,0,0) = sin límite por ese lado.
+            // Un extremo solo aplica si y/m/d forman una fecha completa válida
+            // (mes/día = 0 → ymd_to_system_time devuelve None → sin límite).
+            let (mut from, mut to) = match table.filters.get(&kind) {
+                Some(ColumnFilter::DateRange { from, to }) => (
+                    from.map(system_time_to_ymd).unwrap_or((0, 0, 0)),
+                    to.map(system_time_to_ymd).unwrap_or((0, 0, 0)),
+                ),
+                _ => ((0, 0, 0), (0, 0, 0)),
+            };
+            let mut changed = false;
+            ui.label(i18n.t("filter.date_from"));
             ui.horizontal(|ui| {
-                ui.label(i18n.t("filter.date_from"));
-                ui.weak("—");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut from.0).range(0..=9999))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut from.1).range(0..=12))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut from.2).range(0..=31))
+                    .changed();
             });
+            ui.label(i18n.t("filter.date_to"));
             ui.horizontal(|ui| {
-                ui.label(i18n.t("filter.date_to"));
-                ui.weak("—");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut to.0).range(0..=9999))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut to.1).range(0..=12))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut to.2).range(0..=31))
+                    .changed();
             });
+            if changed {
+                let f = ymd_to_system_time(from.0, from.1, from.2);
+                let t = ymd_to_system_time(to.0, to.1, to.2);
+                actions.push(date_filter_action(kind, f, t));
+            }
         }
     }
 }
@@ -346,5 +460,41 @@ mod tests {
         assert_eq!(to_bytes(1.0, SizeUnit::Kb), 1024);
         assert_eq!(to_bytes(2.0, SizeUnit::Mb), 2 * 1024 * 1024);
         assert_eq!(to_bytes(1.0, SizeUnit::Gb), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn ymd_epoch_es_cero_dias() {
+        assert_eq!(
+            ymd_to_system_time(1970, 1, 1).unwrap(),
+            std::time::UNIX_EPOCH
+        );
+    }
+    #[test]
+    fn ymd_un_dia_despues() {
+        assert_eq!(
+            ymd_to_system_time(1970, 1, 2).unwrap(),
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400)
+        );
+    }
+    #[test]
+    fn ymd_rechaza_fecha_invalida() {
+        assert!(ymd_to_system_time(2021, 2, 29).is_none()); // no bisiesto
+        assert!(ymd_to_system_time(2020, 2, 29).is_some()); // bisiesto
+        assert!(ymd_to_system_time(2021, 13, 1).is_none());
+        assert!(ymd_to_system_time(1969, 1, 1).is_none());
+    }
+    #[test]
+    fn ymd_roundtrip() {
+        for (y, m, d) in [(1970, 1, 1), (2000, 2, 29), (2026, 6, 7), (1999, 12, 31)] {
+            let t = ymd_to_system_time(y, m, d).unwrap();
+            assert_eq!(system_time_to_ymd(t), (y, m, d), "roundtrip {y}-{m}-{d}");
+        }
+    }
+    #[test]
+    fn date_filter_ambos_none_quita() {
+        assert_eq!(
+            date_filter_action(ColumnKind::Modified, None, None),
+            TableAction::ClearFilter(ColumnKind::Modified)
+        );
     }
 }
