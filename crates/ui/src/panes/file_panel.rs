@@ -143,6 +143,10 @@ pub fn show(
         .id_salt(("file_table", id.0))
         .striped(true)
         .resizable(true)
+        // Las celdas sensan clic para que `row.response()` (unión de las celdas de la
+        // fila) registre clics en CUALQUIER celda/zona de la fila, no solo en Nombre.
+        // Por defecto las celdas solo sensan hover y la fila completa no sería clicable.
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
     for col in &visible_cols {
         // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
@@ -206,17 +210,16 @@ pub fn show(
                         // ".." se ve como una carpeta normal (estilo Total Commander):
                         // usa el ícono Folder, no uno especial de "subir".
                         for (ci, _col) in visible_cols.iter().enumerate() {
-                            let (_, _) = row.col(|ui| {
+                            row.col(|ui| {
                                 if ci == 0 {
-                                    let resp = icon_row(ui, icons, IconKey::Folder, "..", false);
-                                    // ".." sube con UN solo clic (además del doble): no
-                                    // hay nada que "seleccionar" en ella. Asimetría
-                                    // intencional (estilo Total Commander).
-                                    if resp.double_clicked() || resp.clicked() {
-                                        parent_activated = true;
-                                    }
+                                    let _ = icon_row(ui, icons, IconKey::Folder, "..", false);
                                 }
                             });
+                        }
+                        // Fila completa: ".." sube con un clic (o doble) en cualquier celda.
+                        let row_resp = row.response();
+                        if row_resp.clicked() || row_resp.double_clicked() {
+                            parent_activated = true;
                         }
                     }
                     DisplayRow::Entry(i) => {
@@ -227,22 +230,22 @@ pub fn show(
                             row.col(|ui| {
                                 if ci == 0 {
                                     let key = icon_key_for(entry);
-                                    // `false`: el resaltado de selección lo pinta el
-                                    // `row.set_selected(selected)` de la fila completa.
-                                    // Pasar `selected` aquí lo pintaría dos veces (doble
-                                    // resaltado en la celda Nombre). El sensado de clic
-                                    // de `icon_row` es independiente de este flag.
-                                    let resp = icon_row(ui, icons, key, &entry.name, false);
-                                    if resp.clicked() {
-                                        clicked = Some(i);
-                                    }
-                                    if resp.double_clicked() {
-                                        activated = Some(i);
-                                    }
+                                    // El ícono+nombre se pintan; el clic se captura sobre
+                                    // la FILA completa (abajo), no por celda.
+                                    let _ = icon_row(ui, icons, key, &entry.name, false);
                                 } else {
                                     ui.label(cell_text(entry, col.kind));
                                 }
                             });
+                        }
+                        // Fila completa clicable: clic en cualquier celda/zona selecciona;
+                        // doble clic navega/activa.
+                        let row_resp = row.response();
+                        if row_resp.clicked() {
+                            clicked = Some(i);
+                        }
+                        if row_resp.double_clicked() {
+                            activated = Some(i);
                         }
                     }
                     DisplayRow::NoMatches => {
