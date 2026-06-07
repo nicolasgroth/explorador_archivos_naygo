@@ -15,6 +15,7 @@ mod input;
 mod logging;
 mod panes;
 mod settings_window;
+mod sort_ui;
 mod templates_menu;
 mod toolbar;
 mod typeahead;

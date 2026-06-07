@@ -31,6 +31,7 @@ pub fn show(
     };
     let focused = f.focused;
     let show_dirs = f.show_dirs;
+    let sort = f.sort; // SortSpec es Copy; se lee antes de los closures
     let current_dir = f.current_dir.clone();
     let entries: Vec<Entry> = f.entries.clone();
 
@@ -49,20 +50,32 @@ pub fn show(
     let mut clicked: Option<usize> = None;
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
+    let mut header_clicked: Option<naygo_core::fs_model::SortKey> = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new(("file_grid", id.0))
             .num_columns(3)
             .striped(true)
             .show(ui, |ui| {
-                ui.strong(i18n.t("col.name"));
-                ui.strong(i18n.t("col.size"));
-                ui.strong(i18n.t("col.modified"));
+                // Encabezados clicables: clic ordena por esa columna (y alterna
+                // dirección si ya es la activa). Indicador ▲/▼ en la columna activa.
+                use naygo_core::fs_model::SortKey;
+                if header_label(ui, i18n.t("col.name"), sort, SortKey::Name).clicked() {
+                    header_clicked = Some(SortKey::Name);
+                }
+                if header_label(ui, i18n.t("col.size"), sort, SortKey::Size).clicked() {
+                    header_clicked = Some(SortKey::Size);
+                }
+                if header_label(ui, i18n.t("col.modified"), sort, SortKey::Modified).clicked() {
+                    header_clicked = Some(SortKey::Modified);
+                }
                 ui.end_row();
 
                 // Fila ".." (si corresponde).
                 if parent.is_some() {
-                    let resp = icon_row(ui, icons, IconKey::ParentDir, "..", false);
+                    // ".." se ve como una carpeta normal (estilo Total Commander):
+                    // usa el ícono Folder en lugar de uno especial de "subir".
+                    let resp = icon_row(ui, icons, IconKey::Folder, "..", false);
                     // ".." sube con UN solo clic (además del doble): no hay nada que
                     // "seleccionar" en ella, a diferencia de una carpeta real que
                     // selecciona con un clic y entra con doble. Asimetría intencional
@@ -95,6 +108,14 @@ pub fn show(
             });
     });
 
+    if let Some(key) = header_clicked {
+        let new_spec = crate::sort_ui::next_sort_on_header_click(sort, key);
+        if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.sort = new_spec;
+            let spec = f.sort;
+            naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        }
+    }
     if parent_activated {
         if let Some(dir) = parent {
             pending.push(PaneRequest::Activate { id });
@@ -142,6 +163,23 @@ fn icon_row(
         img.union(label)
     })
     .inner
+}
+
+/// Pinta un encabezado de columna clicable con indicador de dirección si es el
+/// criterio activo. Devuelve el `Response` (clic ordena por esa columna).
+fn header_label(
+    ui: &mut egui::Ui,
+    title: &str,
+    sort: naygo_core::fs_model::SortSpec,
+    key: naygo_core::fs_model::SortKey,
+) -> egui::Response {
+    let text = if sort.key == key {
+        let arrow = if sort.ascending { " ▲" } else { " ▼" };
+        format!("{title}{arrow}")
+    } else {
+        title.to_string()
+    };
+    ui.selectable_label(sort.key == key, egui::RichText::new(text).strong())
 }
 
 fn format_size(entry: &Entry) -> String {

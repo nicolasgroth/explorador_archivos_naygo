@@ -182,6 +182,7 @@ mod tests {
             kind: EntryKind::File,
             size: Some(1),
             modified: None,
+            created: None,
             hidden: false,
         }
     }
@@ -215,6 +216,7 @@ mod tests {
             kind: EntryKind::Directory,
             size: None,
             modified: None,
+            created: None,
             hidden: false,
         };
         assert_eq!(icon_key_for(&dir), IconKey::Folder);
@@ -236,6 +238,7 @@ mod tests {
             kind: EntryKind::Other,
             size: None,
             modified: None,
+            created: None,
             hidden: false,
         };
         assert_eq!(icon_key_for(&other), IconKey::Unknown);

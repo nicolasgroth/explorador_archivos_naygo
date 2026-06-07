@@ -22,8 +22,10 @@ pub fn sort_entries(entries: &mut [Entry], spec: &SortSpec) {
 
         let ordering = match spec.key {
             SortKey::Name => cmp_name(a, b),
+            SortKey::Extension => cmp_extension(a, b),
             SortKey::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
             SortKey::Modified => a.modified.cmp(&b.modified),
+            SortKey::Created => a.created.cmp(&b.created),
             SortKey::Kind => format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)),
         };
 
@@ -40,6 +42,21 @@ fn cmp_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
 }
 
+/// Comparación por extensión del path, case-insensitive. Sin extensión = vacío.
+/// Usa folding ASCII (`to_ascii_lowercase`) a propósito: las extensiones reales
+/// son ASCII y así se evita el costo Unicode de `to_lowercase` (a diferencia de
+/// `cmp_name`, que sí maneja nombres Unicode).
+fn cmp_extension(a: &Entry, b: &Entry) -> std::cmp::Ordering {
+    let ext = |e: &Entry| {
+        e.path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    };
+    ext(a).cmp(&ext(b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +70,7 @@ mod tests {
             kind,
             size: Some(size),
             modified: None,
+            created: None,
             hidden: false,
         }
     }
@@ -109,6 +127,58 @@ mod tests {
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["big", "mid", "small"]);
+    }
+
+    #[test]
+    fn por_extension_ascendente() {
+        let mut v = vec![
+            entry("z.txt", EntryKind::File, 1),
+            entry("a.zip", EntryKind::File, 1),
+            entry("m.jpg", EntryKind::File, 1),
+        ];
+        let spec = SortSpec {
+            key: SortKey::Extension,
+            ascending: true,
+            dirs_first: false,
+        };
+        sort_entries(&mut v, &spec);
+        let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["m.jpg", "z.txt", "a.zip"]); // jpg < txt < zip
+    }
+
+    #[test]
+    fn por_extension_case_insensitive() {
+        let mut v = vec![
+            entry("b.TXT", EntryKind::File, 1),
+            entry("a.zip", EntryKind::File, 1),
+        ];
+        let spec = SortSpec {
+            key: SortKey::Extension,
+            ascending: true,
+            dirs_first: false,
+        };
+        sort_entries(&mut v, &spec);
+        let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["b.TXT", "a.zip"]); // txt < zip regardless of case
+    }
+
+    #[test]
+    fn por_creacion_descendente() {
+        use std::time::{Duration, SystemTime};
+        let base = SystemTime::UNIX_EPOCH;
+        let mut older = entry("viejo", EntryKind::File, 1);
+        older.created = Some(base);
+        let mut newer = entry("nuevo", EntryKind::File, 1);
+        newer.created = Some(base + Duration::from_secs(100));
+        let mut v = vec![older, newer];
+        let spec = SortSpec {
+            key: SortKey::Created,
+            ascending: false,
+            dirs_first: false,
+        };
+        sort_entries(&mut v, &spec);
+        let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["nuevo", "viejo"]); // descendente: más nuevo primero
     }
 
     #[test]

@@ -95,6 +95,8 @@ fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
     };
 
     let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+    // La fecha de creación puede no estar soportada por el FS → None. Tolerante.
+    let created = metadata.as_ref().and_then(|m| m.created().ok());
 
     Entry {
         name,
@@ -102,6 +104,7 @@ fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
         kind,
         size,
         modified,
+        created,
         hidden: false,
     }
 }
