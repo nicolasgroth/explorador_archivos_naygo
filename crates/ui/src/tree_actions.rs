@@ -9,8 +9,6 @@ use std::path::PathBuf;
 
 /// Una acción pedida desde el árbol durante el pintado.
 #[derive(Clone, Debug, PartialEq, Eq)]
-// consumido en Tareas 8-9 (estado del árbol + render)
-#[allow(dead_code)]
 pub enum TreeAction {
     /// Expandir (y listar) el nodo en `path`.
     Expand(PathBuf),

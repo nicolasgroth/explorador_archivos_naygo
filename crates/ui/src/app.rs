@@ -301,7 +301,6 @@ impl NaygoApp {
 
     /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
     /// vez. Útil antes de pintar un panel Tree.
-    #[allow(dead_code)] // conectado en la Tarea 9 (render + auto-sync)
     fn ensure_tree(&mut self, id: PaneId) -> &mut DirTree {
         self.trees.entry(id).or_insert_with(|| {
             let drives = naygo_platform::drives::drives()
@@ -314,7 +313,6 @@ impl NaygoApp {
 
     /// Expande una rama del árbol del panel `id`: marca Loading y lanza el worker
     /// solo-directorios. No-op si ya hay un worker para esa (id, path).
-    #[allow(dead_code)] // conectado en la Tarea 9
     fn tree_expand(&mut self, id: PaneId, path: PathBuf) {
         // Ya hay un worker en vuelo para esta rama → no relanzar.
         if self.tree_listings.contains_key(&(id, path.clone())) {
@@ -345,7 +343,6 @@ impl NaygoApp {
     }
 
     /// Colapsa una rama (conserva hijos). Cancela su worker si seguía cargando.
-    #[allow(dead_code)] // conectado en la Tarea 9
     fn tree_collapse(&mut self, id: PaneId, path: PathBuf) {
         if let Some(l) = self.tree_listings.get(&(id, path.clone())) {
             l.token.cancel();
@@ -631,7 +628,54 @@ impl eframe::App for NaygoApp {
             });
         });
 
+        // --- Sincronización del árbol con el panel Files activo ---
+        // Aseguramos un DirTree por cada panel Tree y lo apuntamos a la carpeta del
+        // panel activo, expandiendo la cadena de ancestros necesaria para revelarla.
+        let active_dir = self.workspace.active_files().map(|f| f.current_dir.clone());
+        let tree_pane_ids: Vec<PaneId> = self
+            .workspace
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Tree)
+            .map(|p| p.id)
+            .collect();
+        for id in &tree_pane_ids {
+            self.ensure_tree(*id);
+        }
+        // CAVEAT de casing: reveal_chain/node_at usan starts_with/== que en Windows
+        // son sensibles a mayúsculas. Las raíces vienen de GetLogicalDriveStringsW
+        // (devuelve "C:\" en mayúscula) y current_dir suele ser canónico, así que en
+        // la práctica coinciden. No normalizamos rutas aquí (sería frágil); si la
+        // letra de unidad difiriera, el auto-reveal simplemente no encontraría la
+        // cadena (degrada sin romper).
+        if let Some(dir) = active_dir.clone() {
+            for id in &tree_pane_ids {
+                // Re-ejecutar cada frame mientras active_path == dir es inofensivo:
+                // los niveles ya cargados se saltan (children.is_some()) y los que
+                // están en vuelo se saltan por el guard contains_key de tree_expand.
+                let needs: Vec<PathBuf> = if let Some(tree) = self.trees.get_mut(id) {
+                    if tree.active_path.as_deref() != Some(dir.as_path()) {
+                        tree.set_active(dir.clone());
+                    }
+                    tree.reveal_chain(&dir)
+                        .into_iter()
+                        .filter(|anc| {
+                            tree.node_at(anc)
+                                .map(|n| n.children.is_none())
+                                .unwrap_or(false)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for anc in needs {
+                    self.tree_expand(*id, anc);
+                }
+            }
+        }
+
         let mut pending: Vec<crate::docking::PaneRequest> = Vec::new();
+        let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -640,6 +684,8 @@ impl eframe::App for NaygoApp {
                 icons: &self.icons,
                 show_parent_entry: self.settings.show_parent_entry,
                 i18n: &self.i18n,
+                trees: &self.trees,
+                tree_actions: &mut tree_actions,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -658,6 +704,35 @@ impl eframe::App for NaygoApp {
                         f.navigate_to(dir.clone());
                         self.start_listing(id, dir);
                     }
+                }
+            }
+        }
+
+        // Acciones del árbol acumuladas durante el pintado.
+        for (id, action) in tree_actions {
+            match action {
+                crate::tree_actions::TreeAction::Expand(path) => self.tree_expand(id, path),
+                crate::tree_actions::TreeAction::Collapse(path) => self.tree_collapse(id, path),
+                crate::tree_actions::TreeAction::Navigate(path) => {
+                    if let Some(active) = self.workspace.active_id() {
+                        if let Some(f) = self
+                            .workspace
+                            .pane_mut(active)
+                            .and_then(|p| p.files.as_mut())
+                        {
+                            f.navigate_to(path.clone());
+                            self.start_listing(active, path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Limpiar el reveal pendiente para que el scroll no se repita cada frame.
+        for id in &tree_pane_ids {
+            if let Some(t) = self.trees.get_mut(id) {
+                if t.reveal_to.is_some() {
+                    t.clear_reveal();
                 }
             }
         }
