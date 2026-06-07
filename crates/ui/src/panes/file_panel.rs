@@ -173,7 +173,7 @@ pub fn show(
 
     builder
         .header(HEADER_HEIGHT, |mut header| {
-            // Encabezados: título + indicadores (▲/▼ si es la columna de orden, ⏷ si
+            // Encabezados: título + indicadores (▲/▼ si es la columna de orden, ≡ si
             // tiene filtro activo) + botón ▾ que abre el menú de columna. Cada
             // encabezado es FUENTE de arrastre (payload = índice REAL en
             // `table.columns`) y DESTINO: soltar A sobre B mueve A a la posición de B
@@ -323,10 +323,11 @@ pub fn show(
     }
 }
 
-/// Pinta el encabezado de una columna: título + indicadores (orden ▲/▼, filtro ⏷)
-/// y un botón `▾` que abre el menú de columna (orden/filtro/columnas). Acumula
-/// `TableAction`s. El id del popup incluye el `PaneId` para que dos paneles que
-/// muestran la misma columna no compartan el estado de UI.
+/// Pinta el encabezado de una columna: título + indicadores (orden ▲/▼, filtro ≡)
+/// y un botón `▾` que abre el menú de columna (orden/filtro/columnas). El clic
+/// derecho sobre el encabezado abre ese mismo menú. Acumula `TableAction`s. El id
+/// del popup incluye el `PaneId` para que dos paneles que muestran la misma columna
+/// no compartan el estado de UI.
 #[allow(clippy::too_many_arguments)]
 fn column_header(
     ui: &mut egui::Ui,
@@ -338,27 +339,39 @@ fn column_header(
     i18n: &naygo_core::i18n::I18n,
     actions: &mut Vec<TableAction>,
 ) {
-    ui.horizontal(|ui| {
-        let mut title = column_title(kind, i18n);
-        // Indicador de orden en la columna activa.
-        if sort.key == naygo_core::columns::sort_key_of(kind) {
-            title.push(' ');
-            title.push(if sort.ascending { '▲' } else { '▼' });
-        }
-        // Indicador de filtro activo (embudo).
-        if table.filters.contains_key(&kind) {
-            title.push(' ');
-            title.push('⏷');
-        }
-        ui.label(egui::RichText::new(title).strong());
+    // El id del popup se calcula primero: lo usan tanto `Popup::menu(...).id(...)`
+    // como la apertura por id al hacer clic derecho sobre el encabezado.
+    let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
+    let header_resp = ui
+        .horizontal(|ui| {
+            let mut title = column_title(kind, i18n);
+            // Indicador de orden en la columna activa.
+            if sort.key == naygo_core::columns::sort_key_of(kind) {
+                title.push(' ');
+                title.push(if sort.ascending { '▲' } else { '▼' });
+            }
+            // Indicador de filtro activo.
+            if table.filters.contains_key(&kind) {
+                title.push(' ');
+                title.push('≡');
+            }
+            ui.label(egui::RichText::new(title).strong());
 
-        // Botón ▾ que alterna el popup del menú de columna.
-        let menu_button = ui.add(egui::Button::new("▾").frame(false));
-        let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
-        egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
-            crate::column_menu::show_menu(ui, kind, table, sort, ext_counts, i18n, actions);
-        });
-    });
+            // Botón ▾ que alterna el popup del menú de columna.
+            let menu_button = ui.add(egui::Button::new("▾").frame(false));
+            egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
+                crate::column_menu::show_menu(ui, kind, table, sort, ext_counts, i18n, actions);
+            });
+        })
+        .response;
+
+    // Clic derecho en cualquier parte del encabezado abre el MISMO menú que el ▾.
+    // Solo marca el popup como abierto en memoria; `Popup::menu(...).show` lo pinta
+    // el frame siguiente. No re-ejecuta el contenido aquí, así que `actions` (que
+    // ya dejó de estar prestado al cerrar el closure de arriba) no se necesita.
+    if header_resp.secondary_clicked() {
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    }
 }
 
 /// Pinta una fila "[ícono] nombre" como un único elemento clicable. Devuelve el
