@@ -115,6 +115,57 @@ impl DirTree {
     pub fn node_at_mut(&mut self, path: &Path) -> Option<&mut TreeNode> {
         self.roots.iter_mut().find_map(|r| find_node_mut(r, path))
     }
+
+    /// Marca el nodo como `Loading`, expandido, y prepara su lista de hijos vacía
+    /// (lista para recibir los que lleguen del worker). No-op si el path no existe.
+    pub fn begin_loading(&mut self, path: &Path) {
+        if let Some(node) = self.node_at_mut(path) {
+            node.expanded = true;
+            node.state = NodeState::Loading;
+            node.children = Some(Vec::new());
+        }
+    }
+
+    /// Inserta una subcarpeta `child_dir` en el nodo `parent`, manteniendo el orden
+    /// por nombre (case-insensitive). No-op si el padre no existe o aún no tiene
+    /// `children` inicializado.
+    pub fn push_child(&mut self, parent: &Path, child_dir: PathBuf) {
+        if let Some(node) = self.node_at_mut(parent) {
+            if let Some(children) = node.children.as_mut() {
+                let child = TreeNode::folder(child_dir);
+                let key = child.name.to_lowercase();
+                let pos = children
+                    .iter()
+                    .position(|c| c.name.to_lowercase() > key)
+                    .unwrap_or(children.len());
+                children.insert(pos, child);
+            }
+        }
+    }
+
+    /// Cierra el listado de un nodo: `Loaded`/`Empty` según tenga hijos, o `Error`.
+    pub fn finish_loading(&mut self, path: &Path, outcome: NodeOutcome) {
+        if let Some(node) = self.node_at_mut(path) {
+            node.state = match outcome {
+                NodeOutcome::Error => NodeState::Error,
+                NodeOutcome::Done => {
+                    let has = node.children.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+                    if has {
+                        NodeState::Loaded
+                    } else {
+                        NodeState::Empty
+                    }
+                }
+            };
+        }
+    }
+
+    /// Colapsa un nodo conservando sus hijos ya cargados.
+    pub fn collapse(&mut self, path: &Path) {
+        if let Some(node) = self.node_at_mut(path) {
+            node.expanded = false;
+        }
+    }
 }
 
 /// Busca recursivamente un nodo por path dentro de `node`.
@@ -173,5 +224,71 @@ mod tests {
         let t = DirTree::from_drives(&drive_list());
         assert!(t.node_at(Path::new("C:\\")).is_some());
         assert!(t.node_at(Path::new("Z:\\")).is_none());
+    }
+
+    #[test]
+    fn begin_loading_marca_loading_y_expandido() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        let n = t.node_at(Path::new("C:\\")).unwrap();
+        assert_eq!(n.state, NodeState::Loading);
+        assert!(n.expanded);
+        assert_eq!(n.children.as_ref().map(|c| c.len()), Some(0));
+    }
+
+    #[test]
+    fn push_child_inserta_ordenado_case_insensitive() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Windows"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\apps"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        let n = t.node_at(Path::new("C:\\")).unwrap();
+        let names: Vec<&str> = n
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["apps", "Users", "Windows"]);
+    }
+
+    #[test]
+    fn finish_loading_con_hijos_queda_loaded() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Loaded);
+    }
+
+    #[test]
+    fn finish_loading_sin_hijos_queda_empty() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Empty);
+    }
+
+    #[test]
+    fn finish_loading_error_queda_error() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Error);
+        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Error);
+    }
+
+    #[test]
+    fn collapse_conserva_hijos() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        t.collapse(Path::new("C:\\"));
+        let n = t.node_at(Path::new("C:\\")).unwrap();
+        assert!(!n.expanded);
+        assert_eq!(n.children.as_ref().map(|c| c.len()), Some(1));
+        assert_eq!(n.state, NodeState::Loaded);
     }
 }
