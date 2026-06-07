@@ -130,7 +130,10 @@ impl FilePaneState {
                     if !text.is_empty() {
                         t.set_filter(
                             ColumnKind::Name,
-                            ColumnFilter::Text { contains: text, case_sensitive: false },
+                            ColumnFilter::Text {
+                                contains: text,
+                                case_sensitive: false,
+                            },
                         );
                     }
                 }
@@ -194,10 +197,17 @@ mod tests {
             table: None,
         };
         let s = FilePaneState::from_persist(persist);
-        let f = s.table.filters.get(&ColumnKind::Name).expect("filtro de nombre migrado");
+        let f = s
+            .table
+            .filters
+            .get(&ColumnKind::Name)
+            .expect("filtro de nombre migrado");
         assert_eq!(
             *f,
-            ColumnFilter::Text { contains: "informe".into(), case_sensitive: false }
+            ColumnFilter::Text {
+                contains: "informe".into(),
+                case_sensitive: false
+            }
         );
     }
 

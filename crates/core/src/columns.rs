@@ -42,7 +42,11 @@ pub struct TableState {
 
 impl Default for TableState {
     fn default() -> Self {
-        let col = |kind, visible, width| ColumnSpec { kind, visible, width };
+        let col = |kind, visible, width| ColumnSpec {
+            kind,
+            visible,
+            width,
+        };
         TableState {
             columns: vec![
                 col(ColumnKind::Name, true, 240.0),
@@ -121,7 +125,12 @@ mod tests {
         let visible: Vec<ColumnKind> = t.visible_columns().map(|c| c.kind).collect();
         assert_eq!(
             visible,
-            vec![ColumnKind::Name, ColumnKind::Extension, ColumnKind::Size, ColumnKind::Modified]
+            vec![
+                ColumnKind::Name,
+                ColumnKind::Extension,
+                ColumnKind::Size,
+                ColumnKind::Modified
+            ]
         );
         assert!(t.filters.is_empty());
     }
@@ -130,9 +139,21 @@ mod tests {
     fn toggle_visible_oculta_y_muestra() {
         let mut t = TableState::default();
         t.toggle_visible(ColumnKind::Size);
-        assert!(!t.columns.iter().find(|c| c.kind == ColumnKind::Size).unwrap().visible);
+        assert!(
+            !t.columns
+                .iter()
+                .find(|c| c.kind == ColumnKind::Size)
+                .unwrap()
+                .visible
+        );
         t.toggle_visible(ColumnKind::Size);
-        assert!(t.columns.iter().find(|c| c.kind == ColumnKind::Size).unwrap().visible);
+        assert!(
+            t.columns
+                .iter()
+                .find(|c| c.kind == ColumnKind::Size)
+                .unwrap()
+                .visible
+        );
     }
 
     #[test]
@@ -140,7 +161,11 @@ mod tests {
         let mut t = TableState::default();
         t.toggle_visible(ColumnKind::Name);
         assert!(
-            t.columns.iter().find(|c| c.kind == ColumnKind::Name).unwrap().visible,
+            t.columns
+                .iter()
+                .find(|c| c.kind == ColumnKind::Name)
+                .unwrap()
+                .visible,
             "Nombre siempre visible"
         );
     }
@@ -156,10 +181,20 @@ mod tests {
     fn set_width_clampa() {
         let mut t = TableState::default();
         t.set_width(ColumnKind::Name, 5.0);
-        let w = t.columns.iter().find(|c| c.kind == ColumnKind::Name).unwrap().width;
+        let w = t
+            .columns
+            .iter()
+            .find(|c| c.kind == ColumnKind::Name)
+            .unwrap()
+            .width;
         assert!(w >= MIN_COLUMN_WIDTH, "se respeta el ancho mínimo");
         t.set_width(ColumnKind::Name, 5000.0);
-        let w = t.columns.iter().find(|c| c.kind == ColumnKind::Name).unwrap().width;
+        let w = t
+            .columns
+            .iter()
+            .find(|c| c.kind == ColumnKind::Name)
+            .unwrap()
+            .width;
         assert!(w <= MAX_COLUMN_WIDTH, "se respeta el ancho máximo");
     }
 
@@ -169,7 +204,10 @@ mod tests {
         let mut t = TableState::default();
         t.set_filter(
             ColumnKind::Name,
-            ColumnFilter::Text { contains: "x".into(), case_sensitive: false },
+            ColumnFilter::Text {
+                contains: "x".into(),
+                case_sensitive: false,
+            },
         );
         assert!(t.filters.contains_key(&ColumnKind::Name));
         t.clear_filter(ColumnKind::Name);
@@ -193,7 +231,10 @@ mod tests {
         t.toggle_visible(ColumnKind::Created);
         t.set_filter(
             ColumnKind::Name,
-            ColumnFilter::Text { contains: "doc".into(), case_sensitive: false },
+            ColumnFilter::Text {
+                contains: "doc".into(),
+                case_sensitive: false,
+            },
         );
         let json = serde_json::to_string(&t).unwrap();
         let back: TableState = serde_json::from_str(&json).unwrap();

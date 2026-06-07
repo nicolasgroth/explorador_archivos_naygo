@@ -15,13 +15,19 @@ use std::time::SystemTime;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColumnFilter {
     /// Nombre contiene una subcadena.
-    Text { contains: String, case_sensitive: bool },
+    Text {
+        contains: String,
+        case_sensitive: bool,
+    },
     /// Extensión dentro del conjunto marcado (minúsculas; "" = sin extensión).
     Extensions(BTreeSet<String>),
     /// Tamaño en bytes dentro de [min, max] (None = sin límite ese lado).
     SizeRange { min: Option<u64>, max: Option<u64> },
     /// Fecha (modificación o creación, según la columna) dentro de [from, to].
-    DateRange { from: Option<SystemTime>, to: Option<SystemTime> },
+    DateRange {
+        from: Option<SystemTime>,
+        to: Option<SystemTime>,
+    },
 }
 
 /// Extensión de un `Entry` en minúsculas; "" si no tiene.
@@ -42,7 +48,10 @@ pub fn matches(entry: &Entry, filters: &BTreeMap<ColumnKind, ColumnFilter>) -> b
 /// Evalúa un único filtro contra un entry.
 fn match_one(entry: &Entry, kind: ColumnKind, f: &ColumnFilter) -> bool {
     match f {
-        ColumnFilter::Text { contains, case_sensitive } => {
+        ColumnFilter::Text {
+            contains,
+            case_sensitive,
+        } => {
             if contains.is_empty() {
                 return true;
             }
@@ -98,7 +107,11 @@ mod tests {
         Entry {
             name: name.into(),
             path: PathBuf::from(name),
-            kind: if size.is_some() { EntryKind::File } else { EntryKind::Directory },
+            kind: if size.is_some() {
+                EntryKind::File
+            } else {
+                EntryKind::Directory
+            },
             size,
             modified: None,
             created: None,
@@ -120,7 +133,10 @@ mod tests {
         let mut f = no_filters();
         f.insert(
             ColumnKind::Name,
-            ColumnFilter::Text { contains: "INFORME".into(), case_sensitive: false },
+            ColumnFilter::Text {
+                contains: "INFORME".into(),
+                case_sensitive: false,
+            },
         );
         assert!(matches(&entry("informe_final.pdf", Some(1)), &f));
         assert!(!matches(&entry("notas.txt", Some(1)), &f));
@@ -131,7 +147,10 @@ mod tests {
         let mut f = no_filters();
         f.insert(
             ColumnKind::Name,
-            ColumnFilter::Text { contains: "Informe".into(), case_sensitive: true },
+            ColumnFilter::Text {
+                contains: "Informe".into(),
+                case_sensitive: true,
+            },
         );
         assert!(matches(&entry("Informe.pdf", Some(1)), &f));
         assert!(!matches(&entry("informe.pdf", Some(1)), &f));
@@ -140,7 +159,10 @@ mod tests {
     #[test]
     fn extensions_set_vacio_pasa_todo() {
         let mut f = no_filters();
-        f.insert(ColumnKind::Extension, ColumnFilter::Extensions(BTreeSet::new()));
+        f.insert(
+            ColumnKind::Extension,
+            ColumnFilter::Extensions(BTreeSet::new()),
+        );
         assert!(matches(&entry("a.txt", Some(1)), &f));
     }
 
@@ -159,7 +181,13 @@ mod tests {
     #[test]
     fn size_range_bordes_y_carpetas_fuera() {
         let mut f = no_filters();
-        f.insert(ColumnKind::Size, ColumnFilter::SizeRange { min: Some(10), max: Some(100) });
+        f.insert(
+            ColumnKind::Size,
+            ColumnFilter::SizeRange {
+                min: Some(10),
+                max: Some(100),
+            },
+        );
         assert!(matches(&entry("a", Some(10)), &f));
         assert!(matches(&entry("b", Some(100)), &f));
         assert!(!matches(&entry("c", Some(9)), &f));
@@ -194,7 +222,10 @@ mod tests {
         f.insert(ColumnKind::Extension, ColumnFilter::Extensions(set));
         f.insert(
             ColumnKind::Name,
-            ColumnFilter::Text { contains: "informe".into(), case_sensitive: false },
+            ColumnFilter::Text {
+                contains: "informe".into(),
+                case_sensitive: false,
+            },
         );
         assert!(matches(&entry("informe.pdf", Some(1)), &f));
         assert!(!matches(&entry("informe.txt", Some(1)), &f));
