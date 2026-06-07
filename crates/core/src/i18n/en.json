@@ -70,8 +70,6 @@
   "filter.size_to": "To:",
   "filter.date_from": "From:",
   "filter.date_to": "To:",
-  "filter.clear": "Clear",
-  "filter.none": "None",
   "table.no_matches": "No matches",
   "inspector.nothing": "Nothing selected.",
   "inspector.type": "Type",
