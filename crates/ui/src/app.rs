@@ -21,7 +21,7 @@ use naygo_core::workspace::template::LayoutTemplate;
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
 use naygo_core::NodeOutcome;
 use naygo_core::TemplateStore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
@@ -676,6 +676,7 @@ impl eframe::App for NaygoApp {
 
         let mut pending: Vec<crate::docking::PaneRequest> = Vec::new();
         let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
+        let mut tree_revealed: HashSet<PaneId> = HashSet::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -686,6 +687,7 @@ impl eframe::App for NaygoApp {
                 i18n: &self.i18n,
                 trees: &self.trees,
                 tree_actions: &mut tree_actions,
+                tree_revealed: &mut tree_revealed,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -728,10 +730,14 @@ impl eframe::App for NaygoApp {
             }
         }
 
-        // Limpiar el reveal pendiente para que el scroll no se repita cada frame.
+        // Limpiar el reveal SOLO si el nodo objetivo se pintó (y se hizo scroll) este
+        // frame. Si el objetivo aún no está cargado/pintado (revelado en cascada),
+        // reveal_to persiste hasta que aparezca; el repaint por workers activos
+        // garantiza más frames. Así el scroll a una carpeta profunda recién navegada
+        // sí ocurre, en vez de perderse el primer frame.
         for id in &tree_pane_ids {
-            if let Some(t) = self.trees.get_mut(id) {
-                if t.reveal_to.is_some() {
+            if tree_revealed.contains(id) {
+                if let Some(t) = self.trees.get_mut(id) {
                     t.clear_reveal();
                 }
             }

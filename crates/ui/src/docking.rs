@@ -30,6 +30,9 @@ pub struct NaygoTabViewer<'a> {
         naygo_core::workspace::PaneId,
         crate::tree_actions::TreeAction,
     )>,
+    /// Panes de árbol cuyo nodo objetivo de `reveal_to` se pintó (y se hizo scroll)
+    /// en este frame. `NaygoApp` limpia `reveal_to` SOLO para estos panes.
+    pub tree_revealed: &'a mut std::collections::HashSet<naygo_core::workspace::PaneId>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -73,7 +76,11 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
             Some(PanePurpose::Tree) => {
                 if let Some(tree) = self.trees.get(&id) {
                     let mut local: Vec<crate::tree_actions::TreeAction> = Vec::new();
-                    crate::panes::tree_panel::show(ui, tree, &mut local, self.icons, self.i18n);
+                    let revealed =
+                        crate::panes::tree_panel::show(ui, tree, &mut local, self.icons, self.i18n);
+                    if revealed {
+                        self.tree_revealed.insert(id);
+                    }
                     for a in local {
                         self.tree_actions.push((id, a));
                     }

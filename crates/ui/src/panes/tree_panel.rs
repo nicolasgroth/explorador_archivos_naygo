@@ -19,25 +19,35 @@ const ICON_SIZE: f32 = 16.0;
 /// Sangría por nivel de profundidad, en px.
 const INDENT: f32 = 14.0;
 
+/// Devuelve `true` si el nodo objetivo de `reveal_to` se encontró y se pintó (y se
+/// llamó a `scroll_to_me`) en este frame. `NaygoApp` usa esto para limpiar
+/// `reveal_to` SOLO cuando el objetivo ya se reveló, en vez de cada frame (lo que
+/// perdía el scroll a carpetas profundas cargadas en cascada).
 pub fn show(
     ui: &mut egui::Ui,
     tree: &DirTree,
     actions: &mut Vec<TreeAction>,
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
-) {
+) -> bool {
     if tree.is_empty() {
         ui.label(i18n.t("tree.empty"));
-        return;
+        return false;
     }
-    egui::ScrollArea::both().show(ui, |ui| {
-        for root in &tree.roots {
-            show_node(ui, root, 0, tree, actions, icons, i18n);
-        }
-    });
+    egui::ScrollArea::both()
+        .show(ui, |ui| {
+            let mut revealed = false;
+            for root in &tree.roots {
+                revealed |= show_node(ui, root, 0, tree, actions, icons, i18n);
+            }
+            revealed
+        })
+        .inner
 }
 
-/// Pinta un nodo (y, si está expandido, sus hijos) recursivamente.
+/// Pinta un nodo (y, si está expandido, sus hijos) recursivamente. Devuelve `true`
+/// si este nodo o alguno de sus descendientes era el objetivo de `reveal_to` y se
+/// hizo scroll hacia él en este frame.
 #[allow(clippy::too_many_arguments)]
 fn show_node(
     ui: &mut egui::Ui,
@@ -47,7 +57,7 @@ fn show_node(
     actions: &mut Vec<TreeAction>,
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
-) {
+) -> bool {
     let is_active = tree.active_path.as_deref() == Some(node.path.as_path());
 
     // El contenido de la fila se pinta dentro de este closure; lo envolvemos en un
@@ -114,8 +124,10 @@ fn show_node(
     };
 
     // Reveal: si el árbol pide revelar esta carpeta, hacer scroll hasta ella.
+    let mut revealed = false;
     if tree.reveal_to.as_deref() == Some(node.path.as_path()) {
         row.scroll_to_me(Some(egui::Align::Center));
+        revealed = true;
     }
 
     // Hijos: solo si el nodo está expandido.
@@ -145,10 +157,12 @@ fn show_node(
         }
         if let Some(children) = &node.children {
             for child in children {
-                show_node(ui, child, child_depth, tree, actions, icons, i18n);
+                revealed |= show_node(ui, child, child_depth, tree, actions, icons, i18n);
             }
         }
     }
+
+    revealed
 }
 
 /// Pinta una sub-fila de estado (texto débil/coloreado) indentada a `depth`.
