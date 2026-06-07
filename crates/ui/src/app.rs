@@ -843,6 +843,10 @@ fn rebuild_workspace(persist: config::WorkspacePersist, _home: &Path) -> Option<
                         f.sort = state.sort;
                         f.view = state.view;
                         f.show_dirs = state.show_dirs;
+                        // Restaurar el estado de tabla persistido (columnas visibles/
+                        // orden/ancho + filtros). Sin esto, la persistencia de la Fase
+                        // 2E y la migración de text_filter se descartaban al cargar.
+                        f.table = state.table;
                     }
                 }
                 id
