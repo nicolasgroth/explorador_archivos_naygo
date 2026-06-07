@@ -58,7 +58,11 @@ pub fn apply(theme: &Theme, ctx: &egui::Context) {
     v.selection.bg_fill = to_color32(theme.selection_bg);
     v.selection.stroke.color = to_color32(theme.accent);
     v.hyperlink_color = to_color32(theme.accent);
-    v.override_text_color = Some(to_color32(theme.text));
+    // Color de texto normal vía el stroke de widgets no-interactivos (lo que usa la
+    // mayoría de los `Label`). NO se usa `override_text_color` porque aplana el texto
+    // tenue (`.weak()`): egui deriva el tenue de este stroke mezclándolo hacia el
+    // fondo, así que dejándolo derivar se conserva la distinción normal/tenue.
+    v.widgets.noninteractive.fg_stroke.color = to_color32(theme.text);
     v.widgets.noninteractive.bg_stroke.color = to_color32(theme.border);
     ctx.set_visuals(v);
 }
