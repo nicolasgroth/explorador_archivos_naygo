@@ -14,8 +14,10 @@ use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
-use naygo_core::listing::{spawn_listing, ListingMsg};
+use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::sort::sort_entries;
+use naygo_core::tree::DirTree;
+use naygo_core::NodeOutcome;
 use naygo_core::workspace::template::LayoutTemplate;
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
 use naygo_core::TemplateStore;
@@ -29,11 +31,21 @@ pub struct PaneListing {
     pub token: CancellationToken,
 }
 
+/// Un worker de listado solo-directorios para una rama del árbol.
+struct TreeListing {
+    rx: Option<Receiver<ListingMsg>>,
+    token: CancellationToken,
+}
+
 /// Estado raíz de la app.
 pub struct NaygoApp {
     pub workspace: Workspace,
     pub dock_state: DockState<PaneId>,
     listings: HashMap<PaneId, PaneListing>,
+    /// Estado del árbol por cada panel Tree (creado perezosamente).
+    trees: HashMap<PaneId, DirTree>,
+    /// Workers solo-directorios del árbol, por (panel, carpeta) expandida.
+    tree_listings: HashMap<(PaneId, PathBuf), TreeListing>,
     pub settings: Settings,
     pub templates: TemplateStore,
     config_dir: PathBuf,
@@ -77,6 +89,8 @@ impl NaygoApp {
             workspace,
             dock_state,
             listings: HashMap::new(),
+            trees: HashMap::new(),
+            tree_listings: HashMap::new(),
             settings,
             templates,
             config_dir,
@@ -285,6 +299,93 @@ impl NaygoApp {
         self.listings.values().any(|l| l.rx.is_some())
     }
 
+    /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
+    /// vez. Útil antes de pintar un panel Tree.
+    #[allow(dead_code)] // conectado en la Tarea 9 (render + auto-sync)
+    fn ensure_tree(&mut self, id: PaneId) -> &mut DirTree {
+        self.trees.entry(id).or_insert_with(|| {
+            let drives = naygo_platform::drives::drives()
+                .into_iter()
+                .map(|d| (d.path, d.label, d.kind))
+                .collect::<Vec<_>>();
+            DirTree::from_drives(&drives)
+        })
+    }
+
+    /// Expande una rama del árbol del panel `id`: marca Loading y lanza el worker
+    /// solo-directorios. No-op si ya hay un worker para esa (id, path).
+    #[allow(dead_code)] // conectado en la Tarea 9
+    fn tree_expand(&mut self, id: PaneId, path: PathBuf) {
+        if self.tree_listings.contains_key(&(id, path.clone())) {
+            return;
+        }
+        if let Some(tree) = self.trees.get_mut(&id) {
+            tree.begin_loading(&path);
+        }
+        let token = CancellationToken::new();
+        let (rx, _h) = spawn_listing_filtered(path.clone(), token.clone(), ListingFilter::DirsOnly);
+        self.tree_listings
+            .insert((id, path), TreeListing { rx: Some(rx), token });
+    }
+
+    /// Colapsa una rama (conserva hijos). Cancela su worker si seguía cargando.
+    #[allow(dead_code)] // conectado en la Tarea 9
+    fn tree_collapse(&mut self, id: PaneId, path: PathBuf) {
+        if let Some(l) = self.tree_listings.get(&(id, path.clone())) {
+            l.token.cancel();
+        }
+        self.tree_listings.remove(&(id, path.clone()));
+        if let Some(tree) = self.trees.get_mut(&id) {
+            tree.collapse(&path);
+        }
+    }
+
+    /// Drena los canales de TODOS los workers del árbol, sin bloquear.
+    fn pump_tree(&mut self) {
+        let keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
+        for key in keys {
+            self.pump_tree_one(key);
+        }
+    }
+
+    fn pump_tree_one(&mut self, key: (PaneId, PathBuf)) {
+        let (id, path) = (key.0, &key.1);
+        let mut finished = false;
+        let mut err = false;
+        let mut new_dirs: Vec<PathBuf> = Vec::new();
+        if let Some(listing) = self.tree_listings.get(&key) {
+            if let Some(rx) = &listing.rx {
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        ListingMsg::Entry(e) => new_dirs.push(e.path),
+                        ListingMsg::Done => finished = true,
+                        ListingMsg::Cancelled => finished = true,
+                        ListingMsg::Error(_) => {
+                            err = true;
+                            finished = true;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(tree) = self.trees.get_mut(&id) {
+            for d in new_dirs {
+                tree.push_child(path, d);
+            }
+            if finished {
+                let outcome = if err { NodeOutcome::Error } else { NodeOutcome::Done };
+                tree.finish_loading(path, outcome);
+            }
+        }
+        if finished {
+            self.tree_listings.remove(&key);
+        }
+    }
+
+    fn any_tree_listing_active(&self) -> bool {
+        self.tree_listings.values().any(|l| l.rx.is_some())
+    }
+
     /// Aplica una acción al panel activo.
     pub fn apply_action(&mut self, action: Action) {
         match action {
@@ -470,8 +571,9 @@ impl NaygoApp {
 impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_all();
+        self.pump_tree();
         self.handle_input(ctx);
-        if self.any_listing_active() {
+        if self.any_listing_active() || self.any_tree_listing_active() {
             ctx.request_repaint();
         }
     }
