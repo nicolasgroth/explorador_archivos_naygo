@@ -137,6 +137,16 @@ pub fn show(
     // memoria (privada), pero el rect de la celda de encabezado los expone.
     let mut measured_widths: Vec<Option<f32>> = vec![None; visible_cols.len()];
 
+    // Para pintar la línea de inserción al arrastrar una columna necesitamos un
+    // painter, pero el closure del encabezado no expone uno fácilmente. Capturamos
+    // el `Context` (handle Arc, clonado barato) ANTES de mover `ui` dentro del
+    // `TableBuilder`, y una capa Foreground para que la línea quede SOBRE el header.
+    let ctx = ui.ctx().clone();
+    let drop_line_layer = egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new(("col_drop_line", id.0)),
+    );
+
     // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
     // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
     let mut builder = TableBuilder::new(ui)
@@ -200,6 +210,21 @@ pub fn show(
                 // El rect de la celda de encabezado cubre el ancho completo de la
                 // columna: lo guardamos para comparar con el ancho del modelo.
                 measured_widths[ci] = Some(cell_resp.rect.width());
+
+                // Indicador de drop: si se está arrastrando una columna y el cursor
+                // está sobre este encabezado, pintar una línea de inserción azul en su
+                // borde izquierdo ("caería antes de esta columna"). `dnd_hover_payload`
+                // solo devuelve `Some` cuando el puntero está sobre la celda Y se
+                // arrastra un payload `usize` (nuestro índice de columna), así que ya
+                // implica "arrastrando una columna y sobre este header".
+                if cell_resp.dnd_hover_payload::<usize>().is_some() {
+                    let rect = cell_resp.rect;
+                    ctx.layer_painter(drop_line_layer).vline(
+                        rect.left(),
+                        rect.y_range(),
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x2f, 0x81, 0xf7)),
+                    );
+                }
             }
         })
         .body(|body| {
