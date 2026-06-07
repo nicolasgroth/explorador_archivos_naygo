@@ -171,6 +171,15 @@ impl DirTree {
         }
     }
 
+    /// Reabre un nodo YA cargado sin re-listar: solo marca `expanded = true`,
+    /// conservando sus hijos y su estado. Simétrico de `collapse`. (Para re-listar
+    /// de cero, usar `begin_loading`.)
+    pub fn expand_loaded(&mut self, path: &Path) {
+        if let Some(node) = self.node_at_mut(path) {
+            node.expanded = true;
+        }
+    }
+
     /// Fija la carpeta activa (a resaltar) y marca que hay que revelarla (scroll).
     pub fn set_active(&mut self, path: PathBuf) {
         self.active_path = Some(path.clone());
@@ -391,5 +400,24 @@ mod tests {
         t.clear_reveal();
         assert_eq!(t.reveal_to, None);
         assert_eq!(t.active_path, Some(PathBuf::from("C:\\Users")));
+    }
+
+    #[test]
+    fn expand_loaded_reexpande_sin_borrar_hijos() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        t.collapse(Path::new("C:\\"));
+        // Reabrir SIN re-listar: vuelve a expanded=true y conserva los hijos.
+        t.expand_loaded(Path::new("C:\\"));
+        let n = t.node_at(Path::new("C:\\")).unwrap();
+        assert!(n.expanded, "vuelve a estar expandido");
+        assert_eq!(
+            n.children.as_ref().map(|c| c.len()),
+            Some(1),
+            "conserva hijos"
+        );
+        assert_eq!(n.state, NodeState::Loaded, "sigue Loaded, no Loading");
     }
 }

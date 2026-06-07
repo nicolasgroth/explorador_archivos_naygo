@@ -316,10 +316,21 @@ impl NaygoApp {
     /// solo-directorios. No-op si ya hay un worker para esa (id, path).
     #[allow(dead_code)] // conectado en la Tarea 9
     fn tree_expand(&mut self, id: PaneId, path: PathBuf) {
+        // Ya hay un worker en vuelo para esta rama → no relanzar.
         if self.tree_listings.contains_key(&(id, path.clone())) {
             return;
         }
         if let Some(tree) = self.trees.get_mut(&id) {
+            // Si la rama YA tiene hijos cargados, solo reabrir visualmente: NO
+            // re-listar (conserva los hijos; spec "colapsar no re-lista al reabrir").
+            let already_loaded = tree
+                .node_at(&path)
+                .map(|n| n.children.is_some())
+                .unwrap_or(false);
+            if already_loaded {
+                tree.expand_loaded(&path);
+                return;
+            }
             tree.begin_loading(&path);
         }
         let token = CancellationToken::new();
@@ -387,6 +398,9 @@ impl NaygoApp {
             }
         }
         if finished {
+            // El estado del nodo vive en el DirTree; el worker terminado se elimina
+            // (a diferencia del file panel, que conserva la entrada con rx=None).
+            // El árbol se re-expande sin re-listar vía expand_loaded.
             self.tree_listings.remove(&key);
         }
     }
