@@ -6,7 +6,11 @@ authors.workspace = true
 license.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Globalization"] }
+windows = { workspace = true, features = [
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming",
+] }
 
 [dependencies]
 naygo-core = { path = "../core" }
