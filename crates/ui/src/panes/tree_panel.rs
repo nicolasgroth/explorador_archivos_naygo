@@ -89,11 +89,15 @@ fn show_node(
                 None => IconKey::Folder,
             };
             let tex = icons.texture(key);
-            ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE)));
-
-            // Nombre: clic navega el panel activo a esta carpeta.
+            // Ícono + nombre como UNA zona clicable: clic en cualquiera de los dos
+            // (no en el triángulo) navega el panel activo a esta carpeta.
+            let img = ui.add(
+                egui::Image::new(tex)
+                    .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
+                    .sense(egui::Sense::click()),
+            );
             let label = ui.selectable_label(is_active, &node.name);
-            if label.clicked() {
+            if img.union(label).clicked() {
                 actions.push(TreeAction::Navigate(node.path.clone()));
             }
 

@@ -137,12 +137,26 @@ pub fn show(
     // memoria (privada), pero el rect de la celda de encabezado los expone.
     let mut measured_widths: Vec<Option<f32>> = vec![None; visible_cols.len()];
 
+    // Para pintar la línea de inserción al arrastrar una columna necesitamos un
+    // painter, pero el closure del encabezado no expone uno fácilmente. Capturamos
+    // el `Context` (handle Arc, clonado barato) ANTES de mover `ui` dentro del
+    // `TableBuilder`, y una capa Foreground para que la línea quede SOBRE el header.
+    let ctx = ui.ctx().clone();
+    let drop_line_layer = egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new(("col_drop_line", id.0)),
+    );
+
     // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
     // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
     let mut builder = TableBuilder::new(ui)
         .id_salt(("file_table", id.0))
         .striped(true)
         .resizable(true)
+        // Las celdas sensan clic para que `row.response()` (unión de las celdas de la
+        // fila) registre clics en CUALQUIER celda/zona de la fila, no solo en Nombre.
+        // Por defecto las celdas solo sensan hover y la fila completa no sería clicable.
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
     for col in &visible_cols {
         // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
@@ -159,7 +173,7 @@ pub fn show(
 
     builder
         .header(HEADER_HEIGHT, |mut header| {
-            // Encabezados: título + indicadores (▲/▼ si es la columna de orden, ⏷ si
+            // Encabezados: título + indicadores (▲/▼ si es la columna de orden, ≡ si
             // tiene filtro activo) + botón ▾ que abre el menú de columna. Cada
             // encabezado es FUENTE de arrastre (payload = índice REAL en
             // `table.columns`) y DESTINO: soltar A sobre B mueve A a la posición de B
@@ -196,6 +210,21 @@ pub fn show(
                 // El rect de la celda de encabezado cubre el ancho completo de la
                 // columna: lo guardamos para comparar con el ancho del modelo.
                 measured_widths[ci] = Some(cell_resp.rect.width());
+
+                // Indicador de drop: si se está arrastrando una columna y el cursor
+                // está sobre este encabezado, pintar una línea de inserción azul en su
+                // borde izquierdo ("caería antes de esta columna"). `dnd_hover_payload`
+                // solo devuelve `Some` cuando el puntero está sobre la celda Y se
+                // arrastra un payload `usize` (nuestro índice de columna), así que ya
+                // implica "arrastrando una columna y sobre este header".
+                if cell_resp.dnd_hover_payload::<usize>().is_some() {
+                    let rect = cell_resp.rect;
+                    ctx.layer_painter(drop_line_layer).vline(
+                        rect.left(),
+                        rect.y_range(),
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x2f, 0x81, 0xf7)),
+                    );
+                }
             }
         })
         .body(|body| {
@@ -206,17 +235,16 @@ pub fn show(
                         // ".." se ve como una carpeta normal (estilo Total Commander):
                         // usa el ícono Folder, no uno especial de "subir".
                         for (ci, _col) in visible_cols.iter().enumerate() {
-                            let (_, _) = row.col(|ui| {
+                            row.col(|ui| {
                                 if ci == 0 {
-                                    let resp = icon_row(ui, icons, IconKey::Folder, "..", false);
-                                    // ".." sube con UN solo clic (además del doble): no
-                                    // hay nada que "seleccionar" en ella. Asimetría
-                                    // intencional (estilo Total Commander).
-                                    if resp.double_clicked() || resp.clicked() {
-                                        parent_activated = true;
-                                    }
+                                    let _ = icon_row(ui, icons, IconKey::Folder, "..", false);
                                 }
                             });
+                        }
+                        // Fila completa: ".." sube con un clic (o doble) en cualquier celda.
+                        let row_resp = row.response();
+                        if row_resp.clicked() || row_resp.double_clicked() {
+                            parent_activated = true;
                         }
                     }
                     DisplayRow::Entry(i) => {
@@ -227,22 +255,22 @@ pub fn show(
                             row.col(|ui| {
                                 if ci == 0 {
                                     let key = icon_key_for(entry);
-                                    // `false`: el resaltado de selección lo pinta el
-                                    // `row.set_selected(selected)` de la fila completa.
-                                    // Pasar `selected` aquí lo pintaría dos veces (doble
-                                    // resaltado en la celda Nombre). El sensado de clic
-                                    // de `icon_row` es independiente de este flag.
-                                    let resp = icon_row(ui, icons, key, &entry.name, false);
-                                    if resp.clicked() {
-                                        clicked = Some(i);
-                                    }
-                                    if resp.double_clicked() {
-                                        activated = Some(i);
-                                    }
+                                    // El ícono+nombre se pintan; el clic se captura sobre
+                                    // la FILA completa (abajo), no por celda.
+                                    let _ = icon_row(ui, icons, key, &entry.name, false);
                                 } else {
                                     ui.label(cell_text(entry, col.kind));
                                 }
                             });
+                        }
+                        // Fila completa clicable: clic en cualquier celda/zona selecciona;
+                        // doble clic navega/activa.
+                        let row_resp = row.response();
+                        if row_resp.clicked() {
+                            clicked = Some(i);
+                        }
+                        if row_resp.double_clicked() {
+                            activated = Some(i);
                         }
                     }
                     DisplayRow::NoMatches => {
@@ -295,10 +323,11 @@ pub fn show(
     }
 }
 
-/// Pinta el encabezado de una columna: título + indicadores (orden ▲/▼, filtro ⏷)
-/// y un botón `▾` que abre el menú de columna (orden/filtro/columnas). Acumula
-/// `TableAction`s. El id del popup incluye el `PaneId` para que dos paneles que
-/// muestran la misma columna no compartan el estado de UI.
+/// Pinta el encabezado de una columna: título + indicadores (orden ▲/▼, filtro ≡)
+/// y un botón `▾` que abre el menú de columna (orden/filtro/columnas). El clic
+/// derecho sobre el encabezado abre ese mismo menú. Acumula `TableAction`s. El id
+/// del popup incluye el `PaneId` para que dos paneles que muestran la misma columna
+/// no compartan el estado de UI.
 #[allow(clippy::too_many_arguments)]
 fn column_header(
     ui: &mut egui::Ui,
@@ -310,27 +339,39 @@ fn column_header(
     i18n: &naygo_core::i18n::I18n,
     actions: &mut Vec<TableAction>,
 ) {
-    ui.horizontal(|ui| {
-        let mut title = column_title(kind, i18n);
-        // Indicador de orden en la columna activa.
-        if sort.key == naygo_core::columns::sort_key_of(kind) {
-            title.push(' ');
-            title.push(if sort.ascending { '▲' } else { '▼' });
-        }
-        // Indicador de filtro activo (embudo).
-        if table.filters.contains_key(&kind) {
-            title.push(' ');
-            title.push('⏷');
-        }
-        ui.label(egui::RichText::new(title).strong());
+    // El id del popup se calcula primero: lo usan tanto `Popup::menu(...).id(...)`
+    // como la apertura por id al hacer clic derecho sobre el encabezado.
+    let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
+    let header_resp = ui
+        .horizontal(|ui| {
+            let mut title = column_title(kind, i18n);
+            // Indicador de orden en la columna activa.
+            if sort.key == naygo_core::columns::sort_key_of(kind) {
+                title.push(' ');
+                title.push(if sort.ascending { '▲' } else { '▼' });
+            }
+            // Indicador de filtro activo.
+            if table.filters.contains_key(&kind) {
+                title.push(' ');
+                title.push('≡');
+            }
+            ui.label(egui::RichText::new(title).strong());
 
-        // Botón ▾ que alterna el popup del menú de columna.
-        let menu_button = ui.add(egui::Button::new("▾").frame(false));
-        let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
-        egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
-            crate::column_menu::show_menu(ui, kind, table, sort, ext_counts, i18n, actions);
-        });
-    });
+            // Botón ▾ que alterna el popup del menú de columna.
+            let menu_button = ui.add(egui::Button::new("▾").frame(false));
+            egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
+                crate::column_menu::show_menu(ui, kind, table, sort, ext_counts, i18n, actions);
+            });
+        })
+        .response;
+
+    // Clic derecho en cualquier parte del encabezado abre el MISMO menú que el ▾.
+    // Solo marca el popup como abierto en memoria; `Popup::menu(...).show` lo pinta
+    // el frame siguiente. No re-ejecuta el contenido aquí, así que `actions` (que
+    // ya dejó de estar prestado al cerrar el closure de arriba) no se necesita.
+    if header_resp.secondary_clicked() {
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    }
 }
 
 /// Pinta una fila "[ícono] nombre" como un único elemento clicable. Devuelve el
