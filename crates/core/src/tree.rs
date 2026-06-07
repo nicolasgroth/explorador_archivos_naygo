@@ -166,6 +166,49 @@ impl DirTree {
             node.expanded = false;
         }
     }
+
+    /// Fija la carpeta activa (a resaltar) y marca que hay que revelarla (scroll).
+    pub fn set_active(&mut self, path: PathBuf) {
+        self.active_path = Some(path.clone());
+        self.reveal_to = Some(path);
+    }
+
+    /// Limpia el scroll pendiente (tras hacerlo). Conserva `active_path`.
+    pub fn clear_reveal(&mut self) {
+        self.reveal_to = None;
+    }
+
+    /// Dada una carpeta destino, devuelve la cadena de ancestros que hay que
+    /// EXPANDIR para revelarla, desde la raíz/unidad hacia abajo (sin incluir el
+    /// destino final). Vacía si ninguna raíz del árbol es prefijo del destino.
+    pub fn reveal_chain(&self, target: &Path) -> Vec<PathBuf> {
+        // Buscar la raíz (unidad) que es prefijo del destino.
+        let root = self
+            .roots
+            .iter()
+            .find(|r| target.starts_with(&r.path))
+            .map(|r| r.path.clone());
+        let Some(root) = root else {
+            return Vec::new();
+        };
+        // Si el destino ES la raíz, no hay nada que expandir.
+        if target == root {
+            return Vec::new();
+        }
+        // Construir desde la raíz: root, root/a, root/a/b, ... sin incluir target.
+        let mut chain = Vec::new();
+        let mut acc = root.clone();
+        chain.push(acc.clone());
+        if let Ok(rel) = target.strip_prefix(&root) {
+            let comps: Vec<_> = rel.components().collect();
+            // Todos menos el último componente (ese es el destino, no se expande).
+            for comp in comps.iter().take(comps.len().saturating_sub(1)) {
+                acc = acc.join(comp.as_os_str());
+                chain.push(acc.clone());
+            }
+        }
+        chain
+    }
 }
 
 /// Busca recursivamente un nodo por path dentro de `node`.
@@ -290,5 +333,50 @@ mod tests {
         assert!(!n.expanded);
         assert_eq!(n.children.as_ref().map(|c| c.len()), Some(1));
         assert_eq!(n.state, NodeState::Loaded);
+    }
+
+    #[test]
+    fn set_active_fija_path_y_reveal() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.set_active(PathBuf::from("C:\\Users\\ngroth"));
+        assert_eq!(t.active_path, Some(PathBuf::from("C:\\Users\\ngroth")));
+        assert_eq!(t.reveal_to, Some(PathBuf::from("C:\\Users\\ngroth")));
+    }
+
+    #[test]
+    fn reveal_chain_devuelve_ancestros_desde_la_raiz() {
+        let t = DirTree::from_drives(&drive_list());
+        let chain = t.reveal_chain(Path::new("C:\\Users\\ngroth\\Documents"));
+        assert_eq!(
+            chain,
+            vec![
+                PathBuf::from("C:\\"),
+                PathBuf::from("C:\\Users"),
+                PathBuf::from("C:\\Users\\ngroth"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reveal_chain_de_una_raiz_es_vacia() {
+        let t = DirTree::from_drives(&drive_list());
+        let chain = t.reveal_chain(Path::new("C:\\"));
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn reveal_chain_sin_raiz_conocida_es_vacia() {
+        let t = DirTree::from_drives(&drive_list());
+        let chain = t.reveal_chain(Path::new("Z:\\algo"));
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn clear_reveal_borra_el_pendiente() {
+        let mut t = DirTree::from_drives(&drive_list());
+        t.set_active(PathBuf::from("C:\\Users"));
+        t.clear_reveal();
+        assert_eq!(t.reveal_to, None);
+        assert_eq!(t.active_path, Some(PathBuf::from("C:\\Users")));
     }
 }
