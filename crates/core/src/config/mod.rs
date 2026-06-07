@@ -196,8 +196,10 @@ mod tests {
     #[test]
     fn settings_round_trip_con_idioma() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Settings::default();
-        s.language = crate::i18n::LangId::new("es");
+        let s = Settings {
+            language: crate::i18n::LangId::new("es"),
+            ..Settings::default()
+        };
         save_settings(dir.path(), &s);
         assert_eq!(
             load_settings(dir.path()).language,
