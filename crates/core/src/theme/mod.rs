@@ -6,6 +6,8 @@
 //! campos faltantes, y se aplican en caliente. Puro y testeable; la traducción a
 //! `egui::Visuals` vive en la capa `ui`.
 
+pub mod pack;
+
 use serde::{Deserialize, Serialize};
 
 /// Base visual de la que se derivan los neutros (la capa ui parte de
