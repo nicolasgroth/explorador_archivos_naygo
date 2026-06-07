@@ -5,6 +5,8 @@
 //! lista, su historial de navegación, su filtro de carpetas. No toca disco: la UI
 //! le inyecta las entradas (vía el motor de `listing`) y le pide navegar.
 
+use crate::columns::{ColumnKind, TableState};
+use crate::filter::ColumnFilter;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::NavHistory;
 use serde::{Deserialize, Serialize};
@@ -23,8 +25,8 @@ pub struct FilePaneState {
     pub history: NavHistory,
     /// Si es `false`, el panel oculta las carpetas (muestra solo archivos).
     pub show_dirs: bool,
-    /// RESERVADO para una fase futura (filtro de texto). Siempre `None` en 2A.
-    pub text_filter: Option<String>,
+    /// Estado de tabla: columnas (orden/visibilidad/ancho) + filtros por columna.
+    pub table: TableState,
 }
 
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
@@ -34,7 +36,13 @@ pub struct FilePanePersist {
     pub sort: SortSpec,
     pub view: ViewMode,
     pub show_dirs: bool,
+    /// DEPRECADO: filtro de texto plano (fases previas). Solo se LEE para migrar a
+    /// `table`. Ya no se escribe.
+    #[serde(default)]
     pub text_filter: Option<String>,
+    /// Estado de tabla. `None` en persists viejos → se migra desde `text_filter`.
+    #[serde(default)]
+    pub table: Option<TableState>,
 }
 
 impl FilePaneState {
@@ -51,7 +59,7 @@ impl FilePaneState {
             selected: Vec::new(),
             history,
             show_dirs: true,
-            text_filter: None,
+            table: TableState::default(),
         }
     }
 
@@ -103,7 +111,8 @@ impl FilePaneState {
             sort: self.sort,
             view: self.view,
             show_dirs: self.show_dirs,
-            text_filter: self.text_filter.clone(),
+            text_filter: None,
+            table: Some(self.table.clone()),
         }
     }
 
@@ -113,7 +122,21 @@ impl FilePaneState {
         s.sort = p.sort;
         s.view = p.view;
         s.show_dirs = p.show_dirs;
-        s.text_filter = p.text_filter;
+        s.table = match p.table {
+            Some(t) => t,
+            None => {
+                let mut t = TableState::default();
+                if let Some(text) = p.text_filter {
+                    if !text.is_empty() {
+                        t.set_filter(
+                            ColumnKind::Name,
+                            ColumnFilter::Text { contains: text, case_sensitive: false },
+                        );
+                    }
+                }
+                t
+            }
+        };
         s
     }
 }
@@ -132,7 +155,7 @@ mod tests {
         assert_eq!(s.current_dir, p("C:/a"));
         assert_eq!(s.history.current(), Some(p("C:/a").as_path()));
         assert!(s.show_dirs);
-        assert!(s.text_filter.is_none());
+        assert!(s.table.filters.is_empty());
     }
 
     #[test]
@@ -156,6 +179,43 @@ mod tests {
         assert!(s.entries.is_empty());
         assert!(s.focused.is_none());
         assert!(s.selected.is_empty());
+    }
+
+    #[test]
+    fn migracion_text_filter_a_table_name_filter() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        let persist = FilePanePersist {
+            current_dir: p("C:/a"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: Some("informe".into()),
+            table: None,
+        };
+        let s = FilePaneState::from_persist(persist);
+        let f = s.table.filters.get(&ColumnKind::Name).expect("filtro de nombre migrado");
+        assert_eq!(
+            *f,
+            ColumnFilter::Text { contains: "informe".into(), case_sensitive: false }
+        );
+    }
+
+    #[test]
+    fn persist_nuevo_usa_table_directamente() {
+        use crate::columns::{ColumnKind, TableState};
+        let mut table = TableState::default();
+        table.toggle_visible(ColumnKind::Created);
+        let persist = FilePanePersist {
+            current_dir: p("C:/a"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: None,
+            table: Some(table.clone()),
+        };
+        let s = FilePaneState::from_persist(persist);
+        assert_eq!(s.table, table);
     }
 
     #[test]
