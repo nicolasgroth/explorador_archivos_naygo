@@ -20,7 +20,6 @@ pub enum TableAction {
     /// Alternar visibilidad de una columna.
     ToggleColumn(ColumnKind),
     /// Mover una columna del índice `from` al `to`. (Emitido en Tarea 9: drag.)
-    #[allow(dead_code)]
     MoveColumn(usize, usize),
     /// Fijar el ancho de una columna. (Emitido en Tarea 10: drag de ancho.)
     #[allow(dead_code)]

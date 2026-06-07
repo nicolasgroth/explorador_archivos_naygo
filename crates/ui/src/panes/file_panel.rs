@@ -94,17 +94,38 @@ pub fn show(
             .show(ui, |ui| {
                 // Encabezados: título + indicadores (▲/▼ si es la columna de orden,
                 // ⏷ si tiene filtro activo) + botón ▾ que abre el menú de columna.
+                // Cada encabezado es una FUENTE de arrastre (payload = índice REAL en
+                // `table.columns`) y un DESTINO: soltar la columna A sobre la columna B
+                // la mueve a la posición de B (emite `TableAction::MoveColumn`).
                 for col in &visible_cols {
-                    column_header(
-                        ui,
-                        id,
-                        col.kind,
-                        &table,
-                        sort,
-                        &ext_counts,
-                        i18n,
-                        table_actions,
-                    );
+                    // Índice REAL de esta columna en `table.columns` (no el visible).
+                    let to_real = table
+                        .columns
+                        .iter()
+                        .position(|c| c.kind == col.kind)
+                        .unwrap();
+                    let dnd_id = egui::Id::new(("colhdr", id.0, col.kind));
+                    let resp = ui
+                        .dnd_drag_source(dnd_id, to_real, |ui| {
+                            column_header(
+                                ui,
+                                id,
+                                col.kind,
+                                &table,
+                                sort,
+                                &ext_counts,
+                                i18n,
+                                table_actions,
+                            );
+                        })
+                        .response;
+                    // Si se soltó un payload sobre este encabezado, mover esa columna
+                    // a esta posición.
+                    if let Some(from_real) = resp.dnd_release_payload::<usize>() {
+                        if *from_real != to_real {
+                            table_actions.push(TableAction::MoveColumn(*from_real, to_real));
+                        }
+                    }
                 }
                 ui.end_row();
 
