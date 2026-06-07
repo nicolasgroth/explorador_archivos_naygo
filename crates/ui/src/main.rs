@@ -19,6 +19,7 @@ mod settings_window;
 mod sort_ui;
 mod table_actions;
 mod templates_menu;
+mod theme_apply;
 mod toolbar;
 mod tree_actions;
 mod typeahead;
