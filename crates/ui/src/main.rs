@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod column_menu;
 mod dock_translate;
 mod docking;
 mod icons;
@@ -16,6 +17,7 @@ mod logging;
 mod panes;
 mod settings_window;
 mod sort_ui;
+mod table_actions;
 mod templates_menu;
 mod toolbar;
 mod tree_actions;

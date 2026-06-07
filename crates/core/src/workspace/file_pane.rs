@@ -5,6 +5,9 @@
 //! lista, su historial de navegación, su filtro de carpetas. No toca disco: la UI
 //! le inyecta las entradas (vía el motor de `listing`) y le pide navegar.
 
+use crate::columns::{ColumnKind, TableState};
+use crate::filter::matches as filter_matches;
+use crate::filter::ColumnFilter;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::NavHistory;
 use serde::{Deserialize, Serialize};
@@ -23,8 +26,8 @@ pub struct FilePaneState {
     pub history: NavHistory,
     /// Si es `false`, el panel oculta las carpetas (muestra solo archivos).
     pub show_dirs: bool,
-    /// RESERVADO para una fase futura (filtro de texto). Siempre `None` en 2A.
-    pub text_filter: Option<String>,
+    /// Estado de tabla: columnas (orden/visibilidad/ancho) + filtros por columna.
+    pub table: TableState,
 }
 
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
@@ -34,7 +37,13 @@ pub struct FilePanePersist {
     pub sort: SortSpec,
     pub view: ViewMode,
     pub show_dirs: bool,
+    /// DEPRECADO: filtro de texto plano (fases previas). Solo se LEE para migrar a
+    /// `table`. Ya no se escribe.
+    #[serde(default)]
     pub text_filter: Option<String>,
+    /// Estado de tabla. `None` en persists viejos → se migra desde `text_filter`.
+    #[serde(default)]
+    pub table: Option<TableState>,
 }
 
 impl FilePaneState {
@@ -51,13 +60,32 @@ impl FilePaneState {
             selected: Vec::new(),
             history,
             show_dirs: true,
-            text_filter: None,
+            table: TableState::default(),
         }
     }
 
-    /// Entrada con foco, si existe.
-    pub fn focused_entry(&self) -> Option<&Entry> {
-        self.focused.and_then(|i| self.entries.get(i))
+    /// Las entries VISIBLES: las que pasan los filtros activos de la tabla, en el
+    /// orden actual de `entries` (que `pump_one` mantiene ordenado por `sort`).
+    /// Es el ÚNICO espacio de índices que usan foco/selección/teclado/activación.
+    pub fn view_indices(&self) -> Vec<usize> {
+        if self.table.filters.is_empty() {
+            (0..self.entries.len()).collect()
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| filter_matches(e, &self.table.filters))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+
+    /// La entrada con foco, donde `focused` es una posición en la VISTA (no en
+    /// `entries`). Devuelve la entry real correspondiente.
+    pub fn focused_view_entry(&self) -> Option<&Entry> {
+        let view = self.view_indices();
+        let pos = self.focused?;
+        view.get(pos).and_then(|&real| self.entries.get(real))
     }
 
     /// Navega a una carpeta nueva: registra en el historial y limpia entries/foco.
@@ -103,7 +131,8 @@ impl FilePaneState {
             sort: self.sort,
             view: self.view,
             show_dirs: self.show_dirs,
-            text_filter: self.text_filter.clone(),
+            text_filter: None,
+            table: Some(self.table.clone()),
         }
     }
 
@@ -113,7 +142,24 @@ impl FilePaneState {
         s.sort = p.sort;
         s.view = p.view;
         s.show_dirs = p.show_dirs;
-        s.text_filter = p.text_filter;
+        s.table = match p.table {
+            Some(t) => t,
+            None => {
+                let mut t = TableState::default();
+                if let Some(text) = p.text_filter {
+                    if !text.is_empty() {
+                        t.set_filter(
+                            ColumnKind::Name,
+                            ColumnFilter::Text {
+                                contains: text,
+                                case_sensitive: false,
+                            },
+                        );
+                    }
+                }
+                t
+            }
+        };
         s
     }
 }
@@ -132,7 +178,7 @@ mod tests {
         assert_eq!(s.current_dir, p("C:/a"));
         assert_eq!(s.history.current(), Some(p("C:/a").as_path()));
         assert!(s.show_dirs);
-        assert!(s.text_filter.is_none());
+        assert!(s.table.filters.is_empty());
     }
 
     #[test]
@@ -156,6 +202,101 @@ mod tests {
         assert!(s.entries.is_empty());
         assert!(s.focused.is_none());
         assert!(s.selected.is_empty());
+    }
+
+    #[test]
+    fn migracion_text_filter_a_table_name_filter() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        let persist = FilePanePersist {
+            current_dir: p("C:/a"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: Some("informe".into()),
+            table: None,
+        };
+        let s = FilePaneState::from_persist(persist);
+        let f = s
+            .table
+            .filters
+            .get(&ColumnKind::Name)
+            .expect("filtro de nombre migrado");
+        assert_eq!(
+            *f,
+            ColumnFilter::Text {
+                contains: "informe".into(),
+                case_sensitive: false
+            }
+        );
+    }
+
+    #[test]
+    fn persist_nuevo_usa_table_directamente() {
+        use crate::columns::{ColumnKind, TableState};
+        let mut table = TableState::default();
+        table.toggle_visible(ColumnKind::Created);
+        let persist = FilePanePersist {
+            current_dir: p("C:/a"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: None,
+            table: Some(table.clone()),
+        };
+        let s = FilePaneState::from_persist(persist);
+        assert_eq!(s.table, table);
+    }
+
+    #[test]
+    fn focused_view_entry_respeta_filtro() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        use crate::fs_model::{Entry, EntryKind};
+        use std::collections::BTreeSet;
+        let mut s = FilePaneState::new(p("C:/a"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        s.entries = vec![mk("a.txt"), mk("b.pdf"), mk("c.txt")];
+        // Filtro: solo .txt → vista = [a.txt (idx0), c.txt (idx2)].
+        let mut set = BTreeSet::new();
+        set.insert("txt".to_string());
+        s.table
+            .set_filter(ColumnKind::Extension, ColumnFilter::Extensions(set));
+        assert_eq!(s.view_indices(), vec![0, 2]);
+        // focused = posición 1 en la VISTA → c.txt (no b.pdf).
+        s.focused = Some(1);
+        assert_eq!(
+            s.focused_view_entry().map(|e| e.name.as_str()),
+            Some("c.txt")
+        );
+        // foco fuera de la vista → None.
+        s.focused = Some(5);
+        assert!(s.focused_view_entry().is_none());
+    }
+
+    #[test]
+    fn view_indices_sin_filtro_es_identidad() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("C:/a"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        s.entries = vec![mk("a"), mk("b")];
+        assert_eq!(s.view_indices(), vec![0, 1]);
     }
 
     #[test]

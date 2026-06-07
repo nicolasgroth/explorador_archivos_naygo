@@ -33,30 +33,41 @@ pub struct NaygoTabViewer<'a> {
     /// Panes de árbol cuyo nodo objetivo de `reveal_to` se pintó (y se hizo scroll)
     /// en este frame. `NaygoApp` limpia `reveal_to` SOLO para estos panes.
     pub tree_revealed: &'a mut std::collections::HashSet<naygo_core::workspace::PaneId>,
+    /// Acciones de tabla (menú de columna) acumuladas al pintar los file panels.
+    pub table_actions: &'a mut Vec<(
+        naygo_core::workspace::PaneId,
+        crate::table_actions::TableAction,
+    )>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
     type Tab = PaneId;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match self.workspace.pane(*tab).map(|p| p.purpose) {
-            Some(PanePurpose::Files) => {
-                let name = self
-                    .workspace
-                    .pane(*tab)
-                    .and_then(|p| p.files.as_ref())
-                    .map(|f| {
-                        f.current_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| f.current_dir.display().to_string())
-                    })
-                    .unwrap_or_default();
-                name.into()
-            }
-            Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").into(),
-            Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").into(),
-            None => "—".into(),
+        let name: String = match self.workspace.pane(*tab).map(|p| p.purpose) {
+            Some(PanePurpose::Files) => self
+                .workspace
+                .pane(*tab)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| {
+                    f.current_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| f.current_dir.display().to_string())
+                })
+                .unwrap_or_default(),
+            Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").to_string(),
+            Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").to_string(),
+            None => "—".to_string(),
+        };
+        // Resaltar el panel activo: título en color de acento + negrita.
+        if self.workspace.active_id() == Some(*tab) {
+            egui::RichText::new(name)
+                .color(egui::Color32::from_rgb(0x2f, 0x81, 0xf7))
+                .strong()
+                .into()
+        } else {
+            name.into()
         }
     }
 
@@ -64,15 +75,22 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
         let id = *tab;
         let purpose = self.workspace.pane(id).map(|p| p.purpose);
         match purpose {
-            Some(PanePurpose::Files) => crate::panes::file_panel::show(
-                ui,
-                self.workspace,
-                id,
-                self.pending,
-                self.icons,
-                self.show_parent_entry,
-                self.i18n,
-            ),
+            Some(PanePurpose::Files) => {
+                let mut local: Vec<crate::table_actions::TableAction> = Vec::new();
+                crate::panes::file_panel::show(
+                    ui,
+                    self.workspace,
+                    id,
+                    self.pending,
+                    self.icons,
+                    self.show_parent_entry,
+                    self.i18n,
+                    &mut local,
+                );
+                for a in local {
+                    self.table_actions.push((id, a));
+                }
+            }
             Some(PanePurpose::Tree) => {
                 if let Some(tree) = self.trees.get(&id) {
                     let mut local: Vec<crate::tree_actions::TreeAction> = Vec::new();

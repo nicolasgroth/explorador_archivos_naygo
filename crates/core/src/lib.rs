@@ -6,7 +6,9 @@
 //! No depende de egui ni de Windows.
 
 pub mod cancel;
+pub mod columns;
 pub mod config;
+pub mod filter;
 pub mod fs_model;
 pub mod i18n;
 pub mod icon_kind;
@@ -16,7 +18,9 @@ pub mod tree;
 pub mod workspace;
 
 pub use cancel::CancellationToken;
+pub use columns::{sort_key_of, ColumnKind, ColumnSpec, TableState};
 pub use config::{BarPosition, IconSet, Settings};
+pub use filter::{matches, ColumnFilter};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
 pub use i18n::{pick_default_language, I18n, LangId};
 pub use icon_kind::{category_for_extension, icon_key_for, DriveKind, FileCategory, IconKey};
