@@ -18,5 +18,5 @@ recomendado 32×32 (o 16/32/48). Packs libres recomendados (verificar licencia):
 
 ## Nombres de archivo esperados (uno por IconKey)
 
-folder, parent, file_image, file_video, file_audio, file_document, file_code,
+folder, file_image, file_video, file_audio, file_document, file_code,
 file_archive, file_executable, file_model3d, file_font, file_generic, drive, unknown
