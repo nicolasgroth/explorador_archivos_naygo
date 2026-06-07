@@ -55,6 +55,7 @@ pub fn show(
     show_parent_entry: bool,
     i18n: &naygo_core::i18n::I18n,
     table_actions: &mut Vec<TableAction>,
+    theme: &crate::theme_apply::ActiveTheme,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -222,7 +223,7 @@ pub fn show(
                     ctx.layer_painter(drop_line_layer).vline(
                         rect.left(),
                         rect.y_range(),
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x2f, 0x81, 0xf7)),
+                        egui::Stroke::new(2.0, theme.accent()),
                     );
                 }
             }

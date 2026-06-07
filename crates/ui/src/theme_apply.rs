@@ -6,10 +6,6 @@
 //! `egui::Color32` para los paneles que pintan acentos propios (selección de fila,
 //! barra del panel activo, indicadores, línea de drop).
 
-// `ActiveTheme`, sus getters y `apply` se consumen en las Tareas 7-8 (hot-swap del
-// tema desde la app y pintado de acentos en los paneles). Hasta entonces, dead_code.
-#![allow(dead_code)]
-
 use naygo_core::theme::{Theme, ThemeBase, ThemeColor, ThemeId};
 
 /// El tema activo resuelto + su id (para el hot-swap).
@@ -25,12 +21,18 @@ impl ActiveTheme {
     pub fn accent(&self) -> egui::Color32 {
         to_color32(self.theme.accent)
     }
+    // Reservado: barra del panel activo (hoy el realce usa accent()); se mantiene el
+    // token para futuros estilos que diferencien barra y acento.
+    #[allow(dead_code)]
     pub fn active_bar(&self) -> egui::Color32 {
         to_color32(self.theme.active_bar)
     }
     pub fn selection_bg(&self) -> egui::Color32 {
         to_color32(self.theme.selection_bg)
     }
+    // Reservado: color de texto tenue (rutas/secundarios) para cuando se tematice ese
+    // matiz de forma explícita en los paneles.
+    #[allow(dead_code)]
     pub fn text_dim(&self) -> egui::Color32 {
         to_color32(self.theme.text_dim)
     }

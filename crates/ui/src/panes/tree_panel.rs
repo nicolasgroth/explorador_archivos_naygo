@@ -29,6 +29,7 @@ pub fn show(
     actions: &mut Vec<TreeAction>,
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
+    theme: &crate::theme_apply::ActiveTheme,
 ) -> bool {
     if tree.is_empty() {
         ui.label(i18n.t("tree.empty"));
@@ -38,7 +39,7 @@ pub fn show(
         .show(ui, |ui| {
             let mut revealed = false;
             for root in &tree.roots {
-                revealed |= show_node(ui, root, 0, tree, actions, icons, i18n);
+                revealed |= show_node(ui, root, 0, tree, actions, icons, i18n, theme);
             }
             revealed
         })
@@ -57,6 +58,7 @@ fn show_node(
     actions: &mut Vec<TreeAction>,
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
+    theme: &crate::theme_apply::ActiveTheme,
 ) -> bool {
     let is_active = tree.active_path.as_deref() == Some(node.path.as_path());
 
@@ -112,7 +114,7 @@ fn show_node(
     let row = if is_active {
         // Fondo gris suave detrás de toda la fila activa.
         let inner = egui::Frame::NONE
-            .fill(egui::Color32::from_rgb(0x37, 0x37, 0x3d))
+            .fill(theme.selection_bg())
             .show(ui, row_content);
         // Barra azul vertical de 3px en el borde izquierdo de la fila.
         let rect = inner.response.rect;
@@ -120,8 +122,7 @@ fn show_node(
             rect.left_top(),
             egui::pos2(rect.left() + 3.0, rect.bottom()),
         );
-        ui.painter()
-            .rect_filled(bar, 0.0, egui::Color32::from_rgb(0x3b, 0x82, 0xf6));
+        ui.painter().rect_filled(bar, 0.0, theme.accent());
         inner.response
     } else {
         row_content(ui)
@@ -151,17 +152,14 @@ fn show_node(
             }
             NodeState::Error => {
                 status_row(ui, child_depth, |ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(0xe0, 0x4b, 0x4b),
-                        format!("⚠ {}", i18n.t("tree.access_denied")),
-                    );
+                    ui.colored_label(theme.error(), format!("⚠ {}", i18n.t("tree.access_denied")));
                 });
             }
             _ => {}
         }
         if let Some(children) = &node.children {
             for child in children {
-                revealed |= show_node(ui, child, child_depth, tree, actions, icons, i18n);
+                revealed |= show_node(ui, child, child_depth, tree, actions, icons, i18n, theme);
             }
         }
     }
