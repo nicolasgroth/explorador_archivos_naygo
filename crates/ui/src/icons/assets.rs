@@ -13,7 +13,6 @@ use naygo_core::icon_kind::{FileCategory, IconKey};
 fn file_name(key: IconKey) -> &'static str {
     match key {
         IconKey::Folder => "folder",
-        IconKey::ParentDir => "parent",
         IconKey::Drive(_) => "drive",
         IconKey::Unknown => "unknown",
         IconKey::File(cat) => match cat {
@@ -45,12 +44,11 @@ macro_rules! png {
     };
 }
 
-/// Lista de los 14 nombres con sus bytes embebidos, por set.
+/// Lista de los 13 nombres con sus bytes embebidos, por set.
 macro_rules! set_table {
     ($konst:ident, $set:literal) => {
         const $konst: &[(&str, &[u8])] = &[
             ("folder", png!($set, "folder")),
-            ("parent", png!($set, "parent")),
             ("file_image", png!($set, "file_image")),
             ("file_video", png!($set, "file_video")),
             ("file_audio", png!($set, "file_audio")),
@@ -97,7 +95,6 @@ pub fn all_keys() -> Vec<IconKey> {
     use FileCategory::*;
     let mut v = vec![
         IconKey::Folder,
-        IconKey::ParentDir,
         IconKey::Drive(naygo_core::icon_kind::DriveKind::Unknown),
         IconKey::Unknown,
     ];

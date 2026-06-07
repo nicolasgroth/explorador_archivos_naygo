@@ -41,8 +41,6 @@ pub enum DriveKind {
 pub enum IconKey {
     /// Carpeta normal.
     Folder,
-    /// La fila virtual "..".
-    ParentDir,
     /// Archivo de una categoría.
     File(FileCategory),
     /// Unidad de disco.

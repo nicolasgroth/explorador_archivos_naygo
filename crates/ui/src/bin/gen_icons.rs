@@ -40,7 +40,6 @@ fn make_icon(path: &Path, fill: [u8; 4], mono: bool) {
 fn icon_specs() -> Vec<(&'static str, [u8; 4])> {
     vec![
         ("folder", [255, 196, 0, 255]),
-        ("parent", [180, 180, 180, 255]),
         ("file_image", [76, 175, 80, 255]),
         ("file_video", [156, 39, 176, 255]),
         ("file_audio", [233, 30, 99, 255]),
