@@ -18,7 +18,7 @@ pub mod tree;
 pub mod workspace;
 
 pub use cancel::CancellationToken;
-pub use columns::ColumnKind;
+pub use columns::{sort_key_of, ColumnKind, ColumnSpec, TableState};
 pub use config::{BarPosition, IconSet, Settings};
 pub use filter::{matches, ColumnFilter};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
