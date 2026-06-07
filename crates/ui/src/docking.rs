@@ -44,24 +44,30 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
     type Tab = PaneId;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match self.workspace.pane(*tab).map(|p| p.purpose) {
-            Some(PanePurpose::Files) => {
-                let name = self
-                    .workspace
-                    .pane(*tab)
-                    .and_then(|p| p.files.as_ref())
-                    .map(|f| {
-                        f.current_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| f.current_dir.display().to_string())
-                    })
-                    .unwrap_or_default();
-                name.into()
-            }
-            Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").into(),
-            Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").into(),
-            None => "—".into(),
+        let name: String = match self.workspace.pane(*tab).map(|p| p.purpose) {
+            Some(PanePurpose::Files) => self
+                .workspace
+                .pane(*tab)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| {
+                    f.current_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| f.current_dir.display().to_string())
+                })
+                .unwrap_or_default(),
+            Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").to_string(),
+            Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").to_string(),
+            None => "—".to_string(),
+        };
+        // Resaltar el panel activo: título en color de acento + negrita.
+        if self.workspace.active_id() == Some(*tab) {
+            egui::RichText::new(name)
+                .color(egui::Color32::from_rgb(0x2f, 0x81, 0xf7))
+                .strong()
+                .into()
+        } else {
+            name.into()
         }
     }
 
