@@ -63,6 +63,9 @@
   "kind.other": "Otro",
   "tree.location": "Ubicación actual",
   "tree.go_up": "Subir un nivel",
+  "tree.loading": "cargando…",
+  "tree.empty": "(sin subcarpetas)",
+  "tree.access_denied": "acceso denegado",
   "lang.es": "Español",
   "lang.en": "English"
 }

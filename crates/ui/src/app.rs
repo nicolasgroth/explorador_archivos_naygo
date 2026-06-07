@@ -14,12 +14,14 @@ use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
-use naygo_core::listing::{spawn_listing, ListingMsg};
+use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::sort::sort_entries;
+use naygo_core::tree::DirTree;
 use naygo_core::workspace::template::LayoutTemplate;
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
+use naygo_core::NodeOutcome;
 use naygo_core::TemplateStore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
@@ -29,11 +31,21 @@ pub struct PaneListing {
     pub token: CancellationToken,
 }
 
+/// Un worker de listado solo-directorios para una rama del árbol.
+struct TreeListing {
+    rx: Option<Receiver<ListingMsg>>,
+    token: CancellationToken,
+}
+
 /// Estado raíz de la app.
 pub struct NaygoApp {
     pub workspace: Workspace,
     pub dock_state: DockState<PaneId>,
     listings: HashMap<PaneId, PaneListing>,
+    /// Estado del árbol por cada panel Tree (creado perezosamente).
+    trees: HashMap<PaneId, DirTree>,
+    /// Workers solo-directorios del árbol, por (panel, carpeta) expandida.
+    tree_listings: HashMap<(PaneId, PathBuf), TreeListing>,
     pub settings: Settings,
     pub templates: TemplateStore,
     config_dir: PathBuf,
@@ -77,6 +89,8 @@ impl NaygoApp {
             workspace,
             dock_state,
             listings: HashMap::new(),
+            trees: HashMap::new(),
+            tree_listings: HashMap::new(),
             settings,
             templates,
             config_dir,
@@ -285,6 +299,113 @@ impl NaygoApp {
         self.listings.values().any(|l| l.rx.is_some())
     }
 
+    /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
+    /// vez. Útil antes de pintar un panel Tree.
+    fn ensure_tree(&mut self, id: PaneId) -> &mut DirTree {
+        self.trees.entry(id).or_insert_with(|| {
+            let drives = naygo_platform::drives::drives()
+                .into_iter()
+                .map(|d| (d.path, d.label, d.kind))
+                .collect::<Vec<_>>();
+            DirTree::from_drives(&drives)
+        })
+    }
+
+    /// Expande una rama del árbol del panel `id`: marca Loading y lanza el worker
+    /// solo-directorios. No-op si ya hay un worker para esa (id, path).
+    fn tree_expand(&mut self, id: PaneId, path: PathBuf) {
+        // Ya hay un worker en vuelo para esta rama → no relanzar.
+        if self.tree_listings.contains_key(&(id, path.clone())) {
+            return;
+        }
+        if let Some(tree) = self.trees.get_mut(&id) {
+            // Si la rama YA tiene hijos cargados, solo reabrir visualmente: NO
+            // re-listar (conserva los hijos; spec "colapsar no re-lista al reabrir").
+            let already_loaded = tree
+                .node_at(&path)
+                .map(|n| n.children.is_some())
+                .unwrap_or(false);
+            if already_loaded {
+                tree.expand_loaded(&path);
+                return;
+            }
+            tree.begin_loading(&path);
+        }
+        let token = CancellationToken::new();
+        let (rx, _h) = spawn_listing_filtered(path.clone(), token.clone(), ListingFilter::DirsOnly);
+        self.tree_listings.insert(
+            (id, path),
+            TreeListing {
+                rx: Some(rx),
+                token,
+            },
+        );
+    }
+
+    /// Colapsa una rama (conserva hijos). Cancela su worker si seguía cargando.
+    fn tree_collapse(&mut self, id: PaneId, path: PathBuf) {
+        if let Some(l) = self.tree_listings.get(&(id, path.clone())) {
+            l.token.cancel();
+        }
+        self.tree_listings.remove(&(id, path.clone()));
+        if let Some(tree) = self.trees.get_mut(&id) {
+            tree.collapse(&path);
+        }
+    }
+
+    /// Drena los canales de TODOS los workers del árbol, sin bloquear.
+    fn pump_tree(&mut self) {
+        let keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
+        for key in keys {
+            self.pump_tree_one(key);
+        }
+    }
+
+    fn pump_tree_one(&mut self, key: (PaneId, PathBuf)) {
+        let (id, path) = (key.0, &key.1);
+        let mut finished = false;
+        let mut err = false;
+        let mut new_dirs: Vec<PathBuf> = Vec::new();
+        if let Some(listing) = self.tree_listings.get(&key) {
+            if let Some(rx) = &listing.rx {
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        ListingMsg::Entry(e) => new_dirs.push(e.path),
+                        ListingMsg::Done => finished = true,
+                        ListingMsg::Cancelled => finished = true,
+                        ListingMsg::Error(_) => {
+                            err = true;
+                            finished = true;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(tree) = self.trees.get_mut(&id) {
+            for d in new_dirs {
+                tree.push_child(path, d);
+            }
+            if finished {
+                let outcome = if err {
+                    NodeOutcome::Error
+                } else {
+                    NodeOutcome::Done
+                };
+                tree.finish_loading(path, outcome);
+            }
+        }
+        if finished {
+            // El estado del nodo vive en el DirTree; el worker terminado se elimina
+            // (a diferencia del file panel, que conserva la entrada con rx=None).
+            // El árbol se re-expande sin re-listar vía expand_loaded.
+            self.tree_listings.remove(&key);
+        }
+    }
+
+    fn any_tree_listing_active(&self) -> bool {
+        self.tree_listings.values().any(|l| l.rx.is_some())
+    }
+
     /// Aplica una acción al panel activo.
     pub fn apply_action(&mut self, action: Action) {
         match action {
@@ -470,8 +591,9 @@ impl NaygoApp {
 impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_all();
+        self.pump_tree();
         self.handle_input(ctx);
-        if self.any_listing_active() {
+        if self.any_listing_active() || self.any_tree_listing_active() {
             ctx.request_repaint();
         }
     }
@@ -506,7 +628,55 @@ impl eframe::App for NaygoApp {
             });
         });
 
+        // --- Sincronización del árbol con el panel Files activo ---
+        // Aseguramos un DirTree por cada panel Tree y lo apuntamos a la carpeta del
+        // panel activo, expandiendo la cadena de ancestros necesaria para revelarla.
+        let active_dir = self.workspace.active_files().map(|f| f.current_dir.clone());
+        let tree_pane_ids: Vec<PaneId> = self
+            .workspace
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Tree)
+            .map(|p| p.id)
+            .collect();
+        for id in &tree_pane_ids {
+            self.ensure_tree(*id);
+        }
+        // CAVEAT de casing: reveal_chain/node_at usan starts_with/== que en Windows
+        // son sensibles a mayúsculas. Las raíces vienen de GetLogicalDriveStringsW
+        // (devuelve "C:\" en mayúscula) y current_dir suele ser canónico, así que en
+        // la práctica coinciden. No normalizamos rutas aquí (sería frágil); si la
+        // letra de unidad difiriera, el auto-reveal simplemente no encontraría la
+        // cadena (degrada sin romper).
+        if let Some(dir) = active_dir.clone() {
+            for id in &tree_pane_ids {
+                // Re-ejecutar cada frame mientras active_path == dir es inofensivo:
+                // los niveles ya cargados se saltan (children.is_some()) y los que
+                // están en vuelo se saltan por el guard contains_key de tree_expand.
+                let needs: Vec<PathBuf> = if let Some(tree) = self.trees.get_mut(id) {
+                    if tree.active_path.as_deref() != Some(dir.as_path()) {
+                        tree.set_active(dir.clone());
+                    }
+                    tree.reveal_chain(&dir)
+                        .into_iter()
+                        .filter(|anc| {
+                            tree.node_at(anc)
+                                .map(|n| n.children.is_none())
+                                .unwrap_or(false)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for anc in needs {
+                    self.tree_expand(*id, anc);
+                }
+            }
+        }
+
         let mut pending: Vec<crate::docking::PaneRequest> = Vec::new();
+        let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
+        let mut tree_revealed: HashSet<PaneId> = HashSet::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -515,6 +685,9 @@ impl eframe::App for NaygoApp {
                 icons: &self.icons,
                 show_parent_entry: self.settings.show_parent_entry,
                 i18n: &self.i18n,
+                trees: &self.trees,
+                tree_actions: &mut tree_actions,
+                tree_revealed: &mut tree_revealed,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -533,6 +706,39 @@ impl eframe::App for NaygoApp {
                         f.navigate_to(dir.clone());
                         self.start_listing(id, dir);
                     }
+                }
+            }
+        }
+
+        // Acciones del árbol acumuladas durante el pintado.
+        for (id, action) in tree_actions {
+            match action {
+                crate::tree_actions::TreeAction::Expand(path) => self.tree_expand(id, path),
+                crate::tree_actions::TreeAction::Collapse(path) => self.tree_collapse(id, path),
+                crate::tree_actions::TreeAction::Navigate(path) => {
+                    if let Some(active) = self.workspace.active_id() {
+                        if let Some(f) = self
+                            .workspace
+                            .pane_mut(active)
+                            .and_then(|p| p.files.as_mut())
+                        {
+                            f.navigate_to(path.clone());
+                            self.start_listing(active, path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Limpiar el reveal SOLO si el nodo objetivo se pintó (y se hizo scroll) este
+        // frame. Si el objetivo aún no está cargado/pintado (revelado en cascada),
+        // reveal_to persiste hasta que aparezca; el repaint por workers activos
+        // garantiza más frames. Así el scroll a una carpeta profunda recién navegada
+        // sí ocurre, en vez de perderse el primer frame.
+        for id in &tree_pane_ids {
+            if tree_revealed.contains(id) {
+                if let Some(t) = self.trees.get_mut(id) {
+                    t.clear_reveal();
                 }
             }
         }
