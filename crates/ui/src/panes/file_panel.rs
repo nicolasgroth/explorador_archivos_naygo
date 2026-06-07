@@ -13,13 +13,37 @@
 use crate::docking::PaneRequest;
 use crate::icons::IconProvider;
 use crate::table_actions::TableAction;
-use naygo_core::columns::{ColumnKind, TableState};
+use egui_extras::{Column, TableBuilder};
+use naygo_core::columns::{ColumnKind, TableState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH};
 use naygo_core::fs_model::{Entry, SortSpec};
 use naygo_core::icon_kind::{icon_key_for, IconKey};
 use naygo_core::workspace::{PaneId, Workspace};
 use std::time::SystemTime;
 
 const ICON_SIZE: f32 = 16.0;
+
+/// Alto de fila del cuerpo de la tabla (px lógicos). Constante para poder usar el
+/// `TableBody::rows` virtualizado (solo pinta filas visibles), clave para la
+/// prioridad del proyecto: navegar carpetas enormes sin congelar ni gastar de más.
+const ROW_HEIGHT: f32 = 20.0;
+/// Alto de la fila de encabezados.
+const HEADER_HEIGHT: f32 = 22.0;
+/// Umbral (px) para considerar que el usuario cambió el ancho de una columna. Evita
+/// re-emitir `SetColumnWidth` cada frame por jitter de punto flotante (lo que
+/// crearía un bucle de realimentación con el clamp de `set_width`).
+const WIDTH_CHANGE_EPS: f32 = 0.5;
+
+/// Una fila a pintar en el cuerpo de la tabla. Unifica la fila ".." (UI pura) con
+/// las entries de la vista, para poder usar el `TableBody::rows` virtualizado: todas
+/// las filas tienen el mismo alto y se indexan por posición.
+enum DisplayRow {
+    /// La fila ".." (subir al directorio padre). No es una `Entry`.
+    Parent,
+    /// Una entry de la vista filtrada/ordenada, en el índice dado dentro de `view`.
+    Entry(usize),
+    /// Aviso "sin coincidencias" (filtro activo dejó la vista vacía).
+    NoMatches,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn show(
@@ -85,26 +109,69 @@ pub fn show(
 
     let visible_cols: Vec<naygo_core::columns::ColumnSpec> =
         table.visible_columns().cloned().collect();
-    let num_columns = visible_cols.len().max(1);
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::Grid::new(("file_grid", id.0))
-            .num_columns(num_columns)
-            .striped(true)
-            .show(ui, |ui| {
-                // Encabezados: título + indicadores (▲/▼ si es la columna de orden,
-                // ⏷ si tiene filtro activo) + botón ▾ que abre el menú de columna.
-                // Cada encabezado es una FUENTE de arrastre (payload = índice REAL en
-                // `table.columns`) y un DESTINO: soltar la columna A sobre la columna B
-                // la mueve a la posición de B (emite `TableAction::MoveColumn`).
-                for col in &visible_cols {
-                    // Índice REAL de esta columna en `table.columns` (no el visible).
-                    let to_real = table
-                        .columns
-                        .iter()
-                        .position(|c| c.kind == col.kind)
-                        .unwrap();
-                    let dnd_id = egui::Id::new(("colhdr", id.0, col.kind));
+    // Construir la lista de filas a pintar (unificada para el cuerpo virtualizado):
+    // ".." (si corresponde) → entries de la vista (respetando `show_dirs`) → o el
+    // aviso "sin coincidencias" si un filtro activo dejó la vista vacía.
+    let mut rows: Vec<DisplayRow> = Vec::with_capacity(view.len() + 1);
+    if parent.is_some() {
+        rows.push(DisplayRow::Parent);
+    }
+    let mut painted_any = false;
+    for (i, entry) in view.iter().enumerate() {
+        if !show_dirs && entry.is_dir() {
+            continue;
+        }
+        painted_any = true;
+        rows.push(DisplayRow::Entry(i));
+    }
+    if !painted_any && has_active_filters {
+        rows.push(DisplayRow::NoMatches);
+    }
+
+    // Anchos medidos de los encabezados ESTE frame (uno por columna visible). Los
+    // capturamos desde el `Response` de cada celda de encabezado (su rect cubre el
+    // ancho completo de la columna). Comparándolos con el ancho guardado detectamos
+    // que el usuario arrastró el borde y emitimos `SetColumnWidth`. Es la vía pública
+    // para leer el ancho de vuelta: `egui_extras` guarda los anchos en su propia
+    // memoria (privada), pero el rect de la celda de encabezado los expone.
+    let mut measured_widths: Vec<Option<f32>> = vec![None; visible_cols.len()];
+
+    // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
+    // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
+    let mut builder = TableBuilder::new(ui)
+        .id_salt(("file_table", id.0))
+        .striped(true)
+        .resizable(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+    for col in &visible_cols {
+        // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
+        // permite encoger por debajo del contenido (si no, el texto largo impide
+        // achicar la columna).
+        builder = builder.column(
+            Column::initial(col.width)
+                .at_least(MIN_COLUMN_WIDTH)
+                .at_most(MAX_COLUMN_WIDTH)
+                .clip(true)
+                .resizable(true),
+        );
+    }
+
+    builder
+        .header(HEADER_HEIGHT, |mut header| {
+            // Encabezados: título + indicadores (▲/▼ si es la columna de orden, ⏷ si
+            // tiene filtro activo) + botón ▾ que abre el menú de columna. Cada
+            // encabezado es FUENTE de arrastre (payload = índice REAL en
+            // `table.columns`) y DESTINO: soltar A sobre B mueve A a la posición de B
+            // (emite `TableAction::MoveColumn`).
+            for (ci, col) in visible_cols.iter().enumerate() {
+                let to_real = table
+                    .columns
+                    .iter()
+                    .position(|c| c.kind == col.kind)
+                    .unwrap();
+                let dnd_id = egui::Id::new(("colhdr", id.0, col.kind));
+                let (_, cell_resp) = header.col(|ui| {
                     let resp = ui
                         .dnd_drag_source(dnd_id, to_real, |ui| {
                             column_header(
@@ -119,67 +186,84 @@ pub fn show(
                             );
                         })
                         .response;
-                    // Si se soltó un payload sobre este encabezado, mover esa columna
-                    // a esta posición.
+                    // Soltar una columna sobre este encabezado la mueve aquí.
                     if let Some(from_real) = resp.dnd_release_payload::<usize>() {
                         if *from_real != to_real {
                             table_actions.push(TableAction::MoveColumn(*from_real, to_real));
                         }
                     }
-                }
-                ui.end_row();
-
-                // Fila ".." (si corresponde).
-                if parent.is_some() {
-                    // ".." se ve como una carpeta normal (estilo Total Commander):
-                    // usa el ícono Folder en lugar de uno especial de "subir".
-                    let resp = icon_row(ui, icons, IconKey::Folder, "..", false);
-                    // ".." sube con UN solo clic (además del doble): no hay nada que
-                    // "seleccionar" en ella, a diferencia de una carpeta real que
-                    // selecciona con un clic y entra con doble. Asimetría intencional
-                    // (estilo Total Commander); no "corregir" a solo-doble-clic.
-                    if resp.double_clicked() || resp.clicked() {
-                        parent_activated = true;
-                    }
-                    // Celdas vacías para las columnas restantes.
-                    for _ in 1..visible_cols.len() {
-                        ui.label("");
-                    }
-                    ui.end_row();
-                }
-
-                // Filas de la vista. Si la vista quedó vacía POR un filtro activo,
-                // mostrar el aviso "sin coincidencias" en lugar de filas.
-                let mut painted_any = false;
-                for (i, entry) in view.iter().enumerate() {
-                    if !show_dirs && entry.is_dir() {
-                        continue;
-                    }
-                    painted_any = true;
-                    let selected = focused == Some(i);
-                    for (ci, col) in visible_cols.iter().enumerate() {
-                        if ci == 0 {
-                            let key = icon_key_for(entry);
-                            let resp = icon_row(ui, icons, key, &entry.name, selected);
-                            if resp.clicked() {
-                                clicked = Some(i);
-                            }
-                            if resp.double_clicked() {
-                                activated = Some(i);
-                            }
-                        } else {
-                            ui.label(cell_text(entry, col.kind));
+                });
+                // El rect de la celda de encabezado cubre el ancho completo de la
+                // columna: lo guardamos para comparar con el ancho del modelo.
+                measured_widths[ci] = Some(cell_resp.rect.width());
+            }
+        })
+        .body(|body| {
+            body.rows(ROW_HEIGHT, rows.len(), |mut row| {
+                let row_idx = row.index();
+                match rows[row_idx] {
+                    DisplayRow::Parent => {
+                        // ".." se ve como una carpeta normal (estilo Total Commander):
+                        // usa el ícono Folder, no uno especial de "subir".
+                        for (ci, _col) in visible_cols.iter().enumerate() {
+                            let (_, _) = row.col(|ui| {
+                                if ci == 0 {
+                                    let resp = icon_row(ui, icons, IconKey::Folder, "..", false);
+                                    // ".." sube con UN solo clic (además del doble): no
+                                    // hay nada que "seleccionar" en ella. Asimetría
+                                    // intencional (estilo Total Commander).
+                                    if resp.double_clicked() || resp.clicked() {
+                                        parent_activated = true;
+                                    }
+                                }
+                            });
                         }
                     }
-                    ui.end_row();
-                }
-
-                if !painted_any && has_active_filters {
-                    ui.weak(i18n.t("table.no_matches"));
-                    ui.end_row();
+                    DisplayRow::Entry(i) => {
+                        let entry = &view[i];
+                        let selected = focused == Some(i);
+                        row.set_selected(selected);
+                        for (ci, col) in visible_cols.iter().enumerate() {
+                            row.col(|ui| {
+                                if ci == 0 {
+                                    let key = icon_key_for(entry);
+                                    let resp = icon_row(ui, icons, key, &entry.name, selected);
+                                    if resp.clicked() {
+                                        clicked = Some(i);
+                                    }
+                                    if resp.double_clicked() {
+                                        activated = Some(i);
+                                    }
+                                } else {
+                                    ui.label(cell_text(entry, col.kind));
+                                }
+                            });
+                        }
+                    }
+                    DisplayRow::NoMatches => {
+                        // Aviso en la primera columna; resto vacías.
+                        for (ci, _col) in visible_cols.iter().enumerate() {
+                            row.col(|ui| {
+                                if ci == 0 {
+                                    ui.weak(i18n.t("table.no_matches"));
+                                }
+                            });
+                        }
+                    }
                 }
             });
-    });
+        });
+
+    // Detectar resize: si el ancho medido de una columna difiere del guardado en el
+    // modelo, el usuario arrastró el borde → persistir el nuevo ancho. El clamp lo
+    // hace `set_width` en core. El umbral evita re-emitir por jitter de float.
+    for (ci, col) in visible_cols.iter().enumerate() {
+        if let Some(w) = measured_widths[ci] {
+            if (w - col.width).abs() > WIDTH_CHANGE_EPS {
+                table_actions.push(TableAction::SetColumnWidth(col.kind, w));
+            }
+        }
+    }
 
     if parent_activated {
         if let Some(dir) = parent {

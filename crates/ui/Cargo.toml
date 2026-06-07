@@ -14,6 +14,7 @@ naygo-core = { path = "../core" }
 naygo-platform = { path = "../platform" }
 eframe = { workspace = true }
 egui = { workspace = true }
+egui_extras = { workspace = true }
 egui_dock = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }

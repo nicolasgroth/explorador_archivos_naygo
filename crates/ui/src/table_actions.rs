@@ -22,7 +22,6 @@ pub enum TableAction {
     /// Mover una columna del índice `from` al `to`. (Emitido en Tarea 9: drag.)
     MoveColumn(usize, usize),
     /// Fijar el ancho de una columna. (Emitido en Tarea 10: drag de ancho.)
-    #[allow(dead_code)]
     SetColumnWidth(ColumnKind, f32),
 }
 
