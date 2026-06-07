@@ -1,0 +1,14 @@
+{
+  "name": "Dark Teal",
+  "base": "dark",
+  "accent": "#1abc9c",
+  "panel_bg": "#15201e",
+  "row_bg": "#15201e",
+  "row_alt_bg": "#1a2522",
+  "text": "#cfe0db",
+  "text_dim": "#9fb8b1",
+  "selection_bg": "#21302c",
+  "active_bar": "#1abc9c",
+  "error": "#e06c5b",
+  "border": "#25352f"
+}

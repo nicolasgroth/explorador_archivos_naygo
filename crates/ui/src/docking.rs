@@ -22,6 +22,7 @@ pub struct NaygoTabViewer<'a> {
     pub status: &'a mut String,
     pub pending: &'a mut Vec<PaneRequest>,
     pub icons: &'a crate::icons::IconProvider,
+    pub theme: &'a crate::theme_apply::ActiveTheme,
     pub show_parent_entry: bool,
     pub i18n: &'a naygo_core::i18n::I18n,
     pub trees:
@@ -63,7 +64,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
         // Resaltar el panel activo: título en color de acento + negrita.
         if self.workspace.active_id() == Some(*tab) {
             egui::RichText::new(name)
-                .color(egui::Color32::from_rgb(0x2f, 0x81, 0xf7))
+                .color(self.theme.accent())
                 .strong()
                 .into()
         } else {
@@ -86,6 +87,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     self.show_parent_entry,
                     self.i18n,
                     &mut local,
+                    self.theme,
                 );
                 for a in local {
                     self.table_actions.push((id, a));
@@ -94,8 +96,9 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
             Some(PanePurpose::Tree) => {
                 if let Some(tree) = self.trees.get(&id) {
                     let mut local: Vec<crate::tree_actions::TreeAction> = Vec::new();
-                    let revealed =
-                        crate::panes::tree_panel::show(ui, tree, &mut local, self.icons, self.i18n);
+                    let revealed = crate::panes::tree_panel::show(
+                        ui, tree, &mut local, self.icons, self.i18n, self.theme,
+                    );
                     if revealed {
                         self.tree_revealed.insert(id);
                     }

@@ -9,6 +9,7 @@
 use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
 use crate::settings_window::SettingsSection;
+use crate::theme_apply::{self, ActiveTheme};
 use eframe::CreationContext;
 use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
@@ -16,6 +17,8 @@ use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::sort::sort_entries;
+use naygo_core::theme::pack::PackCatalog;
+use naygo_core::theme::ThemeCatalog;
 use naygo_core::tree::DirTree;
 use naygo_core::workspace::template::LayoutTemplate;
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
@@ -53,6 +56,9 @@ pub struct NaygoApp {
     typeahead_buf: String,
     icons: IconProvider,
     i18n: I18n,
+    theme_catalog: ThemeCatalog,
+    pack_catalog: PackCatalog,
+    active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
 }
@@ -85,6 +91,15 @@ impl NaygoApp {
 
         let icons = IconProvider::new(&cc.egui_ctx, settings.icon_set);
 
+        let theme_catalog = ThemeCatalog::load(&config_dir, &settings.theme);
+        let active_theme = {
+            let t = theme_catalog.get(&settings.theme).clone();
+            ActiveTheme::new(settings.theme.clone(), t)
+        };
+        theme_apply::apply(&active_theme.theme, &cc.egui_ctx);
+
+        let pack_catalog = PackCatalog::load(&config_dir);
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -98,6 +113,9 @@ impl NaygoApp {
             typeahead_buf: String::new(),
             icons,
             i18n,
+            theme_catalog,
+            pack_catalog,
+            active_theme,
             settings_open: false,
             settings_section: SettingsSection::Appearance,
         };
@@ -118,6 +136,26 @@ impl NaygoApp {
     /// Ruta de la carpeta de config (para la sección Avanzado).
     pub fn config_dir_display(&self) -> String {
         self.config_dir.display().to_string()
+    }
+
+    /// Ids + Theme de cada tema disponible (para pintar las tarjetas del selector).
+    pub fn theme_cards(&self) -> Vec<(naygo_core::theme::ThemeId, naygo_core::theme::Theme)> {
+        self.theme_catalog
+            .available()
+            .iter()
+            .map(|id| (id.clone(), self.theme_catalog.get(id).clone()))
+            .collect()
+    }
+
+    /// Packs disponibles (catálogo cargado una vez en `new`).
+    pub fn packs(&self) -> Vec<naygo_core::theme::pack::Pack> {
+        self.pack_catalog.packs().to_vec()
+    }
+
+    /// Activa un pack: setea tema + icon set (siguen independientes después).
+    pub fn apply_pack(&mut self, pack: &naygo_core::theme::pack::Pack) {
+        self.settings.theme = pack.theme.clone();
+        self.settings.icon_set = pack.icon_set;
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
@@ -612,6 +650,12 @@ impl eframe::App for NaygoApp {
             self.icons.reload(ui.ctx(), set);
         }
 
+        if self.active_theme.id != self.settings.theme {
+            let t = self.theme_catalog.get(&self.settings.theme).clone();
+            self.active_theme = ActiveTheme::new(self.settings.theme.clone(), t);
+            theme_apply::apply(&self.active_theme.theme, ui.ctx());
+        }
+
         // Aplica un cambio de idioma. También sirve a la ventana de Configuración
         // (viewport): un cambio hecho ahí este frame se aplica al inicio del
         // siguiente (la ventana repinta cada frame, así que el relabel es inmediato
@@ -692,6 +736,7 @@ impl eframe::App for NaygoApp {
                 status: &mut self.status,
                 pending: &mut pending,
                 icons: &self.icons,
+                theme: &self.active_theme,
                 show_parent_entry: self.settings.show_parent_entry,
                 i18n: &self.i18n,
                 trees: &self.trees,

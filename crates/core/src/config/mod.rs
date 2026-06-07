@@ -6,6 +6,7 @@
 //! NO crashea — se cae al default y se loguea. Cada archivo es independiente.
 
 use crate::i18n::LangId;
+use crate::theme::ThemeId;
 use crate::workspace::template::TemplateStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -49,6 +50,10 @@ pub struct Settings {
     /// Idioma activo de la UI. Vacío/ausente → se detecta del SO al arrancar.
     #[serde(default = "default_language")]
     pub language: LangId,
+    /// Tema (color set) activo. `#[serde(default)]` por retro-compat (settings viejo
+    /// sin este campo cae al default).
+    #[serde(default = "default_theme")]
+    pub theme: ThemeId,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -67,6 +72,11 @@ fn default_language() -> LangId {
     LangId::new("en")
 }
 
+/// Default de `theme` para `#[serde(default)]`: Dark Blue.
+fn default_theme() -> ThemeId {
+    ThemeId::new("dark-blue")
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -76,6 +86,7 @@ impl Default for Settings {
             icon_set: IconSet::Flat,
             show_parent_entry: true,
             language: default_language(),
+            theme: default_theme(),
         }
     }
 }
@@ -188,6 +199,7 @@ mod tests {
             icon_set: IconSet::Mono,
             show_parent_entry: false,
             language: default_language(),
+            theme: default_theme(),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -248,6 +260,21 @@ mod tests {
         assert!(!s.icon_only, "conserva lo viejo");
         assert_eq!(s.icon_set, IconSet::Flat, "campo nuevo cae al default");
         assert!(s.show_parent_entry, "campo nuevo cae al default");
+    }
+
+    #[test]
+    fn settings_default_theme_es_dark_blue() {
+        use crate::theme::ThemeId;
+        let s = Settings::default();
+        assert_eq!(s.theme, ThemeId::new("dark-blue"));
+    }
+
+    #[test]
+    fn settings_viejo_sin_theme_cae_al_default() {
+        use crate::theme::ThemeId;
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"Flat","show_parent_entry":true,"language":"es"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.theme, ThemeId::new("dark-blue"));
     }
 
     #[test]
