@@ -270,9 +270,18 @@ mod tests {
 
     #[test]
     fn from_hex_con_y_sin_almohadilla() {
-        assert_eq!(ThemeColor::from_hex("#2f81f7"), Some(ThemeColor::new(0x2f, 0x81, 0xf7)));
-        assert_eq!(ThemeColor::from_hex("2f81f7"), Some(ThemeColor::new(0x2f, 0x81, 0xf7)));
-        assert_eq!(ThemeColor::from_hex("#2F81F7"), Some(ThemeColor::new(0x2f, 0x81, 0xf7)));
+        assert_eq!(
+            ThemeColor::from_hex("#2f81f7"),
+            Some(ThemeColor::new(0x2f, 0x81, 0xf7))
+        );
+        assert_eq!(
+            ThemeColor::from_hex("2f81f7"),
+            Some(ThemeColor::new(0x2f, 0x81, 0xf7))
+        );
+        assert_eq!(
+            ThemeColor::from_hex("#2F81F7"),
+            Some(ThemeColor::new(0x2f, 0x81, 0xf7))
+        );
     }
 
     #[test]
@@ -337,7 +346,10 @@ mod tests {
 
     #[test]
     fn catalog_tiene_los_cuatro_embebidos() {
-        let cat = ThemeCatalog::load(std::path::Path::new("Z:/no/existe"), &ThemeCatalog::default_id());
+        let cat = ThemeCatalog::load(
+            std::path::Path::new("Z:/no/existe"),
+            &ThemeCatalog::default_id(),
+        );
         let ids: Vec<&str> = cat.available().iter().map(|i| i.as_str()).collect();
         for id in ["dark-blue", "dark-teal", "light", "high-contrast"] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
@@ -351,15 +363,24 @@ mod tests {
 
     #[test]
     fn catalog_get_id_desconocido_cae_al_default() {
-        let cat = ThemeCatalog::load(std::path::Path::new("Z:/no/existe"), &ThemeCatalog::default_id());
+        let cat = ThemeCatalog::load(
+            std::path::Path::new("Z:/no/existe"),
+            &ThemeCatalog::default_id(),
+        );
         let t = cat.get(&ThemeId::new("no-existe"));
         assert_eq!(t.name, "Dark Blue");
     }
 
     #[test]
     fn embebidos_parsean_sin_panic() {
-        let cat = ThemeCatalog::load(std::path::Path::new("Z:/no/existe"), &ThemeCatalog::default_id());
+        let cat = ThemeCatalog::load(
+            std::path::Path::new("Z:/no/existe"),
+            &ThemeCatalog::default_id(),
+        );
         assert_eq!(cat.get(&ThemeId::new("light")).base, ThemeBase::Light);
-        assert_eq!(cat.get(&ThemeId::new("high-contrast")).name, "High Contrast");
+        assert_eq!(
+            cat.get(&ThemeId::new("high-contrast")).name,
+            "High Contrast"
+        );
     }
 }
