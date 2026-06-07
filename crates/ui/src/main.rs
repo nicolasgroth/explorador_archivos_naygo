@@ -16,6 +16,7 @@ mod logging;
 mod panes;
 mod settings_window;
 mod sort_ui;
+mod table_actions;
 mod templates_menu;
 mod toolbar;
 mod tree_actions;
