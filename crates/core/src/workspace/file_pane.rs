@@ -6,6 +6,7 @@
 //! le inyecta las entradas (vía el motor de `listing`) y le pide navegar.
 
 use crate::columns::{ColumnKind, TableState};
+use crate::filter::matches as filter_matches;
 use crate::filter::ColumnFilter;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::NavHistory;
@@ -63,9 +64,28 @@ impl FilePaneState {
         }
     }
 
-    /// Entrada con foco, si existe.
-    pub fn focused_entry(&self) -> Option<&Entry> {
-        self.focused.and_then(|i| self.entries.get(i))
+    /// Las entries VISIBLES: las que pasan los filtros activos de la tabla, en el
+    /// orden actual de `entries` (que `pump_one` mantiene ordenado por `sort`).
+    /// Es el ÚNICO espacio de índices que usan foco/selección/teclado/activación.
+    pub fn view_indices(&self) -> Vec<usize> {
+        if self.table.filters.is_empty() {
+            (0..self.entries.len()).collect()
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| filter_matches(e, &self.table.filters))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+
+    /// La entrada con foco, donde `focused` es una posición en la VISTA (no en
+    /// `entries`). Devuelve la entry real correspondiente.
+    pub fn focused_view_entry(&self) -> Option<&Entry> {
+        let view = self.view_indices();
+        let pos = self.focused?;
+        view.get(pos).and_then(|&real| self.entries.get(real))
     }
 
     /// Navega a una carpeta nueva: registra en el historial y limpia entries/foco.
@@ -226,6 +246,57 @@ mod tests {
         };
         let s = FilePaneState::from_persist(persist);
         assert_eq!(s.table, table);
+    }
+
+    #[test]
+    fn focused_view_entry_respeta_filtro() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        use crate::fs_model::{Entry, EntryKind};
+        use std::collections::BTreeSet;
+        let mut s = FilePaneState::new(p("C:/a"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        s.entries = vec![mk("a.txt"), mk("b.pdf"), mk("c.txt")];
+        // Filtro: solo .txt → vista = [a.txt (idx0), c.txt (idx2)].
+        let mut set = BTreeSet::new();
+        set.insert("txt".to_string());
+        s.table
+            .set_filter(ColumnKind::Extension, ColumnFilter::Extensions(set));
+        assert_eq!(s.view_indices(), vec![0, 2]);
+        // focused = posición 1 en la VISTA → c.txt (no b.pdf).
+        s.focused = Some(1);
+        assert_eq!(
+            s.focused_view_entry().map(|e| e.name.as_str()),
+            Some("c.txt")
+        );
+        // foco fuera de la vista → None.
+        s.focused = Some(5);
+        assert!(s.focused_view_entry().is_none());
+    }
+
+    #[test]
+    fn view_indices_sin_filtro_es_identidad() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("C:/a"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        s.entries = vec![mk("a"), mk("b")];
+        assert_eq!(s.view_indices(), vec![0, 1]);
     }
 
     #[test]

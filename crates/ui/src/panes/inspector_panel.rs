@@ -8,7 +8,10 @@ use naygo_core::fs_model::EntryKind;
 use naygo_core::workspace::Workspace;
 
 pub fn show(ui: &mut egui::Ui, workspace: &mut Workspace, i18n: &naygo_core::i18n::I18n) {
-    let Some(entry) = workspace.active_files().and_then(|f| f.focused_entry()) else {
+    let Some(entry) = workspace
+        .active_files()
+        .and_then(|f| f.focused_view_entry())
+    else {
         ui.label(i18n.t("inspector.nothing"));
         return;
     };

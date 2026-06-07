@@ -444,12 +444,14 @@ impl NaygoApp {
 
     fn move_focus(&mut self, delta: isize) {
         if let Some(f) = self.workspace.active_files_mut() {
-            if f.entries.is_empty() {
+            // El foco es una posición en la VISTA (entries que pasan el filtro), no
+            // en `entries` crudas: navegar con flechas se mueve por lo que se ve.
+            let view_len = f.view_indices().len();
+            if view_len == 0 {
                 return;
             }
-            let len = f.entries.len() as isize;
             let cur = f.focused.unwrap_or(0) as isize;
-            f.focused = Some((cur + delta).clamp(0, len - 1) as usize);
+            f.focused = Some((cur + delta).clamp(0, view_len as isize - 1) as usize);
         }
     }
 
@@ -461,7 +463,7 @@ impl NaygoApp {
             .workspace
             .pane(active)
             .and_then(|p| p.files.as_ref())
-            .and_then(|f| f.focused_entry().cloned());
+            .and_then(|f| f.focused_view_entry().cloned());
         let Some(entry) = entry else { return };
         if entry.is_dir() {
             if let Some(f) = self
@@ -504,10 +506,16 @@ impl NaygoApp {
         self.typeahead_buf.push_str(typed);
         let buf = self.typeahead_buf.clone();
         if let Some(f) = self.workspace.active_files_mut() {
-            let names: Vec<String> = f.entries.iter().map(|e| e.name.clone()).collect();
+            // Type-ahead opera sobre la VISTA: los nombres y el índice resultante son
+            // posiciones en la vista filtrada (consistente con foco/selección).
+            let view = f.view_indices();
+            let names: Vec<String> = view
+                .iter()
+                .map(|&real| f.entries[real].name.clone())
+                .collect();
             let start = f.focused.unwrap_or(0);
             if let Some(i) = crate::typeahead::find_match(&names, &buf, start) {
-                f.focused = Some(i);
+                f.focused = Some(i); // i es posición en la VISTA
             }
         }
     }
@@ -738,6 +746,11 @@ impl eframe::App for NaygoApp {
                 match action {
                     crate::table_actions::TableAction::SetSort(spec) => {
                         f.sort = spec;
+                        // Re-ordenar `entries` en sitio (como hace `pump_one`) para que
+                        // `view_indices()` (orden de entries) coincida con el orden que
+                        // pinta el file_panel. Si no, foco/teclado divergirían de la vista
+                        // tras cambiar el orden sin re-listar.
+                        sort_entries(&mut f.entries, &spec);
                     }
                     crate::table_actions::TableAction::SetFilter(kind, filter) => {
                         f.table.set_filter(kind, filter);

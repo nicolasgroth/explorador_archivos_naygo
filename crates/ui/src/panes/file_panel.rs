@@ -227,7 +227,12 @@ pub fn show(
                             row.col(|ui| {
                                 if ci == 0 {
                                     let key = icon_key_for(entry);
-                                    let resp = icon_row(ui, icons, key, &entry.name, selected);
+                                    // `false`: el resaltado de selección lo pinta el
+                                    // `row.set_selected(selected)` de la fila completa.
+                                    // Pasar `selected` aquí lo pintaría dos veces (doble
+                                    // resaltado en la celda Nombre). El sensado de clic
+                                    // de `icon_row` es independiente de este flag.
+                                    let resp = icon_row(ui, icons, key, &entry.name, false);
                                     if resp.clicked() {
                                         clicked = Some(i);
                                     }
