@@ -76,9 +76,9 @@ pub fn to_bytes(value: f64, unit: SizeUnit) -> u64 {
 
 // ---------------------------------------------------------------------------
 // Render del desplegable (egui). La lógica de qué acción emitir vive en las
-// funciones puras de arriba; aquí solo dibujamos y leemos/guardamos el estado
-// transitorio de los controles en `egui::Memory` (clave incluye el PaneId para
-// que dos paneles no compartan el estado de UI del mismo tipo de columna).
+// funciones puras de arriba; aquí solo dibujamos. El estado mostrado por los
+// controles de filtro se deriva de `table.filters` (fuente de verdad) cada frame,
+// no de `egui::Memory`: así no hay desync entre lo que se ve y lo que filtra.
 // ---------------------------------------------------------------------------
 
 /// Dibuja el contenido del desplegable de una columna: botones de orden, una
@@ -87,7 +87,6 @@ pub fn to_bytes(value: f64, unit: SizeUnit) -> u64 {
 #[allow(clippy::too_many_arguments)]
 pub fn show_menu(
     ui: &mut egui::Ui,
-    pane_id: u64,
     kind: ColumnKind,
     table: &TableState,
     sort: SortSpec,
@@ -112,7 +111,7 @@ pub fn show_menu(
 
     // Filtrar… (sub-sección plegable, depende del tipo de columna).
     ui.collapsing(i18n.t("menu.filter"), |ui| {
-        filter_controls(ui, pane_id, kind, ext_counts, i18n, actions);
+        filter_controls(ui, kind, table, ext_counts, i18n, actions);
     });
 
     // Columnas… (mostrar/ocultar columnas; Nombre deshabilitado).
@@ -131,49 +130,49 @@ pub fn show_menu(
 
 /// Controles de filtro según el tipo de columna. LIVE: cualquier cambio emite la
 /// acción correspondiente en el acto.
+///
+/// FUENTE DE VERDAD: `table.filters`. El estado mostrado por cada control se
+/// deriva del filtro activo cada frame (patrón "controlled"), NO de la memoria de
+/// egui. La memoria de egui no se reconciliaba con `table.filters`, lo que causaba
+/// (1) resurrección del filtro tras "Quitar filtro" y (2) controles en blanco con
+/// filtros persistidos/restaurados. El patrón controlled funciona porque la acción
+/// emitida se aplica a `table.filters` entre frames (en app.rs, tras cada `ui()`),
+/// y al frame siguiente el control se re-siembra ya con el valor nuevo; egui
+/// conserva foco/cursor por id de widget, así que se puede escribir con fluidez.
 fn filter_controls(
     ui: &mut egui::Ui,
-    pane_id: u64,
     kind: ColumnKind,
+    table: &TableState,
     ext_counts: &BTreeMap<String, usize>,
     i18n: &naygo_core::i18n::I18n,
     actions: &mut Vec<TableAction>,
 ) {
     match kind {
         ColumnKind::Name => {
-            // Estado del texto y del flag case-sensitive en memoria (por panel+columna).
-            let text_id = ui.make_persistent_id(("col_filter_name_text", pane_id, kind));
-            let case_id = ui.make_persistent_id(("col_filter_name_case", pane_id, kind));
-            let mut text: String = ui
-                .memory(|m| m.data.get_temp::<String>(text_id))
-                .unwrap_or_default();
-            let mut case: bool = ui
-                .memory(|m| m.data.get_temp::<bool>(case_id))
-                .unwrap_or(false);
+            // Estado actual = la verdad (table.filters), no la memoria.
+            let (mut text, mut case) = match table.filters.get(&ColumnKind::Name) {
+                Some(ColumnFilter::Text {
+                    contains,
+                    case_sensitive,
+                }) => (contains.clone(), *case_sensitive),
+                _ => (String::new(), false),
+            };
 
             ui.label(i18n.t("filter.name_contains"));
-            let mut changed = false;
-            if ui.text_edit_singleline(&mut text).changed() {
-                changed = true;
-            }
-            if ui
+            let mut changed = ui.text_edit_singleline(&mut text).changed();
+            changed |= ui
                 .checkbox(&mut case, i18n.t("filter.case_sensitive"))
-                .changed()
-            {
-                changed = true;
-            }
+                .changed();
             if changed {
-                ui.memory_mut(|m| m.data.insert_temp(text_id, text.clone()));
-                ui.memory_mut(|m| m.data.insert_temp(case_id, case));
-                actions.push(name_filter_action(&text, case));
+                actions.push(name_filter_action(&text, case)); // vacío → ClearFilter
             }
         }
         ColumnKind::Extension => {
-            // Conjunto de extensiones marcadas en memoria (por panel+columna).
-            let set_id = ui.make_persistent_id(("col_filter_ext_set", pane_id, kind));
-            let mut set: BTreeSet<String> = ui
-                .memory(|m| m.data.get_temp::<BTreeSet<String>>(set_id))
-                .unwrap_or_default();
+            // Conjunto marcado derivado del filtro activo (no de la memoria).
+            let mut selected: BTreeSet<String> = match table.filters.get(&ColumnKind::Extension) {
+                Some(ColumnFilter::Extensions(s)) => s.clone(),
+                _ => BTreeSet::new(),
+            };
 
             ui.label(i18n.t("filter.search_type"));
             let mut changed = false;
@@ -183,31 +182,31 @@ fn filter_controls(
                 } else {
                     format!(".{ext} ({count})")
                 };
-                let mut checked = set.contains(ext);
-                if ui.checkbox(&mut checked, label).changed() {
-                    if checked {
-                        set.insert(ext.clone());
+                let mut on = selected.contains(ext);
+                if ui.checkbox(&mut on, label).changed() {
+                    if on {
+                        selected.insert(ext.clone());
                     } else {
-                        set.remove(ext);
+                        selected.remove(ext);
                     }
                     changed = true;
                 }
             }
             if changed {
-                ui.memory_mut(|m| m.data.insert_temp(set_id, set.clone()));
-                actions.push(extensions_filter_action(set));
+                actions.push(extensions_filter_action(selected)); // vacío → ClearFilter
             }
         }
         ColumnKind::Size => {
-            // Dos campos (desde/hasta) en KB; el estado de texto vive en memoria.
-            let from_id = ui.make_persistent_id(("col_filter_size_from", pane_id, kind));
-            let to_id = ui.make_persistent_id(("col_filter_size_to", pane_id, kind));
-            let mut from_txt: String = ui
-                .memory(|m| m.data.get_temp::<String>(from_id))
-                .unwrap_or_default();
-            let mut to_txt: String = ui
-                .memory(|m| m.data.get_temp::<String>(to_id))
-                .unwrap_or_default();
+            // Texto de KB derivado del filtro actual (bytes → KB). Round-trip por
+            // 1024: la entrada ES en KB, así que es consistente (500 KB → 512000 B
+            // → 500 KB). Sin memoria: la verdad es table.filters.
+            let (mut from_txt, mut to_txt) = match table.filters.get(&ColumnKind::Size) {
+                Some(ColumnFilter::SizeRange { min, max }) => (
+                    min.map(|b| (b / 1024).to_string()).unwrap_or_default(),
+                    max.map(|b| (b / 1024).to_string()).unwrap_or_default(),
+                ),
+                _ => (String::new(), String::new()),
+            };
 
             let mut changed = false;
             ui.horizontal(|ui| {
@@ -223,8 +222,6 @@ fn filter_controls(
                 }
             });
             if changed {
-                ui.memory_mut(|m| m.data.insert_temp(from_id, from_txt.clone()));
-                ui.memory_mut(|m| m.data.insert_temp(to_id, to_txt.clone()));
                 let min = parse_kb(&from_txt);
                 let max = parse_kb(&to_txt);
                 actions.push(size_filter_action(min, max));

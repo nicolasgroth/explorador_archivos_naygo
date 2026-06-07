@@ -218,7 +218,7 @@ fn column_header(
         let menu_button = ui.add(egui::Button::new("▾").frame(false));
         let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
         egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
-            crate::column_menu::show_menu(ui, id.0, kind, table, sort, ext_counts, i18n, actions);
+            crate::column_menu::show_menu(ui, kind, table, sort, ext_counts, i18n, actions);
         });
     });
 }
