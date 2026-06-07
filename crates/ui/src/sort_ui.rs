@@ -8,6 +8,9 @@
 use naygo_core::fs_model::{SortKey, SortSpec};
 
 /// Calcula el nuevo `SortSpec` al clicar el encabezado de `clicked`.
+// El orden hoy se pide desde el menú de columna (TableAction::SetSort); esta
+// lógica pura se conserva (con sus tests) por si vuelve el clic directo al header.
+#[allow(dead_code)]
 pub fn next_sort_on_header_click(current: SortSpec, clicked: SortKey) -> SortSpec {
     if current.key == clicked {
         SortSpec {

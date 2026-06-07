@@ -677,6 +677,7 @@ impl eframe::App for NaygoApp {
         let mut pending: Vec<crate::docking::PaneRequest> = Vec::new();
         let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
         let mut tree_revealed: HashSet<PaneId> = HashSet::new();
+        let mut table_actions: Vec<(PaneId, crate::table_actions::TableAction)> = Vec::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -688,6 +689,7 @@ impl eframe::App for NaygoApp {
                 trees: &self.trees,
                 tree_actions: &mut tree_actions,
                 tree_revealed: &mut tree_revealed,
+                table_actions: &mut table_actions,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -725,6 +727,32 @@ impl eframe::App for NaygoApp {
                             f.navigate_to(path.clone());
                             self.start_listing(active, path);
                         }
+                    }
+                }
+            }
+        }
+
+        // Acciones de tabla (menú de columna) acumuladas durante el pintado.
+        for (id, action) in table_actions {
+            if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                match action {
+                    crate::table_actions::TableAction::SetSort(spec) => {
+                        f.sort = spec;
+                    }
+                    crate::table_actions::TableAction::SetFilter(kind, filter) => {
+                        f.table.set_filter(kind, filter);
+                    }
+                    crate::table_actions::TableAction::ClearFilter(kind) => {
+                        f.table.clear_filter(kind);
+                    }
+                    crate::table_actions::TableAction::ToggleColumn(kind) => {
+                        f.table.toggle_visible(kind);
+                    }
+                    crate::table_actions::TableAction::MoveColumn(from, to) => {
+                        f.table.move_column(from, to);
+                    }
+                    crate::table_actions::TableAction::SetColumnWidth(kind, w) => {
+                        f.table.set_width(kind, w);
                     }
                 }
             }

@@ -1,19 +1,27 @@
-// Naygo — panel de archivos: vista Detalle (columnas) con íconos sobre FilePaneState.
+// Naygo — panel de archivos: tabla rica (columnas dinámicas) con íconos.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! Pinta las entradas del panel `id` en columnas, cada una con su ícono de tipo
-//! (textura cacheada del set activo). Respeta `show_dirs`. Si `show_parent_entry`
-//! y hay padre, pinta una fila ".." arriba (UI pura, no una Entry). Clic
-//! selecciona; doble clic / Enter sobre carpeta o ".." navega. No hace I/O.
+//! Pinta las entradas del panel `id` en una tabla de columnas dinámicas (las que
+//! `TableState` marca visibles, en su orden). Cada encabezado tiene un botón `▾`
+//! que abre el menú de columna (orden + filtro en vivo + mostrar/ocultar). El
+//! pipeline (filtrar → ordenar) se calcula EN MEMORIA sobre las entries clonadas;
+//! no muta el estado del panel (eso lo hace `NaygoApp` con los `TableAction`s).
+//! Respeta `show_dirs`. Si `show_parent_entry` y hay padre, pinta una fila ".."
+//! arriba (UI pura, no una Entry). Clic selecciona; doble clic / Enter sobre
+//! carpeta o ".." navega. No hace I/O.
 
 use crate::docking::PaneRequest;
 use crate::icons::IconProvider;
-use naygo_core::fs_model::Entry;
+use crate::table_actions::TableAction;
+use naygo_core::columns::{ColumnKind, TableState};
+use naygo_core::fs_model::{Entry, SortSpec};
 use naygo_core::icon_kind::{icon_key_for, IconKey};
 use naygo_core::workspace::{PaneId, Workspace};
+use std::time::SystemTime;
 
 const ICON_SIZE: f32 = 16.0;
 
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     workspace: &mut Workspace,
@@ -22,6 +30,7 @@ pub fn show(
     icons: &IconProvider,
     show_parent_entry: bool,
     i18n: &naygo_core::i18n::I18n,
+    table_actions: &mut Vec<TableAction>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -33,7 +42,25 @@ pub fn show(
     let show_dirs = f.show_dirs;
     let sort = f.sort; // SortSpec es Copy; se lee antes de los closures
     let current_dir = f.current_dir.clone();
-    let entries: Vec<Entry> = f.entries.clone();
+    let table = f.table.clone();
+    let all_entries: Vec<Entry> = f.entries.clone();
+
+    // Conteo de extensiones sobre TODAS las entries actuales (no las filtradas):
+    // así el menú de filtro de tipo muestra todas las opciones disponibles.
+    let ext_counts = naygo_core::filter::extension_counts(&all_entries);
+
+    // Pipeline en memoria: filtrar (solo si hay filtros) → ordenar. No muta el
+    // estado del panel.
+    let mut view: Vec<Entry> = if table.filters.is_empty() {
+        all_entries.clone()
+    } else {
+        all_entries
+            .iter()
+            .filter(|e| naygo_core::filter::matches(e, &table.filters))
+            .cloned()
+            .collect()
+    };
+    naygo_core::sort::sort_entries(&mut view, &sort);
 
     // ¿Mostrar la fila ".."? Solo si la opción está activa y hay carpeta padre.
     let parent = if show_parent_entry {
@@ -42,32 +69,42 @@ pub fn show(
         None
     };
 
+    let has_active_filters = !table.filters.is_empty();
+
     ui.horizontal(|ui| {
         ui.monospace(current_dir.display().to_string());
     });
     ui.separator();
 
+    // Índice de la entry seleccionada se referencia respecto a la VISTA filtrada/
+    // ordenada (lo que el usuario ve), no respecto a `f.entries`. El `focused` del
+    // panel también se interpreta sobre la vista (consistente con el pintado).
     let mut clicked: Option<usize> = None;
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
-    let mut header_clicked: Option<naygo_core::fs_model::SortKey> = None;
+
+    let visible_cols: Vec<naygo_core::columns::ColumnSpec> =
+        table.visible_columns().cloned().collect();
+    let num_columns = visible_cols.len().max(1);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new(("file_grid", id.0))
-            .num_columns(3)
+            .num_columns(num_columns)
             .striped(true)
             .show(ui, |ui| {
-                // Encabezados clicables: clic ordena por esa columna (y alterna
-                // dirección si ya es la activa). Indicador ▲/▼ en la columna activa.
-                use naygo_core::fs_model::SortKey;
-                if header_label(ui, i18n.t("col.name"), sort, SortKey::Name).clicked() {
-                    header_clicked = Some(SortKey::Name);
-                }
-                if header_label(ui, i18n.t("col.size"), sort, SortKey::Size).clicked() {
-                    header_clicked = Some(SortKey::Size);
-                }
-                if header_label(ui, i18n.t("col.modified"), sort, SortKey::Modified).clicked() {
-                    header_clicked = Some(SortKey::Modified);
+                // Encabezados: título + indicadores (▲/▼ si es la columna de orden,
+                // ⏷ si tiene filtro activo) + botón ▾ que abre el menú de columna.
+                for col in &visible_cols {
+                    column_header(
+                        ui,
+                        id,
+                        col.kind,
+                        &table,
+                        sort,
+                        &ext_counts,
+                        i18n,
+                        table_actions,
+                    );
                 }
                 ui.end_row();
 
@@ -83,39 +120,46 @@ pub fn show(
                     if resp.double_clicked() || resp.clicked() {
                         parent_activated = true;
                     }
-                    ui.label("");
-                    ui.label("");
+                    // Celdas vacías para las columnas restantes.
+                    for _ in 1..visible_cols.len() {
+                        ui.label("");
+                    }
                     ui.end_row();
                 }
 
-                for (i, entry) in entries.iter().enumerate() {
+                // Filas de la vista. Si la vista quedó vacía POR un filtro activo,
+                // mostrar el aviso "sin coincidencias" en lugar de filas.
+                let mut painted_any = false;
+                for (i, entry) in view.iter().enumerate() {
                     if !show_dirs && entry.is_dir() {
                         continue;
                     }
+                    painted_any = true;
                     let selected = focused == Some(i);
-                    let key = icon_key_for(entry);
-                    let resp = icon_row(ui, icons, key, &entry.name, selected);
-                    if resp.clicked() {
-                        clicked = Some(i);
+                    for (ci, col) in visible_cols.iter().enumerate() {
+                        if ci == 0 {
+                            let key = icon_key_for(entry);
+                            let resp = icon_row(ui, icons, key, &entry.name, selected);
+                            if resp.clicked() {
+                                clicked = Some(i);
+                            }
+                            if resp.double_clicked() {
+                                activated = Some(i);
+                            }
+                        } else {
+                            ui.label(cell_text(entry, col.kind));
+                        }
                     }
-                    if resp.double_clicked() {
-                        activated = Some(i);
-                    }
-                    ui.label(format_size(entry));
-                    ui.label(format_modified(entry));
+                    ui.end_row();
+                }
+
+                if !painted_any && has_active_filters {
+                    ui.weak(i18n.t("table.no_matches"));
                     ui.end_row();
                 }
             });
     });
 
-    if let Some(key) = header_clicked {
-        let new_spec = crate::sort_ui::next_sort_on_header_click(sort, key);
-        if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            f.sort = new_spec;
-            let spec = f.sort;
-            naygo_core::sort::sort_entries(&mut f.entries, &spec);
-        }
-    }
     if parent_activated {
         if let Some(dir) = parent {
             pending.push(PaneRequest::Activate { id });
@@ -129,7 +173,7 @@ pub fn show(
         pending.push(PaneRequest::Activate { id });
     }
     if let Some(i) = activated {
-        if let Some(entry) = entries.get(i) {
+        if let Some(entry) = view.get(i) {
             if entry.is_dir() {
                 pending.push(PaneRequest::Activate { id });
                 pending.push(PaneRequest::NavigateTo {
@@ -139,6 +183,44 @@ pub fn show(
             }
         }
     }
+}
+
+/// Pinta el encabezado de una columna: título + indicadores (orden ▲/▼, filtro ⏷)
+/// y un botón `▾` que abre el menú de columna (orden/filtro/columnas). Acumula
+/// `TableAction`s. El id del popup incluye el `PaneId` para que dos paneles que
+/// muestran la misma columna no compartan el estado de UI.
+#[allow(clippy::too_many_arguments)]
+fn column_header(
+    ui: &mut egui::Ui,
+    id: PaneId,
+    kind: ColumnKind,
+    table: &TableState,
+    sort: SortSpec,
+    ext_counts: &std::collections::BTreeMap<String, usize>,
+    i18n: &naygo_core::i18n::I18n,
+    actions: &mut Vec<TableAction>,
+) {
+    ui.horizontal(|ui| {
+        let mut title = column_title(kind, i18n);
+        // Indicador de orden en la columna activa.
+        if sort.key == naygo_core::columns::sort_key_of(kind) {
+            title.push(' ');
+            title.push(if sort.ascending { '▲' } else { '▼' });
+        }
+        // Indicador de filtro activo (embudo).
+        if table.filters.contains_key(&kind) {
+            title.push(' ');
+            title.push('⏷');
+        }
+        ui.label(egui::RichText::new(title).strong());
+
+        // Botón ▾ que alterna el popup del menú de columna.
+        let menu_button = ui.add(egui::Button::new("▾").frame(false));
+        let popup_id = ui.make_persistent_id(("col_menu", id.0, kind));
+        egui::Popup::menu(&menu_button).id(popup_id).show(|ui| {
+            crate::column_menu::show_menu(ui, id.0, kind, table, sort, ext_counts, i18n, actions);
+        });
+    });
 }
 
 /// Pinta una fila "[ícono] nombre" como un único elemento clicable. Devuelve el
@@ -165,21 +247,27 @@ fn icon_row(
     .inner
 }
 
-/// Pinta un encabezado de columna clicable con indicador de dirección si es el
-/// criterio activo. Devuelve el `Response` (clic ordena por esa columna).
-fn header_label(
-    ui: &mut egui::Ui,
-    title: &str,
-    sort: naygo_core::fs_model::SortSpec,
-    key: naygo_core::fs_model::SortKey,
-) -> egui::Response {
-    let text = if sort.key == key {
-        let arrow = if sort.ascending { " ▲" } else { " ▼" };
-        format!("{title}{arrow}")
-    } else {
-        title.to_string()
+/// Texto de una celda según la columna (Nombre se pinta aparte con su ícono).
+fn cell_text(entry: &Entry, kind: ColumnKind) -> String {
+    match kind {
+        ColumnKind::Name => entry.name.clone(),
+        ColumnKind::Extension => naygo_core::filter::entry_extension(entry),
+        ColumnKind::Size => format_size(entry),
+        ColumnKind::Modified => format_time(entry.modified),
+        ColumnKind::Created => format_time(entry.created),
+    }
+}
+
+/// Título traducido de una columna (mapea a las claves `col.*`).
+fn column_title(kind: ColumnKind, i18n: &naygo_core::i18n::I18n) -> String {
+    let key = match kind {
+        ColumnKind::Name => "col.name",
+        ColumnKind::Extension => "col.extension",
+        ColumnKind::Size => "col.size",
+        ColumnKind::Modified => "col.modified",
+        ColumnKind::Created => "col.created",
     };
-    ui.selectable_label(sort.key == key, egui::RichText::new(text).strong())
+    i18n.t(key).to_string()
 }
 
 fn format_size(entry: &Entry) -> String {
@@ -205,13 +293,11 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// PROVISIONAL: segundos epoch hasta tener i18n (fase 2C).
-fn format_modified(entry: &Entry) -> String {
+/// PROVISIONAL: segundos epoch hasta tener formato de fecha (fase 2C). Reutilizado
+/// para Modified y Created.
+fn format_time(opt: Option<SystemTime>) -> String {
     use std::time::UNIX_EPOCH;
-    match entry
-        .modified
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-    {
+    match opt.and_then(|t| t.duration_since(UNIX_EPOCH).ok()) {
         Some(d) => format!("{}", d.as_secs()),
         None => String::new(),
     }
