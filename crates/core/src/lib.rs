@@ -12,6 +12,7 @@ pub mod i18n;
 pub mod icon_kind;
 pub mod listing;
 pub mod sort;
+pub mod tree;
 pub mod workspace;
 
 pub use cancel::CancellationToken;
@@ -21,6 +22,7 @@ pub use i18n::{pick_default_language, I18n, LangId};
 pub use icon_kind::{category_for_extension, icon_key_for, DriveKind, FileCategory, IconKey};
 pub use listing::{spawn_listing, ListingMsg};
 pub use sort::sort_entries;
+pub use tree::{DirTree, NodeOutcome, NodeState, TreeNode};
 pub use workspace::{
     FilePaneState, LayoutTemplate, NavHistory, PaneId, PaneNode, PanePurpose, TemplateStore,
     Workspace,
