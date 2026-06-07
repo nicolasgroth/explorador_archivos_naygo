@@ -17,6 +17,7 @@ use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::sort::sort_entries;
+use naygo_core::theme::pack::PackCatalog;
 use naygo_core::theme::ThemeCatalog;
 use naygo_core::tree::DirTree;
 use naygo_core::workspace::template::LayoutTemplate;
@@ -56,6 +57,7 @@ pub struct NaygoApp {
     icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
+    pack_catalog: PackCatalog,
     active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
@@ -96,6 +98,8 @@ impl NaygoApp {
         };
         theme_apply::apply(&active_theme.theme, &cc.egui_ctx);
 
+        let pack_catalog = PackCatalog::load(&config_dir);
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -110,6 +114,7 @@ impl NaygoApp {
             icons,
             i18n,
             theme_catalog,
+            pack_catalog,
             active_theme,
             settings_open: false,
             settings_section: SettingsSection::Appearance,
@@ -131,6 +136,26 @@ impl NaygoApp {
     /// Ruta de la carpeta de config (para la sección Avanzado).
     pub fn config_dir_display(&self) -> String {
         self.config_dir.display().to_string()
+    }
+
+    /// Ids + Theme de cada tema disponible (para pintar las tarjetas del selector).
+    pub fn theme_cards(&self) -> Vec<(naygo_core::theme::ThemeId, naygo_core::theme::Theme)> {
+        self.theme_catalog
+            .available()
+            .iter()
+            .map(|id| (id.clone(), self.theme_catalog.get(id).clone()))
+            .collect()
+    }
+
+    /// Packs disponibles (catálogo cargado una vez en `new`).
+    pub fn packs(&self) -> Vec<naygo_core::theme::pack::Pack> {
+        self.pack_catalog.packs().to_vec()
+    }
+
+    /// Activa un pack: setea tema + icon set (siguen independientes después).
+    pub fn apply_pack(&mut self, pack: &naygo_core::theme::pack::Pack) {
+        self.settings.theme = pack.theme.clone();
+        self.settings.icon_set = pack.icon_set;
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
