@@ -17,9 +17,9 @@ use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::sort::sort_entries;
 use naygo_core::tree::DirTree;
-use naygo_core::NodeOutcome;
 use naygo_core::workspace::template::LayoutTemplate;
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
+use naygo_core::NodeOutcome;
 use naygo_core::TemplateStore;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -324,8 +324,13 @@ impl NaygoApp {
         }
         let token = CancellationToken::new();
         let (rx, _h) = spawn_listing_filtered(path.clone(), token.clone(), ListingFilter::DirsOnly);
-        self.tree_listings
-            .insert((id, path), TreeListing { rx: Some(rx), token });
+        self.tree_listings.insert(
+            (id, path),
+            TreeListing {
+                rx: Some(rx),
+                token,
+            },
+        );
     }
 
     /// Colapsa una rama (conserva hijos). Cancela su worker si seguía cargando.
@@ -373,7 +378,11 @@ impl NaygoApp {
                 tree.push_child(path, d);
             }
             if finished {
-                let outcome = if err { NodeOutcome::Error } else { NodeOutcome::Done };
+                let outcome = if err {
+                    NodeOutcome::Error
+                } else {
+                    NodeOutcome::Done
+                };
                 tree.finish_loading(path, outcome);
             }
         }

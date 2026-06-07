@@ -149,7 +149,11 @@ impl DirTree {
             node.state = match outcome {
                 NodeOutcome::Error => NodeState::Error,
                 NodeOutcome::Done => {
-                    let has = node.children.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+                    let has = node
+                        .children
+                        .as_ref()
+                        .map(|c| !c.is_empty())
+                        .unwrap_or(false);
                     if has {
                         NodeState::Loaded
                     } else {
@@ -303,7 +307,10 @@ mod tests {
         t.begin_loading(Path::new("C:\\"));
         t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
         t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
-        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Loaded);
+        assert_eq!(
+            t.node_at(Path::new("C:\\")).unwrap().state,
+            NodeState::Loaded
+        );
     }
 
     #[test]
@@ -311,7 +318,10 @@ mod tests {
         let mut t = DirTree::from_drives(&drive_list());
         t.begin_loading(Path::new("C:\\"));
         t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
-        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Empty);
+        assert_eq!(
+            t.node_at(Path::new("C:\\")).unwrap().state,
+            NodeState::Empty
+        );
     }
 
     #[test]
@@ -319,7 +329,10 @@ mod tests {
         let mut t = DirTree::from_drives(&drive_list());
         t.begin_loading(Path::new("C:\\"));
         t.finish_loading(Path::new("C:\\"), NodeOutcome::Error);
-        assert_eq!(t.node_at(Path::new("C:\\")).unwrap().state, NodeState::Error);
+        assert_eq!(
+            t.node_at(Path::new("C:\\")).unwrap().state,
+            NodeState::Error
+        );
     }
 
     #[test]
