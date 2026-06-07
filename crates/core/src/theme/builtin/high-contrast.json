@@ -1,0 +1,14 @@
+{
+  "name": "High Contrast",
+  "base": "dark",
+  "accent": "#ffb300",
+  "panel_bg": "#000000",
+  "row_bg": "#000000",
+  "row_alt_bg": "#0c0c0c",
+  "text": "#f2f2f2",
+  "text_dim": "#bdbdbd",
+  "selection_bg": "#2a2200",
+  "active_bar": "#ffb300",
+  "error": "#ff5252",
+  "border": "#333333"
+}

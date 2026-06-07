@@ -1,0 +1,14 @@
+{
+  "name": "Light",
+  "base": "light",
+  "accent": "#1769e0",
+  "panel_bg": "#fbfbfb",
+  "row_bg": "#fbfbfb",
+  "row_alt_bg": "#f4f4f4",
+  "text": "#1f1f1f",
+  "text_dim": "#6b6b6b",
+  "selection_bg": "#dcebff",
+  "active_bar": "#1769e0",
+  "error": "#c0392b",
+  "border": "#dddddd"
+}
