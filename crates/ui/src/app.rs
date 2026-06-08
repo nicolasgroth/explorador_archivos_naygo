@@ -7,7 +7,7 @@
 //! sobre el panel activo. El layout y las carpetas se persisten vía `config`.
 
 use crate::icons::IconProvider;
-use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::input::{map_mouse_extra, Action, MouseExtra};
 use crate::ops_dialogs::{ConflictChoice, NameResult};
 use crate::settings_window::SettingsSection;
 use crate::theme_apply::{self, ActiveTheme};
@@ -217,6 +217,14 @@ pub struct NaygoApp {
     config_dir: PathBuf,
     pub status: String,
     typeahead_buf: String,
+    /// Atajos de teclado configurables.
+    pub(crate) keymap: naygo_core::keymap::KeyMap,
+    /// Acción cuyo nuevo atajo se está capturando en el editor (suspende el input global).
+    pub(crate) shortcut_capture: Option<naygo_core::keymap::Action>,
+    /// Texto del buscador de acciones del editor de atajos.
+    pub(crate) shortcut_search: String,
+    /// Mensaje del banner de conflicto tras un bind que robó un atajo (efímero).
+    pub(crate) shortcut_conflict: Option<String>,
     icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
@@ -272,6 +280,7 @@ impl NaygoApp {
         let config_dir = config::portable_dir();
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
+        let keymap = config::load_keymap(&config_dir);
         let home = default_start_dir();
 
         // i18n: idioma persistido si ya hubo settings; si es el primer arranque,
@@ -321,6 +330,10 @@ impl NaygoApp {
             config_dir,
             status: String::new(),
             typeahead_buf: String::new(),
+            keymap,
+            shortcut_capture: None,
+            shortcut_search: String::new(),
+            shortcut_conflict: None,
             icons,
             i18n,
             theme_catalog,
@@ -350,6 +363,109 @@ impl NaygoApp {
     /// Atajo para traducir una clave con el idioma activo.
     pub fn tr(&self, key: &str) -> String {
         self.i18n.t(key).to_string()
+    }
+
+    /// Guarda el keymap a disco tras una edición.
+    pub(crate) fn save_keymap_now(&mut self) {
+        naygo_core::config::save_keymap(&self.config_dir, &self.keymap);
+    }
+
+    /// Si estamos capturando un atajo, lee la próxima combinación y la asigna. Esc cancela.
+    /// Debe llamarse cada frame, ANTES de handle_input. Devuelve `true` si consumió una
+    /// tecla este frame (capturó o canceló) — el llamador debe entonces SALTAR handle_input
+    /// para que esa misma tecla no dispare además su acción.
+    fn process_shortcut_capture(&mut self, ctx: &egui::Context) -> bool {
+        let Some(action) = self.shortcut_capture else {
+            return false;
+        };
+        let mut captured: Option<naygo_core::keymap::Chord> = None;
+        let mut cancel = false;
+        ctx.input(|i| {
+            let (ctrl, shift, alt) = (i.modifiers.ctrl, i.modifiers.shift, i.modifiers.alt);
+            // Esc sin modificadores cancela la captura.
+            if i.key_pressed(egui::Key::Escape) && !ctrl && !shift && !alt {
+                cancel = true;
+                return;
+            }
+            // Buscar la primera tecla "real" presionada y armar el chord.
+            const KEYS: &[egui::Key] = &[
+                egui::Key::ArrowUp,
+                egui::Key::ArrowDown,
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+                egui::Key::Enter,
+                egui::Key::Backspace,
+                egui::Key::Tab,
+                egui::Key::Delete,
+                egui::Key::F2,
+                egui::Key::F3,
+                egui::Key::F5,
+                egui::Key::F6,
+                egui::Key::A,
+                egui::Key::B,
+                egui::Key::C,
+                egui::Key::D,
+                egui::Key::E,
+                egui::Key::F,
+                egui::Key::G,
+                egui::Key::H,
+                egui::Key::I,
+                egui::Key::J,
+                egui::Key::K,
+                egui::Key::L,
+                egui::Key::M,
+                egui::Key::N,
+                egui::Key::O,
+                egui::Key::P,
+                egui::Key::Q,
+                egui::Key::R,
+                egui::Key::S,
+                egui::Key::T,
+                egui::Key::U,
+                egui::Key::V,
+                egui::Key::W,
+                egui::Key::X,
+                egui::Key::Y,
+                egui::Key::Z,
+            ];
+            for &k in KEYS {
+                if i.key_pressed(k) {
+                    if let Some(code) = crate::input::egui_key_to_code(k) {
+                        captured = Some(naygo_core::keymap::Chord {
+                            key: code,
+                            ctrl,
+                            shift,
+                            alt,
+                        });
+                        break;
+                    }
+                }
+            }
+        });
+        if cancel {
+            self.shortcut_capture = None;
+            return true; // consumió el Esc; no dejar que handle_input lo procese
+        }
+        if let Some(chord) = captured {
+            let chord_txt = crate::input::chord_text(&chord);
+            if let Some(robbed) = self.keymap.bind(action, chord) {
+                self.shortcut_conflict = Some(
+                    self.i18n
+                        .t("settings.shortcuts.conflict")
+                        .replace("{chord}", &chord_txt)
+                        .replace("{from}", self.i18n.t(robbed.i18n_key()))
+                        .replace("{to}", self.i18n.t(action.i18n_key())),
+                );
+            } else {
+                self.shortcut_conflict = None;
+            }
+            self.shortcut_capture = None;
+            self.save_keymap_now();
+            return true; // consumió la tecla recién asignada; no la dispares también
+        }
+        // Seguimos capturando (solo modificadores / tecla no soportada): el input global
+        // ya está suspendido por la guarda de handle_input mientras shortcut_capture es Some.
+        false
     }
 
     /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
@@ -1186,6 +1302,8 @@ impl NaygoApp {
             Action::NewDir => self.begin_create(true),
             Action::CopyToOther => self.transfer_to_other(false),
             Action::MoveToOther => self.transfer_to_other(true),
+            // implementado en la fase sizing
+            Action::ComputeSize => {}
         }
     }
 
@@ -1828,74 +1946,87 @@ impl NaygoApp {
         // procesamos navegación ni disparadores (evita que escribir "C/V/N" en el
         // campo de nombre gatille Copiar/Pegar/Nuevo, o que Delete borre detrás).
         // El modal de retomar (al arrancar) cuenta igual: bloquea hasta decidir.
-        if self.pending_dialog.is_some() || !self.pending_resume.is_empty() {
+        // El editor de atajos, mientras captura una combinación, también se queda
+        // con el teclado: no queremos que pulsar el atajo a reasignar dispare su acción.
+        if self.pending_dialog.is_some()
+            || !self.pending_resume.is_empty()
+            || self.shortcut_capture.is_some()
+        {
             return;
         }
-        let keys = [
-            (egui::Key::ArrowUp, NaygoKey::ArrowUp),
-            (egui::Key::ArrowDown, NaygoKey::ArrowDown),
-            (egui::Key::ArrowLeft, NaygoKey::ArrowLeft),
-            (egui::Key::Enter, NaygoKey::Enter),
-            (egui::Key::Backspace, NaygoKey::Backspace),
-            (egui::Key::Tab, NaygoKey::Tab),
-            (egui::Key::Escape, NaygoKey::Escape),
+        // Teclas que la app entiende (espejo de `egui_key_to_code`). Por cada una
+        // que se PRESIONE este frame (edge), armamos el `Chord` con los modificadores
+        // actuales y dejamos que el keymap resuelva la acción.
+        const KEYS: &[egui::Key] = &[
+            egui::Key::ArrowUp,
+            egui::Key::ArrowDown,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowRight,
+            egui::Key::Enter,
+            egui::Key::Backspace,
+            egui::Key::Tab,
+            egui::Key::Escape,
+            egui::Key::Delete,
+            egui::Key::F2,
+            egui::Key::F3,
+            egui::Key::F5,
+            egui::Key::F6,
+            egui::Key::A,
+            egui::Key::B,
+            egui::Key::C,
+            egui::Key::D,
+            egui::Key::E,
+            egui::Key::F,
+            egui::Key::G,
+            egui::Key::H,
+            egui::Key::I,
+            egui::Key::J,
+            egui::Key::K,
+            egui::Key::L,
+            egui::Key::M,
+            egui::Key::N,
+            egui::Key::O,
+            egui::Key::P,
+            egui::Key::Q,
+            egui::Key::R,
+            egui::Key::S,
+            egui::Key::T,
+            egui::Key::U,
+            egui::Key::V,
+            egui::Key::W,
+            egui::Key::X,
+            egui::Key::Y,
+            egui::Key::Z,
         ];
         let mut actions = Vec::new();
         let mut typed = String::new();
         ctx.input(|i| {
-            let alt = i.modifiers.alt;
             let ctrl = i.modifiers.ctrl;
             let shift = i.modifiers.shift;
-            if alt && i.key_pressed(egui::Key::ArrowLeft) {
-                actions.push(Action::GoBack);
-            } else if alt && i.key_pressed(egui::Key::ArrowRight) {
-                actions.push(Action::GoForward);
-            } else {
-                for (egui_key, naygo_key) in keys {
-                    if i.key_pressed(egui_key) {
-                        if let Some(a) = map_key(naygo_key) {
-                            actions.push(a);
+            let alt = i.modifiers.alt;
+            for &k in KEYS {
+                if i.key_pressed(k) {
+                    if let Some(code) = crate::input::egui_key_to_code(k) {
+                        let chord = naygo_core::keymap::Chord {
+                            key: code,
+                            ctrl,
+                            shift,
+                            alt,
+                        };
+                        if let Some(action) = self.keymap.action_for(&chord) {
+                            actions.push(action);
                         }
                     }
                 }
             }
-
-            // Disparadores de operaciones (con modificadores; no salen del mapa
-            // simple de `input::map_key`). Se evalúan aparte de la navegación.
-            if ctrl && i.key_pressed(egui::Key::C) {
-                actions.push(Action::Copy);
-            }
-            if ctrl && i.key_pressed(egui::Key::X) {
-                actions.push(Action::Cut);
-            }
-            if ctrl && i.key_pressed(egui::Key::V) {
-                actions.push(Action::Paste);
-            }
-            if ctrl && shift && i.key_pressed(egui::Key::N) {
-                actions.push(Action::NewDir);
-            } else if ctrl && i.key_pressed(egui::Key::N) {
-                actions.push(Action::NewFile);
-            }
-            if shift && i.key_pressed(egui::Key::Delete) {
-                actions.push(Action::DeletePermanent);
-            } else if i.key_pressed(egui::Key::Delete) {
-                actions.push(Action::Delete);
-            }
-            if i.key_pressed(egui::Key::F2) {
-                actions.push(Action::Rename);
-            }
-            if i.key_pressed(egui::Key::F5) {
-                actions.push(Action::CopyToOther);
-            }
-            if i.key_pressed(egui::Key::F6) {
-                actions.push(Action::MoveToOther);
-            }
+            // Botones laterales del mouse (fijos, fuera del keymap).
             if i.pointer.button_pressed(egui::PointerButton::Extra1) {
                 actions.push(map_mouse_extra(MouseExtra::Back));
             }
             if i.pointer.button_pressed(egui::PointerButton::Extra2) {
                 actions.push(map_mouse_extra(MouseExtra::Forward));
             }
+            // Typeahead: texto escrito que no fue un atajo.
             for event in &i.events {
                 if let egui::Event::Text(t) = event {
                     typed.push_str(t);
@@ -1903,13 +2034,17 @@ impl NaygoApp {
             }
         });
 
-        if !actions.is_empty() {
+        let fired_action = !actions.is_empty();
+        if fired_action {
             self.typeahead_buf.clear();
         }
         for a in actions {
             self.apply_action(a);
         }
-        if !typed.is_empty() {
+        // Si este frame resolvió una acción (incluida una letra simple rebindeada a una
+        // acción), NO hacemos typeahead con ese texto: una tecla no debe disparar acción
+        // y salto-por-tipeo a la vez.
+        if !fired_action && !typed.is_empty() {
             self.typeahead(&typed);
         }
     }
@@ -1948,7 +2083,17 @@ impl eframe::App for NaygoApp {
         self.pump_watchers();
         self.pump_devices();
         self.pump_paste_write();
-        self.handle_input(ctx);
+        // La captura de atajos consume el teclado de este frame. Si capturó o canceló una
+        // tecla, NO corremos handle_input este frame: si no, la misma tecla (que sigue
+        // `key_pressed` todo el frame) dispararía además su acción recién asignada, y Esc
+        // de cancelación también gatillaría CancelListing.
+        let capture_consumed = self.process_shortcut_capture(ctx);
+        if self.shortcut_capture.is_some() {
+            ctx.request_repaint();
+        }
+        if !capture_consumed {
+            self.handle_input(ctx);
+        }
         if self.any_listing_active()
             || self.any_tree_listing_active()
             || self.any_op_active()

@@ -15,6 +15,7 @@ pub mod format;
 pub mod fs_model;
 pub mod i18n;
 pub mod icon_kind;
+pub mod keymap;
 pub mod listing;
 pub mod ops;
 pub mod sort;
