@@ -10,5 +10,6 @@
   "selection_bg": "#21302c",
   "active_bar": "#1abc9c",
   "error": "#e06c5b",
+  "highlight": "#2e7d32",
   "border": "#25352f"
 }
