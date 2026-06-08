@@ -58,6 +58,7 @@ pub fn show(
     table_actions: &mut Vec<TableAction>,
     theme: &crate::theme_apply::ActiveTheme,
     ops_actions: &mut Vec<Action>,
+    new_items_at_end: bool,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -71,6 +72,7 @@ pub fn show(
     let current_dir = f.current_dir.clone();
     let table = f.table.clone();
     let all_entries: Vec<Entry> = f.entries.clone();
+    let highlighted: std::collections::HashSet<std::path::PathBuf> = f.highlighted.clone();
 
     // Conteo de extensiones sobre TODAS las entries actuales (no las filtradas):
     // así el menú de filtro de tipo muestra todas las opciones disponibles.
@@ -88,6 +90,13 @@ pub fn show(
             .collect()
     };
     naygo_core::sort::sort_entries(&mut view, &sort);
+
+    // Modo "al final": agrupar las entries resaltadas (nuevas) al final, estable.
+    // `sort_by_key` con bool es estable → primero las no resaltadas (false), luego las
+    // resaltadas (true), sin alterar el orden relativo dentro de cada grupo.
+    if new_items_at_end && !highlighted.is_empty() {
+        view.sort_by_key(|e| highlighted.contains(&e.path));
+    }
 
     // ¿Mostrar la fila ".."? Solo si la opción está activa y hay carpeta padre.
     let parent = if show_parent_entry {
@@ -242,7 +251,7 @@ pub fn show(
                         for (ci, _col) in visible_cols.iter().enumerate() {
                             row.col(|ui| {
                                 if ci == 0 {
-                                    let _ = icon_row(ui, icons, IconKey::Folder, "..", false);
+                                    let _ = icon_row(ui, icons, IconKey::Folder, "..", None);
                                 }
                             });
                         }
@@ -255,14 +264,45 @@ pub fn show(
                     DisplayRow::Entry(i) => {
                         let entry = &view[i];
                         let selected = focused == Some(i);
+                        // Resaltado estilo A: las entries que el watcher marcó como recién
+                        // aparecidas se pintan con el fondo teñido del token `highlight` y
+                        // el nombre en ese color. La selección tiene prioridad sobre el
+                        // resaltado (si la fila está seleccionada, manda la selección y no
+                        // se tiñe ni se colorea el nombre), para no confundir ambos estados.
+                        let is_new = !selected && highlighted.contains(&entry.path);
                         row.set_selected(selected);
+                        // Fondo teñido a baja opacidad (~18%) sobre el color base del tema.
+                        let new_tint = if is_new {
+                            let base = theme.highlight();
+                            Some(egui::Color32::from_rgba_unmultiplied(
+                                base.r(),
+                                base.g(),
+                                base.b(),
+                                46,
+                            ))
+                        } else {
+                            None
+                        };
                         for (ci, col) in visible_cols.iter().enumerate() {
                             row.col(|ui| {
+                                // Teñir el fondo de la celda (cubre el ancho completo de la
+                                // columna) DETRÁS del contenido. Se hace por celda porque
+                                // `egui_extras` no expone un hook de fondo de fila completa;
+                                // la unión de las celdas cubre toda la fila.
+                                if let Some(tint) = new_tint {
+                                    ui.painter().rect_filled(ui.max_rect(), 0.0, tint);
+                                }
                                 if ci == 0 {
                                     let key = icon_key_for(entry);
                                     // El ícono+nombre se pintan; el clic se captura sobre
-                                    // la FILA completa (abajo), no por celda.
-                                    let _ = icon_row(ui, icons, key, &entry.name, false);
+                                    // la FILA completa (abajo), no por celda. Si es nuevo,
+                                    // el nombre va en el color de resaltado.
+                                    let name_color = if is_new {
+                                        Some(theme.highlight())
+                                    } else {
+                                        None
+                                    };
+                                    let _ = icon_row(ui, icons, key, &entry.name, name_color);
                                 } else {
                                     ui.label(cell_text(entry, col.kind));
                                 }
@@ -442,7 +482,7 @@ fn icon_row(
     icons: &IconProvider,
     key: IconKey,
     name: &str,
-    selected: bool,
+    name_color: Option<egui::Color32>,
 ) -> egui::Response {
     ui.horizontal(|ui| {
         let tex = icons.texture(key);
@@ -452,7 +492,14 @@ fn icon_row(
                 .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
                 .sense(egui::Sense::click()),
         );
-        let label = ui.selectable_label(selected, name);
+        // El nombre se pinta como un `selectable_label` no seleccionado (la selección de
+        // fila la maneja `row.set_selected`); si se pide un color (resaltado estilo A),
+        // se aplica al texto.
+        let text = match name_color {
+            Some(c) => egui::RichText::new(name).color(c),
+            None => egui::RichText::new(name),
+        };
+        let label = ui.selectable_label(false, text);
         img.union(label)
     })
     .inner

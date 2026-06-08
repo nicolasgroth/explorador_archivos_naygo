@@ -12,6 +12,7 @@ windows = { workspace = true, features = [
     "Win32_System_WindowsProgramming",
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_LibraryLoader",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
@@ -24,3 +25,8 @@ windows = { workspace = true, features = [
 [dependencies]
 naygo-core = { path = "../core" }
 tracing = { workspace = true }
+notify = "8"
+notify-debouncer-full = "0.5"
+
+[dev-dependencies]
+tempfile = "3"

@@ -7,6 +7,8 @@
 //! posteriores. Este crate existe ahora para fijar la frontera arquitectónica.
 
 pub mod clipboard;
+pub mod device_watch;
+pub mod dir_watch;
 pub mod drive_space;
 pub mod drives;
 pub mod locale;

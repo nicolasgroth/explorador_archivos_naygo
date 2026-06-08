@@ -9,6 +9,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
@@ -110,37 +111,107 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     list_into_filtered(dir, token, tx, ListingFilter::All);
 }
 
-/// Construye un `Entry` a partir de un `DirEntry`, tolerando metadata ausente.
-fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
-    let path = dirent.path();
-    let name = dirent.file_name().to_string_lossy().into_owned();
-    let metadata = dirent.metadata().ok();
+/// Construye un `Entry` desde una ruta + su metadata (ya leída). Tolerante a metadata
+/// ausente. Compartido por el listado inicial y por el merge incremental del watcher.
+pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
-    let kind = match &metadata {
+    let kind = match metadata {
         Some(m) if m.is_dir() => EntryKind::Directory,
         Some(m) if m.is_file() => EntryKind::File,
         Some(_) => EntryKind::Other,
         None => EntryKind::Other,
     };
 
-    let size = match (&metadata, kind) {
+    let size = match (metadata, kind) {
         (Some(m), EntryKind::File) => Some(m.len()),
         _ => None,
     };
 
-    let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+    let modified = metadata.and_then(|m| m.modified().ok());
     // La fecha de creación puede no estar soportada por el FS → None. Tolerante.
-    let created = metadata.as_ref().and_then(|m| m.created().ok());
+    let created = metadata.and_then(|m| m.created().ok());
 
     Entry {
         name,
-        path,
+        path: path.to_path_buf(),
         kind,
         size,
         modified,
         created,
         hidden: false,
     }
+}
+
+/// Construye un `Entry` a partir de un `DirEntry`, tolerando metadata ausente.
+fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
+    let path = dirent.path();
+    let metadata = dirent.metadata().ok();
+    entry_from_path(&path, metadata.as_ref())
+}
+
+/// Cambio normalizado en una carpeta vigilada (producido por `platform::dir_watch`,
+/// consumido por `apply_dir_events`). Tipo puro: sin notify ni Windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirEvent {
+    Created(PathBuf),
+    Removed(PathBuf),
+    Modified(PathBuf),
+    Renamed { from: PathBuf, to: PathBuf },
+}
+
+/// Aplica `events` a `entries` SIN re-listar la carpeta. `read_entry` produce el `Entry`
+/// de una ruta (en producción usa el FS vía `entry_from_path`; en tests, un closure).
+/// Devuelve las rutas NUEVAS (Created, o Renamed cuyo `from` no estaba) para resaltarlas.
+/// El llamador re-ordena/re-filtra la vista después.
+pub fn apply_dir_events(
+    entries: &mut Vec<Entry>,
+    events: &[DirEvent],
+    read_entry: &dyn Fn(&std::path::Path) -> Option<Entry>,
+) -> Vec<PathBuf> {
+    let mut nuevas = Vec::new();
+    for ev in events {
+        match ev {
+            DirEvent::Created(p) => {
+                if entries.iter().any(|e| &e.path == p) {
+                    continue;
+                }
+                if let Some(e) = read_entry(p) {
+                    entries.push(e);
+                    nuevas.push(p.clone());
+                }
+            }
+            DirEvent::Removed(p) => {
+                entries.retain(|e| &e.path != p);
+            }
+            DirEvent::Modified(p) => {
+                if let Some(updated) = read_entry(p) {
+                    if let Some(slot) = entries.iter_mut().find(|e| &e.path == p) {
+                        *slot = updated;
+                    }
+                }
+            }
+            DirEvent::Renamed { from, to } => {
+                if let Some(slot) = entries.iter_mut().find(|e| &e.path == from) {
+                    slot.path = to.clone();
+                    slot.name = to
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    nuevas.push(to.clone());
+                } else if !entries.iter().any(|e| &e.path == to) {
+                    if let Some(e) = read_entry(to) {
+                        entries.push(e);
+                        nuevas.push(to.clone());
+                    }
+                }
+            }
+        }
+    }
+    nuevas
 }
 
 #[cfg(test)]
@@ -243,6 +314,29 @@ mod tests {
     }
 
     #[test]
+    fn entry_from_path_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        std::fs::write(&f, b"hola").unwrap(); // 4 bytes
+        let meta = std::fs::metadata(&f).ok();
+        let e = entry_from_path(&f, meta.as_ref());
+        assert_eq!(e.name, "a.txt");
+        assert_eq!(e.kind, EntryKind::File);
+        assert_eq!(e.size, Some(4));
+    }
+
+    #[test]
+    fn entry_from_path_carpeta() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let meta = std::fs::metadata(&sub).ok();
+        let e = entry_from_path(&sub, meta.as_ref());
+        assert_eq!(e.kind, EntryKind::Directory);
+        assert_eq!(e.size, None);
+    }
+
+    #[test]
     fn directorio_inexistente_emite_error() {
         let token = CancellationToken::new();
         let (tx, rx) = mpsc::channel();
@@ -255,5 +349,107 @@ mod tests {
             "debe emitir Error, got {:?}",
             msgs
         );
+    }
+
+    fn mk_entry(name: &str, dir: &std::path::Path) -> Entry {
+        Entry {
+            name: name.into(),
+            path: dir.join(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn apply_created_inserta_y_reporta_nuevo() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let newp = dir.join("b.txt");
+        let np = newp.clone();
+        let read = move |p: &std::path::Path| {
+            if p == np {
+                Some(mk_entry("b.txt", dir))
+            } else {
+                None
+            }
+        };
+        let nuevas = apply_dir_events(&mut entries, &[DirEvent::Created(newp.clone())], &read);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(nuevas, vec![newp]);
+    }
+
+    #[test]
+    fn apply_created_idempotente() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let p = dir.join("a.txt");
+        let read = |_: &std::path::Path| Some(mk_entry("a.txt", dir));
+        let nuevas = apply_dir_events(&mut entries, &[DirEvent::Created(p)], &read);
+        assert_eq!(entries.len(), 1, "no duplica algo ya presente");
+        assert!(nuevas.is_empty());
+    }
+
+    #[test]
+    fn apply_removed_quita() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir), mk_entry("b.txt", dir)];
+        let read = |_: &std::path::Path| None;
+        apply_dir_events(&mut entries, &[DirEvent::Removed(dir.join("a.txt"))], &read);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "b.txt");
+    }
+
+    #[test]
+    fn apply_modified_actualiza_size() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let mut updated = mk_entry("a.txt", dir);
+        updated.size = Some(999);
+        let read = move |_: &std::path::Path| Some(updated.clone());
+        apply_dir_events(
+            &mut entries,
+            &[DirEvent::Modified(dir.join("a.txt"))],
+            &read,
+        );
+        assert_eq!(entries[0].size, Some(999));
+    }
+
+    #[test]
+    fn apply_renamed_renombra() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("old.txt", dir)];
+        let read = |_: &std::path::Path| None;
+        let nuevas = apply_dir_events(
+            &mut entries,
+            &[DirEvent::Renamed {
+                from: dir.join("old.txt"),
+                to: dir.join("new.txt"),
+            }],
+            &read,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "new.txt");
+        assert_eq!(entries[0].path, dir.join("new.txt"));
+        assert_eq!(nuevas, vec![dir.join("new.txt")]);
+    }
+
+    #[test]
+    fn apply_renamed_from_ausente_es_created() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![];
+        let read = |_: &std::path::Path| Some(mk_entry("new.txt", dir));
+        let nuevas = apply_dir_events(
+            &mut entries,
+            &[DirEvent::Renamed {
+                from: dir.join("ghost.txt"),
+                to: dir.join("new.txt"),
+            }],
+            &read,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(nuevas, vec![dir.join("new.txt")]);
     }
 }

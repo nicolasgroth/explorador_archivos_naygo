@@ -244,6 +244,21 @@ pub struct NaygoApp {
     /// Últimas unidades vistas por el escaneo de discos (para el strip del toolbar).
     /// Se refresca al inicio de cada escaneo; barato (drives() no toca espacio).
     pub(crate) drives_cache: Vec<naygo_platform::drives::DriveInfo>,
+    /// Watcher de carpeta por panel (vigila la carpeta visible de cada FilePane).
+    watchers: std::collections::HashMap<PaneId, naygo_platform::dir_watch::WatchHandle>,
+    /// Receptores de eventos de carpeta por panel.
+    watch_rx: std::collections::HashMap<
+        PaneId,
+        std::sync::mpsc::Receiver<Vec<naygo_core::listing::DirEvent>>,
+    >,
+    /// Instante en que se resaltó algo por última vez en cada panel. Solo se usa con
+    /// `HighlightDuration::FadeSeconds`: cuando transcurre el plazo, se limpia el
+    /// resaltado del panel (estado efímero, no se persiste).
+    highlight_since: std::collections::HashMap<PaneId, std::time::Instant>,
+    /// Watcher de dispositivos (pendrives) — ventana message-only Win32.
+    device_watch: Option<naygo_platform::device_watch::DeviceWatchHandle>,
+    /// Receptor de eventos de dispositivos.
+    device_rx: Option<std::sync::mpsc::Receiver<naygo_platform::device_watch::DeviceEvent>>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -292,6 +307,9 @@ impl NaygoApp {
         // Ops interrumpidas de una sesión anterior: se ofrecen retomar al arrancar.
         let pending_resume = journal::scan(&config_dir);
 
+        let (dev_tx, dev_rx) = std::sync::mpsc::channel();
+        let device_watch = Some(naygo_platform::device_watch::watch(dev_tx));
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -319,6 +337,11 @@ impl NaygoApp {
             disk_rx: None,
             disk_scan_ticks: 180,
             drives_cache: Vec::new(),
+            watchers: std::collections::HashMap::new(),
+            watch_rx: std::collections::HashMap::new(),
+            highlight_since: std::collections::HashMap::new(),
+            device_watch,
+            device_rx: Some(dev_rx),
         };
         app.start_all_listings();
         app
@@ -378,6 +401,10 @@ impl NaygoApp {
         if let Some(prev) = self.listings.get(&id) {
             prev.token.cancel();
         }
+        // (Re)vigilar la carpeta recién listada: el watcher del panel pasa a apuntar a
+        // `dir`. El insert reemplaza el handle anterior, cuyo Drop detiene el watcher viejo.
+        // Se hace antes de mover `dir` al worker de listado.
+        self.rewatch_pane(id, &dir);
         let token = CancellationToken::new();
         let (rx, _handle) = spawn_listing(dir, token.clone());
         self.listings.insert(
@@ -387,10 +414,156 @@ impl NaygoApp {
                 token,
             },
         );
+        // Re-listar la carpeta es un "refresco": el resaltado de aparecidos previo deja
+        // de tener sentido (la vista se reconstruye), salvo en UntilInteract donde solo
+        // lo limpia la interacción del usuario.
+        if self.settings.highlight_duration != naygo_core::config::HighlightDuration::UntilInteract
+        {
+            if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.clear_highlight();
+            }
+            self.highlight_since.remove(&id);
+        }
         // Feedback "Listando…" mientras el panel activo carga (se reemplaza por el
         // conteo de elementos al terminar, en pump_one).
         if self.workspace.active_id() == Some(id) {
             self.status = self.i18n.t("app.loading").to_string();
+        }
+    }
+
+    /// (Re)crea el watcher de carpeta del panel `id` apuntando a `dir`. Soltar el viejo
+    /// (vía insert que reemplaza) libera su handle del SO.
+    fn rewatch_pane(&mut self, id: PaneId, dir: &std::path::Path) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = naygo_platform::dir_watch::watch(dir, tx);
+        self.watchers.insert(id, handle);
+        self.watch_rx.insert(id, rx);
+    }
+
+    /// Poda los paneles cerrados por el usuario: cualquier `PaneId` que ya no esté en el
+    /// `DockState` se quita del workspace y de TODOS los mapas por-panel (listings, trees,
+    /// tree_listings, watchers, watch_rx, highlight_since). Cancela sus workers y suelta
+    /// sus handles del SO (el watcher de su carpeta). Evita fugas y mantiene viva la ruta
+    /// "idle" (sin esto, watchers nunca se vacía tras cerrar un panel).
+    fn prune_closed_panes(&mut self) {
+        let live: std::collections::HashSet<PaneId> =
+            crate::dock_translate::dock_pane_ids(&self.dock_state)
+                .into_iter()
+                .collect();
+        let closed: Vec<PaneId> = self
+            .workspace
+            .panes()
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| !live.contains(id))
+            .collect();
+        for id in closed {
+            // Cancelar el listado en curso de ese panel antes de soltarlo.
+            if let Some(l) = self.listings.get(&id) {
+                l.token.cancel();
+            }
+            self.listings.remove(&id);
+            self.trees.remove(&id);
+            self.watchers.remove(&id); // Drop del WatchHandle detiene el watcher de notify.
+            self.watch_rx.remove(&id);
+            self.highlight_since.remove(&id);
+            self.tree_listings.retain(|(pane_id, _), _| *pane_id != id);
+            self.workspace.remove_pane(id);
+        }
+    }
+
+    /// Drena los eventos de carpeta de cada panel y los fusiona al listado en vivo.
+    /// Las rutas nuevas se resaltan; con `FadeSeconds`, el resaltado caducado se limpia.
+    fn pump_watchers(&mut self) {
+        // Recoger (id, eventos) sin mantener prestado self.watch_rx mientras mutamos panes.
+        let mut batches: Vec<(PaneId, Vec<naygo_core::listing::DirEvent>)> = Vec::new();
+        for (id, rx) in &self.watch_rx {
+            let mut events = Vec::new();
+            while let Ok(mut batch) = rx.try_recv() {
+                events.append(&mut batch);
+            }
+            if !events.is_empty() {
+                batches.push((*id, events));
+            }
+        }
+        // Umbral de ráfaga: un lote enorme (p. ej. extraer un zip de miles de archivos)
+        // haría miles de `metadata()` síncronos en el hilo de UI → congelaría el frame
+        // (rompe la regla de oro "el hilo de UI no hace I/O de disco"). En ese caso,
+        // descartamos el merge incremental y re-listamos la carpeta fuera del hilo de UI
+        // (cancelable). Bajo el debounce normal, un lote trae pocos eventos y se fusiona.
+        const BURST_THRESHOLD: usize = 256;
+        for (id, events) in batches {
+            if events.len() > BURST_THRESHOLD {
+                // Ráfaga: re-listar (off-thread) en vez de fusionar evento por evento.
+                if let Some(dir) = self
+                    .workspace
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone())
+                {
+                    self.start_listing(id, dir);
+                }
+                continue;
+            }
+            if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                // El cierre lee la metadata de la ruta en el hilo de UI: barato por lote
+                // (pocos archivos por debounce de ~300 ms). Devuelve `None` si la ruta ya
+                // no existe (p. ej. el evento "from" de un rename visto suelto), para que
+                // `apply_dir_events` no inserte una entry fantasma.
+                let read = |p: &std::path::Path| {
+                    let meta = std::fs::metadata(p).ok()?;
+                    Some(naygo_core::listing::entry_from_path(p, Some(&meta)))
+                };
+                let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &events, &read);
+                let spec = f.sort;
+                naygo_core::sort::sort_entries(&mut f.entries, &spec);
+                if !nuevas.is_empty() {
+                    for p in nuevas {
+                        f.highlighted.insert(p);
+                    }
+                    // Reinicia el reloj del fade en cada lote nuevo (el plazo cuenta desde
+                    // el último archivo aparecido).
+                    self.highlight_since.insert(id, std::time::Instant::now());
+                }
+                // Podar del set de resaltado lo que ya no está en el listado (un archivo
+                // borrado tras resaltarse): mantiene el set acotado y sin rutas fantasma.
+                if !f.highlighted.is_empty() {
+                    let present: std::collections::HashSet<_> =
+                        f.entries.iter().map(|e| e.path.clone()).collect();
+                    f.highlighted.retain(|p| present.contains(p));
+                }
+            }
+        }
+        // Caducidad por FadeSeconds: limpia el resaltado del panel cuyo plazo expiró.
+        if let naygo_core::config::HighlightDuration::FadeSeconds(secs) =
+            self.settings.highlight_duration
+        {
+            let limite = std::time::Duration::from_secs(secs as u64);
+            let caducados: Vec<PaneId> = self
+                .highlight_since
+                .iter()
+                .filter(|(_, &t)| t.elapsed() >= limite)
+                .map(|(&id, _)| id)
+                .collect();
+            for id in caducados {
+                if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                    f.clear_highlight();
+                }
+                self.highlight_since.remove(&id);
+            }
+        }
+    }
+
+    /// Drena eventos de dispositivos: ante un cambio de unidades, re-escanea discos ya.
+    fn pump_devices(&mut self) {
+        let mut changed = false;
+        if let Some(rx) = &self.device_rx {
+            while let Ok(_ev) = rx.try_recv() {
+                changed = true;
+            }
+        }
+        if changed {
+            self.start_disk_scan();
         }
     }
 
@@ -948,8 +1121,36 @@ impl NaygoApp {
         self.tree_listings.values().any(|l| l.rx.is_some())
     }
 
+    /// Con `HighlightDuration::UntilInteract`, limpia el resaltado del panel activo
+    /// porque el usuario acaba de interactuar con él (navegar, enfocar, activar).
+    /// No-op en los demás modos. Centraliza la regla para no repetirla por sitio.
+    fn clear_highlight_on_interact(&mut self) {
+        if self.settings.highlight_duration == naygo_core::config::HighlightDuration::UntilInteract
+        {
+            if let Some(id) = self.workspace.active_id() {
+                if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                    f.clear_highlight();
+                }
+                self.highlight_since.remove(&id);
+            }
+        }
+    }
+
     /// Aplica una acción al panel activo.
     pub fn apply_action(&mut self, action: Action) {
+        // Las acciones de navegación/foco cuentan como interacción del usuario: con el
+        // modo UntilInteract, eso retira el resaltado de los archivos recién aparecidos.
+        if matches!(
+            action,
+            Action::MoveUp
+                | Action::MoveDown
+                | Action::Activate
+                | Action::GoUp
+                | Action::GoBack
+                | Action::GoForward
+        ) {
+            self.clear_highlight_on_interact();
+        }
         match action {
             Action::MoveUp => self.move_focus(-1),
             Action::MoveDown => self.move_focus(1),
@@ -1744,6 +1945,8 @@ impl eframe::App for NaygoApp {
         self.pump_tree();
         self.pump_ops();
         self.pump_disk_usage();
+        self.pump_watchers();
+        self.pump_devices();
         self.pump_paste_write();
         self.handle_input(ctx);
         if self.any_listing_active()
@@ -1753,6 +1956,12 @@ impl eframe::App for NaygoApp {
             || self.disk_rx.is_some()
         {
             ctx.request_repaint();
+        }
+        // Los eventos de carpeta llegan por canal sin input del usuario: despertamos la
+        // UI ~2 veces/seg para drenarlos. Barato y respeta el bajo consumo (no es un
+        // bucle ocupado: si no hay cambios, los pumps no hacen trabajo).
+        if !self.watchers.is_empty() || self.device_watch.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 
@@ -1885,15 +2094,25 @@ impl eframe::App for NaygoApp {
                 table_actions: &mut table_actions,
                 ops_actions: &mut ops_actions,
                 disk_usage: &self.disk_usage,
+                new_items_at_end: self.settings.new_items_at_end,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
                 .show_inside(ui, &mut viewer);
         }
+        // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el
+        // DockState. Podamos ese panel de TODOS los mapas por-panel (workspace + workers
+        // + watchers + estado) para no filtrar handles del SO ni dejar al watcher
+        // vigilando una carpeta de un panel cerrado (consumo). Sin esto, el bucle de
+        // repintado de 500 ms nunca se apagaría tras cerrar un panel.
+        self.prune_closed_panes();
         for req in pending {
             match req {
                 crate::docking::PaneRequest::Activate { id } => {
                     self.workspace.set_active(id);
+                    // Un clic en una fila activa el panel: es interacción del usuario, así
+                    // que con UntilInteract retira el resaltado del panel ya activo.
+                    self.clear_highlight_on_interact();
                 }
                 crate::docking::PaneRequest::NavigateTo { id, dir } => {
                     // Solo navegar/listar si el panel es Files: evita lanzar un

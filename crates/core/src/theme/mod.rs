@@ -94,13 +94,15 @@ pub struct Theme {
     pub selection_bg: ThemeColor,
     pub active_bar: ThemeColor,
     pub error: ThemeColor,
+    /// Color de resaltado para archivos recién aparecidos (vigilancia de carpeta).
+    pub highlight: ThemeColor,
     pub border: ThemeColor,
 }
 
 impl Serialize for Theme {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Theme", 12)?;
+        let mut st = s.serialize_struct("Theme", 13)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("base", &self.base)?;
         st.serialize_field("accent", &self.accent)?;
@@ -112,6 +114,7 @@ impl Serialize for Theme {
         st.serialize_field("selection_bg", &self.selection_bg)?;
         st.serialize_field("active_bar", &self.active_bar)?;
         st.serialize_field("error", &self.error)?;
+        st.serialize_field("highlight", &self.highlight)?;
         st.serialize_field("border", &self.border)?;
         st.end()
     }
@@ -131,6 +134,7 @@ struct ThemeRaw {
     selection_bg: Option<ThemeColor>,
     active_bar: Option<ThemeColor>,
     error: Option<ThemeColor>,
+    highlight: Option<ThemeColor>,
     border: Option<ThemeColor>,
 }
 
@@ -151,6 +155,7 @@ impl<'de> Deserialize<'de> for Theme {
             selection_bg: raw.selection_bg.unwrap_or(def.selection_bg),
             active_bar: raw.active_bar.unwrap_or(def.active_bar),
             error: raw.error.unwrap_or(def.error),
+            highlight: raw.highlight.unwrap_or(def.highlight),
             border: raw.border.unwrap_or(def.border),
         })
     }
@@ -179,6 +184,7 @@ impl Theme {
                 selection_bg: c(0x37, 0x37, 0x3d),
                 active_bar: c(0x2f, 0x81, 0xf7),
                 error: c(0xe0, 0x6c, 0x5b),
+                highlight: c(0x2e, 0x7d, 0x32),
                 border: c(0x3a, 0x3a, 0x3a),
             },
             ThemeBase::Light => Theme {
@@ -193,6 +199,7 @@ impl Theme {
                 selection_bg: c(0xdc, 0xeb, 0xff),
                 active_bar: c(0x17, 0x69, 0xe0),
                 error: c(0xc0, 0x39, 0x2b),
+                highlight: c(0xc8, 0xe6, 0xc9),
                 border: c(0xdd, 0xdd, 0xdd),
             },
         }
@@ -328,6 +335,7 @@ mod tests {
             selection_bg: ThemeColor::new(19, 20, 21),
             active_bar: ThemeColor::new(22, 23, 24),
             error: ThemeColor::new(25, 26, 27),
+            highlight: ThemeColor::new(31, 32, 33),
             border: ThemeColor::new(28, 29, 30),
         };
         let json = serde_json::to_string(&t).unwrap();
@@ -342,6 +350,22 @@ mod tests {
         assert_eq!(t.name, "Min");
         assert_eq!(t.base, ThemeBase::Dark);
         let _ = t.accent;
+    }
+
+    #[test]
+    fn highlight_default_si_falta_en_json() {
+        // Un JSON de tema sin "highlight" cae al default del tema (tolerante, no paniquea).
+        let json = r##"{"name":"X","base":"dark","accent":"#2f81f7"}"##;
+        let t: Theme = serde_json::from_str(json).unwrap();
+        let _ = t.highlight; // existe y tiene algún valor
+    }
+
+    #[test]
+    fn highlight_round_trip() {
+        let t = Theme::defaults_for(ThemeBase::Dark, "X".into());
+        let json = serde_json::to_string(&t).unwrap();
+        let back: Theme = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.highlight, t.highlight);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 use crate::app::NaygoApp;
+use naygo_core::config::HighlightDuration;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let title = app.tr("settings.advanced");
@@ -148,4 +149,44 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
             });
         },
     );
+
+    ui.add_space(12.0);
+    ui.heading(app.tr("settings.watch.section"));
+    ui.add_space(6.0);
+
+    // Duración del resaltado de archivos recién aparecidos (watcher).
+    let (l_dur, l_until_interact, l_fade, l_until_refresh) = (
+        app.tr("settings.watch.highlight_duration"),
+        app.tr("settings.watch.until_interact"),
+        app.tr("settings.watch.fade"),
+        app.tr("settings.watch.until_refresh"),
+    );
+    ui.label(l_dur);
+    ui.horizontal(|ui| {
+        ui.selectable_value(
+            &mut app.settings.highlight_duration,
+            HighlightDuration::UntilInteract,
+            l_until_interact,
+        );
+        // FadeSeconds lleva un valor; el selector fija 6s (si el usuario tenía otra N,
+        // se normaliza a 6 al elegir esta opción, aceptable para el selector simple).
+        ui.selectable_value(
+            &mut app.settings.highlight_duration,
+            HighlightDuration::FadeSeconds(6),
+            l_fade,
+        );
+        ui.selectable_value(
+            &mut app.settings.highlight_duration,
+            HighlightDuration::UntilRefresh,
+            l_until_refresh,
+        );
+    });
+    ui.add_space(6.0);
+
+    // Agrupar archivos nuevos al final de la vista.
+    let l_new_at_end = app.tr("settings.watch.new_at_end");
+    let mut new_at_end = app.settings.new_items_at_end;
+    if ui.checkbox(&mut new_at_end, l_new_at_end).changed() {
+        app.settings.new_items_at_end = new_at_end;
+    }
 }

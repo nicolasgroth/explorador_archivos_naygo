@@ -28,6 +28,9 @@ pub struct FilePaneState {
     pub show_dirs: bool,
     /// Estado de tabla: columnas (orden/visibilidad/ancho) + filtros por columna.
     pub table: TableState,
+    /// Rutas resaltadas como "recién aparecidas" (estado de presentación efímero; NO se
+    /// persiste). El render las tiñe; la interacción/refresh las limpia.
+    pub highlighted: std::collections::HashSet<std::path::PathBuf>,
 }
 
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
@@ -61,14 +64,31 @@ impl FilePaneState {
             history,
             show_dirs: true,
             table: TableState::default(),
+            highlighted: std::collections::HashSet::new(),
         }
+    }
+
+    /// ¿Está esta ruta resaltada como nueva?
+    pub fn is_highlighted(&self, path: &Path) -> bool {
+        self.highlighted.contains(path)
+    }
+
+    /// Limpia todo el resaltado (al interactuar o re-listar).
+    pub fn clear_highlight(&mut self) {
+        self.highlighted.clear();
     }
 
     /// Las entries VISIBLES: las que pasan los filtros activos de la tabla, en el
     /// orden actual de `entries` (que `pump_one` mantiene ordenado por `sort`).
     /// Es el ÚNICO espacio de índices que usan foco/selección/teclado/activación.
     pub fn view_indices(&self) -> Vec<usize> {
-        if self.table.filters.is_empty() {
+        self.view_indices_ordered(false)
+    }
+
+    /// Índices de la vista (filtrada). Si `new_items_at_end`, las filas resaltadas se
+    /// mueven al final de forma ESTABLE (conservando su orden relativo).
+    pub fn view_indices_ordered(&self, new_items_at_end: bool) -> Vec<usize> {
+        let mut idx: Vec<usize> = if self.table.filters.is_empty() {
             (0..self.entries.len()).collect()
         } else {
             self.entries
@@ -77,7 +97,12 @@ impl FilePaneState {
                 .filter(|(_, e)| filter_matches(e, &self.table.filters))
                 .map(|(i, _)| i)
                 .collect()
+        };
+        if new_items_at_end && !self.highlighted.is_empty() {
+            let hl = &self.highlighted;
+            idx.sort_by_key(|&i| hl.contains(&self.entries[i].path));
         }
+        idx
     }
 
     /// La entrada con foco, donde `focused` es una posición en la VISTA (no en
@@ -280,6 +305,37 @@ mod tests {
         // foco fuera de la vista → None.
         s.focused = Some(5);
         assert!(s.focused_view_entry().is_none());
+    }
+
+    #[test]
+    fn highlighted_set_y_clear() {
+        let mut s = FilePaneState::new(p("D:/x"));
+        let path = p("D:/x/a.txt");
+        s.highlighted.insert(path.clone());
+        assert!(s.is_highlighted(&path));
+        s.clear_highlight();
+        assert!(!s.is_highlighted(&path));
+    }
+
+    #[test]
+    fn view_al_final_mueve_resaltadas_al_fondo() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("D:/x"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("D:/x/{name}")),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        s.entries = vec![mk("a"), mk("b"), mk("c")];
+        s.highlighted.insert(p("D:/x/b"));
+        // Sin flag: orden natural.
+        assert_eq!(s.view_indices(), vec![0, 1, 2]);
+        // Con flag: b (idx 1) al final, estable.
+        assert_eq!(s.view_indices_ordered(true), vec![0, 2, 1]);
     }
 
     #[test]

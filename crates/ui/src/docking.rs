@@ -44,6 +44,8 @@ pub struct NaygoTabViewer<'a> {
     pub ops_actions: &'a mut Vec<crate::input::Action>,
     /// Espacio por unidad (root → uso) para pintar la barra de uso en el árbol.
     pub disk_usage: &'a std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+    /// Si los archivos recién aparecidos (resaltados) se agrupan al final de la vista.
+    pub new_items_at_end: bool,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -94,6 +96,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     &mut local,
                     self.theme,
                     self.ops_actions,
+                    self.new_items_at_end,
                 );
                 for a in local {
                     self.table_actions.push((id, a));
