@@ -27,7 +27,10 @@ pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
 pub use i18n::{pick_default_language, I18n, LangId};
 pub use icon_kind::{category_for_extension, icon_key_for, DriveKind, FileCategory, IconKey};
 pub use listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
-pub use ops::{ConflictPolicy, OpKind, OpMsg, OpRequest, OpSummary};
+pub use ops::{
+    ConflictAction, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress,
+    OpRequest, OpStep, OpSummary,
+};
 pub use sort::sort_entries;
 pub use theme::pack::{Pack, PackCatalog};
 pub use theme::{Theme, ThemeBase, ThemeCatalog, ThemeColor, ThemeId};

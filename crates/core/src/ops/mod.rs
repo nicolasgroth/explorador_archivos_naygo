@@ -10,6 +10,7 @@ pub mod engine;
 pub mod names;
 pub mod plan;
 
+pub use engine::{run_plan, spawn};
 pub use names::{dedup_name, is_valid_name};
 pub use plan::{plan, PlanError};
 
