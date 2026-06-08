@@ -56,7 +56,14 @@ impl OpJournal {
             .iter()
             .map(|s| s.from.as_deref().and_then(FileFingerprint::of))
             .collect();
-        OpJournal { id, kind, conflict, plan, done_through: 0, source_fingerprints }
+        OpJournal {
+            id,
+            kind,
+            conflict,
+            plan,
+            done_through: 0,
+            source_fingerprints,
+        }
     }
 
     /// Etiqueta corta para mostrar en el modal (kind + destino raíz).
@@ -212,7 +219,11 @@ pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
     }
 
     ResumePlan {
-        plan: OpPlan { steps, total_bytes, total_files },
+        plan: OpPlan {
+            steps,
+            total_bytes,
+            total_files,
+        },
         skipped_changed,
     }
 }
@@ -228,8 +239,20 @@ mod tests {
         let src = dir.join("a.txt");
         fs::write(&src, b"hola").unwrap();
         let to = dir.join("dst").join("a.txt");
-        let step = OpStep { from: Some(src.clone()), to, bytes: 4, is_dir: false };
-        (OpPlan { steps: vec![step], total_bytes: 4, total_files: 1 }, src)
+        let step = OpStep {
+            from: Some(src.clone()),
+            to,
+            bytes: 4,
+            is_dir: false,
+        };
+        (
+            OpPlan {
+                steps: vec![step],
+                total_bytes: 4,
+                total_files: 1,
+            },
+            src,
+        )
     }
 
     #[test]
@@ -292,11 +315,16 @@ mod tests {
         w.record(1, t0);
         w.record(2, t0 + Duration::from_millis(100));
         let back: OpJournal =
-            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap()).unwrap();
-        assert_eq!(back.done_through, 1, "el 2º record dentro del umbral no se persiste");
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap())
+                .unwrap();
+        assert_eq!(
+            back.done_through, 1,
+            "el 2º record dentro del umbral no se persiste"
+        );
         w.record(3, t0 + Duration::from_millis(600));
         let back2: OpJournal =
-            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap())
+                .unwrap();
         assert_eq!(back2.done_through, 3);
     }
 
@@ -311,7 +339,8 @@ mod tests {
         w.record(2, t0 + Duration::from_millis(50));
         w.flush();
         let back: OpJournal =
-            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w3")).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w3")).unwrap())
+                .unwrap();
         assert_eq!(back.done_through, 2);
     }
 
@@ -344,11 +373,20 @@ mod tests {
     #[test]
     fn resume_plan_poda_a_pendientes() {
         let dir = tempfile::tempdir().unwrap();
-        let mk = |n: &str, b: u64| OpStep { from: Some(dir.path().join(n)), to: dir.path().join("dst").join(n), bytes: b, is_dir: false };
+        let mk = |n: &str, b: u64| OpStep {
+            from: Some(dir.path().join(n)),
+            to: dir.path().join("dst").join(n),
+            bytes: b,
+            is_dir: false,
+        };
         for (n, c) in [("a", "aa"), ("b", "bbb"), ("c", "cccc")] {
             fs::write(dir.path().join(n), c.as_bytes()).unwrap();
         }
-        let plan = OpPlan { steps: vec![mk("a",2), mk("b",3), mk("c",4)], total_bytes: 9, total_files: 3 };
+        let plan = OpPlan {
+            steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
+            total_bytes: 9,
+            total_files: 3,
+        };
         let mut j = OpJournal::new("p1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         j.done_through = 1;
         let r = resume_plan(&j);
@@ -362,10 +400,19 @@ mod tests {
     fn resume_plan_salta_origen_cambiado() {
         let dir = tempfile::tempdir().unwrap();
         let src_b = dir.path().join("b");
-        let mk = |n: &str, b: u64| OpStep { from: Some(dir.path().join(n)), to: dir.path().join("dst").join(n), bytes: b, is_dir: false };
+        let mk = |n: &str, b: u64| OpStep {
+            from: Some(dir.path().join(n)),
+            to: dir.path().join("dst").join(n),
+            bytes: b,
+            is_dir: false,
+        };
         fs::write(dir.path().join("a"), b"aa").unwrap();
         fs::write(&src_b, b"bbb").unwrap();
-        let plan = OpPlan { steps: vec![mk("a",2), mk("b",3)], total_bytes: 5, total_files: 2 };
+        let plan = OpPlan {
+            steps: vec![mk("a", 2), mk("b", 3)],
+            total_bytes: 5,
+            total_files: 2,
+        };
         let j = OpJournal::new("p2".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         fs::write(&src_b, b"bbbbbbbb").unwrap(); // cambia tamaño
         let r = resume_plan(&j);
@@ -377,9 +424,18 @@ mod tests {
     fn resume_plan_salta_origen_ausente() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("a");
-        let mk = OpStep { from: Some(src.clone()), to: dir.path().join("dst").join("a"), bytes: 2, is_dir: false };
+        let mk = OpStep {
+            from: Some(src.clone()),
+            to: dir.path().join("dst").join("a"),
+            bytes: 2,
+            is_dir: false,
+        };
         fs::write(&src, b"aa").unwrap();
-        let plan = OpPlan { steps: vec![mk], total_bytes: 2, total_files: 1 };
+        let plan = OpPlan {
+            steps: vec![mk],
+            total_bytes: 2,
+            total_files: 1,
+        };
         let j = OpJournal::new("p3".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         fs::remove_file(&src).unwrap();
         let r = resume_plan(&j);
@@ -390,10 +446,25 @@ mod tests {
     #[test]
     fn resume_plan_pasos_sin_from_siempre_entran() {
         let dir = tempfile::tempdir().unwrap();
-        let dir_step = OpStep { from: None, to: dir.path().join("dst").join("sub"), bytes: 0, is_dir: true };
-        let src = dir.path().join("a"); fs::write(&src, b"aa").unwrap();
-        let file_step = OpStep { from: Some(src), to: dir.path().join("dst").join("sub").join("a"), bytes: 2, is_dir: false };
-        let plan = OpPlan { steps: vec![dir_step, file_step], total_bytes: 2, total_files: 1 };
+        let dir_step = OpStep {
+            from: None,
+            to: dir.path().join("dst").join("sub"),
+            bytes: 0,
+            is_dir: true,
+        };
+        let src = dir.path().join("a");
+        fs::write(&src, b"aa").unwrap();
+        let file_step = OpStep {
+            from: Some(src),
+            to: dir.path().join("dst").join("sub").join("a"),
+            bytes: 2,
+            is_dir: false,
+        };
+        let plan = OpPlan {
+            steps: vec![dir_step, file_step],
+            total_bytes: 2,
+            total_files: 1,
+        };
         let j = OpJournal::new("p4".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         let r = resume_plan(&j);
         assert_eq!(r.plan.steps.len(), 2);

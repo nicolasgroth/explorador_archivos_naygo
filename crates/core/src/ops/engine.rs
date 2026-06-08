@@ -7,11 +7,11 @@
 //! Papelera: NO aquí (solo borrado permanente); la papelera la hace `platform`.
 //! Conflictos: la UI los resuelve antes de spawnear (el motor recibe pasos limpios).
 
+use super::journal::JournalWriter;
 use super::{
     ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress, OpStep,
     OpSummary,
 };
-use super::journal::JournalWriter;
 use crate::cancel::CancellationToken;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -39,7 +39,15 @@ pub fn spawn(
 ) -> (Receiver<OpMsg>, std::thread::JoinHandle<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
-        let summary = run_plan(&plan, &kind, conflict, &token, &tx, &conflict_rx, journal.as_mut());
+        let summary = run_plan(
+            &plan,
+            &kind,
+            conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            journal.as_mut(),
+        );
         if let Some(w) = journal.as_mut() {
             w.flush();
         }
@@ -453,10 +461,19 @@ mod tests {
         let token = CancellationToken::new();
         let (tx, _rx) = std::sync::mpsc::channel();
         let (_ctx, crx) = std::sync::mpsc::channel();
-        let _summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx, Some(&mut writer));
+        let _summary = run_plan(
+            &p,
+            &req.kind,
+            req.conflict,
+            &token,
+            &tx,
+            &crx,
+            Some(&mut writer),
+        );
         writer.flush();
         let back: OpJournal =
-            serde_json::from_str(&std::fs::read_to_string(journal_path(cfg, "eng1")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(journal_path(cfg, "eng1")).unwrap())
+                .unwrap();
         assert_eq!(back.done_through, 2);
         assert!(dest.join("a").exists() && dest.join("b").exists());
     }
