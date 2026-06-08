@@ -189,4 +189,12 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     if ui.checkbox(&mut new_at_end, l_new_at_end).changed() {
         app.settings.new_items_at_end = new_at_end;
     }
+    ui.add_space(6.0);
+
+    // Tamaño de carpeta (F3): recursivo vs. solo primer nivel.
+    let l_size = app.tr("settings.size_no_subdirs");
+    let mut size_no_subdirs = app.settings.size_no_subdirs;
+    if ui.checkbox(&mut size_no_subdirs, l_size).changed() {
+        app.settings.size_no_subdirs = size_no_subdirs;
+    }
 }

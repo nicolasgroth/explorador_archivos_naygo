@@ -184,6 +184,7 @@
   "settings.watch.fade": "Desvanecer (segundos)",
   "settings.watch.until_refresh": "Hasta refrescar",
   "settings.watch.new_at_end": "Agrupar archivos nuevos al final",
+  "settings.size_no_subdirs": "Calcular tamaño solo del primer nivel (no subcarpetas)",
   "resume.title": "Operaciones interrumpidas",
   "resume.body": "Naygo se cerró mientras estas operaciones estaban en curso:",
   "resume.resume": "Retomar",
