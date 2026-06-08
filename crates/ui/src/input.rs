@@ -25,6 +25,10 @@ pub enum Action {
     MoveDown,
     /// Entrar a la carpeta enfocada / abrir el archivo enfocado.
     Activate,
+    /// Abrir el elemento enfocado con su app por defecto (menú contextual).
+    Open,
+    /// Abrir el elemento enfocado con… (diálogo nativo de elección de app).
+    OpenWith,
     /// Subir un nivel (carpeta padre).
     GoUp,
     /// Ir atrás en el historial del panel activo.

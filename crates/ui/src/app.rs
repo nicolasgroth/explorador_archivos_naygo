@@ -941,6 +941,16 @@ impl NaygoApp {
             Action::MoveUp => self.move_focus(-1),
             Action::MoveDown => self.move_focus(1),
             Action::Activate => self.activate_focused(),
+            Action::Open => {
+                if let Some((p, n)) = self.focused_file() {
+                    self.open_path(&p, &n);
+                }
+            }
+            Action::OpenWith => {
+                if let Some((p, n)) = self.focused_file() {
+                    self.open_with_path(&p, &n);
+                }
+            }
             Action::GoUp => self.nav(|f| f.go_up()),
             Action::GoBack => self.nav(|f| f.go_back()),
             Action::GoForward => self.nav(|f| f.go_forward()),
@@ -1460,10 +1470,43 @@ impl NaygoApp {
             }
             self.start_listing(active, entry.path);
         } else {
-            self.status = self
-                .i18n
-                .t("status.open_pending")
-                .replace("{name}", &entry.name);
+            let (path, name) = (entry.path.clone(), entry.name.clone());
+            self.open_path(&path, &name);
+        }
+    }
+
+    /// Abre un archivo con su app por defecto; deja status de éxito/error.
+    fn open_path(&mut self, path: &std::path::Path, name: &str) {
+        match naygo_platform::open::open_default(path) {
+            Ok(()) => {
+                self.status = self.i18n.t("status.opening").replace("{name}", name);
+            }
+            Err(naygo_platform::open::ShellError::NoAssociation) => {
+                self.status = self.i18n.t("status.no_association").replace("{name}", name);
+            }
+            Err(_) => {
+                self.status = self.i18n.t("status.open_failed").replace("{name}", name);
+            }
+        }
+    }
+
+    /// Abre el diálogo "Abrir con…" del SO para un archivo; status en error.
+    fn open_with_path(&mut self, path: &std::path::Path, name: &str) {
+        if naygo_platform::open::open_with_dialog(path).is_err() {
+            self.status = self.i18n.t("status.open_failed").replace("{name}", name);
+        }
+    }
+
+    /// Resuelve la entry enfocada del panel activo (ruta + nombre), si es archivo.
+    fn focused_file(&self) -> Option<(std::path::PathBuf, String)> {
+        let entry = self
+            .workspace
+            .active_files()
+            .and_then(|f| f.focused_view_entry().cloned())?;
+        if entry.is_dir() {
+            None
+        } else {
+            Some((entry.path, entry.name))
         }
     }
 

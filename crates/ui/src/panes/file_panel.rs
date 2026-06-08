@@ -286,6 +286,15 @@ pub fn show(
                         }
                         row_resp.context_menu(|ui| {
                             context_focus = Some(i);
+                            if ui.button(i18n.t("op.open")).clicked() {
+                                ops_actions.push(Action::Open);
+                                ui.close();
+                            }
+                            if ui.button(i18n.t("op.open_with")).clicked() {
+                                ops_actions.push(Action::OpenWith);
+                                ui.close();
+                            }
+                            ui.separator();
                             if ui.button(i18n.t("op.copy")).clicked() {
                                 ops_actions.push(Action::Copy);
                                 ui.close();
@@ -307,6 +316,11 @@ pub fn show(
                                 ops_actions.push(Action::Delete);
                                 ui.close();
                             }
+                            ui.separator();
+                            // Placeholder shell-B: el menú COM nativo se construye SOLO
+                            // bajo demanda (lento de enumerar). Deshabilitado aquí.
+                            ui.add_enabled(false, egui::Button::new(i18n.t("op.more_windows")))
+                                .on_disabled_hover_text(i18n.t("op.more_windows_soon"));
                         });
                     }
                     DisplayRow::NoMatches => {
