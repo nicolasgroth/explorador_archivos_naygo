@@ -126,5 +126,13 @@
   "settings.ops.display.modal": "Modal",
   "settings.ops.display.always": "Siempre visible",
   "settings.ops.confirm_trash": "Confirmar también el borrado a la papelera",
-  "settings.ops.show_summary": "Mostrar resumen al terminar"
+  "settings.ops.show_summary": "Mostrar resumen al terminar",
+  "resume.title": "Operaciones interrumpidas",
+  "resume.body": "Naygo se cerró mientras estas operaciones estaban en curso:",
+  "resume.resume": "Retomar",
+  "resume.discard": "Descartar",
+  "resume.resume_all": "Retomar todas",
+  "resume.discard_all": "Descartar todas",
+  "resume.progress": "{done} de {total} archivos",
+  "resume.skipped_changed": "{n} archivo(s) omitido(s) porque cambiaron desde la interrupción"
 }
