@@ -8,6 +8,7 @@
 
 pub mod drives;
 pub mod locale;
+pub mod trash;
 
 pub fn hello() -> &'static str {
     "naygo-platform"
