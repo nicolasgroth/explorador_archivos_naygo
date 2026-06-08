@@ -225,8 +225,6 @@ impl KeyMap {
     }
 
     /// Acceso interno a la lista de chords mutable de una acción (la crea si falta).
-    // usado en Task 3 (bind/unbind/reset)
-    #[allow(dead_code)]
     fn slot_mut(&mut self, action: Action) -> &mut Vec<Chord> {
         if let Some(pos) = self.bindings.iter().position(|(a, _)| *a == action) {
             &mut self.bindings[pos].1
@@ -234,6 +232,88 @@ impl KeyMap {
             self.bindings.push((action, Vec::new()));
             &mut self.bindings.last_mut().unwrap().1
         }
+    }
+
+    /// Asigna `chord` a `action`. Si el chord ya era de OTRA acción, se lo quita y devuelve
+    /// esa otra acción (conflicto reasignado). Si ya era de `action`, no-op (None).
+    pub fn bind(&mut self, action: Action, chord: Chord) -> Option<Action> {
+        match self.action_for(&chord) {
+            Some(a) if a == action => None,
+            Some(a) => {
+                self.slot_mut(a).retain(|c| *c != chord);
+                self.slot_mut(action).push(chord);
+                Some(a)
+            }
+            None => {
+                self.slot_mut(action).push(chord);
+                None
+            }
+        }
+    }
+
+    /// Quita `chord` de `action`.
+    pub fn unbind(&mut self, action: Action, chord: &Chord) {
+        self.slot_mut(action).retain(|c| c != chord);
+    }
+
+    /// Restaura los atajos por defecto de UNA acción (quitándolos de quien los tenga).
+    pub fn reset_action(&mut self, action: Action) {
+        let def = KeyMap::defaults();
+        let default_chords = def.chords_for(action).to_vec();
+        for c in &default_chords {
+            if let Some(owner) = self.action_for(c) {
+                if owner != action {
+                    self.slot_mut(owner).retain(|x| x != c);
+                }
+            }
+        }
+        *self.slot_mut(action) = default_chords;
+    }
+
+    /// Restaura TODO el mapa a defaults.
+    pub fn reset_all(&mut self) {
+        *self = KeyMap::defaults();
+    }
+
+    /// Mergea lo almacenado con los defaults: arranca de defaults, y por cada entrada con
+    /// una acción conocida reemplaza sus chords. (Las acciones sin entrada conservan su
+    /// default; eso da retro-compat ante acciones nuevas como ComputeSize.)
+    fn from_stored(stored: Vec<StoredBinding>) -> KeyMap {
+        let mut km = KeyMap::defaults();
+        for entry in stored {
+            if let Some(pos) = km.bindings.iter().position(|(a, _)| *a == entry.action) {
+                km.bindings[pos].1 = entry.chords;
+            }
+        }
+        km
+    }
+}
+
+/// Forma serializable del keymap: lista de (acción, chords). Lo que va al json.
+#[derive(Serialize, Deserialize)]
+struct StoredBinding {
+    action: Action,
+    chords: Vec<Chord>,
+}
+
+impl Serialize for KeyMap {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let stored: Vec<StoredBinding> = self
+            .bindings
+            .iter()
+            .map(|(a, c)| StoredBinding {
+                action: *a,
+                chords: c.clone(),
+            })
+            .collect();
+        stored.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for KeyMap {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<KeyMap, D::Error> {
+        let stored: Vec<StoredBinding> = Vec::deserialize(d)?;
+        Ok(KeyMap::from_stored(stored))
     }
 }
 
@@ -308,5 +388,86 @@ mod tests {
     fn action_for_libre_es_none() {
         let km = KeyMap::defaults();
         assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('z'))), None);
+    }
+
+    #[test]
+    fn bind_conflicto_reasigna_y_devuelve_la_despojada() {
+        let mut km = KeyMap::defaults();
+        let robbed = km.bind(Action::Rename, Chord::ctrl(KeyCode::Char('c')));
+        assert_eq!(robbed, Some(Action::Copy));
+        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Rename));
+        assert!(!km.chords_for(Action::Copy).contains(&Chord::ctrl(KeyCode::Char('c'))));
+    }
+
+    #[test]
+    fn bind_mismo_chord_misma_accion_es_noop() {
+        let mut km = KeyMap::defaults();
+        let r = km.bind(Action::Copy, Chord::ctrl(KeyCode::Char('c')));
+        assert_eq!(r, None);
+        assert_eq!(km.chords_for(Action::Copy).len(), 1);
+    }
+
+    #[test]
+    fn bind_nuevo_libre_no_conflicto() {
+        let mut km = KeyMap::defaults();
+        let r = km.bind(Action::Copy, Chord::ctrl(KeyCode::Char('z')));
+        assert_eq!(r, None);
+        assert_eq!(km.chords_for(Action::Copy).len(), 2);
+    }
+
+    #[test]
+    fn unbind_quita() {
+        let mut km = KeyMap::defaults();
+        km.unbind(Action::GoUp, &Chord::plain(KeyCode::ArrowLeft));
+        assert_eq!(km.chords_for(Action::GoUp).len(), 1);
+        assert_eq!(km.action_for(&Chord::plain(KeyCode::ArrowLeft)), None);
+    }
+
+    #[test]
+    fn reset_action_y_reset_all() {
+        let mut km = KeyMap::defaults();
+        km.unbind(Action::Copy, &Chord::ctrl(KeyCode::Char('c')));
+        assert!(km.chords_for(Action::Copy).is_empty());
+        km.reset_action(Action::Copy);
+        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Copy));
+        km.unbind(Action::Rename, &Chord::plain(KeyCode::F2));
+        km.reset_all();
+        assert_eq!(km, KeyMap::defaults());
+    }
+
+    #[test]
+    fn serde_round_trip() {
+        let km = KeyMap::defaults();
+        let json = serde_json::to_string(&km).unwrap();
+        let back: KeyMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, km);
+    }
+
+    #[test]
+    fn serde_merge_accion_faltante_toma_default() {
+        // Construir el json mergeando: solo Copy con Ctrl+Q; el resto debe caer a default.
+        let mut src = KeyMap::defaults();
+        // dejar Copy con solo Ctrl+Q:
+        src.unbind(Action::Copy, &Chord::ctrl(KeyCode::Char('c')));
+        src.bind(Action::Copy, Chord::ctrl(KeyCode::Char('q')));
+        let json = serde_json::to_string(&src).unwrap();
+        let km: KeyMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('q'))), Some(Action::Copy));
+        // Rename conserva F2 (estaba en el json con su default igual).
+        assert_eq!(km.action_for(&Chord::plain(KeyCode::F2)), Some(Action::Rename));
+    }
+
+    #[test]
+    fn serde_json_parcial_mergea_defaults() {
+        // Un json con SOLO una acción (Rename con F2) → las demás toman su default.
+        // Usamos serde_json::Value para no depender del formato exacto de Chord.
+        let f2 = serde_json::to_value(Chord::plain(KeyCode::F2)).unwrap();
+        let entry = serde_json::json!({ "action": "Rename", "chords": [f2] });
+        let arr = serde_json::Value::Array(vec![entry]);
+        let json = serde_json::to_string(&arr).unwrap();
+        let km: KeyMap = serde_json::from_str(&json).unwrap();
+        // Rename quedó con F2; Copy conserva su default Ctrl+C (no estaba en el json).
+        assert_eq!(km.action_for(&Chord::plain(KeyCode::F2)), Some(Action::Rename));
+        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Copy));
     }
 }
