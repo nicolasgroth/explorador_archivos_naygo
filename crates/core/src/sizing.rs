@@ -9,6 +9,11 @@
 
 use crate::cancel::CancellationToken;
 use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
+
+/// Throttle de emisión de `Progress`.
+const PROGRESS_THROTTLE: Duration = Duration::from_millis(150);
 
 /// Mensaje del worker de cálculo de tamaño.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +83,60 @@ pub fn dir_size_walk(
         }
     }
     (total, partial, false)
+}
+
+/// Lista un directorio del FS real para `dir_size_walk`. `None` si no se puede leer.
+/// Usa `symlink_metadata` (NO sigue symlinks). Los archivos aportan su `len()`.
+fn fs_lister(dir: &std::path::Path) -> ListResult {
+    let rd = std::fs::read_dir(dir).ok()?;
+    let mut out = Vec::new();
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => {
+                // Entrada ilegible: representarla como archivo sin tamaño → parcial.
+                out.push(WalkEntry { path, is_dir: false, is_symlink: false, size: None });
+                continue;
+            }
+        };
+        let is_symlink = meta.file_type().is_symlink();
+        let is_dir = meta.is_dir();
+        let size = if !is_dir && !is_symlink { Some(meta.len()) } else { None };
+        out.push(WalkEntry { path, is_dir, is_symlink, size });
+    }
+    Some(out)
+}
+
+/// Lanza el cálculo del tamaño de `dir` en un worker. Emite `Progress` (throttle ~150ms)
+/// y un mensaje final (`Done`/`Cancelled`) por el canal devuelto. Cancelable vía `token`.
+pub fn spawn_dir_size(
+    dir: PathBuf,
+    recursive: bool,
+    token: CancellationToken,
+) -> Receiver<SizeMsg> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        // El closure de progreso usa un clon del Sender, así `tx` queda libre para el
+        // mensaje final (evita mover `tx` dentro del FnMut).
+        let tx_prog = tx.clone();
+        let mut last = Instant::now();
+        let mut on_progress = move |bytes: u64| {
+            if last.elapsed() >= PROGRESS_THROTTLE {
+                let _ = tx_prog.send(SizeMsg::Progress { bytes });
+                last = Instant::now();
+            }
+        };
+        let (total, partial, cancelled) =
+            dir_size_walk(&dir, recursive, &fs_lister, &token, &mut on_progress);
+        let final_msg = if cancelled {
+            SizeMsg::Cancelled { bytes: total }
+        } else {
+            SizeMsg::Done { total, partial }
+        };
+        let _ = tx.send(final_msg);
+    });
+    rx
 }
 
 #[cfg(test)]
@@ -180,5 +239,41 @@ mod tests {
         let mut prog = |_| {};
         let (_, _, cancelled) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
         assert!(cancelled);
+    }
+
+    #[test]
+    fn spawn_dir_size_suma_un_arbol_real() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"hola").unwrap(); // 4
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("b.txt"), b"mundo!").unwrap(); // 6
+        let token = CancellationToken::new();
+        let rx = spawn_dir_size(dir.path().to_path_buf(), true, token);
+        let mut total = None;
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                SizeMsg::Done { total: t, .. } => { total = Some(t); break; }
+                SizeMsg::Cancelled { .. } => break,
+                SizeMsg::Progress { .. } => {}
+            }
+        }
+        assert_eq!(total, Some(10));
+    }
+
+    #[test]
+    fn spawn_dir_size_no_recursivo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"hola").unwrap(); // 4
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("b.txt"), b"mundo!").unwrap(); // 6 (no se cuenta)
+        let token = CancellationToken::new();
+        let rx = spawn_dir_size(dir.path().to_path_buf(), false, token);
+        let mut total = None;
+        while let Ok(msg) = rx.recv() {
+            if let SizeMsg::Done { total: t, .. } = msg { total = Some(t); break; }
+        }
+        assert_eq!(total, Some(4));
     }
 }
