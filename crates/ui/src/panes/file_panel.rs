@@ -59,6 +59,7 @@ pub fn show(
     theme: &crate::theme_apply::ActiveTheme,
     ops_actions: &mut Vec<Action>,
     new_items_at_end: bool,
+    size_partial: &std::collections::HashSet<std::path::PathBuf>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -304,7 +305,14 @@ pub fn show(
                                     };
                                     let _ = icon_row(ui, icons, key, &entry.name, name_color);
                                 } else {
-                                    ui.label(cell_text(entry, col.kind));
+                                    let mut text = cell_text(entry, col.kind);
+                                    if col.kind == ColumnKind::Size
+                                        && entry.size.is_some()
+                                        && size_partial.contains(&entry.path)
+                                    {
+                                        text.push_str(i18n.t("size.partial_suffix"));
+                                    }
+                                    ui.label(text);
                                 }
                             });
                         }

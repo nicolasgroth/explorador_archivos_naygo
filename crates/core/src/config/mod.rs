@@ -123,6 +123,10 @@ pub struct Settings {
     /// insertarse ya ordenados.
     #[serde(default = "default_new_items_at_end")]
     pub new_items_at_end: bool,
+    /// Al calcular el tamaño de una carpeta (F3), NO bajar a subdirectorios (solo el
+    /// primer nivel). Más barato. `false` (default) = recursivo.
+    #[serde(default = "default_size_no_subdirs")]
+    pub size_no_subdirs: bool,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -201,6 +205,11 @@ fn default_new_items_at_end() -> bool {
     false
 }
 
+/// Default de `size_no_subdirs`: false (recursivo).
+fn default_size_no_subdirs() -> bool {
+    false
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -223,6 +232,7 @@ impl Default for Settings {
             paste_jpg_quality: 90,
             highlight_duration: HighlightDuration::UntilInteract,
             new_items_at_end: false,
+            size_no_subdirs: false,
         }
     }
 }
@@ -359,6 +369,7 @@ mod tests {
             paste_jpg_quality: 75,
             highlight_duration: HighlightDuration::FadeSeconds(6),
             new_items_at_end: true,
+            size_no_subdirs: true,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
