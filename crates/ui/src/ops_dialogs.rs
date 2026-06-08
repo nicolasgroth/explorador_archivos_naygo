@@ -146,3 +146,71 @@ pub fn name_input(
     }
     result
 }
+
+/// Decisión del usuario sobre las operaciones interrumpidas.
+// Consumido en Task 7 (app.rs).
+#[allow(dead_code)]
+pub enum ResumeChoice {
+    /// Retomar la operación con este id.
+    Resume(String),
+    /// Descartar la operación con este id.
+    Discard(String),
+    /// Retomar todas las pendientes.
+    ResumeAll,
+    /// Descartar todas.
+    DiscardAll,
+}
+
+/// Modal de retomar: lista las operaciones interrumpidas (id + label + progreso) con
+/// Retomar/Descartar por op, y Retomar todas / Descartar todas si hay más de una.
+/// Devuelve `Some(choice)` cuando el usuario actúa, `None` mientras sigue abierto.
+/// `items` = (id, label, done, total).
+///
+/// A diferencia de los otros modales, este NO se cierra solo con Esc / clic fuera:
+/// la operación sigue pendiente y se vuelve a ofrecer. El llamador (Task 7) la quita
+/// de la lista cuando llega una decisión, lo que hace desaparecer el modal.
+// Consumido en Task 7 (app.rs).
+#[allow(dead_code)]
+pub fn resume_dialog(
+    ctx: &egui::Context,
+    i18n: &I18n,
+    items: &[(String, String, usize, usize)],
+) -> Option<ResumeChoice> {
+    let mut choice = None;
+    egui::Modal::new(egui::Id::new("resume_ops_modal")).show(ctx, |ui| {
+        ui.set_max_width(440.0);
+        ui.heading(i18n.t("resume.title"));
+        ui.label(i18n.t("resume.body"));
+        ui.add_space(6.0);
+        for (id, label, done, total) in items {
+            ui.group(|ui| {
+                ui.label(egui::RichText::new(label).strong());
+                let prog = i18n
+                    .t("resume.progress")
+                    .replace("{done}", &done.to_string())
+                    .replace("{total}", &total.to_string());
+                ui.label(egui::RichText::new(prog).weak());
+                ui.horizontal(|ui| {
+                    if ui.button(i18n.t("resume.resume")).clicked() {
+                        choice = Some(ResumeChoice::Resume(id.clone()));
+                    }
+                    if ui.button(i18n.t("resume.discard")).clicked() {
+                        choice = Some(ResumeChoice::Discard(id.clone()));
+                    }
+                });
+            });
+        }
+        if items.len() > 1 {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(i18n.t("resume.resume_all")).clicked() {
+                    choice = Some(ResumeChoice::ResumeAll);
+                }
+                if ui.button(i18n.t("resume.discard_all")).clicked() {
+                    choice = Some(ResumeChoice::DiscardAll);
+                }
+            });
+        }
+    });
+    choice
+}
