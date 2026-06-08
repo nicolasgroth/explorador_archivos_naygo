@@ -10,6 +10,8 @@ pub mod engine;
 pub mod names;
 pub mod plan;
 
+pub use names::{dedup_name, is_valid_name};
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
