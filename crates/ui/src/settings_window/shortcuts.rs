@@ -29,6 +29,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let add_label = app.tr("settings.shortcuts.add");
     let capturing_label = app.tr("settings.shortcuts.capturing");
     let reset_one_label = app.tr("settings.shortcuts.reset_one");
+    let none_label = app.tr("settings.shortcuts.none");
 
     // Filas (acción, nombre, chords) precomputadas para no prestar app mientras pintamos.
     let rows: Vec<(Action, String, Vec<Chord>)> = Action::all()
@@ -48,6 +49,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
             for (action, name, chords) in &rows {
                 ui.label(name);
                 ui.horizontal(|ui| {
+                    if chords.is_empty() && app.shortcut_capture != Some(*action) {
+                        ui.label(egui::RichText::new(&none_label).weak());
+                    }
                     for c in chords {
                         ui.label(egui::RichText::new(chord_text(c)).monospace());
                         if ui.small_button("×").clicked() {

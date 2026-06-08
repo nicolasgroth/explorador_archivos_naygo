@@ -371,10 +371,12 @@ impl NaygoApp {
     }
 
     /// Si estamos capturando un atajo, lee la próxima combinación y la asigna. Esc cancela.
-    /// Debe llamarse cada frame, ANTES de handle_input (que retorna temprano si se captura).
-    fn process_shortcut_capture(&mut self, ctx: &egui::Context) {
+    /// Debe llamarse cada frame, ANTES de handle_input. Devuelve `true` si consumió una
+    /// tecla este frame (capturó o canceló) — el llamador debe entonces SALTAR handle_input
+    /// para que esa misma tecla no dispare además su acción.
+    fn process_shortcut_capture(&mut self, ctx: &egui::Context) -> bool {
         let Some(action) = self.shortcut_capture else {
-            return;
+            return false;
         };
         let mut captured: Option<naygo_core::keymap::Chord> = None;
         let mut cancel = false;
@@ -442,7 +444,7 @@ impl NaygoApp {
         });
         if cancel {
             self.shortcut_capture = None;
-            return;
+            return true; // consumió el Esc; no dejar que handle_input lo procese
         }
         if let Some(chord) = captured {
             let chord_txt = crate::input::chord_text(&chord);
@@ -459,7 +461,11 @@ impl NaygoApp {
             }
             self.shortcut_capture = None;
             self.save_keymap_now();
+            return true; // consumió la tecla recién asignada; no la dispares también
         }
+        // Seguimos capturando (solo modificadores / tecla no soportada): el input global
+        // ya está suspendido por la guarda de handle_input mientras shortcut_capture es Some.
+        false
     }
 
     /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
@@ -2028,13 +2034,17 @@ impl NaygoApp {
             }
         });
 
-        if !actions.is_empty() {
+        let fired_action = !actions.is_empty();
+        if fired_action {
             self.typeahead_buf.clear();
         }
         for a in actions {
             self.apply_action(a);
         }
-        if !typed.is_empty() {
+        // Si este frame resolvió una acción (incluida una letra simple rebindeada a una
+        // acción), NO hacemos typeahead con ese texto: una tecla no debe disparar acción
+        // y salto-por-tipeo a la vez.
+        if !fired_action && !typed.is_empty() {
             self.typeahead(&typed);
         }
     }
@@ -2073,11 +2083,17 @@ impl eframe::App for NaygoApp {
         self.pump_watchers();
         self.pump_devices();
         self.pump_paste_write();
-        self.process_shortcut_capture(ctx);
+        // La captura de atajos consume el teclado de este frame. Si capturó o canceló una
+        // tecla, NO corremos handle_input este frame: si no, la misma tecla (que sigue
+        // `key_pressed` todo el frame) dispararía además su acción recién asignada, y Esc
+        // de cancelación también gatillaría CancelListing.
+        let capture_consumed = self.process_shortcut_capture(ctx);
         if self.shortcut_capture.is_some() {
             ctx.request_repaint();
         }
-        self.handle_input(ctx);
+        if !capture_consumed {
+            self.handle_input(ctx);
+        }
         if self.any_listing_active()
             || self.any_tree_listing_active()
             || self.any_op_active()

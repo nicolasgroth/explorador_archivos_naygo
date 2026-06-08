@@ -156,6 +156,44 @@ mod tests {
         I18n::load(Path::new("Z:/no/existe/naygo-test"), &LangId::new("es"))
     }
 
+    /// Paridad ES/EN: ambos JSON embebidos deben tener EXACTAMENTE el mismo conjunto de
+    /// claves (y ninguna vacía). Atrapa que alguien agregue/quite una clave en un idioma
+    /// y olvide el otro — un riesgo en cada fase que toca i18n.
+    #[test]
+    fn es_en_tienen_las_mismas_claves() {
+        use std::collections::BTreeSet;
+        let es: std::collections::HashMap<String, String> =
+            serde_json::from_str(ES_JSON).expect("es.json válido");
+        let en: std::collections::HashMap<String, String> =
+            serde_json::from_str(EN_JSON).expect("en.json válido");
+        let es_keys: BTreeSet<&String> = es.keys().collect();
+        let en_keys: BTreeSet<&String> = en.keys().collect();
+        let solo_es: Vec<_> = es_keys.difference(&en_keys).collect();
+        let solo_en: Vec<_> = en_keys.difference(&es_keys).collect();
+        assert!(solo_es.is_empty(), "claves solo en es.json: {solo_es:?}");
+        assert!(solo_en.is_empty(), "claves solo en en.json: {solo_en:?}");
+        assert!(
+            es.values().all(|v| !v.is_empty()),
+            "es.json tiene valores vacíos"
+        );
+        assert!(
+            en.values().all(|v| !v.is_empty()),
+            "en.json tiene valores vacíos"
+        );
+    }
+
+    /// Cada acción del keymap tiene su nombre traducido en AMBOS idiomas.
+    #[test]
+    fn cada_accion_tiene_nombre_en_ambos_idiomas() {
+        let es: std::collections::HashMap<String, String> = serde_json::from_str(ES_JSON).unwrap();
+        let en: std::collections::HashMap<String, String> = serde_json::from_str(EN_JSON).unwrap();
+        for a in crate::keymap::Action::all() {
+            let k = a.i18n_key();
+            assert!(es.contains_key(k), "falta {k} en es.json");
+            assert!(en.contains_key(k), "falta {k} en en.json");
+        }
+    }
+
     #[test]
     fn t_resuelve_clave_del_activo() {
         let i = i18n_de_prueba();
