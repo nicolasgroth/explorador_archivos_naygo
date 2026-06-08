@@ -6,6 +6,7 @@
 //! No depende de egui ni de Windows.
 
 pub mod cancel;
+pub mod clipboard;
 pub mod columns;
 pub mod config;
 pub mod filter;
