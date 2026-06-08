@@ -44,13 +44,19 @@ mod tests {
 
     #[test]
     fn used_normal() {
-        let d = DiskUsage { total: 1000, free: 400 };
+        let d = DiskUsage {
+            total: 1000,
+            free: 400,
+        };
         assert_eq!(d.used(), 600);
     }
 
     #[test]
     fn used_satura_si_free_mayor_que_total() {
-        let d = DiskUsage { total: 100, free: 500 };
+        let d = DiskUsage {
+            total: 100,
+            free: 500,
+        };
         assert_eq!(d.used(), 0);
         assert_eq!(d.percent_used(), 0);
     }
@@ -63,26 +69,41 @@ mod tests {
 
     #[test]
     fn percent_y_umbrales() {
-        let half = DiskUsage { total: 1000, free: 500 };
+        let half = DiskUsage {
+            total: 1000,
+            free: 500,
+        };
         assert_eq!(half.percent_used(), 50);
         assert!(!half.is_high() && !half.is_critical());
 
-        let p76 = DiskUsage { total: 1000, free: 240 }; // 76% usado
+        let p76 = DiskUsage {
+            total: 1000,
+            free: 240,
+        }; // 76% usado
         assert_eq!(p76.percent_used(), 76);
         assert!(p76.is_high() && !p76.is_critical());
 
-        let p91 = DiskUsage { total: 1000, free: 90 }; // 91% usado
+        let p91 = DiskUsage {
+            total: 1000,
+            free: 90,
+        }; // 91% usado
         assert_eq!(p91.percent_used(), 91);
         assert!(p91.is_high() && p91.is_critical());
 
-        let p75 = DiskUsage { total: 1000, free: 250 }; // 75% exacto: NO high (>75)
+        let p75 = DiskUsage {
+            total: 1000,
+            free: 250,
+        }; // 75% exacto: NO high (>75)
         assert_eq!(p75.percent_used(), 75);
         assert!(!p75.is_high());
     }
 
     #[test]
     fn percent_satura_a_100() {
-        let full = DiskUsage { total: 1000, free: 0 };
+        let full = DiskUsage {
+            total: 1000,
+            free: 0,
+        };
         assert_eq!(full.percent_used(), 100);
         assert!(full.is_critical());
     }
