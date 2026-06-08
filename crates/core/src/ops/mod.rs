@@ -7,10 +7,12 @@
 //! propios submódulos. Todo el modelo es serializable (útil para el journal de ops-B).
 
 pub mod engine;
+pub mod journal;
 pub mod names;
 pub mod plan;
 
 pub use engine::{run_plan, spawn};
+pub use journal::{FileFingerprint, OpJournal};
 pub use names::{dedup_name, is_valid_name};
 pub use plan::{plan, PlanError};
 
