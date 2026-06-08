@@ -11,6 +11,7 @@ use super::{
     ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress, OpStep,
     OpSummary,
 };
+use super::journal::JournalWriter;
 use crate::cancel::CancellationToken;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -34,10 +35,14 @@ pub fn spawn(
     conflict: ConflictPolicy,
     token: CancellationToken,
     conflict_rx: Receiver<ConflictDecision>,
+    mut journal: Option<JournalWriter>,
 ) -> (Receiver<OpMsg>, std::thread::JoinHandle<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
-        let summary = run_plan(&plan, &kind, conflict, &token, &tx, &conflict_rx);
+        let summary = run_plan(&plan, &kind, conflict, &token, &tx, &conflict_rx, journal.as_mut());
+        if let Some(w) = journal.as_mut() {
+            w.flush();
+        }
         let final_msg = if token.is_cancelled() {
             OpMsg::Cancelled(summary)
         } else {
@@ -69,12 +74,13 @@ pub fn run_plan(
     token: &CancellationToken,
     tx: &Sender<OpMsg>,
     _conflict_rx: &Receiver<ConflictDecision>,
+    mut journal: Option<&mut JournalWriter>,
 ) -> OpSummary {
     let start = std::time::Instant::now();
     let mut summary = OpSummary::default();
     let mut files_done = 0usize;
 
-    for step in &plan.steps {
+    for (idx, step) in plan.steps.iter().enumerate() {
         if token.is_cancelled() {
             break;
         }
@@ -95,6 +101,11 @@ pub fn run_plan(
             files_done += 1;
         }
         summary.items.push((record_path, outcome));
+
+        // Journal: el paso `idx` quedó procesado → done_through = idx + 1 (throttled).
+        if let Some(w) = journal.as_deref_mut() {
+            w.record(idx + 1, std::time::Instant::now());
+        }
     }
 
     summary.elapsed_secs = start.elapsed().as_secs_f64();
@@ -310,7 +321,7 @@ mod tests {
         let token = CancellationToken::new();
         let (tx, rx) = mpsc::channel();
         let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
-        let summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx);
+        let summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx, None);
         drop(tx);
         let msgs: Vec<OpMsg> = rx.into_iter().collect();
         (msgs, summary)
@@ -415,8 +426,39 @@ mod tests {
             &token,
             &tx,
             &crx,
+            None,
         );
         assert!(!dest.join("a.txt").exists());
+    }
+
+    #[test]
+    fn run_plan_con_journal_actualiza_done_through() {
+        use crate::ops::journal::{journal_path, JournalWriter, OpJournal};
+        let dir = tempfile::tempdir().unwrap();
+        for (n, c) in [("a", "aa"), ("b", "bbb")] {
+            std::fs::write(dir.path().join(n), c.as_bytes()).unwrap();
+        }
+        let dest = dir.path().join("dst");
+        std::fs::create_dir(&dest).unwrap();
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![dir.path().join("a"), dir.path().join("b")],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let p = plan(&req).unwrap();
+        let cfg = dir.path();
+        let journal = OpJournal::new("eng1".into(), req.kind.clone(), req.conflict, p.clone());
+        let mut writer = JournalWriter::new(cfg, journal);
+        let token = CancellationToken::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (_ctx, crx) = std::sync::mpsc::channel();
+        let _summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx, Some(&mut writer));
+        writer.flush();
+        let back: OpJournal =
+            serde_json::from_str(&std::fs::read_to_string(journal_path(cfg, "eng1")).unwrap()).unwrap();
+        assert_eq!(back.done_through, 2);
+        assert!(dest.join("a").exists() && dest.join("b").exists());
     }
 
     #[test]
