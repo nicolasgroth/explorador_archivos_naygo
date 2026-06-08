@@ -9,6 +9,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
@@ -110,37 +111,56 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     list_into_filtered(dir, token, tx, ListingFilter::All);
 }
 
-/// Construye un `Entry` a partir de un `DirEntry`, tolerando metadata ausente.
-fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
-    let path = dirent.path();
-    let name = dirent.file_name().to_string_lossy().into_owned();
-    let metadata = dirent.metadata().ok();
+/// Construye un `Entry` desde una ruta + su metadata (ya leída). Tolerante a metadata
+/// ausente. Compartido por el listado inicial y por el merge incremental del watcher.
+pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
-    let kind = match &metadata {
+    let kind = match metadata {
         Some(m) if m.is_dir() => EntryKind::Directory,
         Some(m) if m.is_file() => EntryKind::File,
         Some(_) => EntryKind::Other,
         None => EntryKind::Other,
     };
 
-    let size = match (&metadata, kind) {
+    let size = match (metadata, kind) {
         (Some(m), EntryKind::File) => Some(m.len()),
         _ => None,
     };
 
-    let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+    let modified = metadata.and_then(|m| m.modified().ok());
     // La fecha de creación puede no estar soportada por el FS → None. Tolerante.
-    let created = metadata.as_ref().and_then(|m| m.created().ok());
+    let created = metadata.and_then(|m| m.created().ok());
 
     Entry {
         name,
-        path,
+        path: path.to_path_buf(),
         kind,
         size,
         modified,
         created,
         hidden: false,
     }
+}
+
+/// Construye un `Entry` a partir de un `DirEntry`, tolerando metadata ausente.
+fn entry_from_dirent(dirent: &std::fs::DirEntry) -> Entry {
+    let path = dirent.path();
+    let metadata = dirent.metadata().ok();
+    entry_from_path(&path, metadata.as_ref())
+}
+
+/// Cambio normalizado en una carpeta vigilada (producido por `platform::dir_watch`,
+/// consumido por `apply_dir_events`). Tipo puro: sin notify ni Windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirEvent {
+    Created(PathBuf),
+    Removed(PathBuf),
+    Modified(PathBuf),
+    Renamed { from: PathBuf, to: PathBuf },
 }
 
 #[cfg(test)]
@@ -240,6 +260,29 @@ mod tests {
         }
         nombres.sort();
         assert_eq!(nombres, vec!["a.txt", "sub1"]);
+    }
+
+    #[test]
+    fn entry_from_path_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        std::fs::write(&f, b"hola").unwrap(); // 4 bytes
+        let meta = std::fs::metadata(&f).ok();
+        let e = entry_from_path(&f, meta.as_ref());
+        assert_eq!(e.name, "a.txt");
+        assert_eq!(e.kind, EntryKind::File);
+        assert_eq!(e.size, Some(4));
+    }
+
+    #[test]
+    fn entry_from_path_carpeta() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let meta = std::fs::metadata(&sub).ok();
+        let e = entry_from_path(&sub, meta.as_ref());
+        assert_eq!(e.kind, EntryKind::Directory);
+        assert_eq!(e.size, None);
     }
 
     #[test]
