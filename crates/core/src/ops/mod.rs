@@ -11,6 +11,7 @@ pub mod names;
 pub mod plan;
 
 pub use names::{dedup_name, is_valid_name};
+pub use plan::{plan, PlanError};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
