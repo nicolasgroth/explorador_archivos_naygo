@@ -370,7 +370,11 @@ mod tests {
         let newp = dir.join("b.txt");
         let np = newp.clone();
         let read = move |p: &std::path::Path| {
-            if p == np { Some(mk_entry("b.txt", dir)) } else { None }
+            if p == np {
+                Some(mk_entry("b.txt", dir))
+            } else {
+                None
+            }
         };
         let nuevas = apply_dir_events(&mut entries, &[DirEvent::Created(newp.clone())], &read);
         assert_eq!(entries.len(), 2);
@@ -405,7 +409,11 @@ mod tests {
         let mut updated = mk_entry("a.txt", dir);
         updated.size = Some(999);
         let read = move |_: &std::path::Path| Some(updated.clone());
-        apply_dir_events(&mut entries, &[DirEvent::Modified(dir.join("a.txt"))], &read);
+        apply_dir_events(
+            &mut entries,
+            &[DirEvent::Modified(dir.join("a.txt"))],
+            &read,
+        );
         assert_eq!(entries[0].size, Some(999));
     }
 
@@ -416,7 +424,10 @@ mod tests {
         let read = |_: &std::path::Path| None;
         let nuevas = apply_dir_events(
             &mut entries,
-            &[DirEvent::Renamed { from: dir.join("old.txt"), to: dir.join("new.txt") }],
+            &[DirEvent::Renamed {
+                from: dir.join("old.txt"),
+                to: dir.join("new.txt"),
+            }],
             &read,
         );
         assert_eq!(entries.len(), 1);
@@ -432,7 +443,10 @@ mod tests {
         let read = |_: &std::path::Path| Some(mk_entry("new.txt", dir));
         let nuevas = apply_dir_events(
             &mut entries,
-            &[DirEvent::Renamed { from: dir.join("ghost.txt"), to: dir.join("new.txt") }],
+            &[DirEvent::Renamed {
+                from: dir.join("ghost.txt"),
+                to: dir.join("new.txt"),
+            }],
             &read,
         );
         assert_eq!(entries.len(), 1);
