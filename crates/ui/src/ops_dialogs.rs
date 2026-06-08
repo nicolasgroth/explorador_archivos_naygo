@@ -147,6 +147,90 @@ pub fn name_input(
     result
 }
 
+/// Resultado del diálogo de confirmación de pegado.
+pub enum PastePreviewResult {
+    /// Crear con este nombre (sin extensión) y, si es imagen, este formato.
+    Create {
+        name: String,
+        fmt: Option<naygo_core::clipboard::ImageFmt>,
+    },
+    /// Cancelar.
+    Cancelled,
+}
+
+/// Modal de confirmación al pegar texto/imagen (modo B): nombre editable, y para
+/// imagen un selector PNG/JPG + las dimensiones. `fmt` es `Some` para imagen (y
+/// editable), `None` para texto. `ext` se muestra junto al nombre (solo lectura para
+/// texto; para imagen lo dicta `fmt`). Devuelve `Some(result)` al decidir, `None` si
+/// el modal sigue abierto. Esc / clic fuera = cancelar.
+pub fn paste_preview(
+    ctx: &egui::Context,
+    i18n: &I18n,
+    is_image: bool,
+    name_buf: &mut String,
+    ext: &str,
+    image_dims: Option<(u32, u32)>,
+    fmt: &mut Option<naygo_core::clipboard::ImageFmt>,
+) -> Option<PastePreviewResult> {
+    use naygo_core::clipboard::ImageFmt;
+    let title = if is_image {
+        i18n.t("paste.preview_image_title")
+    } else {
+        i18n.t("paste.preview_text_title")
+    };
+    let valid = naygo_core::ops::is_valid_name(name_buf.trim());
+    let mut result = None;
+    let resp = egui::Modal::new(egui::Id::new("naygo_paste_preview")).show(ctx, |ui| {
+        ui.set_min_width(340.0);
+        ui.heading(title);
+        ui.add_space(8.0);
+        if let Some((w, h)) = image_dims {
+            ui.label(
+                i18n.t("paste.dims")
+                    .replace("{w}", &w.to_string())
+                    .replace("{h}", &h.to_string()),
+            );
+            ui.add_space(4.0);
+        }
+        ui.label(i18n.t("paste.name_label"));
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(name_buf);
+            // extensión: para imagen sigue al fmt (PNG/JPG); para texto es fija.
+            if is_image {
+                if let Some(f) = fmt {
+                    ui.selectable_value(f, ImageFmt::Png, i18n.t("paste.fmt_png"));
+                    ui.selectable_value(f, ImageFmt::Jpg, i18n.t("paste.fmt_jpg"));
+                }
+            } else {
+                ui.label(format!(".{ext}"));
+            }
+        });
+        if !name_buf.trim().is_empty() && !valid {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 80, 80),
+                i18n.t("op.invalid_name"),
+            );
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let create = ui.add_enabled(valid, egui::Button::new(i18n.t("paste.create")));
+            if create.clicked() && valid {
+                result = Some(PastePreviewResult::Create {
+                    name: name_buf.trim().to_string(),
+                    fmt: *fmt,
+                });
+            }
+            if ui.button(i18n.t("paste.cancel")).clicked() {
+                result = Some(PastePreviewResult::Cancelled);
+            }
+        });
+    });
+    if result.is_none() && resp.should_close() {
+        result = Some(PastePreviewResult::Cancelled);
+    }
+    result
+}
+
 /// Decisión del usuario sobre las operaciones interrumpidas.
 pub enum ResumeChoice {
     /// Retomar la operación con este id.

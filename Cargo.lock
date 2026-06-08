@@ -1611,6 +1611,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1932,6 +1934,7 @@ dependencies = [
 name = "naygo-core"
 version = "0.1.0"
 dependencies = [
+ "image",
  "serde",
  "serde_json",
  "tempfile",

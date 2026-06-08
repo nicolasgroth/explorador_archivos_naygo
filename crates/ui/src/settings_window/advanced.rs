@@ -81,4 +81,71 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     if ui.checkbox(&mut show_summary, l_show_summary).changed() {
         app.settings.show_op_summary = show_summary;
     }
+
+    ui.add_space(12.0);
+    ui.heading(app.tr("settings.paste.section"));
+    ui.add_space(6.0);
+
+    // Confirmar antes de crear (modo B).
+    let l_confirm = app.tr("settings.paste.confirm");
+    let mut confirm = app.settings.paste_confirm;
+    if ui.checkbox(&mut confirm, l_confirm).changed() {
+        app.settings.paste_confirm = confirm;
+    }
+    ui.add_space(6.0);
+
+    // Nombres (plantillas con {fecha}).
+    ui.label(app.tr("settings.paste.date_hint"));
+    let l_tname = app.tr("settings.paste.text_name");
+    ui.horizontal(|ui| {
+        ui.label(l_tname);
+        ui.text_edit_singleline(&mut app.settings.paste_text_name);
+    });
+    let l_text = app.tr("settings.paste.text_ext");
+    ui.horizontal(|ui| {
+        ui.label(l_text);
+        ui.text_edit_singleline(&mut app.settings.paste_text_ext);
+    });
+    let l_iname = app.tr("settings.paste.image_name");
+    ui.horizontal(|ui| {
+        ui.label(l_iname);
+        ui.text_edit_singleline(&mut app.settings.paste_image_name);
+    });
+    ui.add_space(6.0);
+
+    // Formato de imagen.
+    let (l_fmt, l_png, l_jpg) = (
+        app.tr("settings.paste.image_fmt"),
+        app.tr("settings.paste.fmt_png"),
+        app.tr("settings.paste.fmt_jpg"),
+    );
+    ui.label(l_fmt);
+    ui.horizontal(|ui| {
+        ui.selectable_value(
+            &mut app.settings.paste_image_fmt,
+            naygo_core::clipboard::ImageFmt::Png,
+            l_png,
+        );
+        ui.selectable_value(
+            &mut app.settings.paste_image_fmt,
+            naygo_core::clipboard::ImageFmt::Jpg,
+            l_jpg,
+        );
+    });
+    ui.add_space(6.0);
+
+    // Calidad JPG (solo aplica si el formato es JPG).
+    let l_quality = app.tr("settings.paste.jpg_quality");
+    ui.add_enabled_ui(
+        app.settings.paste_image_fmt == naygo_core::clipboard::ImageFmt::Jpg,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(l_quality);
+                ui.add(egui::Slider::new(
+                    &mut app.settings.paste_jpg_quality,
+                    1..=100,
+                ));
+            });
+        },
+    );
 }

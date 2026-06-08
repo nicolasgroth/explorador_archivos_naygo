@@ -86,6 +86,25 @@ pub struct Settings {
     /// Mostrar el resumen al terminar una operación. `#[serde(default)]` por retro-compat.
     #[serde(default = "default_show_op_summary")]
     pub show_op_summary: bool,
+    /// Pegar texto/imagen: pedir confirmación de nombre antes de crear (modo B).
+    /// `false` (default) = crear directo con nombre automático (modo A).
+    #[serde(default = "default_paste_confirm")]
+    pub paste_confirm: bool,
+    /// Plantilla de nombre para un archivo de texto pegado. `{fecha}` → fecha/hora.
+    #[serde(default = "default_paste_text_name")]
+    pub paste_text_name: String,
+    /// Extensión (sin punto) para texto pegado.
+    #[serde(default = "default_paste_text_ext")]
+    pub paste_text_ext: String,
+    /// Plantilla de nombre para una imagen pegada. `{fecha}` → fecha/hora.
+    #[serde(default = "default_paste_image_name")]
+    pub paste_image_name: String,
+    /// Formato de salida para imagen pegada.
+    #[serde(default = "default_paste_image_fmt")]
+    pub paste_image_fmt: crate::clipboard::ImageFmt,
+    /// Calidad JPG (1..=100) para imagen pegada como JPG.
+    #[serde(default = "default_paste_jpg_quality")]
+    pub paste_jpg_quality: u8,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -124,6 +143,36 @@ fn default_show_op_summary() -> bool {
     true
 }
 
+/// Default de `paste_confirm`: false (crear directo).
+fn default_paste_confirm() -> bool {
+    false
+}
+
+/// Default de `paste_text_name`.
+fn default_paste_text_name() -> String {
+    "pegado {fecha}".to_string()
+}
+
+/// Default de `paste_text_ext`.
+fn default_paste_text_ext() -> String {
+    "txt".to_string()
+}
+
+/// Default de `paste_image_name`.
+fn default_paste_image_name() -> String {
+    "captura {fecha}".to_string()
+}
+
+/// Default de `paste_image_fmt`: PNG.
+fn default_paste_image_fmt() -> crate::clipboard::ImageFmt {
+    crate::clipboard::ImageFmt::Png
+}
+
+/// Default de `paste_jpg_quality`: 90.
+fn default_paste_jpg_quality() -> u8 {
+    90
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -138,6 +187,12 @@ impl Default for Settings {
             ops_display: OpsDisplay::Panel,
             confirm_trash: false,
             show_op_summary: true,
+            paste_confirm: false,
+            paste_text_name: "pegado {fecha}".into(),
+            paste_text_ext: "txt".into(),
+            paste_image_name: "captura {fecha}".into(),
+            paste_image_fmt: crate::clipboard::ImageFmt::Png,
+            paste_jpg_quality: 90,
         }
     }
 }
@@ -255,6 +310,12 @@ mod tests {
             ops_display: OpsDisplay::Modal,
             confirm_trash: true,
             show_op_summary: false,
+            paste_confirm: true,
+            paste_text_name: "nota {fecha}".into(),
+            paste_text_ext: "md".into(),
+            paste_image_name: "img {fecha}".into(),
+            paste_image_fmt: crate::clipboard::ImageFmt::Jpg,
+            paste_jpg_quality: 75,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);

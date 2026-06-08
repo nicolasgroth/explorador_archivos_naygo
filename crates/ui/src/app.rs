@@ -54,11 +54,104 @@ pub struct ActiveOp {
     pub journal_id: Option<String>,
 }
 
-/// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
-#[derive(Default)]
-pub struct InternalClipboard {
-    pub paths: Vec<std::path::PathBuf>,
-    pub cut: bool,
+/// Trabajo de escritura de un archivo pegado (corre en un worker corto).
+enum WriteJob {
+    Text {
+        path: std::path::PathBuf,
+        body: String,
+    },
+    Image {
+        path: std::path::PathBuf,
+        fmt: naygo_core::clipboard::ImageFmt,
+        img: naygo_core::clipboard::ClipboardImage,
+        quality: u8,
+    },
+}
+
+/// Carga del diálogo de confirmación de pegado (modo B): lo que se escribirá una
+/// vez que el usuario confirme nombre (y, para imagen, formato).
+pub(crate) enum PastePreviewKind {
+    Text {
+        body: String,
+    },
+    Image {
+        img: naygo_core::clipboard::ClipboardImage,
+        fmt: naygo_core::clipboard::ImageFmt,
+        quality: u8,
+    },
+}
+
+/// Separa el nombre de archivo en (stem sin extensión, extensión sin punto).
+fn split_stem_ext(path: &std::path::Path) -> (String, String) {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (stem, ext)
+}
+
+/// Resumen del archivo escrito (para el status/toast).
+enum PasteOk {
+    Text {
+        bytes: u64,
+        chars: usize,
+        lines: usize,
+    },
+    Image {
+        w: u32,
+        h: u32,
+        fmt: &'static str,
+        bytes: u64,
+    },
+}
+
+impl WriteJob {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            WriteJob::Text { path, .. } | WriteJob::Image { path, .. } => path,
+        }
+    }
+
+    fn run(self) -> Result<PasteOk, String> {
+        match self {
+            WriteJob::Text { path, body } => {
+                let chars = body.chars().count();
+                let lines = if body.is_empty() {
+                    0
+                } else {
+                    body.lines().count().max(1)
+                };
+                std::fs::write(&path, &body).map_err(|e| e.to_string())?;
+                Ok(PasteOk::Text {
+                    bytes: body.len() as u64,
+                    chars,
+                    lines,
+                })
+            }
+            WriteJob::Image {
+                path,
+                fmt,
+                img,
+                quality,
+            } => {
+                let (w, h) = (img.width, img.height);
+                let bytes = naygo_core::clipboard::encode::encode_image(&img, fmt, quality)
+                    .map_err(|e| format!("{e:?}"))?;
+                let len = bytes.len() as u64;
+                std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+                Ok(PasteOk::Image {
+                    w,
+                    h,
+                    fmt: fmt.ext(),
+                    bytes: len,
+                })
+            }
+        }
+    }
 }
 
 /// Diálogo modal pendiente de confirmación. Lleva la `OpRequest` ya armada; al
@@ -91,6 +184,17 @@ pub enum PendingDialog {
         is_dir: bool,
         buf: String,
     },
+    /// Confirmar nombre/formato antes de crear un archivo pegado (modo B).
+    PastePreview {
+        /// Carpeta destino (el nombre final = dir/<name>.<ext>).
+        dir: std::path::PathBuf,
+        /// Nombre editable (SIN extensión).
+        name_buf: String,
+        /// Extensión actual (sin punto) — para texto fija; para imagen sigue al formato.
+        ext: String,
+        /// Contenido a escribir.
+        kind: PastePreviewKind,
+    },
 }
 
 /// Un worker de listado solo-directorios para una rama del árbol.
@@ -122,14 +226,21 @@ pub struct NaygoApp {
     pub settings_section: SettingsSection,
     /// Operaciones de archivo en curso/terminadas (panel de progreso).
     active_ops: Vec<ActiveOp>,
-    /// Clipboard interno para Ctrl+C/X/V.
-    clipboard: InternalClipboard,
     /// Diálogo modal pendiente (confirmación/conflicto/nombre), si hay uno.
     pending_dialog: Option<PendingDialog>,
     /// Si el panel de operaciones muestra el detalle expandido.
     ops_panel_expanded: bool,
     /// Ops interrumpidas detectadas al arrancar, pendientes de decisión (modal).
     pending_resume: Vec<OpJournal>,
+    /// Escritura de un archivo pegado (texto/imagen) en curso en un worker. El hilo de
+    /// UI NO bloquea: se drena el resultado por frame. `dir` = carpeta a refrescar.
+    pending_paste_write: Option<PendingPasteWrite>,
+}
+
+/// Escritura de un archivo pegado en curso (worker + canal de resultado).
+struct PendingPasteWrite {
+    rx: std::sync::mpsc::Receiver<Result<PasteOk, String>>,
+    dir: Option<std::path::PathBuf>,
 }
 
 impl NaygoApp {
@@ -191,10 +302,10 @@ impl NaygoApp {
             settings_open: false,
             settings_section: SettingsSection::Appearance,
             active_ops: Vec::new(),
-            clipboard: InternalClipboard::default(),
             pending_dialog: None,
             ops_panel_expanded: false,
             pending_resume,
+            pending_paste_write: None,
         };
         app.start_all_listings();
         app
@@ -897,13 +1008,18 @@ impl NaygoApp {
             .find_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
     }
 
-    /// Copia/corta la selección actual al clipboard interno.
+    /// Copia/corta la selección al portapapeles del SISTEMA (CF_HDROP + DropEffect),
+    /// para interoperar con el Explorador de Windows y otras apps.
     fn clipboard_set(&mut self, cut: bool) {
         let paths = self.selected_paths();
         if paths.is_empty() {
             return;
         }
-        self.clipboard = InternalClipboard { paths, cut };
+        if let Err(e) = naygo_platform::clipboard::write_files(&paths, cut) {
+            // Detalle técnico al log; al usuario, un mensaje traducible discreto.
+            tracing::warn!("write_files al portapapeles falló: {e:?}");
+            self.status = self.i18n.t("paste.copy_error").to_string();
+        }
     }
 
     /// ¿Existe ya `dest_dir/name` para alguna de las fuentes de nivel superior?
@@ -921,8 +1037,7 @@ impl NaygoApp {
 
     /// Lanza una transferencia (copia/movida) resolviendo conflictos ANTES de
     /// spawnear. Si hay colisión y la política es Ask, abre el modal de conflicto;
-    /// si no, usa `Overwrite` (no habrá conflicto) y arranca. `clear_clipboard`
-    /// indica si una movida exitosa debe vaciar el clipboard (paste de un "cut").
+    /// si no, usa `Overwrite` (no habrá conflicto) y arranca.
     fn launch_transfer(&mut self, mut req: OpRequest, label: String) {
         let Some(dest) = req.dest_dir.clone() else {
             return;
@@ -940,28 +1055,138 @@ impl NaygoApp {
         }
     }
 
-    /// Pega el clipboard interno en la carpeta activa (copia o movida según `cut`).
-    fn paste(&mut self) {
-        if self.clipboard.paths.is_empty() {
+    /// Escribe un archivo pegado (texto o imagen) en un worker corto: el hilo de UI
+    /// no hace la E/S. Al terminar, refresca el panel activo y deja un status con la
+    /// metadata; en error, status discreto. (No usa el OpPlan: es un único archivo.)
+    fn write_pasted_file(&mut self, job: WriteJob) {
+        let dir = job.path().parent().map(|p| p.to_path_buf());
+        let (tx, rx) = std::sync::mpsc::channel::<Result<PasteOk, String>>();
+        // El worker codifica (imagen) y escribe; el hilo de UI no se bloquea: el
+        // resultado se drena por frame en `pump_paste_write`. Una imagen grande puede
+        // tardar en codificar, así que NO esperamos aquí.
+        std::thread::spawn(move || {
+            let _ = tx.send(job.run());
+        });
+        self.pending_paste_write = Some(PendingPasteWrite { rx, dir });
+    }
+
+    /// Drena el resultado de una escritura de archivo pegado (si terminó). Deja un
+    /// status con la metadata y refresca el panel; en error, status discreto.
+    fn pump_paste_write(&mut self) {
+        use crate::panes::file_panel::human_size;
+        let Some(pending) = &self.pending_paste_write else {
             return;
+        };
+        let result = match pending.rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return, // aún en curso
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(String::new()),
+        };
+        // Terminó: consumir el pendiente.
+        let dir = self.pending_paste_write.take().and_then(|p| p.dir);
+        match result {
+            Ok(PasteOk::Text {
+                bytes,
+                chars,
+                lines,
+            }) => {
+                self.status = self
+                    .i18n
+                    .t("paste.done_text")
+                    .replace("{bytes}", &human_size(bytes))
+                    .replace("{chars}", &chars.to_string())
+                    .replace("{lines}", &lines.to_string());
+                if let (Some(id), Some(d)) = (self.workspace.active_id(), dir) {
+                    self.refresh_pane(id, d);
+                }
+            }
+            Ok(PasteOk::Image { w, h, fmt, bytes }) => {
+                self.status = self
+                    .i18n
+                    .t("paste.done_image")
+                    .replace("{w}", &w.to_string())
+                    .replace("{h}", &h.to_string())
+                    .replace("{fmt}", fmt)
+                    .replace("{bytes}", &human_size(bytes));
+                if let (Some(id), Some(d)) = (self.workspace.active_id(), dir) {
+                    self.refresh_pane(id, d);
+                }
+            }
+            Err(_) => self.status = self.i18n.t("paste.error").to_string(),
         }
+    }
+
+    /// Pega el portapapeles del SISTEMA en la carpeta activa según su tipo:
+    /// archivos → copiar/mover (motor de ops); texto → .txt; imagen → png/jpg.
+    fn paste(&mut self) {
         let Some(dest) = self.active_dir() else {
             return;
         };
-        let cut = self.clipboard.cut;
-        let sources = self.clipboard.paths.clone();
-        let req = crate::ops_actions::transfer(cut, sources, dest.clone());
-        let verb = if cut {
-            self.i18n.t("op.cut")
-        } else {
-            self.i18n.t("op.paste")
-        };
-        let label = format!("{verb} → {}", dest.display());
-        // Una movida (cut) exitosa vacía el clipboard; la copia lo conserva.
-        if cut {
-            self.clipboard = InternalClipboard::default();
+        let content = naygo_platform::clipboard::read();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let exists = |p: &std::path::Path| p.exists();
+        let plan =
+            naygo_core::clipboard::decide_paste(&content, &dest, &self.settings, now_secs, &exists);
+        use naygo_core::clipboard::PastePlan;
+        match plan {
+            PastePlan::Transfer { paths, cut } => {
+                let req = crate::ops_actions::transfer(cut, paths, dest.clone());
+                let verb = if cut {
+                    self.i18n.t("op.cut")
+                } else {
+                    self.i18n.t("op.paste")
+                };
+                let label = format!("{verb} → {}", dest.display());
+                self.launch_transfer(req, label);
+            }
+            PastePlan::CreateText { path, body } => {
+                if self.settings.paste_confirm {
+                    let (stem, ext) = split_stem_ext(&path);
+                    self.pending_dialog = Some(PendingDialog::PastePreview {
+                        dir: path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or(dest.clone()),
+                        name_buf: stem,
+                        ext,
+                        kind: PastePreviewKind::Text { body },
+                    });
+                } else {
+                    self.write_pasted_file(WriteJob::Text { path, body });
+                }
+            }
+            PastePlan::CreateImage { path, fmt, img } => {
+                if self.settings.paste_confirm {
+                    let (stem, _ext) = split_stem_ext(&path);
+                    self.pending_dialog = Some(PendingDialog::PastePreview {
+                        dir: path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or(dest.clone()),
+                        name_buf: stem,
+                        ext: fmt.ext().to_string(),
+                        kind: PastePreviewKind::Image {
+                            img,
+                            fmt,
+                            quality: self.settings.paste_jpg_quality,
+                        },
+                    });
+                } else {
+                    self.write_pasted_file(WriteJob::Image {
+                        path,
+                        fmt,
+                        img,
+                        quality: self.settings.paste_jpg_quality,
+                    });
+                }
+            }
+            PastePlan::Nothing => {
+                self.status = self.i18n.t("paste.empty").to_string();
+            }
         }
-        self.launch_transfer(req, label);
     }
 
     /// Copia/mueve la selección al OTRO panel (F5 copia, F6 mueve).
@@ -1112,6 +1337,63 @@ impl NaygoApp {
                     Some(NameResult::Cancelled) => {}
                     None => {
                         self.pending_dialog = Some(PendingDialog::Create { dir, is_dir, buf });
+                    }
+                }
+            }
+            PendingDialog::PastePreview {
+                dir,
+                mut name_buf,
+                ext,
+                kind,
+            } => {
+                // Datos para el modal: se toman PRESTADOS de `kind` antes de moverlo.
+                let is_image = matches!(kind, PastePreviewKind::Image { .. });
+                let image_dims = match &kind {
+                    PastePreviewKind::Image { img, .. } => Some((img.width, img.height)),
+                    _ => None,
+                };
+                let mut fmt_opt = match &kind {
+                    PastePreviewKind::Image { fmt, .. } => Some(*fmt),
+                    _ => None,
+                };
+                match crate::ops_dialogs::paste_preview(
+                    ctx,
+                    &self.i18n,
+                    is_image,
+                    &mut name_buf,
+                    &ext,
+                    image_dims,
+                    &mut fmt_opt,
+                ) {
+                    Some(crate::ops_dialogs::PastePreviewResult::Create { name, fmt }) => {
+                        // Extensión final: la imagen la toma del formato elegido; el
+                        // texto conserva la suya.
+                        let final_ext = match (is_image, fmt) {
+                            (true, Some(f)) => f.ext().to_string(),
+                            _ => ext.clone(),
+                        };
+                        let mut path = dir.join(format!("{name}.{final_ext}"));
+                        // Deduplica si ya existe (nombre (1), (2), ...).
+                        path = naygo_core::ops::dedup_name(&path, &|p| p.exists());
+                        let job = match kind {
+                            PastePreviewKind::Text { body } => WriteJob::Text { path, body },
+                            PastePreviewKind::Image { img, quality, .. } => WriteJob::Image {
+                                path,
+                                fmt: fmt.unwrap_or(self.settings.paste_image_fmt),
+                                img,
+                                quality,
+                            },
+                        };
+                        self.write_pasted_file(job);
+                    }
+                    Some(crate::ops_dialogs::PastePreviewResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::PastePreview {
+                            dir,
+                            name_buf,
+                            ext,
+                            kind,
+                        });
                     }
                 }
             }
@@ -1344,8 +1626,13 @@ impl eframe::App for NaygoApp {
         self.pump_all();
         self.pump_tree();
         self.pump_ops();
+        self.pump_paste_write();
         self.handle_input(ctx);
-        if self.any_listing_active() || self.any_tree_listing_active() || self.any_op_active() {
+        if self.any_listing_active()
+            || self.any_tree_listing_active()
+            || self.any_op_active()
+            || self.pending_paste_write.is_some()
+        {
             ctx.request_repaint();
         }
     }

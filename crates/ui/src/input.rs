@@ -35,11 +35,11 @@ pub enum Action {
     SwitchPane,
     /// Cancelar el listado en curso.
     CancelListing,
-    /// Copiar la selección al clipboard interno (Ctrl+C).
+    /// Copiar la selección al portapapeles del sistema (Ctrl+C).
     Copy,
-    /// Cortar la selección al clipboard interno (Ctrl+X).
+    /// Cortar la selección al portapapeles del sistema (Ctrl+X).
     Cut,
-    /// Pegar el clipboard interno en la carpeta activa (Ctrl+V).
+    /// Pegar el portapapeles del sistema en la carpeta activa, según su tipo (Ctrl+V).
     Paste,
     /// Eliminar la selección a la papelera (Delete).
     Delete,
