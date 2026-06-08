@@ -49,7 +49,6 @@
   "template.power_user": "Power-user",
   "status.elements": "{n} items",
   "status.error": "Error: {e}",
-  "status.open_pending": "Open: {name} (platform::shell pending)",
   "status.opening": "Opening {name}",
   "status.no_association": "No program associated with {name}",
   "status.open_failed": "Couldn't open {name}",

@@ -955,9 +955,9 @@ impl NaygoApp {
             Action::MoveDown => self.move_focus(1),
             Action::Activate => self.activate_focused(),
             Action::Open => {
-                if let Some((p, n)) = self.focused_file() {
-                    self.open_path(&p, &n);
-                }
+                // "Abrir" del menú = misma semántica que doble-clic/Enter: una carpeta
+                // navega, un archivo se abre con su app. `activate_focused` ya distingue.
+                self.activate_focused();
             }
             Action::OpenWith => {
                 if let Some((p, n)) = self.focused_file() {
