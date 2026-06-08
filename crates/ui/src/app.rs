@@ -255,6 +255,10 @@ pub struct NaygoApp {
     /// `HighlightDuration::FadeSeconds`: cuando transcurre el plazo, se limpia el
     /// resaltado del panel (estado efímero, no se persiste).
     highlight_since: std::collections::HashMap<PaneId, std::time::Instant>,
+    /// Watcher de dispositivos (pendrives) — ventana message-only Win32.
+    device_watch: Option<naygo_platform::device_watch::DeviceWatchHandle>,
+    /// Receptor de eventos de dispositivos.
+    device_rx: Option<std::sync::mpsc::Receiver<naygo_platform::device_watch::DeviceEvent>>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -303,6 +307,9 @@ impl NaygoApp {
         // Ops interrumpidas de una sesión anterior: se ofrecen retomar al arrancar.
         let pending_resume = journal::scan(&config_dir);
 
+        let (dev_tx, dev_rx) = std::sync::mpsc::channel();
+        let device_watch = Some(naygo_platform::device_watch::watch(dev_tx));
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -333,6 +340,8 @@ impl NaygoApp {
             watchers: std::collections::HashMap::new(),
             watch_rx: std::collections::HashMap::new(),
             highlight_since: std::collections::HashMap::new(),
+            device_watch,
+            device_rx: Some(dev_rx),
         };
         app.start_all_listings();
         app
@@ -483,6 +492,19 @@ impl NaygoApp {
                 }
                 self.highlight_since.remove(&id);
             }
+        }
+    }
+
+    /// Drena eventos de dispositivos: ante un cambio de unidades, re-escanea discos ya.
+    fn pump_devices(&mut self) {
+        let mut changed = false;
+        if let Some(rx) = &self.device_rx {
+            while let Ok(_ev) = rx.try_recv() {
+                changed = true;
+            }
+        }
+        if changed {
+            self.start_disk_scan();
         }
     }
 
@@ -1865,6 +1887,7 @@ impl eframe::App for NaygoApp {
         self.pump_ops();
         self.pump_disk_usage();
         self.pump_watchers();
+        self.pump_devices();
         self.pump_paste_write();
         self.handle_input(ctx);
         if self.any_listing_active()
@@ -1878,7 +1901,7 @@ impl eframe::App for NaygoApp {
         // Los eventos de carpeta llegan por canal sin input del usuario: despertamos la
         // UI ~2 veces/seg para drenarlos. Barato y respeta el bajo consumo (no es un
         // bucle ocupado: si no hay cambios, los pumps no hacen trabajo).
-        if !self.watchers.is_empty() {
+        if !self.watchers.is_empty() || self.device_watch.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
