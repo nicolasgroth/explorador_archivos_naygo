@@ -54,11 +54,78 @@ pub struct ActiveOp {
     pub journal_id: Option<String>,
 }
 
-/// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
-#[derive(Default)]
-pub struct InternalClipboard {
-    pub paths: Vec<std::path::PathBuf>,
-    pub cut: bool,
+/// Trabajo de escritura de un archivo pegado (corre en un worker corto).
+enum WriteJob {
+    Text {
+        path: std::path::PathBuf,
+        body: String,
+    },
+    Image {
+        path: std::path::PathBuf,
+        fmt: naygo_core::clipboard::ImageFmt,
+        img: naygo_core::clipboard::ClipboardImage,
+        quality: u8,
+    },
+}
+
+/// Resumen del archivo escrito (para el status/toast).
+enum PasteOk {
+    Text {
+        bytes: u64,
+        chars: usize,
+        lines: usize,
+    },
+    Image {
+        w: u32,
+        h: u32,
+        fmt: &'static str,
+        bytes: u64,
+    },
+}
+
+impl WriteJob {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            WriteJob::Text { path, .. } | WriteJob::Image { path, .. } => path,
+        }
+    }
+
+    fn run(self) -> Result<PasteOk, String> {
+        match self {
+            WriteJob::Text { path, body } => {
+                let chars = body.chars().count();
+                let lines = if body.is_empty() {
+                    0
+                } else {
+                    body.lines().count().max(1)
+                };
+                std::fs::write(&path, &body).map_err(|e| e.to_string())?;
+                Ok(PasteOk::Text {
+                    bytes: body.len() as u64,
+                    chars,
+                    lines,
+                })
+            }
+            WriteJob::Image {
+                path,
+                fmt,
+                img,
+                quality,
+            } => {
+                let (w, h) = (img.width, img.height);
+                let bytes = naygo_core::clipboard::encode::encode_image(&img, fmt, quality)
+                    .map_err(|e| format!("{e:?}"))?;
+                let len = bytes.len() as u64;
+                std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+                Ok(PasteOk::Image {
+                    w,
+                    h,
+                    fmt: fmt.ext(),
+                    bytes: len,
+                })
+            }
+        }
+    }
 }
 
 /// Diálogo modal pendiente de confirmación. Lleva la `OpRequest` ya armada; al
@@ -122,8 +189,6 @@ pub struct NaygoApp {
     pub settings_section: SettingsSection,
     /// Operaciones de archivo en curso/terminadas (panel de progreso).
     active_ops: Vec<ActiveOp>,
-    /// Clipboard interno para Ctrl+C/X/V.
-    clipboard: InternalClipboard,
     /// Diálogo modal pendiente (confirmación/conflicto/nombre), si hay uno.
     pending_dialog: Option<PendingDialog>,
     /// Si el panel de operaciones muestra el detalle expandido.
@@ -191,7 +256,6 @@ impl NaygoApp {
             settings_open: false,
             settings_section: SettingsSection::Appearance,
             active_ops: Vec::new(),
-            clipboard: InternalClipboard::default(),
             pending_dialog: None,
             ops_panel_expanded: false,
             pending_resume,
@@ -897,13 +961,16 @@ impl NaygoApp {
             .find_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
     }
 
-    /// Copia/corta la selección actual al clipboard interno.
+    /// Copia/corta la selección al portapapeles del SISTEMA (CF_HDROP + DropEffect),
+    /// para interoperar con el Explorador de Windows y otras apps.
     fn clipboard_set(&mut self, cut: bool) {
         let paths = self.selected_paths();
         if paths.is_empty() {
             return;
         }
-        self.clipboard = InternalClipboard { paths, cut };
+        if let Err(e) = naygo_platform::clipboard::write_files(&paths, cut) {
+            self.status = format!("{e:?}");
+        }
     }
 
     /// ¿Existe ya `dest_dir/name` para alguna de las fuentes de nivel superior?
@@ -940,28 +1007,91 @@ impl NaygoApp {
         }
     }
 
-    /// Pega el clipboard interno en la carpeta activa (copia o movida según `cut`).
-    fn paste(&mut self) {
-        if self.clipboard.paths.is_empty() {
-            return;
+    /// Escribe un archivo pegado (texto o imagen) en un worker corto: el hilo de UI
+    /// no hace la E/S. Al terminar, refresca el panel activo y deja un status con la
+    /// metadata; en error, status discreto. (No usa el OpPlan: es un único archivo.)
+    fn write_pasted_file(&mut self, job: WriteJob) {
+        use crate::panes::file_panel::human_size;
+        let dir = job.path().parent().map(|p| p.to_path_buf());
+        let (tx, rx) = std::sync::mpsc::channel::<Result<PasteOk, String>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(job.run());
+        });
+        match rx.recv() {
+            Ok(Ok(PasteOk::Text {
+                bytes,
+                chars,
+                lines,
+            })) => {
+                self.status = self
+                    .i18n
+                    .t("paste.done_text")
+                    .replace("{bytes}", &human_size(bytes))
+                    .replace("{chars}", &chars.to_string())
+                    .replace("{lines}", &lines.to_string());
+                if let (Some(id), Some(d)) = (self.workspace.active_id(), dir) {
+                    self.refresh_pane(id, d);
+                }
+            }
+            Ok(Ok(PasteOk::Image { w, h, fmt, bytes })) => {
+                self.status = self
+                    .i18n
+                    .t("paste.done_image")
+                    .replace("{w}", &w.to_string())
+                    .replace("{h}", &h.to_string())
+                    .replace("{fmt}", fmt)
+                    .replace("{bytes}", &human_size(bytes));
+                if let (Some(id), Some(d)) = (self.workspace.active_id(), dir) {
+                    self.refresh_pane(id, d);
+                }
+            }
+            _ => self.status = self.i18n.t("paste.error").to_string(),
         }
+    }
+
+    /// Pega el portapapeles del SISTEMA en la carpeta activa según su tipo:
+    /// archivos → copiar/mover (motor de ops); texto → .txt; imagen → png/jpg.
+    fn paste(&mut self) {
         let Some(dest) = self.active_dir() else {
             return;
         };
-        let cut = self.clipboard.cut;
-        let sources = self.clipboard.paths.clone();
-        let req = crate::ops_actions::transfer(cut, sources, dest.clone());
-        let verb = if cut {
-            self.i18n.t("op.cut")
-        } else {
-            self.i18n.t("op.paste")
-        };
-        let label = format!("{verb} → {}", dest.display());
-        // Una movida (cut) exitosa vacía el clipboard; la copia lo conserva.
-        if cut {
-            self.clipboard = InternalClipboard::default();
+        let content = naygo_platform::clipboard::read();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let exists = |p: &std::path::Path| p.exists();
+        let plan =
+            naygo_core::clipboard::decide_paste(&content, &dest, &self.settings, now_secs, &exists);
+        use naygo_core::clipboard::PastePlan;
+        match plan {
+            PastePlan::Transfer { paths, cut } => {
+                let req = crate::ops_actions::transfer(cut, paths, dest.clone());
+                let verb = if cut {
+                    self.i18n.t("op.cut")
+                } else {
+                    self.i18n.t("op.paste")
+                };
+                let label = format!("{verb} → {}", dest.display());
+                self.launch_transfer(req, label);
+            }
+            PastePlan::CreateText { path, body } => {
+                // El mini-diálogo de confirmación (modo B) llega en Task 7; por ahora,
+                // tanto modo directo como confirmar escriben directo (seguro).
+                self.write_pasted_file(WriteJob::Text { path, body });
+            }
+            PastePlan::CreateImage { path, fmt, img } => {
+                self.write_pasted_file(WriteJob::Image {
+                    path,
+                    fmt,
+                    img,
+                    quality: self.settings.paste_jpg_quality,
+                });
+            }
+            PastePlan::Nothing => {
+                self.status = self.i18n.t("paste.empty").to_string();
+            }
         }
-        self.launch_transfer(req, label);
     }
 
     /// Copia/mueve la selección al OTRO panel (F5 copia, F6 mueve).
