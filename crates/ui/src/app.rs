@@ -17,6 +17,7 @@ use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
+use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
 use naygo_core::ops::{
     self, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress,
     OpRequest, OpSummary,
@@ -49,6 +50,8 @@ pub struct ActiveOp {
     pub started: bool, // false = en cola, true = corriendo
     /// Plan+kind+conflict pendientes de lanzar (modo cola). None si ya se lanzó.
     pub pending: Option<(OpPlan, OpKind, ConflictPolicy)>,
+    /// Id del journal de esta op (None = no journaleada, p. ej. papelera).
+    pub journal_id: Option<String>,
 }
 
 /// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
@@ -125,6 +128,8 @@ pub struct NaygoApp {
     pending_dialog: Option<PendingDialog>,
     /// Si el panel de operaciones muestra el detalle expandido.
     ops_panel_expanded: bool,
+    /// Ops interrumpidas detectadas al arrancar, pendientes de decisión (modal).
+    pending_resume: Vec<OpJournal>,
 }
 
 impl NaygoApp {
@@ -164,6 +169,9 @@ impl NaygoApp {
 
         let pack_catalog = PackCatalog::load(&config_dir);
 
+        // Ops interrumpidas de una sesión anterior: se ofrecen retomar al arrancar.
+        let pending_resume = journal::scan(&config_dir);
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -186,6 +194,7 @@ impl NaygoApp {
             clipboard: InternalClipboard::default(),
             pending_dialog: None,
             ops_panel_expanded: false,
+            pending_resume,
         };
         app.start_all_listings();
         app
@@ -405,6 +414,122 @@ impl NaygoApp {
         self.listings.values().any(|l| l.rx.is_some())
     }
 
+    /// Genera un id único para un journal de operación (timestamp en nanos).
+    fn next_journal_id(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("op-{now}")
+    }
+
+    /// Crea el journal de una op si es journaleable (copy/move/borrado permanente).
+    /// Devuelve `(id, writer)` o None. La papelera NUNCA llega aquí (atómica).
+    fn make_journal(
+        &self,
+        kind: &OpKind,
+        conflict: ConflictPolicy,
+        plan: &OpPlan,
+    ) -> Option<(String, JournalWriter)> {
+        let journaled = matches!(
+            kind,
+            OpKind::Copy | OpKind::Move | OpKind::Delete { to_trash: false }
+        );
+        if !journaled {
+            return None;
+        }
+        let id = self.next_journal_id();
+        let j = OpJournal::new(id.clone(), kind.clone(), conflict, plan.clone());
+        Some((id, JournalWriter::new(&self.config_dir, j)))
+    }
+
+    /// Muestra el modal de retomar si hay ops interrumpidas y procesa la decisión.
+    fn process_resume_dialog(&mut self, ctx: &egui::Context) {
+        if self.pending_resume.is_empty() {
+            return;
+        }
+        let items: Vec<(String, String, usize, usize)> = self
+            .pending_resume
+            .iter()
+            .map(|j| (j.id.clone(), j.label(), j.done_through, j.plan.steps.len()))
+            .collect();
+        let Some(choice) = crate::ops_dialogs::resume_dialog(ctx, &self.i18n, &items) else {
+            return;
+        };
+        use crate::ops_dialogs::ResumeChoice;
+        // IDs a retomar y a descartar según la elección.
+        let (resume_ids, discard_ids): (Vec<String>, Vec<String>) = match choice {
+            ResumeChoice::Resume(id) => (vec![id], vec![]),
+            ResumeChoice::Discard(id) => (vec![], vec![id]),
+            ResumeChoice::ResumeAll => (
+                self.pending_resume.iter().map(|j| j.id.clone()).collect(),
+                vec![],
+            ),
+            ResumeChoice::DiscardAll => (
+                vec![],
+                self.pending_resume.iter().map(|j| j.id.clone()).collect(),
+            ),
+        };
+        // Descartar: borrar journal (se quitan de pending_resume al final).
+        for id in &discard_ids {
+            journal::remove(&self.config_dir, id);
+        }
+        // Retomar: tomar el journal, podar el plan, relanzar reusando el id.
+        for id in &resume_ids {
+            if let Some(pos) = self.pending_resume.iter().position(|j| &j.id == id) {
+                let j = self.pending_resume[pos].clone();
+                let r = journal::resume_plan(&j);
+                if r.plan.steps.is_empty() {
+                    // Nada pendiente que retomar: borrar el journal.
+                    journal::remove(&self.config_dir, id);
+                } else {
+                    if !r.skipped_changed.is_empty() {
+                        self.status = self
+                            .i18n
+                            .t("resume.skipped_changed")
+                            .replace("{n}", &r.skipped_changed.len().to_string());
+                    }
+                    self.start_resumed_op(
+                        id.clone(),
+                        j.kind.clone(),
+                        j.conflict,
+                        r.plan,
+                        j.label(),
+                    );
+                }
+            }
+        }
+        // Quitar de pending_resume todo lo procesado.
+        self.pending_resume
+            .retain(|j| !resume_ids.contains(&j.id) && !discard_ids.contains(&j.id));
+    }
+
+    /// Retoma una operación desde un plan ya podado, reusando el `id` de journal.
+    fn start_resumed_op(
+        &mut self,
+        id: String,
+        kind: OpKind,
+        conflict: ConflictPolicy,
+        plan: OpPlan,
+        label: String,
+    ) {
+        let token = CancellationToken::new();
+        let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let j = OpJournal::new(id.clone(), kind.clone(), conflict, plan.clone());
+        let writer = JournalWriter::new(&self.config_dir, j);
+        let (rx, _h) = ops::spawn(plan, kind, conflict, token.clone(), crx, Some(writer));
+        self.active_ops.push(ActiveOp {
+            rx: Some(rx),
+            token,
+            label,
+            progress: None,
+            summary: None,
+            started: true,
+            pending: None,
+            journal_id: Some(id),
+        });
+    }
+
     /// Lanza una operación: planifica, spawnea (o encola). Papelera = atómica vía
     /// platform (no pasa por el motor core). `label` se muestra en el panel.
     pub fn start_op(&mut self, req: OpRequest, label: String) {
@@ -436,10 +561,16 @@ impl NaygoApp {
                 summary: None,
                 started: false,
                 pending: Some((plan, req.kind, req.conflict)),
+                journal_id: None, // se journalea al lanzarse en pump_ops
             });
         } else {
             let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
-            let (rx, _h) = ops::spawn(plan, req.kind, req.conflict, token.clone(), crx);
+            let journal = self.make_journal(&req.kind, req.conflict, &plan);
+            let (journal_id, writer) = match journal {
+                Some((id, w)) => (Some(id), Some(w)),
+                None => (None, None),
+            };
+            let (rx, _h) = ops::spawn(plan, req.kind, req.conflict, token.clone(), crx, writer);
             self.active_ops.push(ActiveOp {
                 rx: Some(rx),
                 token,
@@ -448,6 +579,7 @@ impl NaygoApp {
                 summary: None,
                 started: true,
                 pending: None,
+                journal_id,
             });
         }
     }
@@ -457,6 +589,8 @@ impl NaygoApp {
         // Drenar mensajes de las ops corriendo. `just_finished` se marca cuando una
         // op pasa a tener summary este pump → refrescamos el panel activo después.
         let mut just_finished = false;
+        // Clon previo: no se puede prestar `self.config_dir` dentro del `&mut self.active_ops`.
+        let cfg = self.config_dir.clone();
         for op in &mut self.active_ops {
             // Drenar a un buffer local primero: no podemos asignar `op.rx = None`
             // mientras `rx` sigue prestado dentro del while (E0506).
@@ -473,6 +607,10 @@ impl NaygoApp {
                         op.summary = Some(s);
                         op.rx = None;
                         just_finished = true;
+                        // Op concluida (ok o cancelada): el journal ya no aplica.
+                        if let Some(id) = &op.journal_id {
+                            journal::remove(&cfg, id);
+                        }
                     }
                     OpMsg::Failed(_) => op.rx = None,
                     OpMsg::Conflict(_) => {} // ops-A resuelve conflicto antes de spawn
@@ -496,9 +634,15 @@ impl NaygoApp {
                 if let Some((plan, kind, conflict)) = self.active_ops[idx].pending.take() {
                     let token = self.active_ops[idx].token.clone();
                     let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
-                    let (rx, _h) = ops::spawn(plan, kind, conflict, token, crx);
+                    let journal = self.make_journal(&kind, conflict, &plan);
+                    let (journal_id, writer) = match journal {
+                        Some((id, w)) => (Some(id), Some(w)),
+                        None => (None, None),
+                    };
+                    let (rx, _h) = ops::spawn(plan, kind, conflict, token, crx, writer);
                     self.active_ops[idx].rx = Some(rx);
                     self.active_ops[idx].started = true;
+                    self.active_ops[idx].journal_id = journal_id;
                 }
             }
         }
@@ -1428,6 +1572,14 @@ impl eframe::App for NaygoApp {
         if self.pending_dialog.is_some() {
             let ctx = ui.ctx().clone();
             self.process_pending_dialog(&ctx);
+            ui.ctx().request_repaint();
+        }
+
+        // Modal de retomar ops interrumpidas (detectadas al arrancar). Se pinta al
+        // final por la misma razón que el modal anterior.
+        if !self.pending_resume.is_empty() {
+            let ctx = ui.ctx().clone();
+            self.process_resume_dialog(&ctx);
             ui.ctx().request_repaint();
         }
     }

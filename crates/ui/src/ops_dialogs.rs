@@ -148,8 +148,6 @@ pub fn name_input(
 }
 
 /// Decisión del usuario sobre las operaciones interrumpidas.
-// Consumido en Task 7 (app.rs).
-#[allow(dead_code)]
 pub enum ResumeChoice {
     /// Retomar la operación con este id.
     Resume(String),
@@ -169,8 +167,6 @@ pub enum ResumeChoice {
 /// A diferencia de los otros modales, este NO se cierra solo con Esc / clic fuera:
 /// la operación sigue pendiente y se vuelve a ofrecer. El llamador (Task 7) la quita
 /// de la lista cuando llega una decisión, lo que hace desaparecer el modal.
-// Consumido en Task 7 (app.rs).
-#[allow(dead_code)]
 pub fn resume_dialog(
     ctx: &egui::Context,
     i18n: &I18n,
