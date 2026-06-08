@@ -80,6 +80,8 @@
   "ops.summary_done": "{done} done · {skipped} skipped · {failed} failed",
   "ops.view_detail": "View detail",
   "ops.export": "Export…",
+  "ops.exported": "Summary exported to {path}",
+  "ops.export_failed": "Could not export summary: {e}",
   "pane.tree.title": "Folders",
   "pane.inspector.title": "Properties",
   "pane.unknown": "Unknown panel",

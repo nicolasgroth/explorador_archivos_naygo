@@ -80,6 +80,8 @@
   "ops.summary_done": "{done} hechos · {skipped} omitidos · {failed} con error",
   "ops.view_detail": "Ver detalle",
   "ops.export": "Exportar…",
+  "ops.exported": "Resumen exportado a {path}",
+  "ops.export_failed": "No se pudo exportar el resumen: {e}",
   "pane.tree.title": "Carpetas",
   "pane.inspector.title": "Propiedades",
   "pane.unknown": "Panel desconocido",

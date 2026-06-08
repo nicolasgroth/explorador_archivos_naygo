@@ -18,7 +18,8 @@ use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::ops::{
-    self, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpPlan, OpProgress, OpRequest, OpSummary,
+    self, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress,
+    OpRequest, OpSummary,
 };
 use naygo_core::sort::sort_entries;
 use naygo_core::theme::pack::PackCatalog;
@@ -515,8 +516,52 @@ impl NaygoApp {
     /// Done/Cancelled conservan su summary → se quedan visibles hasta que el panel
     /// se cierre (no hay ops) o llegue Task 11 con un "limpiar" explícito.
     fn prune_finished_ops(&mut self) {
-        self.active_ops
-            .retain(|o| o.rx.is_some() || o.pending.is_some() || o.summary.is_some());
+        // Si el usuario desactivó el resumen, las ops terminadas se descartan en
+        // cuanto dejan de correr: no se conserva su summary para mostrarlo.
+        let keep_summaries = self.settings.show_op_summary;
+        self.active_ops.retain(|o| {
+            o.rx.is_some() || o.pending.is_some() || (keep_summaries && o.summary.is_some())
+        });
+    }
+
+    /// Escribe un reporte de texto del resumen de la op `index` a un archivo en el
+    /// directorio del panel activo: `<dir>/naygo-ops-<unix_secs>.txt`. Sin selector
+    /// nativo (eso es de la fase platform/shell). El reporte es pequeño, así que la
+    /// escritura síncrona es aceptable. Deja la ruta (o el error) en `self.status`.
+    fn export_op_summary(&mut self, index: usize) {
+        let Some(summary) = self.active_ops.get(index).and_then(|o| o.summary.clone()) else {
+            return;
+        };
+
+        // Directorio destino: el del panel activo; si no hay, el dir de config.
+        let dir = self
+            .workspace
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| self.config_dir.clone());
+
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = dir.join(format!("naygo-ops-{secs}.txt"));
+
+        let report = build_summary_report(&summary);
+
+        match std::fs::write(&path, report) {
+            Ok(()) => {
+                self.status = self
+                    .i18n
+                    .t("ops.exported")
+                    .replace("{path}", &path.display().to_string());
+            }
+            Err(e) => {
+                self.status = self
+                    .i18n
+                    .t("ops.export_failed")
+                    .replace("{e}", &e.to_string());
+            }
+        }
     }
 
     /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
@@ -1197,16 +1242,19 @@ impl eframe::App for NaygoApp {
             let active_ops = &self.active_ops;
             let i18n = &self.i18n;
             let expanded = &mut self.ops_panel_expanded;
-            let mut to_cancel = Vec::new();
+            let mut output = crate::ops_panel::OpsPanelOutput::default();
             egui::Panel::bottom("ops_panel")
                 .resizable(true)
                 .show_inside(ui, |ui| {
-                    to_cancel = crate::ops_panel::show(ui, active_ops, i18n, expanded);
+                    output = crate::ops_panel::show(ui, active_ops, i18n, expanded);
                 });
-            for i in to_cancel {
+            for i in output.cancel {
                 if let Some(op) = self.active_ops.get(i) {
                     op.token.cancel();
                 }
+            }
+            if let Some(i) = output.export {
+                self.export_op_summary(i);
             }
             self.prune_finished_ops();
         }
@@ -1392,6 +1440,35 @@ impl eframe::App for NaygoApp {
 }
 
 /// Carpeta inicial: home del usuario o C:\ como fallback.
+/// Construye el reporte de texto plano del resumen de una operación. Una línea de
+/// cabecera con conteos + bytes + tiempo, y luego una línea por archivo:
+/// `<OUTCOME>\t<ruta>` (con el motivo tras un tab más en los `FAILED`).
+fn build_summary_report(summary: &OpSummary) -> String {
+    let mut out = String::new();
+    out.push_str("Naygo — resumen de operación\n");
+    out.push_str(&format!(
+        "Hechos: {}  Omitidos: {}  Con error: {}\n",
+        summary.count_done(),
+        summary.count_skipped(),
+        summary.count_failed()
+    ));
+    out.push_str(&format!(
+        "Bytes: {}  Tiempo: {:.1}s\n",
+        summary.bytes_done, summary.elapsed_secs
+    ));
+    out.push_str("---\n");
+    for (path, outcome) in &summary.items {
+        match outcome {
+            OpOutcome::Done => out.push_str(&format!("DONE\t{}\n", path.display())),
+            OpOutcome::Skipped => out.push_str(&format!("SKIPPED\t{}\n", path.display())),
+            OpOutcome::Failed(reason) => {
+                out.push_str(&format!("FAILED\t{}\t{}\n", path.display(), reason))
+            }
+        }
+    }
+    out
+}
+
 fn default_start_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
