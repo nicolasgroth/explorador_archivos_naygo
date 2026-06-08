@@ -88,7 +88,8 @@ pub fn run_plan(
             current: step.to.clone(),
         }));
 
-        let (record_path, outcome, bytes_added, counts_as_file) = exec_step(step, kind, conflict, token);
+        let (record_path, outcome, bytes_added, counts_as_file) =
+            exec_step(step, kind, conflict, token);
         summary.bytes_done += bytes_added;
         if counts_as_file && matches!(outcome, OpOutcome::Done) {
             files_done += 1;
@@ -114,7 +115,12 @@ fn exec_step(
         OpKind::Delete { to_trash } => {
             if *to_trash {
                 // El motor solo hace borrado permanente; la papelera la maneja platform.
-                (step.to.clone(), OpOutcome::Failed("papelera se maneja en platform".into()), 0, !step.is_dir)
+                (
+                    step.to.clone(),
+                    OpOutcome::Failed("papelera se maneja en platform".into()),
+                    0,
+                    !step.is_dir,
+                )
             } else {
                 let outcome = exec_delete(step);
                 (step.to.clone(), outcome, 0, !step.is_dir)
@@ -154,7 +160,14 @@ fn exec_copy_step(
 
     let from = match &step.from {
         Some(p) => p.clone(),
-        None => return (step.to.clone(), OpOutcome::Failed("paso sin origen".into()), 0, true),
+        None => {
+            return (
+                step.to.clone(),
+                OpOutcome::Failed("paso sin origen".into()),
+                0,
+                true,
+            )
+        }
     };
 
     // Resolver el destino según la política de conflictos.
@@ -163,9 +176,7 @@ fn exec_copy_step(
             ConflictPolicy::Skip => {
                 return (step.to.clone(), OpOutcome::Skipped, 0, true);
             }
-            ConflictPolicy::Rename => {
-                super::dedup_name(&step.to, &|p: &Path| p.exists())
-            }
+            ConflictPolicy::Rename => super::dedup_name(&step.to, &|p: &Path| p.exists()),
             // Ask se trata como Overwrite a nivel motor (la UI resuelve Ask antes).
             ConflictPolicy::Overwrite | ConflictPolicy::Ask => step.to.clone(),
         }
@@ -191,7 +202,12 @@ fn exec_copy_step(
             if is_move {
                 // Borrar el origen tras una copia exitosa (fin del move cross-volume).
                 if let Err(e) = std::fs::remove_file(&from) {
-                    return (to, OpOutcome::Failed(format!("copiado pero no se borró el origen: {e}")), step.bytes, true);
+                    return (
+                        to,
+                        OpOutcome::Failed(format!("copiado pero no se borró el origen: {e}")),
+                        step.bytes,
+                        true,
+                    );
                 }
             }
             (to, OpOutcome::Done, step.bytes, true)
@@ -271,7 +287,11 @@ fn exec_create_file(to: &Path) -> OpOutcome {
             return OpOutcome::Failed(e.to_string());
         }
     }
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(to) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+    {
         Ok(_) => OpOutcome::Done,
         Err(e) => OpOutcome::Failed(e.to_string()),
     }
@@ -279,9 +299,9 @@ fn exec_create_file(to: &Path) -> OpOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::plan::plan;
     use super::super::{ConflictPolicy, OpKind, OpRequest};
+    use super::*;
     use std::fs;
     use std::sync::mpsc;
 
@@ -303,7 +323,12 @@ mod tests {
         fs::write(&src, b"contenido").unwrap();
         let dest = dir.path().join("dst");
         fs::create_dir(&dest).unwrap();
-        let req = OpRequest { kind: OpKind::Copy, sources: vec![src], dest_dir: Some(dest.clone()), conflict: ConflictPolicy::Overwrite };
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![src],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
         let (_msgs, summary) = run(req);
         assert!(dest.join("a.txt").exists());
         assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"contenido");
@@ -318,7 +343,12 @@ mod tests {
         let dest = dir.path().join("dst");
         fs::create_dir(&dest).unwrap();
         fs::write(dest.join("a.txt"), b"viejo").unwrap();
-        let req = OpRequest { kind: OpKind::Copy, sources: vec![src], dest_dir: Some(dest.clone()), conflict: ConflictPolicy::Skip };
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![src],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Skip,
+        };
         let (_m, summary) = run(req);
         assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"viejo");
         assert_eq!(summary.count_skipped(), 1);
@@ -332,7 +362,12 @@ mod tests {
         let dest = dir.path().join("dst");
         fs::create_dir(&dest).unwrap();
         fs::write(dest.join("a.txt"), b"viejo").unwrap();
-        let req = OpRequest { kind: OpKind::Copy, sources: vec![src], dest_dir: Some(dest.clone()), conflict: ConflictPolicy::Overwrite };
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![src],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
         let (_m, _s) = run(req);
         assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"nuevo");
     }
@@ -344,7 +379,12 @@ mod tests {
         fs::write(&src, b"x").unwrap();
         let dest = dir.path().join("dst");
         fs::create_dir(&dest).unwrap();
-        let req = OpRequest { kind: OpKind::Move, sources: vec![src.clone()], dest_dir: Some(dest.clone()), conflict: ConflictPolicy::Overwrite };
+        let req = OpRequest {
+            kind: OpKind::Move,
+            sources: vec![src.clone()],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
         let (_m, _s) = run(req);
         assert!(!src.exists());
         assert!(dest.join("a.txt").exists());
@@ -357,12 +397,25 @@ mod tests {
         fs::write(&src, b"x").unwrap();
         let dest = dir.path().join("dst");
         fs::create_dir(&dest).unwrap();
-        let p = plan(&OpRequest { kind: OpKind::Copy, sources: vec![src], dest_dir: Some(dest.clone()), conflict: ConflictPolicy::Overwrite }).unwrap();
+        let p = plan(&OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![src],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        })
+        .unwrap();
         let token = CancellationToken::new();
         token.cancel();
         let (tx, _rx) = mpsc::channel();
         let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
-        let _summary = run_plan(&p, &OpKind::Copy, ConflictPolicy::Overwrite, &token, &tx, &crx);
+        let _summary = run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+        );
         assert!(!dest.join("a.txt").exists());
     }
 
@@ -371,7 +424,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("a.txt");
         fs::write(&src, b"x").unwrap();
-        let req = OpRequest { kind: OpKind::Delete { to_trash: false }, sources: vec![src.clone()], dest_dir: None, conflict: ConflictPolicy::Overwrite };
+        let req = OpRequest {
+            kind: OpKind::Delete { to_trash: false },
+            sources: vec![src.clone()],
+            dest_dir: None,
+            conflict: ConflictPolicy::Overwrite,
+        };
         let (_m, summary) = run(req);
         assert!(!src.exists());
         assert_eq!(summary.count_done(), 1);

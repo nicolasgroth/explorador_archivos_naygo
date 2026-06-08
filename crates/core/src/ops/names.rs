@@ -18,7 +18,9 @@ pub fn is_valid_name(name: &str) -> bool {
     if name.trim().is_empty() || name.chars().all(|c| c == '.') {
         return false;
     }
-    !name.chars().any(|c| FORBIDDEN.contains(&c) || (c as u32) < 0x20)
+    !name
+        .chars()
+        .any(|c| FORBIDDEN.contains(&c) || (c as u32) < 0x20)
 }
 
 /// Dada una ruta destino candidata y un predicado `exists`, devuelve la primera ruta
@@ -28,13 +30,19 @@ pub fn dedup_name(candidate: &Path, exists: &dyn Fn(&Path) -> bool) -> PathBuf {
     if !exists(candidate) {
         return candidate.to_path_buf();
     }
-    let dir = candidate.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let dir = candidate
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
     let stem = candidate
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_string();
-    let ext = candidate.extension().and_then(|s| s.to_str()).map(|s| s.to_string());
+    let ext = candidate
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
     let mut n = 2u32;
     loop {
         let name = match &ext {
@@ -63,7 +71,9 @@ mod tests {
 
     #[test]
     fn nombre_invalido_caracteres_prohibidos() {
-        for bad in ["a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b"] {
+        for bad in [
+            "a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b",
+        ] {
             assert!(!is_valid_name(bad), "{bad} debería ser inválido");
         }
         assert!(!is_valid_name(""), "vacío inválido");
@@ -86,10 +96,10 @@ mod tests {
 
     #[test]
     fn dedup_incrementa_si_2_tambien_existe() {
-        let taken: HashSet<PathBuf> = [
-            PathBuf::from("C:/x/a.txt"),
-            PathBuf::from("C:/x/a (2).txt"),
-        ].into_iter().collect();
+        let taken: HashSet<PathBuf> =
+            [PathBuf::from("C:/x/a.txt"), PathBuf::from("C:/x/a (2).txt")]
+                .into_iter()
+                .collect();
         let exists = |p: &std::path::Path| taken.contains(p);
         let out = dedup_name(&PathBuf::from("C:/x/a.txt"), &exists);
         assert_eq!(out, PathBuf::from("C:/x/a (3).txt"));

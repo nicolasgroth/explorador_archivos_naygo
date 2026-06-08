@@ -38,7 +38,12 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 .map(|parent| parent.join(new_name))
                 .ok_or(PlanError::MissingDest)?;
             Ok(OpPlan {
-                steps: vec![OpStep { from, to, bytes: 0, is_dir: false }],
+                steps: vec![OpStep {
+                    from,
+                    to,
+                    bytes: 0,
+                    is_dir: false,
+                }],
                 total_bytes: 0,
                 total_files: 1,
             })
@@ -50,7 +55,12 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
             let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
             let is_dir = matches!(req.kind, OpKind::CreateDir { .. });
             Ok(OpPlan {
-                steps: vec![OpStep { from: None, to: dest.join(name), bytes: 0, is_dir }],
+                steps: vec![OpStep {
+                    from: None,
+                    to: dest.join(name),
+                    bytes: 0,
+                    is_dir,
+                }],
                 total_bytes: 0,
                 total_files: if is_dir { 0 } else { 1 },
             })
@@ -70,9 +80,19 @@ fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
     let mut total_files = 0usize;
     for src in &req.sources {
         let base_to = dest.join(src.file_name().unwrap_or_default());
-        expand(src, &base_to, &mut steps, &mut total_bytes, &mut total_files)?;
+        expand(
+            src,
+            &base_to,
+            &mut steps,
+            &mut total_bytes,
+            &mut total_files,
+        )?;
     }
-    Ok(OpPlan { steps, total_bytes, total_files })
+    Ok(OpPlan {
+        steps,
+        total_bytes,
+        total_files,
+    })
 }
 
 fn plan_delete(req: &OpRequest) -> Result<OpPlan, PlanError> {
@@ -82,10 +102,19 @@ fn plan_delete(req: &OpRequest) -> Result<OpPlan, PlanError> {
             return Err(PlanError::SourceUnreadable(src.clone()));
         }
         let is_dir = src.is_dir();
-        steps.push(OpStep { from: Some(src.clone()), to: src.clone(), bytes: 0, is_dir });
+        steps.push(OpStep {
+            from: Some(src.clone()),
+            to: src.clone(),
+            bytes: 0,
+            is_dir,
+        });
     }
     let n = steps.iter().filter(|s| !s.is_dir).count();
-    Ok(OpPlan { steps, total_bytes: 0, total_files: n })
+    Ok(OpPlan {
+        steps,
+        total_bytes: 0,
+        total_files: n,
+    })
 }
 
 fn expand(
@@ -95,10 +124,17 @@ fn expand(
     total_bytes: &mut u64,
     total_files: &mut usize,
 ) -> Result<(), PlanError> {
-    let meta = std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
+    let meta =
+        std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
     if meta.is_dir() {
-        steps.push(OpStep { from: Some(src.to_path_buf()), to: to.to_path_buf(), bytes: 0, is_dir: true });
-        let entries = std::fs::read_dir(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
+        steps.push(OpStep {
+            from: Some(src.to_path_buf()),
+            to: to.to_path_buf(),
+            bytes: 0,
+            is_dir: true,
+        });
+        let entries =
+            std::fs::read_dir(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
         for entry in entries.flatten() {
             let child = entry.path();
             let child_to = to.join(entry.file_name());
@@ -106,7 +142,12 @@ fn expand(
         }
     } else {
         let bytes = meta.len();
-        steps.push(OpStep { from: Some(src.to_path_buf()), to: to.to_path_buf(), bytes, is_dir: false });
+        steps.push(OpStep {
+            from: Some(src.to_path_buf()),
+            to: to.to_path_buf(),
+            bytes,
+            is_dir: false,
+        });
         *total_bytes += bytes;
         *total_files += 1;
     }
@@ -120,12 +161,17 @@ fn is_inside(inner: &Path, outer: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{ConflictPolicy, OpKind, OpRequest};
+    use super::*;
     use std::fs;
 
     fn req(kind: OpKind, sources: Vec<PathBuf>, dest: Option<PathBuf>) -> OpRequest {
-        OpRequest { kind, sources, dest_dir: dest, conflict: ConflictPolicy::Overwrite }
+        OpRequest {
+            kind,
+            sources,
+            dest_dir: dest,
+            conflict: ConflictPolicy::Overwrite,
+        }
     }
 
     #[test]
@@ -175,7 +221,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("a.txt");
         fs::write(&src, b"x").unwrap();
-        let r = req(OpKind::Rename { new_name: "a/b.txt".into() }, vec![src], None);
+        let r = req(
+            OpKind::Rename {
+                new_name: "a/b.txt".into(),
+            },
+            vec![src],
+            None,
+        );
         let e = plan(&r).unwrap_err();
         assert!(matches!(e, PlanError::InvalidName(_)));
     }

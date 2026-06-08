@@ -118,13 +118,22 @@ pub struct OpSummary {
 
 impl OpSummary {
     pub fn count_done(&self) -> usize {
-        self.items.iter().filter(|(_, o)| matches!(o, OpOutcome::Done)).count()
+        self.items
+            .iter()
+            .filter(|(_, o)| matches!(o, OpOutcome::Done))
+            .count()
     }
     pub fn count_skipped(&self) -> usize {
-        self.items.iter().filter(|(_, o)| matches!(o, OpOutcome::Skipped)).count()
+        self.items
+            .iter()
+            .filter(|(_, o)| matches!(o, OpOutcome::Skipped))
+            .count()
     }
     pub fn count_failed(&self) -> usize {
-        self.items.iter().filter(|(_, o)| matches!(o, OpOutcome::Failed(_))).count()
+        self.items
+            .iter()
+            .filter(|(_, o)| matches!(o, OpOutcome::Failed(_)))
+            .count()
     }
 }
 
