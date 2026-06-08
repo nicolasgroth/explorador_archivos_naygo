@@ -664,6 +664,11 @@ impl NaygoApp {
             return Vec::new();
         };
         let view = f.view_indices();
+        // NOTA: `f.selected` está RESERVADO para una futura multi-selección y hoy la UI
+        // nunca lo puebla (siempre vacío en ops-A) → esta rama es código correcto-por-
+        // contrato pero inactivo; en la práctica se usa el fallback al foco de abajo.
+        // `selected` y `focused` viven en espacio de VISTA (pos en view_indices()), por
+        // eso se mapea pos→real antes de indexar `entries`.
         if !f.selected.is_empty() {
             return f
                 .selected
