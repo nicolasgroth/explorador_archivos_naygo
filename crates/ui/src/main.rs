@@ -14,6 +14,7 @@ mod docking;
 mod icons;
 mod input;
 mod logging;
+mod ops_actions;
 mod panes;
 mod settings_window;
 mod sort_ui;
