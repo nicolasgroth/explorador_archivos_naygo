@@ -56,8 +56,6 @@ pub fn egui_key_to_code(key: egui::Key) -> Option<KeyCode> {
 }
 
 /// Texto legible de un chord para el editor ("Ctrl+C", "F3", "↑").
-// Lo consume el editor de atajos (tarea posterior); ya está testeado aquí.
-#[allow(dead_code)]
 pub fn chord_text(chord: &Chord) -> String {
     let mut s = String::new();
     if chord.ctrl {

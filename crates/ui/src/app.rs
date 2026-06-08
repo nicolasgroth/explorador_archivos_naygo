@@ -218,9 +218,13 @@ pub struct NaygoApp {
     pub status: String,
     typeahead_buf: String,
     /// Atajos de teclado configurables.
-    keymap: naygo_core::keymap::KeyMap,
+    pub(crate) keymap: naygo_core::keymap::KeyMap,
     /// Acción cuyo nuevo atajo se está capturando en el editor (suspende el input global).
-    shortcut_capture: Option<naygo_core::keymap::Action>,
+    pub(crate) shortcut_capture: Option<naygo_core::keymap::Action>,
+    /// Texto del buscador de acciones del editor de atajos.
+    pub(crate) shortcut_search: String,
+    /// Mensaje del banner de conflicto tras un bind que robó un atajo (efímero).
+    pub(crate) shortcut_conflict: Option<String>,
     icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
@@ -328,6 +332,8 @@ impl NaygoApp {
             typeahead_buf: String::new(),
             keymap,
             shortcut_capture: None,
+            shortcut_search: String::new(),
+            shortcut_conflict: None,
             icons,
             i18n,
             theme_catalog,
@@ -357,6 +363,103 @@ impl NaygoApp {
     /// Atajo para traducir una clave con el idioma activo.
     pub fn tr(&self, key: &str) -> String {
         self.i18n.t(key).to_string()
+    }
+
+    /// Guarda el keymap a disco tras una edición.
+    pub(crate) fn save_keymap_now(&mut self) {
+        naygo_core::config::save_keymap(&self.config_dir, &self.keymap);
+    }
+
+    /// Si estamos capturando un atajo, lee la próxima combinación y la asigna. Esc cancela.
+    /// Debe llamarse cada frame, ANTES de handle_input (que retorna temprano si se captura).
+    fn process_shortcut_capture(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.shortcut_capture else {
+            return;
+        };
+        let mut captured: Option<naygo_core::keymap::Chord> = None;
+        let mut cancel = false;
+        ctx.input(|i| {
+            let (ctrl, shift, alt) = (i.modifiers.ctrl, i.modifiers.shift, i.modifiers.alt);
+            // Esc sin modificadores cancela la captura.
+            if i.key_pressed(egui::Key::Escape) && !ctrl && !shift && !alt {
+                cancel = true;
+                return;
+            }
+            // Buscar la primera tecla "real" presionada y armar el chord.
+            const KEYS: &[egui::Key] = &[
+                egui::Key::ArrowUp,
+                egui::Key::ArrowDown,
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+                egui::Key::Enter,
+                egui::Key::Backspace,
+                egui::Key::Tab,
+                egui::Key::Delete,
+                egui::Key::F2,
+                egui::Key::F3,
+                egui::Key::F5,
+                egui::Key::F6,
+                egui::Key::A,
+                egui::Key::B,
+                egui::Key::C,
+                egui::Key::D,
+                egui::Key::E,
+                egui::Key::F,
+                egui::Key::G,
+                egui::Key::H,
+                egui::Key::I,
+                egui::Key::J,
+                egui::Key::K,
+                egui::Key::L,
+                egui::Key::M,
+                egui::Key::N,
+                egui::Key::O,
+                egui::Key::P,
+                egui::Key::Q,
+                egui::Key::R,
+                egui::Key::S,
+                egui::Key::T,
+                egui::Key::U,
+                egui::Key::V,
+                egui::Key::W,
+                egui::Key::X,
+                egui::Key::Y,
+                egui::Key::Z,
+            ];
+            for &k in KEYS {
+                if i.key_pressed(k) {
+                    if let Some(code) = crate::input::egui_key_to_code(k) {
+                        captured = Some(naygo_core::keymap::Chord {
+                            key: code,
+                            ctrl,
+                            shift,
+                            alt,
+                        });
+                        break;
+                    }
+                }
+            }
+        });
+        if cancel {
+            self.shortcut_capture = None;
+            return;
+        }
+        if let Some(chord) = captured {
+            let chord_txt = crate::input::chord_text(&chord);
+            if let Some(robbed) = self.keymap.bind(action, chord) {
+                self.shortcut_conflict = Some(
+                    self.i18n
+                        .t("settings.shortcuts.conflict")
+                        .replace("{chord}", &chord_txt)
+                        .replace("{from}", self.i18n.t(robbed.i18n_key()))
+                        .replace("{to}", self.i18n.t(action.i18n_key())),
+                );
+            } else {
+                self.shortcut_conflict = None;
+            }
+            self.shortcut_capture = None;
+            self.save_keymap_now();
+        }
     }
 
     /// Idiomas disponibles (clonados, para la UI sin prestar `self.i18n`).
@@ -1970,6 +2073,10 @@ impl eframe::App for NaygoApp {
         self.pump_watchers();
         self.pump_devices();
         self.pump_paste_write();
+        self.process_shortcut_capture(ctx);
+        if self.shortcut_capture.is_some() {
+            ctx.request_repaint();
+        }
         self.handle_input(ctx);
         if self.any_listing_active()
             || self.any_tree_listing_active()
