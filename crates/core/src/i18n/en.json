@@ -126,5 +126,13 @@
   "settings.ops.display.modal": "Modal",
   "settings.ops.display.always": "Always visible",
   "settings.ops.confirm_trash": "Also confirm moving to Recycle Bin",
-  "settings.ops.show_summary": "Show summary when finished"
+  "settings.ops.show_summary": "Show summary when finished",
+  "resume.title": "Interrupted operations",
+  "resume.body": "Naygo closed while these operations were in progress:",
+  "resume.resume": "Resume",
+  "resume.discard": "Discard",
+  "resume.resume_all": "Resume all",
+  "resume.discard_all": "Discard all",
+  "resume.progress": "{done} of {total} files",
+  "resume.skipped_changed": "{n} file(s) skipped because they changed since the interruption"
 }

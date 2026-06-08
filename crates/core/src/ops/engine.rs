@@ -7,6 +7,7 @@
 //! Papelera: NO aquí (solo borrado permanente); la papelera la hace `platform`.
 //! Conflictos: la UI los resuelve antes de spawnear (el motor recibe pasos limpios).
 
+use super::journal::JournalWriter;
 use super::{
     ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress, OpStep,
     OpSummary,
@@ -34,10 +35,22 @@ pub fn spawn(
     conflict: ConflictPolicy,
     token: CancellationToken,
     conflict_rx: Receiver<ConflictDecision>,
+    mut journal: Option<JournalWriter>,
 ) -> (Receiver<OpMsg>, std::thread::JoinHandle<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
-        let summary = run_plan(&plan, &kind, conflict, &token, &tx, &conflict_rx);
+        let summary = run_plan(
+            &plan,
+            &kind,
+            conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            journal.as_mut(),
+        );
+        if let Some(w) = journal.as_mut() {
+            w.flush();
+        }
         let final_msg = if token.is_cancelled() {
             OpMsg::Cancelled(summary)
         } else {
@@ -69,12 +82,20 @@ pub fn run_plan(
     token: &CancellationToken,
     tx: &Sender<OpMsg>,
     _conflict_rx: &Receiver<ConflictDecision>,
+    mut journal: Option<&mut JournalWriter>,
 ) -> OpSummary {
     let start = std::time::Instant::now();
     let mut summary = OpSummary::default();
     let mut files_done = 0usize;
+    // Mayor prefijo CONTIGUO de pasos resueltos (Done/Skipped). Solo este avanza el
+    // journal: si un paso falla, dejamos de avanzar el cursor para el resto de la op,
+    // de modo que ese paso (y los siguientes) se vuelvan a intentar al retomar tras un
+    // crash, en vez de darse por hechos. Re-hacer un paso es seguro (idempotente bajo
+    // Overwrite).
+    let mut journal_cursor = 0usize;
+    let mut barrier_hit = false;
 
-    for step in &plan.steps {
+    for (idx, step) in plan.steps.iter().enumerate() {
         if token.is_cancelled() {
             break;
         }
@@ -94,7 +115,21 @@ pub fn run_plan(
         if counts_as_file && matches!(outcome, OpOutcome::Done) {
             files_done += 1;
         }
+        let resolved = matches!(outcome, OpOutcome::Done | OpOutcome::Skipped);
         summary.items.push((record_path, outcome));
+
+        // El cursor del journal avanza solo mientras los pasos se resuelven de forma
+        // contigua. El primer fallo levanta una barrera: a partir de ahí el cursor no
+        // avanza más (aunque pasos posteriores tengan éxito), así el paso fallido queda
+        // pendiente para el retomar. `done_through = journal_cursor` (throttled).
+        if resolved && !barrier_hit {
+            journal_cursor = idx + 1;
+        } else if !resolved {
+            barrier_hit = true;
+        }
+        if let Some(w) = journal.as_deref_mut() {
+            w.record(journal_cursor, std::time::Instant::now());
+        }
     }
 
     summary.elapsed_secs = start.elapsed().as_secs_f64();
@@ -310,7 +345,7 @@ mod tests {
         let token = CancellationToken::new();
         let (tx, rx) = mpsc::channel();
         let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
-        let summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx);
+        let summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx, None);
         drop(tx);
         let msgs: Vec<OpMsg> = rx.into_iter().collect();
         (msgs, summary)
@@ -415,8 +450,102 @@ mod tests {
             &token,
             &tx,
             &crx,
+            None,
         );
         assert!(!dest.join("a.txt").exists());
+    }
+
+    #[test]
+    fn run_plan_con_journal_actualiza_done_through() {
+        use crate::ops::journal::{journal_path, JournalWriter, OpJournal};
+        let dir = tempfile::tempdir().unwrap();
+        for (n, c) in [("a", "aa"), ("b", "bbb")] {
+            std::fs::write(dir.path().join(n), c.as_bytes()).unwrap();
+        }
+        let dest = dir.path().join("dst");
+        std::fs::create_dir(&dest).unwrap();
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![dir.path().join("a"), dir.path().join("b")],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let p = plan(&req).unwrap();
+        let cfg = dir.path();
+        let journal = OpJournal::new("eng1".into(), req.kind.clone(), req.conflict, p.clone());
+        let mut writer = JournalWriter::new(cfg, journal);
+        let token = CancellationToken::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (_ctx, crx) = std::sync::mpsc::channel();
+        let _summary = run_plan(
+            &p,
+            &req.kind,
+            req.conflict,
+            &token,
+            &tx,
+            &crx,
+            Some(&mut writer),
+        );
+        writer.flush();
+        let back: OpJournal =
+            serde_json::from_str(&std::fs::read_to_string(journal_path(cfg, "eng1")).unwrap())
+                .unwrap();
+        assert_eq!(back.done_through, 2);
+        assert!(dest.join("a").exists() && dest.join("b").exists());
+    }
+
+    #[test]
+    fn run_plan_con_journal_no_avanza_sobre_paso_fallido() {
+        // Plan de 3 pasos de copia donde el 2º (índice 1) falla porque el origen no
+        // existe. El cursor del journal debe quedarse en 1 (solo el 1er paso resuelto),
+        // de modo que al retomar se re-intente el paso fallido y los siguientes.
+        use crate::ops::journal::{journal_path, JournalWriter, OpJournal};
+        use crate::ops::{OpPlan, OpStep};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), b"aa").unwrap();
+        std::fs::write(dir.path().join("c"), b"cccc").unwrap();
+        // "b" NO se crea → su paso de copia fallará.
+        let dest = dir.path().join("dst");
+        std::fs::create_dir(&dest).unwrap();
+        let mk = |n: &str, b: u64| OpStep {
+            from: Some(dir.path().join(n)),
+            to: dest.join(n),
+            bytes: b,
+            is_dir: false,
+        };
+        let p = OpPlan {
+            steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
+            total_bytes: 9,
+            total_files: 3,
+        };
+        let cfg = dir.path();
+        let journal = OpJournal::new(
+            "engbar".into(),
+            OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            p.clone(),
+        );
+        let mut writer = JournalWriter::new(cfg, journal);
+        let token = CancellationToken::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (_ctx, crx) = std::sync::mpsc::channel();
+        let summary = run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            Some(&mut writer),
+        );
+        writer.flush();
+        let back: OpJournal =
+            serde_json::from_str(&std::fs::read_to_string(journal_path(cfg, "engbar")).unwrap())
+                .unwrap();
+        // Barrera en el paso 1 (índice 1, falló): el cursor no pasa de 1, aunque el
+        // paso 2 (índice 2, "c") sí se copia con éxito.
+        assert_eq!(back.done_through, 1);
+        assert_eq!(summary.count_failed(), 1);
     }
 
     #[test]
