@@ -52,6 +52,17 @@ pub enum OpsDisplay {
     AlwaysVisible,
 }
 
+/// Cuánto dura el resaltado de un archivo recién aparecido (watcher).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HighlightDuration {
+    /// Hasta que el usuario interactúa con el panel (default).
+    UntilInteract,
+    /// Se desvanece tras N segundos.
+    FadeSeconds(u32),
+    /// Persiste hasta re-listar la carpeta.
+    UntilRefresh,
+}
+
 /// Ajustes de la app (settings.json).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -105,6 +116,13 @@ pub struct Settings {
     /// Calidad JPG (1..=100) para imagen pegada como JPG.
     #[serde(default = "default_paste_jpg_quality")]
     pub paste_jpg_quality: u8,
+    /// Duración del resaltado de archivos recién aparecidos (watcher).
+    #[serde(default = "default_highlight_duration")]
+    pub highlight_duration: HighlightDuration,
+    /// Si los archivos nuevos se agrupan al final del listado (resaltados) en vez de
+    /// insertarse ya ordenados.
+    #[serde(default = "default_new_items_at_end")]
+    pub new_items_at_end: bool,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -173,6 +191,16 @@ fn default_paste_jpg_quality() -> u8 {
     90
 }
 
+/// Default de `highlight_duration`: UntilInteract.
+fn default_highlight_duration() -> HighlightDuration {
+    HighlightDuration::UntilInteract
+}
+
+/// Default de `new_items_at_end`: false.
+fn default_new_items_at_end() -> bool {
+    false
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -193,6 +221,8 @@ impl Default for Settings {
             paste_image_name: "captura {fecha}".into(),
             paste_image_fmt: crate::clipboard::ImageFmt::Png,
             paste_jpg_quality: 90,
+            highlight_duration: HighlightDuration::UntilInteract,
+            new_items_at_end: false,
         }
     }
 }
@@ -316,6 +346,8 @@ mod tests {
             paste_image_name: "img {fecha}".into(),
             paste_image_fmt: crate::clipboard::ImageFmt::Jpg,
             paste_jpg_quality: 75,
+            highlight_duration: HighlightDuration::FadeSeconds(6),
+            new_items_at_end: true,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
