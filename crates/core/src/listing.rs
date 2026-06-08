@@ -163,6 +163,57 @@ pub enum DirEvent {
     Renamed { from: PathBuf, to: PathBuf },
 }
 
+/// Aplica `events` a `entries` SIN re-listar la carpeta. `read_entry` produce el `Entry`
+/// de una ruta (en producción usa el FS vía `entry_from_path`; en tests, un closure).
+/// Devuelve las rutas NUEVAS (Created, o Renamed cuyo `from` no estaba) para resaltarlas.
+/// El llamador re-ordena/re-filtra la vista después.
+pub fn apply_dir_events(
+    entries: &mut Vec<Entry>,
+    events: &[DirEvent],
+    read_entry: &dyn Fn(&std::path::Path) -> Option<Entry>,
+) -> Vec<PathBuf> {
+    let mut nuevas = Vec::new();
+    for ev in events {
+        match ev {
+            DirEvent::Created(p) => {
+                if entries.iter().any(|e| &e.path == p) {
+                    continue;
+                }
+                if let Some(e) = read_entry(p) {
+                    entries.push(e);
+                    nuevas.push(p.clone());
+                }
+            }
+            DirEvent::Removed(p) => {
+                entries.retain(|e| &e.path != p);
+            }
+            DirEvent::Modified(p) => {
+                if let Some(updated) = read_entry(p) {
+                    if let Some(slot) = entries.iter_mut().find(|e| &e.path == p) {
+                        *slot = updated;
+                    }
+                }
+            }
+            DirEvent::Renamed { from, to } => {
+                if let Some(slot) = entries.iter_mut().find(|e| &e.path == from) {
+                    slot.path = to.clone();
+                    slot.name = to
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    nuevas.push(to.clone());
+                } else if !entries.iter().any(|e| &e.path == to) {
+                    if let Some(e) = read_entry(to) {
+                        entries.push(e);
+                        nuevas.push(to.clone());
+                    }
+                }
+            }
+        }
+    }
+    nuevas
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +349,93 @@ mod tests {
             "debe emitir Error, got {:?}",
             msgs
         );
+    }
+
+    fn mk_entry(name: &str, dir: &std::path::Path) -> Entry {
+        Entry {
+            name: name.into(),
+            path: dir.join(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn apply_created_inserta_y_reporta_nuevo() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let newp = dir.join("b.txt");
+        let np = newp.clone();
+        let read = move |p: &std::path::Path| {
+            if p == np { Some(mk_entry("b.txt", dir)) } else { None }
+        };
+        let nuevas = apply_dir_events(&mut entries, &[DirEvent::Created(newp.clone())], &read);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(nuevas, vec![newp]);
+    }
+
+    #[test]
+    fn apply_created_idempotente() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let p = dir.join("a.txt");
+        let read = |_: &std::path::Path| Some(mk_entry("a.txt", dir));
+        let nuevas = apply_dir_events(&mut entries, &[DirEvent::Created(p)], &read);
+        assert_eq!(entries.len(), 1, "no duplica algo ya presente");
+        assert!(nuevas.is_empty());
+    }
+
+    #[test]
+    fn apply_removed_quita() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir), mk_entry("b.txt", dir)];
+        let read = |_: &std::path::Path| None;
+        apply_dir_events(&mut entries, &[DirEvent::Removed(dir.join("a.txt"))], &read);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "b.txt");
+    }
+
+    #[test]
+    fn apply_modified_actualiza_size() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("a.txt", dir)];
+        let mut updated = mk_entry("a.txt", dir);
+        updated.size = Some(999);
+        let read = move |_: &std::path::Path| Some(updated.clone());
+        apply_dir_events(&mut entries, &[DirEvent::Modified(dir.join("a.txt"))], &read);
+        assert_eq!(entries[0].size, Some(999));
+    }
+
+    #[test]
+    fn apply_renamed_renombra() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![mk_entry("old.txt", dir)];
+        let read = |_: &std::path::Path| None;
+        let nuevas = apply_dir_events(
+            &mut entries,
+            &[DirEvent::Renamed { from: dir.join("old.txt"), to: dir.join("new.txt") }],
+            &read,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "new.txt");
+        assert_eq!(entries[0].path, dir.join("new.txt"));
+        assert_eq!(nuevas, vec![dir.join("new.txt")]);
+    }
+
+    #[test]
+    fn apply_renamed_from_ausente_es_created() {
+        let dir = std::path::Path::new("D:/x");
+        let mut entries = vec![];
+        let read = |_: &std::path::Path| Some(mk_entry("new.txt", dir));
+        let nuevas = apply_dir_events(
+            &mut entries,
+            &[DirEvent::Renamed { from: dir.join("ghost.txt"), to: dir.join("new.txt") }],
+            &read,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(nuevas, vec![dir.join("new.txt")]);
     }
 }
