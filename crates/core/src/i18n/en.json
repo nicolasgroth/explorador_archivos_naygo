@@ -116,5 +116,15 @@
   "tree.empty": "(no subfolders)",
   "tree.access_denied": "access denied",
   "lang.es": "Español",
-  "lang.en": "English"
+  "lang.en": "English",
+  "settings.ops.section": "Operations",
+  "settings.ops.mode": "Execution mode",
+  "settings.ops.mode.queue": "Queue",
+  "settings.ops.mode.parallel": "Parallel",
+  "settings.ops.display": "Show progress",
+  "settings.ops.display.panel": "Panel",
+  "settings.ops.display.modal": "Modal",
+  "settings.ops.display.always": "Always visible",
+  "settings.ops.confirm_trash": "Also confirm moving to Recycle Bin",
+  "settings.ops.show_summary": "Show summary when finished"
 }

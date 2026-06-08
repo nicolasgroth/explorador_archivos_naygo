@@ -116,5 +116,15 @@
   "tree.empty": "(sin subcarpetas)",
   "tree.access_denied": "acceso denegado",
   "lang.es": "Español",
-  "lang.en": "English"
+  "lang.en": "English",
+  "settings.ops.section": "Operaciones",
+  "settings.ops.mode": "Modo de ejecución",
+  "settings.ops.mode.queue": "En cola",
+  "settings.ops.mode.parallel": "Paralelo",
+  "settings.ops.display": "Mostrar progreso",
+  "settings.ops.display.panel": "Panel",
+  "settings.ops.display.modal": "Modal",
+  "settings.ops.display.always": "Siempre visible",
+  "settings.ops.confirm_trash": "Confirmar también el borrado a la papelera",
+  "settings.ops.show_summary": "Mostrar resumen al terminar"
 }
