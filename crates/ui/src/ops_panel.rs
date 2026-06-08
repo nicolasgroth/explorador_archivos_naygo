@@ -9,7 +9,7 @@
 //! negocio: solo pinta `ActiveOp`s y devuelve los índices de las ops a cancelar.
 
 use crate::app::ActiveOp;
-use crate::panes::file_panel::human_size;
+use naygo_core::format::human_size;
 use naygo_core::i18n::I18n;
 use naygo_core::ops::OpOutcome;
 

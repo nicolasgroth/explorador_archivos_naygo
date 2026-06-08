@@ -235,6 +235,15 @@ pub struct NaygoApp {
     /// Escritura de un archivo pegado (texto/imagen) en curso en un worker. El hilo de
     /// UI NO bloquea: se drena el resultado por frame. `dir` = carpeta a refrescar.
     pending_paste_write: Option<PendingPasteWrite>,
+    /// Espacio por unidad (root → uso), rellenado async por un worker; lo pinta el árbol.
+    disk_usage: std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+    /// Canal del worker de espacio en curso (None si no hay escaneo activo).
+    disk_rx: Option<std::sync::mpsc::Receiver<(std::path::PathBuf, naygo_core::disk::DiskUsage)>>,
+    /// Frames desde el último escaneo (re-escaneo periódico sin reloj).
+    disk_scan_ticks: u32,
+    /// Últimas unidades vistas por el escaneo de discos (para el strip del toolbar).
+    /// Se refresca al inicio de cada escaneo; barato (drives() no toca espacio).
+    pub(crate) drives_cache: Vec<naygo_platform::drives::DriveInfo>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -306,6 +315,10 @@ impl NaygoApp {
             ops_panel_expanded: false,
             pending_resume,
             pending_paste_write: None,
+            disk_usage: std::collections::HashMap::new(),
+            disk_rx: None,
+            disk_scan_ticks: 180,
+            drives_cache: Vec::new(),
         };
         app.start_all_listings();
         app
@@ -941,6 +954,16 @@ impl NaygoApp {
             Action::MoveUp => self.move_focus(-1),
             Action::MoveDown => self.move_focus(1),
             Action::Activate => self.activate_focused(),
+            Action::Open => {
+                // "Abrir" del menú = misma semántica que doble-clic/Enter: una carpeta
+                // navega, un archivo se abre con su app. `activate_focused` ya distingue.
+                self.activate_focused();
+            }
+            Action::OpenWith => {
+                if let Some((p, n)) = self.focused_file() {
+                    self.open_with_path(&p, &n);
+                }
+            }
             Action::GoUp => self.nav(|f| f.go_up()),
             Action::GoBack => self.nav(|f| f.go_back()),
             Action::GoForward => self.nav(|f| f.go_forward()),
@@ -1070,10 +1093,71 @@ impl NaygoApp {
         self.pending_paste_write = Some(PendingPasteWrite { rx, dir });
     }
 
+    /// Lanza un worker que lee el espacio de cada unidad y lo emite por canal. No
+    /// solapa escaneos: si ya hay uno en curso, no hace nada.
+    fn start_disk_scan(&mut self) {
+        // Refresca el strip del toolbar aunque haya un escaneo en curso (un USB
+        // recién conectado debe aparecer; drives() es barato, no lee espacio).
+        self.drives_cache = naygo_platform::drives::drives();
+        if self.disk_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for d in naygo_platform::drives::drives() {
+                if let Some((total, free)) = naygo_platform::drive_space::read_space(&d.path) {
+                    let _ = tx.send((d.path.clone(), naygo_core::disk::DiskUsage { total, free }));
+                }
+            }
+        });
+        self.disk_rx = Some(rx);
+    }
+
+    /// Navega el panel activo a `path` (misma ruta que usa el árbol al navegar).
+    pub(crate) fn navigate_active_to(&mut self, path: std::path::PathBuf) {
+        if let Some(active) = self.workspace.active_id() {
+            if let Some(f) = self
+                .workspace
+                .pane_mut(active)
+                .and_then(|p| p.files.as_mut())
+            {
+                f.navigate_to(path.clone());
+                self.start_listing(active, path);
+            }
+        }
+    }
+
+    /// Drena el worker de espacio (por frame) y re-escanea cada ~180 frames (~3s).
+    fn pump_disk_usage(&mut self) {
+        let mut done = false;
+        if let Some(rx) = &self.disk_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok((root, usage)) => {
+                        self.disk_usage.insert(root, usage);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if done {
+            self.disk_rx = None;
+        }
+        self.disk_scan_ticks = self.disk_scan_ticks.wrapping_add(1);
+        if self.disk_rx.is_none() && self.disk_scan_ticks >= 180 {
+            self.disk_scan_ticks = 0;
+            self.start_disk_scan();
+        }
+    }
+
     /// Drena el resultado de una escritura de archivo pegado (si terminó). Deja un
     /// status con la metadata y refresca el panel; en error, status discreto.
     fn pump_paste_write(&mut self) {
-        use crate::panes::file_panel::human_size;
+        use naygo_core::format::human_size;
         let Some(pending) = &self.pending_paste_write else {
             return;
         };
@@ -1460,10 +1544,43 @@ impl NaygoApp {
             }
             self.start_listing(active, entry.path);
         } else {
-            self.status = self
-                .i18n
-                .t("status.open_pending")
-                .replace("{name}", &entry.name);
+            let (path, name) = (entry.path.clone(), entry.name.clone());
+            self.open_path(&path, &name);
+        }
+    }
+
+    /// Abre un archivo con su app por defecto; deja status de éxito/error.
+    fn open_path(&mut self, path: &std::path::Path, name: &str) {
+        match naygo_platform::open::open_default(path) {
+            Ok(()) => {
+                self.status = self.i18n.t("status.opening").replace("{name}", name);
+            }
+            Err(naygo_platform::open::ShellError::NoAssociation) => {
+                self.status = self.i18n.t("status.no_association").replace("{name}", name);
+            }
+            Err(_) => {
+                self.status = self.i18n.t("status.open_failed").replace("{name}", name);
+            }
+        }
+    }
+
+    /// Abre el diálogo "Abrir con…" del SO para un archivo; status en error.
+    fn open_with_path(&mut self, path: &std::path::Path, name: &str) {
+        if naygo_platform::open::open_with_dialog(path).is_err() {
+            self.status = self.i18n.t("status.open_failed").replace("{name}", name);
+        }
+    }
+
+    /// Resuelve la entry enfocada del panel activo (ruta + nombre), si es archivo.
+    fn focused_file(&self) -> Option<(std::path::PathBuf, String)> {
+        let entry = self
+            .workspace
+            .active_files()
+            .and_then(|f| f.focused_view_entry().cloned())?;
+        if entry.is_dir() {
+            None
+        } else {
+            Some((entry.path, entry.name))
         }
     }
 
@@ -1626,12 +1743,14 @@ impl eframe::App for NaygoApp {
         self.pump_all();
         self.pump_tree();
         self.pump_ops();
+        self.pump_disk_usage();
         self.pump_paste_write();
         self.handle_input(ctx);
         if self.any_listing_active()
             || self.any_tree_listing_active()
             || self.any_op_active()
             || self.pending_paste_write.is_some()
+            || self.disk_rx.is_some()
         {
             ctx.request_repaint();
         }
@@ -1765,6 +1884,7 @@ impl eframe::App for NaygoApp {
                 tree_revealed: &mut tree_revealed,
                 table_actions: &mut table_actions,
                 ops_actions: &mut ops_actions,
+                disk_usage: &self.disk_usage,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -1800,16 +1920,7 @@ impl eframe::App for NaygoApp {
                 crate::tree_actions::TreeAction::Expand(path) => self.tree_expand(id, path),
                 crate::tree_actions::TreeAction::Collapse(path) => self.tree_collapse(id, path),
                 crate::tree_actions::TreeAction::Navigate(path) => {
-                    if let Some(active) = self.workspace.active_id() {
-                        if let Some(f) = self
-                            .workspace
-                            .pane_mut(active)
-                            .and_then(|p| p.files.as_mut())
-                        {
-                            f.navigate_to(path.clone());
-                            self.start_listing(active, path);
-                        }
-                    }
+                    self.navigate_active_to(path);
                 }
             }
         }

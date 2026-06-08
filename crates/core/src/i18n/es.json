@@ -49,7 +49,13 @@
   "template.power_user": "Power-user",
   "status.elements": "{n} elementos",
   "status.error": "Error: {e}",
-  "status.open_pending": "Abrir: {name} (pendiente platform::shell)",
+  "status.opening": "Abriendo {name}",
+  "status.no_association": "No hay programa asociado a {name}",
+  "status.open_failed": "No se pudo abrir {name}",
+  "op.open": "Abrir",
+  "op.open_with": "Abrir con…",
+  "op.more_windows": "Más opciones de Windows…",
+  "op.more_windows_soon": "Disponible próximamente",
   "op.copy": "Copiar",
   "op.cut": "Cortar",
   "op.paste": "Pegar",
@@ -157,5 +163,6 @@
   "resume.resume_all": "Retomar todas",
   "resume.discard_all": "Descartar todas",
   "resume.progress": "{done} de {total} archivos",
-  "resume.skipped_changed": "{n} archivo(s) omitido(s) porque cambiaron desde la interrupción"
+  "resume.skipped_changed": "{n} archivo(s) omitido(s) porque cambiaron desde la interrupción",
+  "disk.usage": "{free} libres de {total} · {pct}% usado"
 }

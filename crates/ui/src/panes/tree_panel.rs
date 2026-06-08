@@ -30,6 +30,7 @@ pub fn show(
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
     theme: &crate::theme_apply::ActiveTheme,
+    disk_usage: &std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
 ) -> bool {
     if tree.is_empty() {
         ui.label(i18n.t("tree.empty"));
@@ -39,7 +40,7 @@ pub fn show(
         .show(ui, |ui| {
             let mut revealed = false;
             for root in &tree.roots {
-                revealed |= show_node(ui, root, 0, tree, actions, icons, i18n, theme);
+                revealed |= show_node(ui, root, 0, tree, actions, icons, i18n, theme, disk_usage);
             }
             revealed
         })
@@ -59,6 +60,7 @@ fn show_node(
     icons: &IconProvider,
     i18n: &naygo_core::i18n::I18n,
     theme: &crate::theme_apply::ActiveTheme,
+    disk_usage: &std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
 ) -> bool {
     let is_active = tree.active_path.as_deref() == Some(node.path.as_path());
 
@@ -135,6 +137,41 @@ fn show_node(
         revealed = true;
     }
 
+    // Barra de uso de disco: solo bajo las raíces (unidades), justo debajo del
+    // nombre y sobre las carpetas hijas. La rellena el worker async de espacio.
+    if depth == 0 && node.drive_kind.is_some() {
+        if let Some(usage) = disk_usage.get(&node.path) {
+            let pct = usage.percent_used();
+            let frac = pct as f32 / 100.0;
+            let color = if usage.is_critical() {
+                egui::Color32::from_rgb(0xE0, 0x55, 0x55)
+            } else if usage.is_high() {
+                egui::Color32::from_rgb(0xE0, 0xA0, 0x30)
+            } else {
+                theme.accent()
+            };
+            ui.horizontal(|ui| {
+                ui.add_space(INDENT);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(120.0, 5.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, 2.0, egui::Color32::from_gray(60));
+                let mut fill = rect;
+                fill.set_width(rect.width() * frac);
+                ui.painter().rect_filled(fill, 2.0, color);
+            });
+            let label = i18n
+                .t("disk.usage")
+                .replace("{free}", &naygo_core::format::human_size(usage.free))
+                .replace("{total}", &naygo_core::format::human_size(usage.total))
+                .replace("{pct}", &pct.to_string());
+            ui.horizontal(|ui| {
+                ui.add_space(INDENT);
+                ui.label(egui::RichText::new(label).weak().small());
+            });
+        }
+    }
+
     // Hijos: solo si el nodo está expandido.
     if node.expanded {
         let child_depth = depth + 1;
@@ -159,7 +196,17 @@ fn show_node(
         }
         if let Some(children) = &node.children {
             for child in children {
-                revealed |= show_node(ui, child, child_depth, tree, actions, icons, i18n, theme);
+                revealed |= show_node(
+                    ui,
+                    child,
+                    child_depth,
+                    tree,
+                    actions,
+                    icons,
+                    i18n,
+                    theme,
+                    disk_usage,
+                );
             }
         }
     }
