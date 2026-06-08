@@ -6,7 +6,7 @@
 //! interrumpidas y `resume_plan` poda el plan a lo pendiente revalidando que los
 //! orígenes no cambiaron. El motor de ops-A se reutiliza tal cual.
 
-use super::{ConflictPolicy, OpKind, OpPlan};
+use super::{ConflictPolicy, OpKind, OpPlan, OpStep};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -166,6 +166,57 @@ impl JournalWriter {
     }
 }
 
+/// Resultado de planificar un retomar: el plan podado a pendientes + los saltados.
+pub struct ResumePlan {
+    /// Solo los pasos pendientes que revalidaron OK.
+    pub plan: OpPlan,
+    /// Orígenes que cambiaron/desaparecieron desde el journal → reportar en el resumen.
+    pub skipped_changed: Vec<PathBuf>,
+}
+
+/// Construye el plan a ejecutar al retomar `journal`: toma los pasos con índice
+/// `>= done_through` (pendientes); revalida la huella de cada origen contra la del
+/// journal. Coincide → el paso entra; difiere o el origen desapareció → va a
+/// `skipped_changed`. Los pasos sin `from` (crear) siempre entran. Recalcula totales.
+pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
+    let mut steps: Vec<OpStep> = Vec::new();
+    let mut skipped_changed: Vec<PathBuf> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut total_files = 0usize;
+
+    for (idx, step) in journal.plan.steps.iter().enumerate() {
+        if idx < journal.done_through {
+            continue;
+        }
+        match &step.from {
+            None => {
+                steps.push(step.clone());
+                if !step.is_dir {
+                    total_files += 1;
+                }
+            }
+            Some(from) => {
+                let recorded = journal.source_fingerprints.get(idx).and_then(|f| f.clone());
+                let current = FileFingerprint::of(from);
+                if current.is_some() && current == recorded {
+                    steps.push(step.clone());
+                    total_bytes += step.bytes;
+                    if !step.is_dir {
+                        total_files += 1;
+                    }
+                } else {
+                    skipped_changed.push(from.clone());
+                }
+            }
+        }
+    }
+
+    ResumePlan {
+        plan: OpPlan { steps, total_bytes, total_files },
+        skipped_changed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +339,63 @@ mod tests {
         assert!(journal_path(dir.path(), "r1").exists());
         remove(dir.path(), "r1");
         assert!(!journal_path(dir.path(), "r1").exists());
+    }
+
+    #[test]
+    fn resume_plan_poda_a_pendientes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = |n: &str, b: u64| OpStep { from: Some(dir.path().join(n)), to: dir.path().join("dst").join(n), bytes: b, is_dir: false };
+        for (n, c) in [("a", "aa"), ("b", "bbb"), ("c", "cccc")] {
+            fs::write(dir.path().join(n), c.as_bytes()).unwrap();
+        }
+        let plan = OpPlan { steps: vec![mk("a",2), mk("b",3), mk("c",4)], total_bytes: 9, total_files: 3 };
+        let mut j = OpJournal::new("p1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        j.done_through = 1;
+        let r = resume_plan(&j);
+        assert_eq!(r.plan.steps.len(), 2);
+        assert_eq!(r.plan.total_bytes, 7);
+        assert_eq!(r.plan.total_files, 2);
+        assert!(r.skipped_changed.is_empty());
+    }
+
+    #[test]
+    fn resume_plan_salta_origen_cambiado() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_b = dir.path().join("b");
+        let mk = |n: &str, b: u64| OpStep { from: Some(dir.path().join(n)), to: dir.path().join("dst").join(n), bytes: b, is_dir: false };
+        fs::write(dir.path().join("a"), b"aa").unwrap();
+        fs::write(&src_b, b"bbb").unwrap();
+        let plan = OpPlan { steps: vec![mk("a",2), mk("b",3)], total_bytes: 5, total_files: 2 };
+        let j = OpJournal::new("p2".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        fs::write(&src_b, b"bbbbbbbb").unwrap(); // cambia tamaño
+        let r = resume_plan(&j);
+        assert_eq!(r.plan.steps.len(), 1);
+        assert_eq!(r.skipped_changed, vec![src_b]);
+    }
+
+    #[test]
+    fn resume_plan_salta_origen_ausente() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a");
+        let mk = OpStep { from: Some(src.clone()), to: dir.path().join("dst").join("a"), bytes: 2, is_dir: false };
+        fs::write(&src, b"aa").unwrap();
+        let plan = OpPlan { steps: vec![mk], total_bytes: 2, total_files: 1 };
+        let j = OpJournal::new("p3".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        fs::remove_file(&src).unwrap();
+        let r = resume_plan(&j);
+        assert!(r.plan.steps.is_empty());
+        assert_eq!(r.skipped_changed, vec![src]);
+    }
+
+    #[test]
+    fn resume_plan_pasos_sin_from_siempre_entran() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_step = OpStep { from: None, to: dir.path().join("dst").join("sub"), bytes: 0, is_dir: true };
+        let src = dir.path().join("a"); fs::write(&src, b"aa").unwrap();
+        let file_step = OpStep { from: Some(src), to: dir.path().join("dst").join("sub").join("a"), bytes: 2, is_dir: false };
+        let plan = OpPlan { steps: vec![dir_step, file_step], total_bytes: 2, total_files: 1 };
+        let j = OpJournal::new("p4".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let r = resume_plan(&j);
+        assert_eq!(r.plan.steps.len(), 2);
     }
 }

@@ -12,7 +12,7 @@ pub mod names;
 pub mod plan;
 
 pub use engine::{run_plan, spawn};
-pub use journal::{journal_path, remove, scan, FileFingerprint, JournalWriter, OpJournal};
+pub use journal::{journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan};
 pub use names::{dedup_name, is_valid_name};
 pub use plan::{plan, PlanError};
 
