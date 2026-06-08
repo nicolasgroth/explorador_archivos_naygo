@@ -440,6 +440,38 @@ impl NaygoApp {
         self.watch_rx.insert(id, rx);
     }
 
+    /// Poda los paneles cerrados por el usuario: cualquier `PaneId` que ya no esté en el
+    /// `DockState` se quita del workspace y de TODOS los mapas por-panel (listings, trees,
+    /// tree_listings, watchers, watch_rx, highlight_since). Cancela sus workers y suelta
+    /// sus handles del SO (el watcher de su carpeta). Evita fugas y mantiene viva la ruta
+    /// "idle" (sin esto, watchers nunca se vacía tras cerrar un panel).
+    fn prune_closed_panes(&mut self) {
+        let live: std::collections::HashSet<PaneId> =
+            crate::dock_translate::dock_pane_ids(&self.dock_state)
+                .into_iter()
+                .collect();
+        let closed: Vec<PaneId> = self
+            .workspace
+            .panes()
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| !live.contains(id))
+            .collect();
+        for id in closed {
+            // Cancelar el listado en curso de ese panel antes de soltarlo.
+            if let Some(l) = self.listings.get(&id) {
+                l.token.cancel();
+            }
+            self.listings.remove(&id);
+            self.trees.remove(&id);
+            self.watchers.remove(&id); // Drop del WatchHandle detiene el watcher de notify.
+            self.watch_rx.remove(&id);
+            self.highlight_since.remove(&id);
+            self.tree_listings.retain(|(pane_id, _), _| *pane_id != id);
+            self.workspace.remove_pane(id);
+        }
+    }
+
     /// Drena los eventos de carpeta de cada panel y los fusiona al listado en vivo.
     /// Las rutas nuevas se resaltan; con `FadeSeconds`, el resaltado caducado se limpia.
     fn pump_watchers(&mut self) {
@@ -454,13 +486,33 @@ impl NaygoApp {
                 batches.push((*id, events));
             }
         }
+        // Umbral de ráfaga: un lote enorme (p. ej. extraer un zip de miles de archivos)
+        // haría miles de `metadata()` síncronos en el hilo de UI → congelaría el frame
+        // (rompe la regla de oro "el hilo de UI no hace I/O de disco"). En ese caso,
+        // descartamos el merge incremental y re-listamos la carpeta fuera del hilo de UI
+        // (cancelable). Bajo el debounce normal, un lote trae pocos eventos y se fusiona.
+        const BURST_THRESHOLD: usize = 256;
         for (id, events) in batches {
+            if events.len() > BURST_THRESHOLD {
+                // Ráfaga: re-listar (off-thread) en vez de fusionar evento por evento.
+                if let Some(dir) = self
+                    .workspace
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone())
+                {
+                    self.start_listing(id, dir);
+                }
+                continue;
+            }
             if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 // El cierre lee la metadata de la ruta en el hilo de UI: barato por lote
-                // (pocos archivos por debounce de ~300 ms). Aceptable según el diseño.
+                // (pocos archivos por debounce de ~300 ms). Devuelve `None` si la ruta ya
+                // no existe (p. ej. el evento "from" de un rename visto suelto), para que
+                // `apply_dir_events` no inserte una entry fantasma.
                 let read = |p: &std::path::Path| {
-                    let meta = std::fs::metadata(p).ok();
-                    Some(naygo_core::listing::entry_from_path(p, meta.as_ref()))
+                    let meta = std::fs::metadata(p).ok()?;
+                    Some(naygo_core::listing::entry_from_path(p, Some(&meta)))
                 };
                 let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &events, &read);
                 let spec = f.sort;
@@ -472,6 +524,13 @@ impl NaygoApp {
                     // Reinicia el reloj del fade en cada lote nuevo (el plazo cuenta desde
                     // el último archivo aparecido).
                     self.highlight_since.insert(id, std::time::Instant::now());
+                }
+                // Podar del set de resaltado lo que ya no está en el listado (un archivo
+                // borrado tras resaltarse): mantiene el set acotado y sin rutas fantasma.
+                if !f.highlighted.is_empty() {
+                    let present: std::collections::HashSet<_> =
+                        f.entries.iter().map(|e| e.path.clone()).collect();
+                    f.highlighted.retain(|p| present.contains(p));
                 }
             }
         }
@@ -2041,6 +2100,12 @@ impl eframe::App for NaygoApp {
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
                 .show_inside(ui, &mut viewer);
         }
+        // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el
+        // DockState. Podamos ese panel de TODOS los mapas por-panel (workspace + workers
+        // + watchers + estado) para no filtrar handles del SO ni dejar al watcher
+        // vigilando una carpeta de un panel cerrado (consumo). Sin esto, el bucle de
+        // repintado de 500 ms nunca se apagaría tras cerrar un panel.
+        self.prune_closed_panes();
         for req in pending {
             match req {
                 crate::docking::PaneRequest::Activate { id } => {

@@ -130,7 +130,12 @@ mod windows_impl {
                     let sender_ptr = (*cs).lpCreateParams as *mut Sender<DeviceEvent>;
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, sender_ptr as isize);
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                // Devolver TRUE explícito tras guardar el puntero: si DefWindowProcW
+                // devolviera FALSE aquí, la creación abortaría SIN enviar WM_DESTROY y el
+                // Box<Sender> ya guardado se filtraría. TRUE garantiza que la creación
+                // continúe y que la liberación ocurra en WM_DESTROY.
+                let _ = DefWindowProcW(hwnd, msg, wparam, lparam);
+                LRESULT(1)
             }
             WM_DEVICECHANGE => {
                 // Solo nos interesan llegada/quita completas de un dispositivo. wparam trae
