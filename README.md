@@ -4,12 +4,11 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Fase watcher (carpeta en vivo + detección de dispositivos) en desarrollo.
-> Diseño en
-> [`docs/superpowers/specs/2026-06-08-naygo-watcher-design.md`](docs/superpowers/specs/2026-06-08-naygo-watcher-design.md);
+> **Estado:** Fase atajos configurables (keymap personalizable) en desarrollo. Diseño en
+> [`docs/superpowers/specs/2026-06-08-naygo-atajos-configurables-design.md`](docs/superpowers/specs/2026-06-08-naygo-atajos-configurables-design.md);
 > plan en
-> [`docs/superpowers/plans/2026-06-08-naygo-watcher.md`](docs/superpowers/plans/2026-06-08-naygo-watcher.md).
-> Operaciones (ops-A/B), paste inteligente, shell-A (abrir + discos) y bloque visual completos.
+> [`docs/superpowers/plans/2026-06-08-naygo-atajos-configurables.md`](docs/superpowers/plans/2026-06-08-naygo-atajos-configurables.md).
+> Operaciones (ops-A/B), paste inteligente, shell-A, watcher y bloque visual completos.
 
 ## Objetivos
 
