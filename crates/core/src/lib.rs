@@ -9,6 +9,7 @@ pub mod cancel;
 pub mod clipboard;
 pub mod columns;
 pub mod config;
+pub mod disk;
 pub mod filter;
 pub mod fs_model;
 pub mod i18n;
