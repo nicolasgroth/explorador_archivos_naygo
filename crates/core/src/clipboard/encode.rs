@@ -52,7 +52,11 @@ mod tests {
 
     fn sample(w: u32, h: u32) -> ClipboardImage {
         let rgba = (0..(w * h)).flat_map(|_| [255u8, 0, 0, 255]).collect();
-        ClipboardImage { width: w, height: h, rgba }
+        ClipboardImage {
+            width: w,
+            height: h,
+            rgba,
+        }
     }
 
     #[test]
@@ -74,7 +78,11 @@ mod tests {
 
     #[test]
     fn error_si_rgba_inconsistente() {
-        let bad = ClipboardImage { width: 2, height: 2, rgba: vec![0, 0, 0] };
+        let bad = ClipboardImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0, 0, 0],
+        };
         assert!(encode_image(&bad, ImageFmt::Png, 90).is_err());
     }
 }

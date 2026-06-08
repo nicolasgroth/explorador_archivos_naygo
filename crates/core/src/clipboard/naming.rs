@@ -42,19 +42,28 @@ mod tests {
     #[test]
     fn expande_fecha_epoch_cero() {
         // 1970-01-01 00:00 UTC
-        assert_eq!(expand_name_template("pegado {fecha}", 0), "pegado 1970-01-01 00-00");
+        assert_eq!(
+            expand_name_template("pegado {fecha}", 0),
+            "pegado 1970-01-01 00-00"
+        );
     }
 
     #[test]
     fn expande_fecha_conocida() {
         // 2021-01-01 00:00:00 UTC = 1609459200
-        assert_eq!(expand_name_template("x {fecha}", 1_609_459_200), "x 2021-01-01 00-00");
+        assert_eq!(
+            expand_name_template("x {fecha}", 1_609_459_200),
+            "x 2021-01-01 00-00"
+        );
     }
 
     #[test]
     fn expande_fecha_con_hora_minuto() {
         // 2021-01-01 13:45:00 UTC = 1609459200 + 13*3600 + 45*60 = 1609508700
-        assert_eq!(expand_name_template("{fecha}", 1_609_508_700), "2021-01-01 13-45");
+        assert_eq!(
+            expand_name_template("{fecha}", 1_609_508_700),
+            "2021-01-01 13-45"
+        );
     }
 
     #[test]

@@ -172,8 +172,14 @@ mod tests {
 
     #[test]
     fn files_vacio_a_nothing() {
-        let c = ClipboardContent::Files { paths: vec![], cut: false };
-        assert_eq!(decide_paste(&c, Path::new("D:/dst"), &settings(), 0, &none_exists), PastePlan::Nothing);
+        let c = ClipboardContent::Files {
+            paths: vec![],
+            cut: false,
+        };
+        assert_eq!(
+            decide_paste(&c, Path::new("D:/dst"), &settings(), 0, &none_exists),
+            PastePlan::Nothing
+        );
     }
 
     #[test]
@@ -191,8 +197,9 @@ mod tests {
 
     #[test]
     fn text_dedup_si_existe() {
-        let taken: HashSet<PathBuf> =
-            [PathBuf::from("D:/dst/pegado 1970-01-01 00-00.txt")].into_iter().collect();
+        let taken: HashSet<PathBuf> = [PathBuf::from("D:/dst/pegado 1970-01-01 00-00.txt")]
+            .into_iter()
+            .collect();
         let exists = |p: &Path| taken.contains(p);
         let c = ClipboardContent::Text("x".into());
         let plan = decide_paste(&c, Path::new("D:/dst"), &settings(), 0, &exists);
@@ -206,11 +213,19 @@ mod tests {
 
     #[test]
     fn image_a_create_image() {
-        let img = ClipboardImage { width: 2, height: 2, rgba: vec![0u8; 16] };
+        let img = ClipboardImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0u8; 16],
+        };
         let c = ClipboardContent::Image(img.clone());
         let plan = decide_paste(&c, Path::new("D:/dst"), &settings(), 0, &none_exists);
         match plan {
-            PastePlan::CreateImage { path, fmt, img: got } => {
+            PastePlan::CreateImage {
+                path,
+                fmt,
+                img: got,
+            } => {
                 assert_eq!(fmt, ImageFmt::Png);
                 assert_eq!(got, img);
                 assert_eq!(path, Path::new("D:/dst/captura 1970-01-01 00-00.png"));
@@ -221,14 +236,34 @@ mod tests {
 
     #[test]
     fn image_dims_absurdas_a_nothing() {
-        let bad = ClipboardImage { width: 2, height: 2, rgba: vec![0u8; 3] };
+        let bad = ClipboardImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0u8; 3],
+        };
         assert_eq!(
-            decide_paste(&ClipboardContent::Image(bad), Path::new("D:/dst"), &settings(), 0, &none_exists),
+            decide_paste(
+                &ClipboardContent::Image(bad),
+                Path::new("D:/dst"),
+                &settings(),
+                0,
+                &none_exists
+            ),
             PastePlan::Nothing
         );
-        let zero = ClipboardImage { width: 0, height: 5, rgba: vec![] };
+        let zero = ClipboardImage {
+            width: 0,
+            height: 5,
+            rgba: vec![],
+        };
         assert_eq!(
-            decide_paste(&ClipboardContent::Image(zero), Path::new("D:/dst"), &settings(), 0, &none_exists),
+            decide_paste(
+                &ClipboardContent::Image(zero),
+                Path::new("D:/dst"),
+                &settings(),
+                0,
+                &none_exists
+            ),
             PastePlan::Nothing
         );
     }
@@ -236,7 +271,13 @@ mod tests {
     #[test]
     fn empty_a_nothing() {
         assert_eq!(
-            decide_paste(&ClipboardContent::Empty, Path::new("D:/dst"), &settings(), 0, &none_exists),
+            decide_paste(
+                &ClipboardContent::Empty,
+                Path::new("D:/dst"),
+                &settings(),
+                0,
+                &none_exists
+            ),
             PastePlan::Nothing
         );
     }
