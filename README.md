@@ -4,12 +4,12 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Fase paste-inteligente (pegar el portapapeles del SO por tipo) en
-> desarrollo. Diseño en
-> [`docs/superpowers/specs/2026-06-08-naygo-paste-inteligente-design.md`](docs/superpowers/specs/2026-06-08-naygo-paste-inteligente-design.md);
+> **Estado:** Fase shell-A (abrir con app default + espacio de discos) en desarrollo.
+> Diseño en
+> [`docs/superpowers/specs/2026-06-08-naygo-shell-a-design.md`](docs/superpowers/specs/2026-06-08-naygo-shell-a-design.md);
 > plan en
-> [`docs/superpowers/plans/2026-06-08-naygo-paste-inteligente.md`](docs/superpowers/plans/2026-06-08-naygo-paste-inteligente.md).
-> Operaciones de archivo (ops-A), journal/retomar (ops-B) y bloque visual completos.
+> [`docs/superpowers/plans/2026-06-08-naygo-shell-a.md`](docs/superpowers/plans/2026-06-08-naygo-shell-a.md).
+> Operaciones (ops-A), journal/retomar (ops-B), paste inteligente y bloque visual completos.
 
 ## Objetivos
 
