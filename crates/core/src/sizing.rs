@@ -96,14 +96,28 @@ fn fs_lister(dir: &std::path::Path) -> ListResult {
             Ok(m) => m,
             Err(_) => {
                 // Entrada ilegible: representarla como archivo sin tamaño → parcial.
-                out.push(WalkEntry { path, is_dir: false, is_symlink: false, size: None });
+                out.push(WalkEntry {
+                    path,
+                    is_dir: false,
+                    is_symlink: false,
+                    size: None,
+                });
                 continue;
             }
         };
         let is_symlink = meta.file_type().is_symlink();
         let is_dir = meta.is_dir();
-        let size = if !is_dir && !is_symlink { Some(meta.len()) } else { None };
-        out.push(WalkEntry { path, is_dir, is_symlink, size });
+        let size = if !is_dir && !is_symlink {
+            Some(meta.len())
+        } else {
+            None
+        };
+        out.push(WalkEntry {
+            path,
+            is_dir,
+            is_symlink,
+            size,
+        });
     }
     Some(out)
 }
@@ -144,7 +158,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn lister_from(map: &HashMap<PathBuf, Vec<WalkEntry>>) -> impl Fn(&std::path::Path) -> ListResult + '_ {
+    fn lister_from(
+        map: &HashMap<PathBuf, Vec<WalkEntry>>,
+    ) -> impl Fn(&std::path::Path) -> ListResult + '_ {
         move |p: &std::path::Path| {
             map.get(p).map(|v| {
                 v.iter()
@@ -160,21 +176,43 @@ mod tests {
     }
 
     fn file(p: &str, size: u64) -> WalkEntry {
-        WalkEntry { path: PathBuf::from(p), is_dir: false, is_symlink: false, size: Some(size) }
+        WalkEntry {
+            path: PathBuf::from(p),
+            is_dir: false,
+            is_symlink: false,
+            size: Some(size),
+        }
     }
     fn dir(p: &str) -> WalkEntry {
-        WalkEntry { path: PathBuf::from(p), is_dir: true, is_symlink: false, size: None }
+        WalkEntry {
+            path: PathBuf::from(p),
+            is_dir: true,
+            is_symlink: false,
+            size: None,
+        }
     }
 
     #[test]
     fn suma_recursiva() {
         let mut m: HashMap<PathBuf, Vec<WalkEntry>> = HashMap::new();
-        m.insert(PathBuf::from("root"), vec![file("root/a.txt", 10), dir("root/sub")]);
-        m.insert(PathBuf::from("root/sub"), vec![file("root/sub/b.txt", 20), file("root/sub/c.txt", 5)]);
+        m.insert(
+            PathBuf::from("root"),
+            vec![file("root/a.txt", 10), dir("root/sub")],
+        );
+        m.insert(
+            PathBuf::from("root/sub"),
+            vec![file("root/sub/b.txt", 20), file("root/sub/c.txt", 5)],
+        );
         let lister = lister_from(&m);
         let token = CancellationToken::new();
         let mut prog = |_| {};
-        let (total, partial, cancelled) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
+        let (total, partial, cancelled) = dir_size_walk(
+            std::path::Path::new("root"),
+            true,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert_eq!(total, 35);
         assert!(!partial && !cancelled);
     }
@@ -182,36 +220,68 @@ mod tests {
     #[test]
     fn no_recursivo_solo_primer_nivel() {
         let mut m: HashMap<PathBuf, Vec<WalkEntry>> = HashMap::new();
-        m.insert(PathBuf::from("root"), vec![file("root/a.txt", 10), dir("root/sub")]);
+        m.insert(
+            PathBuf::from("root"),
+            vec![file("root/a.txt", 10), dir("root/sub")],
+        );
         m.insert(PathBuf::from("root/sub"), vec![file("root/sub/b.txt", 20)]);
         let lister = lister_from(&m);
         let token = CancellationToken::new();
         let mut prog = |_| {};
-        let (total, _, _) = dir_size_walk(std::path::Path::new("root"), false, &lister, &token, &mut prog);
+        let (total, _, _) = dir_size_walk(
+            std::path::Path::new("root"),
+            false,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert_eq!(total, 10);
     }
 
     #[test]
     fn no_sigue_symlink() {
         let mut m: HashMap<PathBuf, Vec<WalkEntry>> = HashMap::new();
-        let link = WalkEntry { path: PathBuf::from("root/link"), is_dir: true, is_symlink: true, size: None };
+        let link = WalkEntry {
+            path: PathBuf::from("root/link"),
+            is_dir: true,
+            is_symlink: true,
+            size: None,
+        };
         m.insert(PathBuf::from("root"), vec![file("root/a.txt", 10), link]);
-        m.insert(PathBuf::from("root/link"), vec![file("root/link/big.bin", 9999)]);
+        m.insert(
+            PathBuf::from("root/link"),
+            vec![file("root/link/big.bin", 9999)],
+        );
         let lister = lister_from(&m);
         let token = CancellationToken::new();
         let mut prog = |_| {};
-        let (total, _, _) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
+        let (total, _, _) = dir_size_walk(
+            std::path::Path::new("root"),
+            true,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert_eq!(total, 10);
     }
 
     #[test]
     fn subdir_ilegible_marca_parcial() {
         let mut m: HashMap<PathBuf, Vec<WalkEntry>> = HashMap::new();
-        m.insert(PathBuf::from("root"), vec![file("root/a.txt", 10), dir("root/secret")]);
+        m.insert(
+            PathBuf::from("root"),
+            vec![file("root/a.txt", 10), dir("root/secret")],
+        );
         let lister = lister_from(&m);
         let token = CancellationToken::new();
         let mut prog = |_| {};
-        let (total, partial, _) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
+        let (total, partial, _) = dir_size_walk(
+            std::path::Path::new("root"),
+            true,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert_eq!(total, 10);
         assert!(partial);
     }
@@ -223,7 +293,13 @@ mod tests {
         let lister = lister_from(&m);
         let token = CancellationToken::new();
         let mut prog = |_| {};
-        let (total, partial, _) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
+        let (total, partial, _) = dir_size_walk(
+            std::path::Path::new("root"),
+            true,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert_eq!(total, 0);
         assert!(!partial);
     }
@@ -237,7 +313,13 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         let mut prog = |_| {};
-        let (_, _, cancelled) = dir_size_walk(std::path::Path::new("root"), true, &lister, &token, &mut prog);
+        let (_, _, cancelled) = dir_size_walk(
+            std::path::Path::new("root"),
+            true,
+            &lister,
+            &token,
+            &mut prog,
+        );
         assert!(cancelled);
     }
 
@@ -253,7 +335,10 @@ mod tests {
         let mut total = None;
         while let Ok(msg) = rx.recv() {
             match msg {
-                SizeMsg::Done { total: t, .. } => { total = Some(t); break; }
+                SizeMsg::Done { total: t, .. } => {
+                    total = Some(t);
+                    break;
+                }
                 SizeMsg::Cancelled { .. } => break,
                 SizeMsg::Progress { .. } => {}
             }
@@ -272,7 +357,10 @@ mod tests {
         let rx = spawn_dir_size(dir.path().to_path_buf(), false, token);
         let mut total = None;
         while let Ok(msg) = rx.recv() {
-            if let SizeMsg::Done { total: t, .. } = msg { total = Some(t); break; }
+            if let SizeMsg::Done { total: t, .. } = msg {
+                total = Some(t);
+                break;
+            }
         }
         assert_eq!(total, Some(4));
     }
