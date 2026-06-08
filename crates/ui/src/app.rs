@@ -2358,6 +2358,7 @@ impl eframe::App for NaygoApp {
                 ops_actions: &mut ops_actions,
                 disk_usage: &self.disk_usage,
                 new_items_at_end: self.settings.new_items_at_end,
+                size_partial: &self.size_partial,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))

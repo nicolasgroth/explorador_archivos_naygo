@@ -130,6 +130,7 @@
   "col.modified": "Modified",
   "col.extension": "Extension",
   "col.created": "Created",
+  "size.partial_suffix": " (partial)",
   "menu.sort_asc": "Sort ascending",
   "menu.sort_desc": "Sort descending",
   "menu.filter": "Filter…",

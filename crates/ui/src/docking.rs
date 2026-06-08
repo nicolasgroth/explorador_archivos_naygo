@@ -46,6 +46,8 @@ pub struct NaygoTabViewer<'a> {
     pub disk_usage: &'a std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
     /// Si los archivos recién aparecidos (resaltados) se agrupan al final de la vista.
     pub new_items_at_end: bool,
+    /// Carpetas cuyo tamaño calculado es parcial (p. ej. subcarpetas sin acceso).
+    pub size_partial: &'a std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -97,6 +99,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     self.theme,
                     self.ops_actions,
                     self.new_items_at_end,
+                    self.size_partial,
                 );
                 for a in local {
                     self.table_actions.push((id, a));
