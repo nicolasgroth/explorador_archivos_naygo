@@ -21,6 +21,10 @@ impl ActiveTheme {
     pub fn accent(&self) -> egui::Color32 {
         to_color32(self.theme.accent)
     }
+    /// Color base del resaltado de archivos recién aparecidos (se tiñe el fondo de la fila).
+    pub fn highlight(&self) -> egui::Color32 {
+        to_color32(self.theme.highlight)
+    }
     // Reservado: barra del panel activo (hoy el realce usa accent()); se mantiene el
     // token para futuros estilos que diferencien barra y acento.
     #[allow(dead_code)]
