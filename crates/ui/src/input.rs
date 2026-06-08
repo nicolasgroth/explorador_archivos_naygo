@@ -6,6 +6,8 @@
 //! En la Fase 1 el mapa es fijo (default estilo Windows); los atajos
 //! configurables llegan en una fase posterior.
 
+pub use naygo_core::keymap::Action;
+
 /// Teclas que nos interesan en la Fase 1. Espejo reducido de `egui::Key`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -16,49 +18,6 @@ pub enum Key {
     Backspace,
     Tab,
     Escape,
-}
-
-/// Acción de alto nivel resultante de una tecla.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action {
-    MoveUp,
-    MoveDown,
-    /// Entrar a la carpeta enfocada / abrir el archivo enfocado.
-    Activate,
-    /// Abrir el elemento enfocado con su app por defecto (menú contextual).
-    Open,
-    /// Abrir el elemento enfocado con… (diálogo nativo de elección de app).
-    OpenWith,
-    /// Subir un nivel (carpeta padre).
-    GoUp,
-    /// Ir atrás en el historial del panel activo.
-    GoBack,
-    /// Ir adelante en el historial del panel activo.
-    GoForward,
-    /// Cambiar el panel de archivos activo.
-    SwitchPane,
-    /// Cancelar el listado en curso.
-    CancelListing,
-    /// Copiar la selección al portapapeles del sistema (Ctrl+C).
-    Copy,
-    /// Cortar la selección al portapapeles del sistema (Ctrl+X).
-    Cut,
-    /// Pegar el portapapeles del sistema en la carpeta activa, según su tipo (Ctrl+V).
-    Paste,
-    /// Eliminar la selección a la papelera (Delete).
-    Delete,
-    /// Eliminar la selección permanentemente (Shift+Delete).
-    DeletePermanent,
-    /// Renombrar el elemento enfocado (F2).
-    Rename,
-    /// Crear un archivo nuevo en la carpeta activa (Ctrl+N).
-    NewFile,
-    /// Crear una carpeta nueva en la carpeta activa (Ctrl+Shift+N).
-    NewDir,
-    /// Copiar la selección al OTRO panel de archivos (F5).
-    CopyToOther,
-    /// Mover la selección al OTRO panel de archivos (F6).
-    MoveToOther,
 }
 
 /// Mapea una tecla a su acción, si tiene una asignada en la Fase 1.

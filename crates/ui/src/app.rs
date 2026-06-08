@@ -1186,6 +1186,8 @@ impl NaygoApp {
             Action::NewDir => self.begin_create(true),
             Action::CopyToOther => self.transfer_to_other(false),
             Action::MoveToOther => self.transfer_to_other(true),
+            // implementado en la fase sizing
+            Action::ComputeSize => {}
         }
     }
 
