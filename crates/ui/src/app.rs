@@ -8,6 +8,7 @@
 
 use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::ops_dialogs::{ConflictChoice, NameResult};
 use crate::settings_window::SettingsSection;
 use crate::theme_apply::{self, ActiveTheme};
 use eframe::CreationContext;
@@ -41,7 +42,6 @@ pub struct PaneListing {
 pub struct ActiveOp {
     pub rx: Option<Receiver<OpMsg>>,
     pub token: CancellationToken,
-    #[allow(dead_code)] // consumido en Task 10 (panel de progreso)
     pub label: String, // p. ej. "Copiar → D:\backup"
     pub progress: Option<OpProgress>,
     pub summary: Option<OpSummary>,
@@ -52,10 +52,41 @@ pub struct ActiveOp {
 
 /// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
 #[derive(Default)]
-#[allow(dead_code)] // consumido en Task 10 (triggers Ctrl+C/X/V)
 pub struct InternalClipboard {
     pub paths: Vec<std::path::PathBuf>,
     pub cut: bool,
+}
+
+/// Diálogo modal pendiente de confirmación. Lleva la `OpRequest` ya armada; al
+/// confirmar se ajusta su política de conflicto / nombre y se llama a `start_op`.
+/// Resolver el conflicto AQUÍ (antes de lanzar) garantiza que el motor nunca
+/// reciba `ConflictPolicy::Ask` (su canal de conflicto se descarta en ops-A).
+pub enum PendingDialog {
+    /// Confirmar borrado (papelera si `permanent==false`, irreversible si true).
+    ConfirmDelete {
+        req: OpRequest,
+        label: String,
+        permanent: bool,
+        count: usize,
+    },
+    /// Resolver un conflicto de nombre antes de copiar/mover.
+    Conflict {
+        req: OpRequest,
+        label: String,
+        /// Nombre del primer choque (para el cuerpo del modal).
+        name: String,
+    },
+    /// Renombrar el elemento `source`: pide el nombre nuevo.
+    Rename {
+        source: std::path::PathBuf,
+        buf: String,
+    },
+    /// Crear archivo/carpeta en `dir`: pide el nombre.
+    Create {
+        dir: std::path::PathBuf,
+        is_dir: bool,
+        buf: String,
+    },
 }
 
 /// Un worker de listado solo-directorios para una rama del árbol.
@@ -85,11 +116,14 @@ pub struct NaygoApp {
     active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
-    /// Operaciones de archivo en curso/terminadas (panel de progreso en Task 10).
+    /// Operaciones de archivo en curso/terminadas (panel de progreso).
     active_ops: Vec<ActiveOp>,
-    /// Clipboard interno para Ctrl+C/X/V (consumido en Task 10).
-    #[allow(dead_code)] // consumido en Task 10
+    /// Clipboard interno para Ctrl+C/X/V.
     clipboard: InternalClipboard,
+    /// Diálogo modal pendiente (confirmación/conflicto/nombre), si hay uno.
+    pending_dialog: Option<PendingDialog>,
+    /// Si el panel de operaciones muestra el detalle expandido.
+    ops_panel_expanded: bool,
 }
 
 impl NaygoApp {
@@ -149,6 +183,8 @@ impl NaygoApp {
             settings_section: SettingsSection::Appearance,
             active_ops: Vec::new(),
             clipboard: InternalClipboard::default(),
+            pending_dialog: None,
+            ops_panel_expanded: false,
         };
         app.start_all_listings();
         app
@@ -370,7 +406,6 @@ impl NaygoApp {
 
     /// Lanza una operación: planifica, spawnea (o encola). Papelera = atómica vía
     /// platform (no pasa por el motor core). `label` se muestra en el panel.
-    #[allow(dead_code)] // consumido en Task 10 (triggers de panel)
     pub fn start_op(&mut self, req: OpRequest, label: String) {
         // Papelera: caso especial atómico vía platform.
         if let OpKind::Delete { to_trash: true } = &req.kind {
@@ -472,6 +507,16 @@ impl NaygoApp {
         self.active_ops
             .iter()
             .any(|o| o.rx.is_some() || o.pending.is_some())
+    }
+
+    /// Quita las ops realmente terminadas y sin nada que mostrar. Regla: una op se
+    /// descarta cuando no corre (`rx==None`), no está en cola (`pending==None`) y
+    /// NO tiene summary. Eso captura las que `Failed` (rx=None, sin summary). Las
+    /// Done/Cancelled conservan su summary → se quedan visibles hasta que el panel
+    /// se cierre (no hay ops) o llegue Task 11 con un "limpiar" explícito.
+    fn prune_finished_ops(&mut self) {
+        self.active_ops
+            .retain(|o| o.rx.is_some() || o.pending.is_some() || o.summary.is_some());
     }
 
     /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
@@ -598,7 +643,287 @@ impl NaygoApp {
                 }
             }
             Action::SwitchPane => self.cycle_active_files(),
+            Action::Copy => self.clipboard_set(false),
+            Action::Cut => self.clipboard_set(true),
+            Action::Paste => self.paste(),
+            Action::Delete => self.delete_selection(false),
+            Action::DeletePermanent => self.delete_selection(true),
+            Action::Rename => self.begin_rename(),
+            Action::NewFile => self.begin_create(false),
+            Action::NewDir => self.begin_create(true),
+            Action::CopyToOther => self.transfer_to_other(false),
+            Action::MoveToOther => self.transfer_to_other(true),
         }
+    }
+
+    /// Rutas seleccionadas en el panel activo (mapeadas vista→entries). Si no hay
+    /// selección, usa la entry enfocada. Vacío si no hay nada. Las rutas son las
+    /// de las entries reales (no la fila virtual "..").
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        let Some(f) = self.workspace.active_files() else {
+            return Vec::new();
+        };
+        let view = f.view_indices();
+        if !f.selected.is_empty() {
+            return f
+                .selected
+                .iter()
+                .filter_map(|&pos| view.get(pos))
+                .filter_map(|&real| f.entries.get(real))
+                .map(|e| e.path.clone())
+                .collect();
+        }
+        // Sin multi-selección: la entry enfocada.
+        f.focused_view_entry()
+            .map(|e| vec![e.path.clone()])
+            .unwrap_or_default()
+    }
+
+    /// Carpeta del panel de archivos activo.
+    fn active_dir(&self) -> Option<PathBuf> {
+        self.workspace.active_files().map(|f| f.current_dir.clone())
+    }
+
+    /// La carpeta del OTRO panel `Files` (para F5/F6). `None` si solo hay uno.
+    fn other_files_dir(&self) -> Option<PathBuf> {
+        let active = self.workspace.active_id();
+        self.workspace
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Files && Some(p.id) != active)
+            .find_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
+    }
+
+    /// Copia/corta la selección actual al clipboard interno.
+    fn clipboard_set(&mut self, cut: bool) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        self.clipboard = InternalClipboard { paths, cut };
+    }
+
+    /// ¿Existe ya `dest_dir/name` para alguna de las fuentes de nivel superior?
+    /// Devuelve el primer nombre que choca (para el cuerpo del modal de conflicto).
+    fn first_collision(sources: &[PathBuf], dest_dir: &Path) -> Option<String> {
+        for src in sources {
+            if let Some(name) = src.file_name() {
+                if dest_dir.join(name).exists() {
+                    return Some(name.to_string_lossy().into_owned());
+                }
+            }
+        }
+        None
+    }
+
+    /// Lanza una transferencia (copia/movida) resolviendo conflictos ANTES de
+    /// spawnear. Si hay colisión y la política es Ask, abre el modal de conflicto;
+    /// si no, usa `Overwrite` (no habrá conflicto) y arranca. `clear_clipboard`
+    /// indica si una movida exitosa debe vaciar el clipboard (paste de un "cut").
+    fn launch_transfer(&mut self, mut req: OpRequest, label: String) {
+        let Some(dest) = req.dest_dir.clone() else {
+            return;
+        };
+        match Self::first_collision(&req.sources, &dest) {
+            Some(name) => {
+                // Hay choque y la política aún es Ask → preguntar.
+                self.pending_dialog = Some(PendingDialog::Conflict { req, label, name });
+            }
+            None => {
+                // Sin choque: Overwrite es inocuo (no se gatilla ningún conflicto).
+                req.conflict = ConflictPolicy::Overwrite;
+                self.start_op(req, label);
+            }
+        }
+    }
+
+    /// Pega el clipboard interno en la carpeta activa (copia o movida según `cut`).
+    fn paste(&mut self) {
+        if self.clipboard.paths.is_empty() {
+            return;
+        }
+        let Some(dest) = self.active_dir() else {
+            return;
+        };
+        let cut = self.clipboard.cut;
+        let sources = self.clipboard.paths.clone();
+        let req = crate::ops_actions::transfer(cut, sources, dest.clone());
+        let verb = if cut {
+            self.i18n.t("op.cut")
+        } else {
+            self.i18n.t("op.paste")
+        };
+        let label = format!("{verb} → {}", dest.display());
+        // Una movida (cut) exitosa vacía el clipboard; la copia lo conserva.
+        if cut {
+            self.clipboard = InternalClipboard::default();
+        }
+        self.launch_transfer(req, label);
+    }
+
+    /// Copia/mueve la selección al OTRO panel (F5 copia, F6 mueve).
+    fn transfer_to_other(&mut self, move_it: bool) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let Some(dest) = self.other_files_dir() else {
+            return;
+        };
+        let req = crate::ops_actions::transfer(move_it, sources, dest.clone());
+        let verb = if move_it {
+            self.i18n.t("op.cut")
+        } else {
+            self.i18n.t("op.copy")
+        };
+        let label = format!("{verb} → {}", dest.display());
+        self.launch_transfer(req, label);
+    }
+
+    /// Elimina la selección. Papelera: confirma solo si `settings.confirm_trash`.
+    /// Permanente: confirma SIEMPRE (irreversible).
+    fn delete_selection(&mut self, permanent: bool) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let count = sources.len();
+        let to_trash = !permanent;
+        let req = crate::ops_actions::delete(sources, to_trash);
+        let label = if permanent {
+            self.i18n.t("op.delete_permanent").to_string()
+        } else {
+            self.i18n.t("op.delete").to_string()
+        };
+        let needs_confirm = permanent || self.settings.confirm_trash;
+        if needs_confirm {
+            self.pending_dialog = Some(PendingDialog::ConfirmDelete {
+                req,
+                label,
+                permanent,
+                count,
+            });
+        } else {
+            self.start_op(req, label);
+        }
+    }
+
+    /// Abre el modal de renombrar para la entry enfocada (precarga su nombre).
+    fn begin_rename(&mut self) {
+        let entry = self
+            .workspace
+            .active_files()
+            .and_then(|f| f.focused_view_entry())
+            .map(|e| (e.path.clone(), e.name.clone()));
+        if let Some((source, name)) = entry {
+            self.pending_dialog = Some(PendingDialog::Rename { source, buf: name });
+        }
+    }
+
+    /// Abre el modal de crear archivo/carpeta en la carpeta activa.
+    fn begin_create(&mut self, is_dir: bool) {
+        if let Some(dir) = self.active_dir() {
+            self.pending_dialog = Some(PendingDialog::Create {
+                dir,
+                is_dir,
+                buf: String::new(),
+            });
+        }
+    }
+
+    /// Pinta el diálogo modal pendiente (si hay) y, al recibir una decisión,
+    /// finaliza la operación: ajusta la política/nombre del request y la lanza.
+    /// Se llama cada frame desde `ui()`.
+    fn process_pending_dialog(&mut self, ctx: &egui::Context) {
+        // `take` para poder mutar `self` (start_op) sin un préstamo doble; si el
+        // modal sigue abierto sin decisión, lo volvemos a colocar al final.
+        let Some(dialog) = self.pending_dialog.take() else {
+            return;
+        };
+        match dialog {
+            PendingDialog::ConfirmDelete {
+                req,
+                label,
+                permanent,
+                count,
+            } => match crate::ops_dialogs::confirm_delete(ctx, &self.i18n, count, permanent) {
+                Some(true) => self.start_op(req, label),
+                Some(false) => {} // cancelado: descartar
+                None => {
+                    self.pending_dialog = Some(PendingDialog::ConfirmDelete {
+                        req,
+                        label,
+                        permanent,
+                        count,
+                    });
+                }
+            },
+            PendingDialog::Conflict { req, label, name } => {
+                match crate::ops_dialogs::conflict(ctx, &self.i18n, &name) {
+                    Some(choice) => self.resolve_conflict(req, label, choice),
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Conflict { req, label, name });
+                    }
+                }
+            }
+            PendingDialog::Rename { source, mut buf } => {
+                match crate::ops_dialogs::name_input(ctx, &self.i18n, "op.rename_title", &mut buf) {
+                    Some(NameResult::Confirmed(new_name)) => {
+                        let req = crate::ops_actions::rename(source, new_name);
+                        let label = self.i18n.t("op.rename").to_string();
+                        // Renombrar no genera conflicto vía nuestro flujo de paste;
+                        // el motor maneja el choque con la política del request. Para
+                        // ops-A usamos Overwrite (decisión simple) — el plan de rename
+                        // es un solo paso.
+                        let mut req = req;
+                        req.conflict = ConflictPolicy::Overwrite;
+                        self.start_op(req, label);
+                    }
+                    Some(NameResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Rename { source, buf });
+                    }
+                }
+            }
+            PendingDialog::Create {
+                dir,
+                is_dir,
+                mut buf,
+            } => {
+                let title = if is_dir {
+                    "op.new_folder_title"
+                } else {
+                    "op.new_file_title"
+                };
+                match crate::ops_dialogs::name_input(ctx, &self.i18n, title, &mut buf) {
+                    Some(NameResult::Confirmed(name)) => {
+                        let mut req = crate::ops_actions::create(dir, name, is_dir);
+                        req.conflict = ConflictPolicy::Overwrite;
+                        let label = if is_dir {
+                            self.i18n.t("op.new_folder").to_string()
+                        } else {
+                            self.i18n.t("op.new_file").to_string()
+                        };
+                        self.start_op(req, label);
+                    }
+                    Some(NameResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Create { dir, is_dir, buf });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Aplica la elección de conflicto a un request de copia/movida y lo lanza.
+    /// Skip cancela la operación (en ops-A el conflicto es a nivel de request).
+    fn resolve_conflict(&mut self, mut req: OpRequest, label: String, choice: ConflictChoice) {
+        match choice {
+            ConflictChoice::Overwrite => req.conflict = ConflictPolicy::Overwrite,
+            ConflictChoice::Rename => req.conflict = ConflictPolicy::Rename,
+            ConflictChoice::Skip => return, // saltar = no hacer nada
+        }
+        self.start_op(req, label);
     }
 
     /// Ejecuta una navegación sobre el panel activo y, si cambió de carpeta, lanza
@@ -696,6 +1021,12 @@ impl NaygoApp {
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // Si hay un diálogo modal abierto, él se queda con el teclado: no
+        // procesamos navegación ni disparadores (evita que escribir "C/V/N" en el
+        // campo de nombre gatille Copiar/Pegar/Nuevo, o que Delete borre detrás).
+        if self.pending_dialog.is_some() {
+            return;
+        }
         let keys = [
             (egui::Key::ArrowUp, NaygoKey::ArrowUp),
             (egui::Key::ArrowDown, NaygoKey::ArrowDown),
@@ -709,6 +1040,8 @@ impl NaygoApp {
         let mut typed = String::new();
         ctx.input(|i| {
             let alt = i.modifiers.alt;
+            let ctrl = i.modifiers.ctrl;
+            let shift = i.modifiers.shift;
             if alt && i.key_pressed(egui::Key::ArrowLeft) {
                 actions.push(Action::GoBack);
             } else if alt && i.key_pressed(egui::Key::ArrowRight) {
@@ -721,6 +1054,37 @@ impl NaygoApp {
                         }
                     }
                 }
+            }
+
+            // Disparadores de operaciones (con modificadores; no salen del mapa
+            // simple de `input::map_key`). Se evalúan aparte de la navegación.
+            if ctrl && i.key_pressed(egui::Key::C) {
+                actions.push(Action::Copy);
+            }
+            if ctrl && i.key_pressed(egui::Key::X) {
+                actions.push(Action::Cut);
+            }
+            if ctrl && i.key_pressed(egui::Key::V) {
+                actions.push(Action::Paste);
+            }
+            if ctrl && shift && i.key_pressed(egui::Key::N) {
+                actions.push(Action::NewDir);
+            } else if ctrl && i.key_pressed(egui::Key::N) {
+                actions.push(Action::NewFile);
+            }
+            if shift && i.key_pressed(egui::Key::Delete) {
+                actions.push(Action::DeletePermanent);
+            } else if i.key_pressed(egui::Key::Delete) {
+                actions.push(Action::Delete);
+            }
+            if i.key_pressed(egui::Key::F2) {
+                actions.push(Action::Rename);
+            }
+            if i.key_pressed(egui::Key::F5) {
+                actions.push(Action::CopyToOther);
+            }
+            if i.key_pressed(egui::Key::F6) {
+                actions.push(Action::MoveToOther);
             }
             if i.pointer.button_pressed(egui::PointerButton::Extra1) {
                 actions.push(map_mouse_extra(MouseExtra::Back));
@@ -818,6 +1182,30 @@ impl eframe::App for NaygoApp {
             });
         });
 
+        // Panel de operaciones (acoplado abajo). Se muestra si hay ops o si el modo
+        // de display es "siempre visible". En modo Modal seguimos mostrándolo como
+        // panel (un modal de progreso a pantalla completa es de Task 11+); aquí el
+        // panel cumple para ops-A. Las ✕ devueltas se cancelan tras pintar.
+        let show_panel = !self.active_ops.is_empty()
+            || self.settings.ops_display == naygo_core::config::OpsDisplay::AlwaysVisible;
+        if show_panel {
+            let active_ops = &self.active_ops;
+            let i18n = &self.i18n;
+            let expanded = &mut self.ops_panel_expanded;
+            let mut to_cancel = Vec::new();
+            egui::Panel::bottom("ops_panel")
+                .resizable(true)
+                .show_inside(ui, |ui| {
+                    to_cancel = crate::ops_panel::show(ui, active_ops, i18n, expanded);
+                });
+            for i in to_cancel {
+                if let Some(op) = self.active_ops.get(i) {
+                    op.token.cancel();
+                }
+            }
+            self.prune_finished_ops();
+        }
+
         // --- Sincronización del árbol con el panel Files activo ---
         // Aseguramos un DirTree por cada panel Tree y lo apuntamos a la carpeta del
         // panel activo, expandiendo la cadena de ancestros necesaria para revelarla.
@@ -868,6 +1256,7 @@ impl eframe::App for NaygoApp {
         let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
         let mut tree_revealed: HashSet<PaneId> = HashSet::new();
         let mut table_actions: Vec<(PaneId, crate::table_actions::TableAction)> = Vec::new();
+        let mut ops_actions: Vec<Action> = Vec::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -881,6 +1270,7 @@ impl eframe::App for NaygoApp {
                 tree_actions: &mut tree_actions,
                 tree_revealed: &mut tree_revealed,
                 table_actions: &mut table_actions,
+                ops_actions: &mut ops_actions,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -901,6 +1291,13 @@ impl eframe::App for NaygoApp {
                     }
                 }
             }
+        }
+
+        // Disparadores de operaciones del menú contextual. Se aplican DESPUÉS del
+        // `pending` (que ya enfocó/activó la fila del clic derecho), así las acciones
+        // basadas en foco actúan sobre la entry correcta.
+        for action in ops_actions {
+            self.apply_action(action);
         }
 
         // Acciones del árbol acumuladas durante el pintado.
@@ -970,6 +1367,15 @@ impl eframe::App for NaygoApp {
         if self.settings_open {
             let ctx = ui.ctx().clone();
             crate::settings_window::show_settings_viewport(self, &ctx);
+        }
+
+        // Diálogo modal pendiente (confirmar/conflicto/nombre). Se pinta al final
+        // para quedar sobre todo. Si hay uno abierto, repintamos para que el modal
+        // responda con fluidez aunque no haya workers activos.
+        if self.pending_dialog.is_some() {
+            let ctx = ui.ctx().clone();
+            self.process_pending_dialog(&ctx);
+            ui.ctx().request_repaint();
         }
     }
 

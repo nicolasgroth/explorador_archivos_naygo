@@ -4,9 +4,6 @@
 //! Funciones puras que arman una `OpRequest` a partir de las rutas seleccionadas y el
 //! destino. Separadas del render para testearlas sin egui.
 
-// consumido en Task 10
-#![allow(dead_code)]
-
 use naygo_core::ops::{ConflictPolicy, OpKind, OpRequest};
 use std::path::PathBuf;
 

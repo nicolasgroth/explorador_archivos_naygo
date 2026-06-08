@@ -35,6 +35,26 @@ pub enum Action {
     SwitchPane,
     /// Cancelar el listado en curso.
     CancelListing,
+    /// Copiar la selección al clipboard interno (Ctrl+C).
+    Copy,
+    /// Cortar la selección al clipboard interno (Ctrl+X).
+    Cut,
+    /// Pegar el clipboard interno en la carpeta activa (Ctrl+V).
+    Paste,
+    /// Eliminar la selección a la papelera (Delete).
+    Delete,
+    /// Eliminar la selección permanentemente (Shift+Delete).
+    DeletePermanent,
+    /// Renombrar el elemento enfocado (F2).
+    Rename,
+    /// Crear un archivo nuevo en la carpeta activa (Ctrl+N).
+    NewFile,
+    /// Crear una carpeta nueva en la carpeta activa (Ctrl+Shift+N).
+    NewDir,
+    /// Copiar la selección al OTRO panel de archivos (F5).
+    CopyToOther,
+    /// Mover la selección al OTRO panel de archivos (F6).
+    MoveToOther,
 }
 
 /// Mapea una tecla a su acción, si tiene una asignada en la Fase 1.

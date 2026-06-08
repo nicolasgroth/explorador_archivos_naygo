@@ -39,6 +39,9 @@ pub struct NaygoTabViewer<'a> {
         naygo_core::workspace::PaneId,
         crate::table_actions::TableAction,
     )>,
+    /// Disparadores de operaciones del menú contextual de un file panel, a aplicar
+    /// (vía `apply_action`) tras pintar. Patrón de acción diferida del file panel.
+    pub ops_actions: &'a mut Vec<crate::input::Action>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -88,6 +91,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     self.i18n,
                     &mut local,
                     self.theme,
+                    self.ops_actions,
                 );
                 for a in local {
                     self.table_actions.push((id, a));

@@ -12,6 +12,7 @@
 
 use crate::docking::PaneRequest;
 use crate::icons::IconProvider;
+use crate::input::Action;
 use crate::table_actions::TableAction;
 use egui_extras::{Column, TableBuilder};
 use naygo_core::columns::{ColumnKind, TableState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH};
@@ -56,6 +57,7 @@ pub fn show(
     i18n: &naygo_core::i18n::I18n,
     table_actions: &mut Vec<TableAction>,
     theme: &crate::theme_apply::ActiveTheme,
+    ops_actions: &mut Vec<Action>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -107,6 +109,8 @@ pub fn show(
     let mut clicked: Option<usize> = None;
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
+    // Fila sobre la que se abrió el menú contextual (para enfocarla antes de actuar).
+    let mut context_focus: Option<usize> = None;
 
     let visible_cols: Vec<naygo_core::columns::ColumnSpec> =
         table.visible_columns().cloned().collect();
@@ -273,6 +277,37 @@ pub fn show(
                         if row_resp.double_clicked() {
                             activated = Some(i);
                         }
+                        // Clic derecho: enfocar esta fila (para que las acciones del
+                        // menú operen sobre ella) y abrir el menú contextual de ops.
+                        // Las acciones se difieren a `NaygoApp` (patrón de la fila:
+                        // acumular y procesar tras pintar) vía `ops_actions`.
+                        if row_resp.secondary_clicked() {
+                            context_focus = Some(i);
+                        }
+                        row_resp.context_menu(|ui| {
+                            context_focus = Some(i);
+                            if ui.button(i18n.t("op.copy")).clicked() {
+                                ops_actions.push(Action::Copy);
+                                ui.close();
+                            }
+                            if ui.button(i18n.t("op.cut")).clicked() {
+                                ops_actions.push(Action::Cut);
+                                ui.close();
+                            }
+                            if ui.button(i18n.t("op.paste")).clicked() {
+                                ops_actions.push(Action::Paste);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button(i18n.t("op.rename")).clicked() {
+                                ops_actions.push(Action::Rename);
+                                ui.close();
+                            }
+                            if ui.button(i18n.t("op.delete")).clicked() {
+                                ops_actions.push(Action::Delete);
+                                ui.close();
+                            }
+                        });
                     }
                     DisplayRow::NoMatches => {
                         // Aviso en la primera columna; resto vacías.
@@ -304,6 +339,16 @@ pub fn show(
             pending.push(PaneRequest::Activate { id });
             pending.push(PaneRequest::NavigateTo { id, dir });
         }
+    }
+    // El clic derecho enfoca la fila y activa el panel, para que las acciones del
+    // menú contextual operen sobre la entry correcta (apply_action usa el foco si no
+    // hay multi-selección). Se aplica antes que `clicked` (clic izquierdo) que es
+    // mutuamente excluyente en la práctica.
+    if let Some(i) = context_focus {
+        if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.focused = Some(i);
+        }
+        pending.push(PaneRequest::Activate { id });
     }
     if let Some(i) = clicked {
         if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
@@ -429,7 +474,7 @@ fn format_size(entry: &Entry) -> String {
     }
 }
 
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
