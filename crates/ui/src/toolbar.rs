@@ -93,6 +93,27 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.add_files_pane();
     }
 
+    ui.separator();
+    // Strip de unidades de acceso rápido. Clic → navegar el panel activo a la raíz.
+    // Se construye `drive_roots` (clonando fuera de `app.drives_cache`) ANTES del
+    // bucle para no tener a `app` prestado mientras el cuerpo llama a `app.*`.
+    let drive_roots: Vec<(String, std::path::PathBuf)> = app
+        .drives_cache
+        .iter()
+        .map(|d| (d.path.to_string_lossy().into_owned(), d.path.clone()))
+        .collect();
+    let mut navigate_to: Option<std::path::PathBuf> = None;
+    for (label, path) in &drive_roots {
+        // Mostrar la letra de unidad (p. ej. "C:") de forma compacta.
+        let short = label.trim_end_matches(['\\', '/']).to_string();
+        if icon_button(ui, &short, label, true) {
+            navigate_to = Some(path.clone());
+        }
+    }
+    if let Some(path) = navigate_to {
+        app.navigate_active_to(path);
+    }
+
     // Botón de ajustes: a la derecha del todo si la barra es horizontal (Top).
     if matches!(app.settings.bar_position, BarPosition::Top) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

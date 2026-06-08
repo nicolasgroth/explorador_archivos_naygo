@@ -241,6 +241,9 @@ pub struct NaygoApp {
     disk_rx: Option<std::sync::mpsc::Receiver<(std::path::PathBuf, naygo_core::disk::DiskUsage)>>,
     /// Frames desde el último escaneo (re-escaneo periódico sin reloj).
     disk_scan_ticks: u32,
+    /// Últimas unidades vistas por el escaneo de discos (para el strip del toolbar).
+    /// Se refresca al inicio de cada escaneo; barato (drives() no toca espacio).
+    pub(crate) drives_cache: Vec<naygo_platform::drives::DriveInfo>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -315,6 +318,7 @@ impl NaygoApp {
             disk_usage: std::collections::HashMap::new(),
             disk_rx: None,
             disk_scan_ticks: 180,
+            drives_cache: Vec::new(),
         };
         app.start_all_listings();
         app
@@ -1092,6 +1096,9 @@ impl NaygoApp {
     /// Lanza un worker que lee el espacio de cada unidad y lo emite por canal. No
     /// solapa escaneos: si ya hay uno en curso, no hace nada.
     fn start_disk_scan(&mut self) {
+        // Refresca el strip del toolbar aunque haya un escaneo en curso (un USB
+        // recién conectado debe aparecer; drives() es barato, no lee espacio).
+        self.drives_cache = naygo_platform::drives::drives();
         if self.disk_rx.is_some() {
             return;
         }
@@ -1104,6 +1111,20 @@ impl NaygoApp {
             }
         });
         self.disk_rx = Some(rx);
+    }
+
+    /// Navega el panel activo a `path` (misma ruta que usa el árbol al navegar).
+    pub(crate) fn navigate_active_to(&mut self, path: std::path::PathBuf) {
+        if let Some(active) = self.workspace.active_id() {
+            if let Some(f) = self
+                .workspace
+                .pane_mut(active)
+                .and_then(|p| p.files.as_mut())
+            {
+                f.navigate_to(path.clone());
+                self.start_listing(active, path);
+            }
+        }
     }
 
     /// Drena el worker de espacio (por frame) y re-escanea cada ~180 frames (~3s).
@@ -1899,16 +1920,7 @@ impl eframe::App for NaygoApp {
                 crate::tree_actions::TreeAction::Expand(path) => self.tree_expand(id, path),
                 crate::tree_actions::TreeAction::Collapse(path) => self.tree_collapse(id, path),
                 crate::tree_actions::TreeAction::Navigate(path) => {
-                    if let Some(active) = self.workspace.active_id() {
-                        if let Some(f) = self
-                            .workspace
-                            .pane_mut(active)
-                            .and_then(|p| p.files.as_mut())
-                        {
-                            f.navigate_to(path.clone());
-                            self.start_listing(active, path);
-                        }
-                    }
+                    self.navigate_active_to(path);
                 }
             }
         }
