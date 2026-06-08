@@ -8,7 +8,8 @@
 
 use super::{ConflictPolicy, OpKind, OpPlan};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Huella de un archivo de origen al planificar, para revalidar al retomar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +78,94 @@ impl OpJournal {
     }
 }
 
+/// Intervalo mínimo entre escrituras del journal (throttle).
+const THROTTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Ruta del journal de la operación `id`.
+pub fn journal_path(config_dir: &Path, id: &str) -> PathBuf {
+    config_dir.join("ops-journal").join(format!("{id}.json"))
+}
+
+/// Borra el journal de `id` (al completar/descartar). Best-effort.
+pub fn remove(config_dir: &Path, id: &str) {
+    let _ = std::fs::remove_file(journal_path(config_dir, id));
+}
+
+/// Lee todas las operaciones interrumpidas de `<config_dir>/ops-journal/*.json`.
+/// Ignora archivos corruptos. Orden: por id (estable).
+pub fn scan(config_dir: &Path) -> Vec<OpJournal> {
+    let jdir = config_dir.join("ops-journal");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&jdir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(txt) = std::fs::read_to_string(&path) {
+                    if let Ok(j) = serde_json::from_str::<OpJournal>(&txt) {
+                        out.push(j);
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Escribe el journal a disco con throttle. Best-effort: si el write falla, no
+/// propaga (la operación no debe romperse por el journal).
+pub struct JournalWriter {
+    config_dir: PathBuf,
+    journal: OpJournal,
+    last_write: Option<Instant>,
+}
+
+impl JournalWriter {
+    /// Crea el escritor y persiste el journal inicial inmediatamente.
+    pub fn new(config_dir: &Path, journal: OpJournal) -> JournalWriter {
+        let w = JournalWriter {
+            config_dir: config_dir.to_path_buf(),
+            journal,
+            last_write: None,
+        };
+        w.persist();
+        w
+    }
+
+    /// Actualiza `done_through` y persiste si pasó el throttle (o es el primero).
+    pub fn record(&mut self, done_through: usize, now: Instant) {
+        self.journal.done_through = done_through;
+        let due = match self.last_write {
+            None => true,
+            Some(prev) => now.duration_since(prev) >= THROTTLE,
+        };
+        if due {
+            self.persist();
+            self.last_write = Some(now);
+        }
+    }
+
+    /// Fuerza una escritura (al terminar la operación).
+    pub fn flush(&mut self) {
+        self.persist();
+    }
+
+    /// El id del journal (para borrarlo al terminar).
+    pub fn id(&self) -> &str {
+        &self.journal.id
+    }
+
+    fn persist(&self) {
+        let path = journal_path(&self.config_dir, &self.journal.id);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(txt) = serde_json::to_string(&self.journal) {
+            let _ = std::fs::write(&path, txt);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +213,80 @@ mod tests {
         let json = serde_json::to_string(&j).unwrap();
         let back: OpJournal = serde_json::from_str(&json).unwrap();
         assert_eq!(back, j);
+    }
+
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn writer_primer_record_escribe() {
+        let dir = tempfile::tempdir().unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("w1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let mut w = JournalWriter::new(dir.path(), j);
+        let now = Instant::now();
+        w.record(1, now);
+        let path = journal_path(dir.path(), "w1");
+        let txt = fs::read_to_string(&path).unwrap();
+        let back: OpJournal = serde_json::from_str(&txt).unwrap();
+        assert_eq!(back.done_through, 1);
+    }
+
+    #[test]
+    fn writer_throttle_no_reescribe_dentro_del_umbral() {
+        let dir = tempfile::tempdir().unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("w2".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let mut w = JournalWriter::new(dir.path(), j);
+        let t0 = Instant::now();
+        w.record(1, t0);
+        w.record(2, t0 + Duration::from_millis(100));
+        let back: OpJournal =
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap()).unwrap();
+        assert_eq!(back.done_through, 1, "el 2º record dentro del umbral no se persiste");
+        w.record(3, t0 + Duration::from_millis(600));
+        let back2: OpJournal =
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w2")).unwrap()).unwrap();
+        assert_eq!(back2.done_through, 3);
+    }
+
+    #[test]
+    fn writer_flush_fuerza_persistencia() {
+        let dir = tempfile::tempdir().unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("w3".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let mut w = JournalWriter::new(dir.path(), j);
+        let t0 = Instant::now();
+        w.record(1, t0);
+        w.record(2, t0 + Duration::from_millis(50));
+        w.flush();
+        let back: OpJournal =
+            serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w3")).unwrap()).unwrap();
+        assert_eq!(back.done_through, 2);
+    }
+
+    #[test]
+    fn scan_lee_journals_e_ignora_corruptos() {
+        let dir = tempfile::tempdir().unwrap();
+        let jdir = dir.path().join("ops-journal");
+        fs::create_dir_all(&jdir).unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("ok".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        fs::write(jdir.join("ok.json"), serde_json::to_string(&j).unwrap()).unwrap();
+        fs::write(jdir.join("bad.json"), b"{ no es json").unwrap();
+        let found = scan(dir.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "ok");
+    }
+
+    #[test]
+    fn remove_borra_el_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("r1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let mut w = JournalWriter::new(dir.path(), j);
+        w.record(1, Instant::now());
+        assert!(journal_path(dir.path(), "r1").exists());
+        remove(dir.path(), "r1");
+        assert!(!journal_path(dir.path(), "r1").exists());
     }
 }
