@@ -164,5 +164,6 @@
   "resume.resume_all": "Resume all",
   "resume.discard_all": "Discard all",
   "resume.progress": "{done} of {total} files",
-  "resume.skipped_changed": "{n} file(s) skipped because they changed since the interruption"
+  "resume.skipped_changed": "{n} file(s) skipped because they changed since the interruption",
+  "disk.usage": "{free} free of {total} · {pct}% used"
 }

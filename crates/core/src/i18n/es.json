@@ -164,5 +164,6 @@
   "resume.resume_all": "Retomar todas",
   "resume.discard_all": "Descartar todas",
   "resume.progress": "{done} de {total} archivos",
-  "resume.skipped_changed": "{n} archivo(s) omitido(s) porque cambiaron desde la interrupción"
+  "resume.skipped_changed": "{n} archivo(s) omitido(s) porque cambiaron desde la interrupción",
+  "disk.usage": "{free} libres de {total} · {pct}% usado"
 }

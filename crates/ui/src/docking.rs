@@ -42,6 +42,8 @@ pub struct NaygoTabViewer<'a> {
     /// Disparadores de operaciones del menú contextual de un file panel, a aplicar
     /// (vía `apply_action`) tras pintar. Patrón de acción diferida del file panel.
     pub ops_actions: &'a mut Vec<crate::input::Action>,
+    /// Espacio por unidad (root → uso) para pintar la barra de uso en el árbol.
+    pub disk_usage: &'a std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -101,7 +103,13 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                 if let Some(tree) = self.trees.get(&id) {
                     let mut local: Vec<crate::tree_actions::TreeAction> = Vec::new();
                     let revealed = crate::panes::tree_panel::show(
-                        ui, tree, &mut local, self.icons, self.i18n, self.theme,
+                        ui,
+                        tree,
+                        &mut local,
+                        self.icons,
+                        self.i18n,
+                        self.theme,
+                        self.disk_usage,
                     );
                     if revealed {
                         self.tree_revealed.insert(id);
