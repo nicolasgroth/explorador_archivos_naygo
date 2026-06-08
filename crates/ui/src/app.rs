@@ -40,6 +40,12 @@ pub struct PaneListing {
     pub token: CancellationToken,
 }
 
+/// Un cálculo de tamaño de carpeta en curso.
+struct SizeJob {
+    rx: std::sync::mpsc::Receiver<naygo_core::sizing::SizeMsg>,
+    token: CancellationToken,
+}
+
 /// Una operación de archivo en curso (o terminada, mostrándose en el panel).
 pub struct ActiveOp {
     pub rx: Option<Receiver<OpMsg>>,
@@ -267,6 +273,12 @@ pub struct NaygoApp {
     device_watch: Option<naygo_platform::device_watch::DeviceWatchHandle>,
     /// Receptor de eventos de dispositivos.
     device_rx: Option<std::sync::mpsc::Receiver<naygo_platform::device_watch::DeviceEvent>>,
+    /// Cálculos de tamaño en curso, por (panel, carpeta).
+    size_jobs: std::collections::HashMap<(PaneId, std::path::PathBuf), SizeJob>,
+    /// Paths con tamaño calculado (para recalcular en F5), por panel.
+    sized_paths: std::collections::HashMap<PaneId, std::collections::HashSet<std::path::PathBuf>>,
+    /// Paths cuyo tamaño calculado es PARCIAL (accesos denegados) — para el render.
+    size_partial: std::collections::HashSet<std::path::PathBuf>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -355,6 +367,9 @@ impl NaygoApp {
             highlight_since: std::collections::HashMap::new(),
             device_watch,
             device_rx: Some(dev_rx),
+            size_jobs: HashMap::new(),
+            sized_paths: HashMap::new(),
+            size_partial: std::collections::HashSet::new(),
         };
         app.start_all_listings();
         app
@@ -689,7 +704,23 @@ impl NaygoApp {
             f.entries.clear();
             f.focused = None;
         }
+        // Carpetas que tenían tamaño calculado → recalcular tras re-listar.
+        let to_recompute: Vec<PathBuf> = self
+            .sized_paths
+            .get(&id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        self.sized_paths.remove(&id);
         self.start_listing(id, dir);
+        let recursive = !self.settings.size_no_subdirs;
+        for p in to_recompute {
+            if p.is_dir() {
+                self.size_partial.remove(&p);
+                let token = CancellationToken::new();
+                let rx = naygo_core::sizing::spawn_dir_size(p.clone(), recursive, token.clone());
+                self.size_jobs.insert((id, p), SizeJob { rx, token });
+            }
+        }
     }
 
     /// Agrega un panel de archivos nuevo en la carpeta del activo (o home) y lo
@@ -1290,6 +1321,9 @@ impl NaygoApp {
                         l.token.cancel();
                     }
                 }
+                for job in self.size_jobs.values() {
+                    job.token.cancel();
+                }
             }
             Action::SwitchPane => self.cycle_active_files(),
             Action::Copy => self.clipboard_set(false),
@@ -1302,8 +1336,90 @@ impl NaygoApp {
             Action::NewDir => self.begin_create(true),
             Action::CopyToOther => self.transfer_to_other(false),
             Action::MoveToOther => self.transfer_to_other(true),
-            // implementado en la fase sizing
-            Action::ComputeSize => {}
+            Action::ComputeSize => self.compute_size(),
+        }
+    }
+
+    /// Lanza el cálculo de tamaño de las carpetas seleccionadas (o la enfocada si es dir).
+    fn compute_size(&mut self) {
+        let Some(pane) = self.workspace.active_id() else {
+            return;
+        };
+        let dirs: Vec<std::path::PathBuf> = {
+            let from_sel: Vec<std::path::PathBuf> = self
+                .selected_paths()
+                .into_iter()
+                .filter(|p| p.is_dir())
+                .collect();
+            if !from_sel.is_empty() {
+                from_sel
+            } else if let Some(e) = self
+                .workspace
+                .active_files()
+                .and_then(|f| f.focused_view_entry())
+            {
+                if e.is_dir() {
+                    vec![e.path.clone()]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        };
+        let recursive = !self.settings.size_no_subdirs;
+        for dir in dirs {
+            if let Some(old) = self.size_jobs.remove(&(pane, dir.clone())) {
+                old.token.cancel();
+            }
+            let token = CancellationToken::new();
+            let rx = naygo_core::sizing::spawn_dir_size(dir.clone(), recursive, token.clone());
+            self.size_jobs.insert((pane, dir), SizeJob { rx, token });
+        }
+    }
+
+    /// Drena los cálculos de tamaño y escribe el resultado en el Entry de cada carpeta.
+    fn pump_sizing(&mut self) {
+        if self.size_jobs.is_empty() {
+            return;
+        }
+        let mut updates: Vec<(PaneId, std::path::PathBuf, u64, Option<bool>)> = Vec::new();
+        let mut finished: Vec<(PaneId, std::path::PathBuf)> = Vec::new();
+        for ((pane, dir), job) in &self.size_jobs {
+            while let Ok(msg) = job.rx.try_recv() {
+                match msg {
+                    naygo_core::sizing::SizeMsg::Progress { bytes } => {
+                        updates.push((*pane, dir.clone(), bytes, None));
+                    }
+                    naygo_core::sizing::SizeMsg::Done { total, partial } => {
+                        updates.push((*pane, dir.clone(), total, Some(partial)));
+                        finished.push((*pane, dir.clone()));
+                    }
+                    naygo_core::sizing::SizeMsg::Cancelled { bytes } => {
+                        updates.push((*pane, dir.clone(), bytes, Some(false)));
+                        finished.push((*pane, dir.clone()));
+                    }
+                }
+            }
+        }
+        for (pane, dir, bytes, fin) in updates {
+            if let Some(f) = self.workspace.pane_mut(pane).and_then(|p| p.files.as_mut()) {
+                if let Some(e) = f.entries.iter_mut().find(|e| e.path == dir) {
+                    e.size = Some(bytes);
+                }
+            }
+            if let Some(partial) = fin {
+                if partial {
+                    self.size_partial.insert(dir.clone());
+                }
+                self.sized_paths
+                    .entry(pane)
+                    .or_default()
+                    .insert(dir.clone());
+            }
+        }
+        for key in finished {
+            self.size_jobs.remove(&key);
         }
     }
 
@@ -2080,6 +2196,7 @@ impl eframe::App for NaygoApp {
         self.pump_tree();
         self.pump_ops();
         self.pump_disk_usage();
+        self.pump_sizing();
         self.pump_watchers();
         self.pump_devices();
         self.pump_paste_write();
@@ -2099,6 +2216,7 @@ impl eframe::App for NaygoApp {
             || self.any_op_active()
             || self.pending_paste_write.is_some()
             || self.disk_rx.is_some()
+            || !self.size_jobs.is_empty()
         {
             ctx.request_repaint();
         }
