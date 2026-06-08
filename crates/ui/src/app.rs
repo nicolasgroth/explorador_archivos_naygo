@@ -16,6 +16,9 @@ use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
+use naygo_core::ops::{
+    self, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpPlan, OpProgress, OpRequest, OpSummary,
+};
 use naygo_core::sort::sort_entries;
 use naygo_core::theme::pack::PackCatalog;
 use naygo_core::theme::ThemeCatalog;
@@ -32,6 +35,27 @@ use std::sync::mpsc::Receiver;
 pub struct PaneListing {
     pub rx: Option<Receiver<ListingMsg>>,
     pub token: CancellationToken,
+}
+
+/// Una operación de archivo en curso (o terminada, mostrándose en el panel).
+pub struct ActiveOp {
+    pub rx: Option<Receiver<OpMsg>>,
+    pub token: CancellationToken,
+    #[allow(dead_code)] // consumido en Task 10 (panel de progreso)
+    pub label: String, // p. ej. "Copiar → D:\backup"
+    pub progress: Option<OpProgress>,
+    pub summary: Option<OpSummary>,
+    pub started: bool, // false = en cola, true = corriendo
+    /// Plan+kind+conflict pendientes de lanzar (modo cola). None si ya se lanzó.
+    pub pending: Option<(OpPlan, OpKind, ConflictPolicy)>,
+}
+
+/// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
+#[derive(Default)]
+#[allow(dead_code)] // consumido en Task 10 (triggers Ctrl+C/X/V)
+pub struct InternalClipboard {
+    pub paths: Vec<std::path::PathBuf>,
+    pub cut: bool,
 }
 
 /// Un worker de listado solo-directorios para una rama del árbol.
@@ -61,6 +85,11 @@ pub struct NaygoApp {
     active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
+    /// Operaciones de archivo en curso/terminadas (panel de progreso en Task 10).
+    active_ops: Vec<ActiveOp>,
+    /// Clipboard interno para Ctrl+C/X/V (consumido en Task 10).
+    #[allow(dead_code)] // consumido en Task 10
+    clipboard: InternalClipboard,
 }
 
 impl NaygoApp {
@@ -118,6 +147,8 @@ impl NaygoApp {
             active_theme,
             settings_open: false,
             settings_section: SettingsSection::Appearance,
+            active_ops: Vec::new(),
+            clipboard: InternalClipboard::default(),
         };
         app.start_all_listings();
         app
@@ -335,6 +366,112 @@ impl NaygoApp {
 
     fn any_listing_active(&self) -> bool {
         self.listings.values().any(|l| l.rx.is_some())
+    }
+
+    /// Lanza una operación: planifica, spawnea (o encola). Papelera = atómica vía
+    /// platform (no pasa por el motor core). `label` se muestra en el panel.
+    #[allow(dead_code)] // consumido en Task 10 (triggers de panel)
+    pub fn start_op(&mut self, req: OpRequest, label: String) {
+        // Papelera: caso especial atómico vía platform.
+        if let OpKind::Delete { to_trash: true } = &req.kind {
+            let _ = naygo_platform::trash::move_to_trash(&req.sources);
+            if let (Some(id), Some(dir)) = (
+                self.workspace.active_id(),
+                self.workspace.active_files().map(|f| f.current_dir.clone()),
+            ) {
+                self.refresh_pane(id, dir);
+            }
+            return;
+        }
+        let plan = match ops::plan(&req) {
+            Ok(p) => p,
+            Err(_e) => return, // plan inválido: en futuro mostrar error en UI
+        };
+        let queue = self.settings.ops_mode == naygo_core::config::OpsMode::Queue;
+        let any_running = self.active_ops.iter().any(|o| o.started && o.rx.is_some());
+        let token = CancellationToken::new();
+        if queue && any_running {
+            // Encolar: guardar plan+kind+conflict; se lanza en pump_ops al liberarse.
+            self.active_ops.push(ActiveOp {
+                rx: None,
+                token,
+                label,
+                progress: None,
+                summary: None,
+                started: false,
+                pending: Some((plan, req.kind, req.conflict)),
+            });
+        } else {
+            let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
+            let (rx, _h) = ops::spawn(plan, req.kind, req.conflict, token.clone(), crx);
+            self.active_ops.push(ActiveOp {
+                rx: Some(rx),
+                token,
+                label,
+                progress: None,
+                summary: None,
+                started: true,
+                pending: None,
+            });
+        }
+    }
+
+    /// Drena canales de las ops y gestiona la cola (lanza la siguiente al liberarse).
+    pub fn pump_ops(&mut self) {
+        // Drenar mensajes de las ops corriendo. `just_finished` se marca cuando una
+        // op pasa a tener summary este pump → refrescamos el panel activo después.
+        let mut just_finished = false;
+        for op in &mut self.active_ops {
+            // Drenar a un buffer local primero: no podemos asignar `op.rx = None`
+            // mientras `rx` sigue prestado dentro del while (E0506).
+            let mut msgs = Vec::new();
+            if let Some(rx) = &op.rx {
+                while let Ok(msg) = rx.try_recv() {
+                    msgs.push(msg);
+                }
+            }
+            for msg in msgs {
+                match msg {
+                    OpMsg::Progress(p) => op.progress = Some(p),
+                    OpMsg::Done(s) | OpMsg::Cancelled(s) => {
+                        op.summary = Some(s);
+                        op.rx = None;
+                        just_finished = true;
+                    }
+                    OpMsg::Failed(_) => op.rx = None,
+                    OpMsg::Conflict(_) => {} // ops-A resuelve conflicto antes de spawn
+                }
+            }
+        }
+        // Una op acabó de tocar el filesystem → re-listar el panel activo para
+        // mostrar el resultado (copia/movida/borrada).
+        if just_finished {
+            if let (Some(id), Some(dir)) = (
+                self.workspace.active_id(),
+                self.workspace.active_files().map(|f| f.current_dir.clone()),
+            ) {
+                self.refresh_pane(id, dir);
+            }
+        }
+        // Lanzar la siguiente pendiente (cola) si no hay ninguna corriendo.
+        let none_running_now = !self.active_ops.iter().any(|o| o.started && o.rx.is_some());
+        if none_running_now {
+            if let Some(idx) = self.active_ops.iter().position(|o| o.pending.is_some()) {
+                if let Some((plan, kind, conflict)) = self.active_ops[idx].pending.take() {
+                    let token = self.active_ops[idx].token.clone();
+                    let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
+                    let (rx, _h) = ops::spawn(plan, kind, conflict, token, crx);
+                    self.active_ops[idx].rx = Some(rx);
+                    self.active_ops[idx].started = true;
+                }
+            }
+        }
+    }
+
+    pub fn any_op_active(&self) -> bool {
+        self.active_ops
+            .iter()
+            .any(|o| o.rx.is_some() || o.pending.is_some())
     }
 
     /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
@@ -638,8 +775,9 @@ impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_all();
         self.pump_tree();
+        self.pump_ops();
         self.handle_input(ctx);
-        if self.any_listing_active() || self.any_tree_listing_active() {
+        if self.any_listing_active() || self.any_tree_listing_active() || self.any_op_active() {
             ctx.request_repaint();
         }
     }
