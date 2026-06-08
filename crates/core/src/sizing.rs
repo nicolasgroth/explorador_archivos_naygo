@@ -87,6 +87,21 @@ pub fn dir_size_walk(
 
 /// Lista un directorio del FS real para `dir_size_walk`. `None` si no se puede leer.
 /// Usa `symlink_metadata` (NO sigue symlinks). Los archivos aportan su `len()`.
+/// ¿La metadata corresponde a un reparse point de Windows (symlink O junction)? En
+/// Windows usamos los atributos del archivo (`FILE_ATTRIBUTE_REPARSE_POINT = 0x400`); en
+/// otras plataformas siempre `false` (allí `is_symlink()` ya cubre los enlaces).
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
 fn fs_lister(dir: &std::path::Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
@@ -105,7 +120,11 @@ fn fs_lister(dir: &std::path::Path) -> ListResult {
                 continue;
             }
         };
-        let is_symlink = meta.file_type().is_symlink();
+        // "No seguir": tanto los symlinks como los JUNCTIONS de Windows. `is_symlink()` NO
+        // detecta junctions (son reparse points de tipo mount-point, no name-surrogate), así
+        // que en Windows tratamos cualquier reparse point como no-descendible para evitar
+        // loops y doble conteo (requisito del diseño).
+        let is_symlink = meta.file_type().is_symlink() || is_reparse_point(&meta);
         let is_dir = meta.is_dir();
         let size = if !is_dir && !is_symlink {
             Some(meta.len())

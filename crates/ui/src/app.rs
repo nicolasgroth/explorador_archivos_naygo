@@ -555,6 +555,24 @@ impl NaygoApp {
             }
             self.highlight_since.remove(&id);
         }
+        // Re-listar deja obsoletos los tamaños calculados de la carpeta anterior: cancelar
+        // los jobs de sizing de ESTE panel y olvidar su registro (si no, acumularían
+        // carpetas de directorios ya no visibles y se re-calcularían en cada refresh).
+        // `refresh_pane` ya tomó su snapshot de `sized_paths` ANTES de llamar aquí, así que
+        // su recálculo no se ve afectado; esto limpia el caso de navegación normal.
+        self.size_jobs.retain(|(pane_id, _), job| {
+            if *pane_id == id {
+                job.token.cancel();
+                false
+            } else {
+                true
+            }
+        });
+        if let Some(paths) = self.sized_paths.remove(&id) {
+            for p in paths {
+                self.size_partial.remove(&p);
+            }
+        }
         // Feedback "Listando…" mientras el panel activo carga (se reemplaza por el
         // conteo de elementos al terminar, en pump_one).
         if self.workspace.active_id() == Some(id) {
@@ -599,6 +617,17 @@ impl NaygoApp {
             self.watch_rx.remove(&id);
             self.highlight_since.remove(&id);
             self.tree_listings.retain(|(pane_id, _), _| *pane_id != id);
+            // Cálculos de tamaño del panel cerrado: cancelar sus tokens y quitarlos (si no,
+            // su worker sigue caminando el FS y el repaint nunca se apaga).
+            self.size_jobs.retain(|(pane_id, _), job| {
+                if *pane_id == id {
+                    job.token.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+            self.sized_paths.remove(&id);
             self.workspace.remove_pane(id);
         }
     }
