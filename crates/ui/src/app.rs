@@ -7,7 +7,7 @@
 //! sobre el panel activo. El layout y las carpetas se persisten vía `config`.
 
 use crate::icons::IconProvider;
-use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::input::{map_mouse_extra, Action, MouseExtra};
 use crate::ops_dialogs::{ConflictChoice, NameResult};
 use crate::settings_window::SettingsSection;
 use crate::theme_apply::{self, ActiveTheme};
@@ -217,6 +217,10 @@ pub struct NaygoApp {
     config_dir: PathBuf,
     pub status: String,
     typeahead_buf: String,
+    /// Atajos de teclado configurables.
+    keymap: naygo_core::keymap::KeyMap,
+    /// Acción cuyo nuevo atajo se está capturando en el editor (suspende el input global).
+    shortcut_capture: Option<naygo_core::keymap::Action>,
     icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
@@ -272,6 +276,7 @@ impl NaygoApp {
         let config_dir = config::portable_dir();
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
+        let keymap = config::load_keymap(&config_dir);
         let home = default_start_dir();
 
         // i18n: idioma persistido si ya hubo settings; si es el primer arranque,
@@ -321,6 +326,8 @@ impl NaygoApp {
             config_dir,
             status: String::new(),
             typeahead_buf: String::new(),
+            keymap,
+            shortcut_capture: None,
             icons,
             i18n,
             theme_catalog,
@@ -1830,74 +1837,87 @@ impl NaygoApp {
         // procesamos navegación ni disparadores (evita que escribir "C/V/N" en el
         // campo de nombre gatille Copiar/Pegar/Nuevo, o que Delete borre detrás).
         // El modal de retomar (al arrancar) cuenta igual: bloquea hasta decidir.
-        if self.pending_dialog.is_some() || !self.pending_resume.is_empty() {
+        // El editor de atajos, mientras captura una combinación, también se queda
+        // con el teclado: no queremos que pulsar el atajo a reasignar dispare su acción.
+        if self.pending_dialog.is_some()
+            || !self.pending_resume.is_empty()
+            || self.shortcut_capture.is_some()
+        {
             return;
         }
-        let keys = [
-            (egui::Key::ArrowUp, NaygoKey::ArrowUp),
-            (egui::Key::ArrowDown, NaygoKey::ArrowDown),
-            (egui::Key::ArrowLeft, NaygoKey::ArrowLeft),
-            (egui::Key::Enter, NaygoKey::Enter),
-            (egui::Key::Backspace, NaygoKey::Backspace),
-            (egui::Key::Tab, NaygoKey::Tab),
-            (egui::Key::Escape, NaygoKey::Escape),
+        // Teclas que la app entiende (espejo de `egui_key_to_code`). Por cada una
+        // que se PRESIONE este frame (edge), armamos el `Chord` con los modificadores
+        // actuales y dejamos que el keymap resuelva la acción.
+        const KEYS: &[egui::Key] = &[
+            egui::Key::ArrowUp,
+            egui::Key::ArrowDown,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowRight,
+            egui::Key::Enter,
+            egui::Key::Backspace,
+            egui::Key::Tab,
+            egui::Key::Escape,
+            egui::Key::Delete,
+            egui::Key::F2,
+            egui::Key::F3,
+            egui::Key::F5,
+            egui::Key::F6,
+            egui::Key::A,
+            egui::Key::B,
+            egui::Key::C,
+            egui::Key::D,
+            egui::Key::E,
+            egui::Key::F,
+            egui::Key::G,
+            egui::Key::H,
+            egui::Key::I,
+            egui::Key::J,
+            egui::Key::K,
+            egui::Key::L,
+            egui::Key::M,
+            egui::Key::N,
+            egui::Key::O,
+            egui::Key::P,
+            egui::Key::Q,
+            egui::Key::R,
+            egui::Key::S,
+            egui::Key::T,
+            egui::Key::U,
+            egui::Key::V,
+            egui::Key::W,
+            egui::Key::X,
+            egui::Key::Y,
+            egui::Key::Z,
         ];
         let mut actions = Vec::new();
         let mut typed = String::new();
         ctx.input(|i| {
-            let alt = i.modifiers.alt;
             let ctrl = i.modifiers.ctrl;
             let shift = i.modifiers.shift;
-            if alt && i.key_pressed(egui::Key::ArrowLeft) {
-                actions.push(Action::GoBack);
-            } else if alt && i.key_pressed(egui::Key::ArrowRight) {
-                actions.push(Action::GoForward);
-            } else {
-                for (egui_key, naygo_key) in keys {
-                    if i.key_pressed(egui_key) {
-                        if let Some(a) = map_key(naygo_key) {
-                            actions.push(a);
+            let alt = i.modifiers.alt;
+            for &k in KEYS {
+                if i.key_pressed(k) {
+                    if let Some(code) = crate::input::egui_key_to_code(k) {
+                        let chord = naygo_core::keymap::Chord {
+                            key: code,
+                            ctrl,
+                            shift,
+                            alt,
+                        };
+                        if let Some(action) = self.keymap.action_for(&chord) {
+                            actions.push(action);
                         }
                     }
                 }
             }
-
-            // Disparadores de operaciones (con modificadores; no salen del mapa
-            // simple de `input::map_key`). Se evalúan aparte de la navegación.
-            if ctrl && i.key_pressed(egui::Key::C) {
-                actions.push(Action::Copy);
-            }
-            if ctrl && i.key_pressed(egui::Key::X) {
-                actions.push(Action::Cut);
-            }
-            if ctrl && i.key_pressed(egui::Key::V) {
-                actions.push(Action::Paste);
-            }
-            if ctrl && shift && i.key_pressed(egui::Key::N) {
-                actions.push(Action::NewDir);
-            } else if ctrl && i.key_pressed(egui::Key::N) {
-                actions.push(Action::NewFile);
-            }
-            if shift && i.key_pressed(egui::Key::Delete) {
-                actions.push(Action::DeletePermanent);
-            } else if i.key_pressed(egui::Key::Delete) {
-                actions.push(Action::Delete);
-            }
-            if i.key_pressed(egui::Key::F2) {
-                actions.push(Action::Rename);
-            }
-            if i.key_pressed(egui::Key::F5) {
-                actions.push(Action::CopyToOther);
-            }
-            if i.key_pressed(egui::Key::F6) {
-                actions.push(Action::MoveToOther);
-            }
+            // Botones laterales del mouse (fijos, fuera del keymap).
             if i.pointer.button_pressed(egui::PointerButton::Extra1) {
                 actions.push(map_mouse_extra(MouseExtra::Back));
             }
             if i.pointer.button_pressed(egui::PointerButton::Extra2) {
                 actions.push(map_mouse_extra(MouseExtra::Forward));
             }
+            // Typeahead: texto escrito que no fue un atajo.
             for event in &i.events {
                 if let egui::Event::Text(t) = event {
                     typed.push_str(t);
