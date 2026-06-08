@@ -18,6 +18,7 @@ pub mod icon_kind;
 pub mod keymap;
 pub mod listing;
 pub mod ops;
+pub mod sizing;
 pub mod sort;
 pub mod theme;
 pub mod tree;
