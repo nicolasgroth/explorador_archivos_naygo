@@ -157,11 +157,6 @@ impl JournalWriter {
         self.persist();
     }
 
-    /// El id del journal (para borrarlo al terminar).
-    pub fn id(&self) -> &str {
-        &self.journal.id
-    }
-
     fn persist(&self) {
         let path = journal_path(&self.config_dir, &self.journal.id);
         if let Some(parent) = path.parent() {

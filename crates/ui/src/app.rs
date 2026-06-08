@@ -612,7 +612,16 @@ impl NaygoApp {
                             journal::remove(&cfg, id);
                         }
                     }
-                    OpMsg::Failed(_) => op.rx = None,
+                    OpMsg::Failed(_) => {
+                        op.rx = None;
+                        // El motor nunca emite Failed hoy (los fallos por paso van en
+                        // el summary), pero si lo hiciera, borramos el journal igual
+                        // para no dejar una op "interrumpida" fantasma que re-pregunte
+                        // al arrancar.
+                        if let Some(id) = &op.journal_id {
+                            journal::remove(&cfg, id);
+                        }
+                    }
                     OpMsg::Conflict(_) => {} // ops-A resuelve conflicto antes de spawn
                 }
             }
@@ -1218,7 +1227,8 @@ impl NaygoApp {
         // Si hay un diálogo modal abierto, él se queda con el teclado: no
         // procesamos navegación ni disparadores (evita que escribir "C/V/N" en el
         // campo de nombre gatille Copiar/Pegar/Nuevo, o que Delete borre detrás).
-        if self.pending_dialog.is_some() {
+        // El modal de retomar (al arrancar) cuenta igual: bloquea hasta decidir.
+        if self.pending_dialog.is_some() || !self.pending_resume.is_empty() {
             return;
         }
         let keys = [
