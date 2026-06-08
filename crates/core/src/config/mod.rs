@@ -313,6 +313,17 @@ pub fn save_workspace(dir: &Path, w: &WorkspacePersist) {
     write_json(&dir.join("workspace.json"), w);
 }
 
+/// Carga el keymap desde `keybindings.json`; ausente/corrupto → defaults.
+pub fn load_keymap(dir: &Path) -> crate::keymap::KeyMap {
+    read_json::<crate::keymap::KeyMap>(&dir.join("keybindings.json"))
+        .unwrap_or_else(crate::keymap::KeyMap::defaults)
+}
+
+/// Guarda el keymap.
+pub fn save_keymap(dir: &Path, km: &crate::keymap::KeyMap) {
+    write_json(&dir.join("keybindings.json"), km);
+}
+
 /// Directorio de config portable: junto al ejecutable, o el cwd como fallback.
 pub fn portable_dir() -> PathBuf {
     std::env::current_exe()
@@ -493,5 +504,34 @@ mod tests {
         assert_eq!(loaded.active, Some(PaneId(3)));
         assert_eq!(loaded.layout.pane_ids(), vec![PaneId(3)]);
         assert_eq!(loaded.purposes.len(), 1);
+    }
+
+    #[test]
+    fn keymap_ausente_es_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let km = load_keymap(dir.path());
+        assert_eq!(km, crate::keymap::KeyMap::defaults());
+    }
+
+    #[test]
+    fn keymap_round_trip_en_disco() {
+        use crate::keymap::{Action, Chord, KeyCode};
+        let dir = tempfile::tempdir().unwrap();
+        let mut km = crate::keymap::KeyMap::defaults();
+        km.bind(Action::Copy, Chord::ctrl(KeyCode::Char('z')));
+        save_keymap(dir.path(), &km);
+        let back = load_keymap(dir.path());
+        assert_eq!(
+            back.action_for(&Chord::ctrl(KeyCode::Char('z'))),
+            Some(Action::Copy)
+        );
+    }
+
+    #[test]
+    fn keymap_corrupto_es_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("keybindings.json"), b"{ no es json").unwrap();
+        let km = load_keymap(dir.path());
+        assert_eq!(km, crate::keymap::KeyMap::defaults());
     }
 }

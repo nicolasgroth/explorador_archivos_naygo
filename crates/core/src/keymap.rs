@@ -349,31 +349,91 @@ mod tests {
     #[test]
     fn defaults_atajos_clave() {
         let km = KeyMap::defaults();
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Copy));
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('x'))), Some(Action::Cut));
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('v'))), Some(Action::Paste));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F2)), Some(Action::Rename));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F3)), Some(Action::ComputeSize));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F5)), Some(Action::CopyToOther));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F6)), Some(Action::MoveToOther));
-        assert_eq!(km.action_for(&Chord::ctrl_shift(KeyCode::Char('n'))), Some(Action::NewDir));
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('n'))), Some(Action::NewFile));
-        assert_eq!(km.action_for(&Chord::shift(KeyCode::Delete)), Some(Action::DeletePermanent));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::Delete)), Some(Action::Delete));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::Enter)), Some(Action::Activate));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::Tab)), Some(Action::SwitchPane));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::Escape)), Some(Action::CancelListing));
-        assert_eq!(km.action_for(&Chord::alt(KeyCode::ArrowLeft)), Some(Action::GoBack));
-        assert_eq!(km.action_for(&Chord::alt(KeyCode::ArrowRight)), Some(Action::GoForward));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::ArrowUp)), Some(Action::MoveUp));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::ArrowDown)), Some(Action::MoveDown));
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Copy)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('x'))),
+            Some(Action::Cut)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('v'))),
+            Some(Action::Paste)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F2)),
+            Some(Action::Rename)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F3)),
+            Some(Action::ComputeSize)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F5)),
+            Some(Action::CopyToOther)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F6)),
+            Some(Action::MoveToOther)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl_shift(KeyCode::Char('n'))),
+            Some(Action::NewDir)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('n'))),
+            Some(Action::NewFile)
+        );
+        assert_eq!(
+            km.action_for(&Chord::shift(KeyCode::Delete)),
+            Some(Action::DeletePermanent)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Delete)),
+            Some(Action::Delete)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Enter)),
+            Some(Action::Activate)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Tab)),
+            Some(Action::SwitchPane)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Escape)),
+            Some(Action::CancelListing)
+        );
+        assert_eq!(
+            km.action_for(&Chord::alt(KeyCode::ArrowLeft)),
+            Some(Action::GoBack)
+        );
+        assert_eq!(
+            km.action_for(&Chord::alt(KeyCode::ArrowRight)),
+            Some(Action::GoForward)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::ArrowUp)),
+            Some(Action::MoveUp)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::ArrowDown)),
+            Some(Action::MoveDown)
+        );
     }
 
     #[test]
     fn go_up_tiene_dos_atajos() {
         let km = KeyMap::defaults();
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::Backspace)), Some(Action::GoUp));
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::ArrowLeft)), Some(Action::GoUp));
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Backspace)),
+            Some(Action::GoUp)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::ArrowLeft)),
+            Some(Action::GoUp)
+        );
         assert_eq!(km.chords_for(Action::GoUp).len(), 2);
     }
 
@@ -395,8 +455,13 @@ mod tests {
         let mut km = KeyMap::defaults();
         let robbed = km.bind(Action::Rename, Chord::ctrl(KeyCode::Char('c')));
         assert_eq!(robbed, Some(Action::Copy));
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Rename));
-        assert!(!km.chords_for(Action::Copy).contains(&Chord::ctrl(KeyCode::Char('c'))));
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Rename)
+        );
+        assert!(!km
+            .chords_for(Action::Copy)
+            .contains(&Chord::ctrl(KeyCode::Char('c'))));
     }
 
     #[test]
@@ -429,7 +494,10 @@ mod tests {
         km.unbind(Action::Copy, &Chord::ctrl(KeyCode::Char('c')));
         assert!(km.chords_for(Action::Copy).is_empty());
         km.reset_action(Action::Copy);
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Copy));
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Copy)
+        );
         km.unbind(Action::Rename, &Chord::plain(KeyCode::F2));
         km.reset_all();
         assert_eq!(km, KeyMap::defaults());
@@ -452,9 +520,15 @@ mod tests {
         src.bind(Action::Copy, Chord::ctrl(KeyCode::Char('q')));
         let json = serde_json::to_string(&src).unwrap();
         let km: KeyMap = serde_json::from_str(&json).unwrap();
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('q'))), Some(Action::Copy));
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('q'))),
+            Some(Action::Copy)
+        );
         // Rename conserva F2 (estaba en el json con su default igual).
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F2)), Some(Action::Rename));
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F2)),
+            Some(Action::Rename)
+        );
     }
 
     #[test]
@@ -467,7 +541,13 @@ mod tests {
         let json = serde_json::to_string(&arr).unwrap();
         let km: KeyMap = serde_json::from_str(&json).unwrap();
         // Rename quedó con F2; Copy conserva su default Ctrl+C (no estaba en el json).
-        assert_eq!(km.action_for(&Chord::plain(KeyCode::F2)), Some(Action::Rename));
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('c'))), Some(Action::Copy));
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F2)),
+            Some(Action::Rename)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Copy)
+        );
     }
 }
