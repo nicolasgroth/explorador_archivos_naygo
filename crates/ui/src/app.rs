@@ -68,6 +68,32 @@ enum WriteJob {
     },
 }
 
+/// Carga del diálogo de confirmación de pegado (modo B): lo que se escribirá una
+/// vez que el usuario confirme nombre (y, para imagen, formato).
+pub(crate) enum PastePreviewKind {
+    Text {
+        body: String,
+    },
+    Image {
+        img: naygo_core::clipboard::ClipboardImage,
+        fmt: naygo_core::clipboard::ImageFmt,
+        quality: u8,
+    },
+}
+
+/// Separa el nombre de archivo en (stem sin extensión, extensión sin punto).
+fn split_stem_ext(path: &std::path::Path) -> (String, String) {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (stem, ext)
+}
+
 /// Resumen del archivo escrito (para el status/toast).
 enum PasteOk {
     Text {
@@ -157,6 +183,17 @@ pub enum PendingDialog {
         dir: std::path::PathBuf,
         is_dir: bool,
         buf: String,
+    },
+    /// Confirmar nombre/formato antes de crear un archivo pegado (modo B).
+    PastePreview {
+        /// Carpeta destino (el nombre final = dir/<name>.<ext>).
+        dir: std::path::PathBuf,
+        /// Nombre editable (SIN extensión).
+        name_buf: String,
+        /// Extensión actual (sin punto) — para texto fija; para imagen sigue al formato.
+        ext: String,
+        /// Contenido a escribir.
+        kind: PastePreviewKind,
     },
 }
 
@@ -1076,17 +1113,45 @@ impl NaygoApp {
                 self.launch_transfer(req, label);
             }
             PastePlan::CreateText { path, body } => {
-                // El mini-diálogo de confirmación (modo B) llega en Task 7; por ahora,
-                // tanto modo directo como confirmar escriben directo (seguro).
-                self.write_pasted_file(WriteJob::Text { path, body });
+                if self.settings.paste_confirm {
+                    let (stem, ext) = split_stem_ext(&path);
+                    self.pending_dialog = Some(PendingDialog::PastePreview {
+                        dir: path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or(dest.clone()),
+                        name_buf: stem,
+                        ext,
+                        kind: PastePreviewKind::Text { body },
+                    });
+                } else {
+                    self.write_pasted_file(WriteJob::Text { path, body });
+                }
             }
             PastePlan::CreateImage { path, fmt, img } => {
-                self.write_pasted_file(WriteJob::Image {
-                    path,
-                    fmt,
-                    img,
-                    quality: self.settings.paste_jpg_quality,
-                });
+                if self.settings.paste_confirm {
+                    let (stem, _ext) = split_stem_ext(&path);
+                    self.pending_dialog = Some(PendingDialog::PastePreview {
+                        dir: path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or(dest.clone()),
+                        name_buf: stem,
+                        ext: fmt.ext().to_string(),
+                        kind: PastePreviewKind::Image {
+                            img,
+                            fmt,
+                            quality: self.settings.paste_jpg_quality,
+                        },
+                    });
+                } else {
+                    self.write_pasted_file(WriteJob::Image {
+                        path,
+                        fmt,
+                        img,
+                        quality: self.settings.paste_jpg_quality,
+                    });
+                }
             }
             PastePlan::Nothing => {
                 self.status = self.i18n.t("paste.empty").to_string();
@@ -1242,6 +1307,63 @@ impl NaygoApp {
                     Some(NameResult::Cancelled) => {}
                     None => {
                         self.pending_dialog = Some(PendingDialog::Create { dir, is_dir, buf });
+                    }
+                }
+            }
+            PendingDialog::PastePreview {
+                dir,
+                mut name_buf,
+                ext,
+                kind,
+            } => {
+                // Datos para el modal: se toman PRESTADOS de `kind` antes de moverlo.
+                let is_image = matches!(kind, PastePreviewKind::Image { .. });
+                let image_dims = match &kind {
+                    PastePreviewKind::Image { img, .. } => Some((img.width, img.height)),
+                    _ => None,
+                };
+                let mut fmt_opt = match &kind {
+                    PastePreviewKind::Image { fmt, .. } => Some(*fmt),
+                    _ => None,
+                };
+                match crate::ops_dialogs::paste_preview(
+                    ctx,
+                    &self.i18n,
+                    is_image,
+                    &mut name_buf,
+                    &ext,
+                    image_dims,
+                    &mut fmt_opt,
+                ) {
+                    Some(crate::ops_dialogs::PastePreviewResult::Create { name, fmt }) => {
+                        // Extensión final: la imagen la toma del formato elegido; el
+                        // texto conserva la suya.
+                        let final_ext = match (is_image, fmt) {
+                            (true, Some(f)) => f.ext().to_string(),
+                            _ => ext.clone(),
+                        };
+                        let mut path = dir.join(format!("{name}.{final_ext}"));
+                        // Deduplica si ya existe (nombre (1), (2), ...).
+                        path = naygo_core::ops::dedup_name(&path, &|p| p.exists());
+                        let job = match kind {
+                            PastePreviewKind::Text { body } => WriteJob::Text { path, body },
+                            PastePreviewKind::Image { img, quality, .. } => WriteJob::Image {
+                                path,
+                                fmt: fmt.unwrap_or(self.settings.paste_image_fmt),
+                                img,
+                                quality,
+                            },
+                        };
+                        self.write_pasted_file(job);
+                    }
+                    Some(crate::ops_dialogs::PastePreviewResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::PastePreview {
+                            dir,
+                            name_buf,
+                            ext,
+                            kind,
+                        });
                     }
                 }
             }
