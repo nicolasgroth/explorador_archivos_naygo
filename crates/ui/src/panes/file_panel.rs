@@ -469,24 +469,8 @@ fn column_title(kind: ColumnKind, i18n: &naygo_core::i18n::I18n) -> String {
 
 fn format_size(entry: &Entry) -> String {
     match entry.size {
-        Some(bytes) => human_size(bytes),
+        Some(bytes) => naygo_core::format::human_size(bytes),
         None => String::new(),
-    }
-}
-
-pub(crate) fn human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.1} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
     }
 }
 

@@ -1073,7 +1073,7 @@ impl NaygoApp {
     /// Drena el resultado de una escritura de archivo pegado (si terminó). Deja un
     /// status con la metadata y refresca el panel; en error, status discreto.
     fn pump_paste_write(&mut self) {
-        use crate::panes::file_panel::human_size;
+        use naygo_core::format::human_size;
         let Some(pending) = &self.pending_paste_write else {
             return;
         };
