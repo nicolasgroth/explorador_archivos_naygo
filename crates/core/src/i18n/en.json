@@ -57,6 +57,7 @@
   "paste.done_text": "Text pasted · {bytes} · {chars} chars · {lines} lines",
   "paste.done_image": "Image pasted · {w}×{h} · {fmt} · {bytes}",
   "paste.error": "Could not paste",
+  "paste.copy_error": "Could not copy to clipboard",
   "paste.preview_text_title": "Paste text as file",
   "paste.preview_image_title": "Paste image as file",
   "paste.name_label": "File name",

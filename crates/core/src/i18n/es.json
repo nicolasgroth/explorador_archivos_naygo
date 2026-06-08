@@ -57,6 +57,7 @@
   "paste.done_text": "Texto pegado · {bytes} · {chars} caracteres · {lines} líneas",
   "paste.done_image": "Imagen pegada · {w}×{h} · {fmt} · {bytes}",
   "paste.error": "No se pudo pegar",
+  "paste.copy_error": "No se pudo copiar al portapapeles",
   "paste.preview_text_title": "Pegar texto como archivo",
   "paste.preview_image_title": "Pegar imagen como archivo",
   "paste.name_label": "Nombre del archivo",

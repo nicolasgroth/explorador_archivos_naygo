@@ -232,6 +232,15 @@ pub struct NaygoApp {
     ops_panel_expanded: bool,
     /// Ops interrumpidas detectadas al arrancar, pendientes de decisión (modal).
     pending_resume: Vec<OpJournal>,
+    /// Escritura de un archivo pegado (texto/imagen) en curso en un worker. El hilo de
+    /// UI NO bloquea: se drena el resultado por frame. `dir` = carpeta a refrescar.
+    pending_paste_write: Option<PendingPasteWrite>,
+}
+
+/// Escritura de un archivo pegado en curso (worker + canal de resultado).
+struct PendingPasteWrite {
+    rx: std::sync::mpsc::Receiver<Result<PasteOk, String>>,
+    dir: Option<std::path::PathBuf>,
 }
 
 impl NaygoApp {
@@ -296,6 +305,7 @@ impl NaygoApp {
             pending_dialog: None,
             ops_panel_expanded: false,
             pending_resume,
+            pending_paste_write: None,
         };
         app.start_all_listings();
         app
@@ -1006,7 +1016,9 @@ impl NaygoApp {
             return;
         }
         if let Err(e) = naygo_platform::clipboard::write_files(&paths, cut) {
-            self.status = format!("{e:?}");
+            // Detalle técnico al log; al usuario, un mensaje traducible discreto.
+            tracing::warn!("write_files al portapapeles falló: {e:?}");
+            self.status = self.i18n.t("paste.copy_error").to_string();
         }
     }
 
@@ -1025,8 +1037,7 @@ impl NaygoApp {
 
     /// Lanza una transferencia (copia/movida) resolviendo conflictos ANTES de
     /// spawnear. Si hay colisión y la política es Ask, abre el modal de conflicto;
-    /// si no, usa `Overwrite` (no habrá conflicto) y arranca. `clear_clipboard`
-    /// indica si una movida exitosa debe vaciar el clipboard (paste de un "cut").
+    /// si no, usa `Overwrite` (no habrá conflicto) y arranca.
     fn launch_transfer(&mut self, mut req: OpRequest, label: String) {
         let Some(dest) = req.dest_dir.clone() else {
             return;
@@ -1048,18 +1059,37 @@ impl NaygoApp {
     /// no hace la E/S. Al terminar, refresca el panel activo y deja un status con la
     /// metadata; en error, status discreto. (No usa el OpPlan: es un único archivo.)
     fn write_pasted_file(&mut self, job: WriteJob) {
-        use crate::panes::file_panel::human_size;
         let dir = job.path().parent().map(|p| p.to_path_buf());
         let (tx, rx) = std::sync::mpsc::channel::<Result<PasteOk, String>>();
+        // El worker codifica (imagen) y escribe; el hilo de UI no se bloquea: el
+        // resultado se drena por frame en `pump_paste_write`. Una imagen grande puede
+        // tardar en codificar, así que NO esperamos aquí.
         std::thread::spawn(move || {
             let _ = tx.send(job.run());
         });
-        match rx.recv() {
-            Ok(Ok(PasteOk::Text {
+        self.pending_paste_write = Some(PendingPasteWrite { rx, dir });
+    }
+
+    /// Drena el resultado de una escritura de archivo pegado (si terminó). Deja un
+    /// status con la metadata y refresca el panel; en error, status discreto.
+    fn pump_paste_write(&mut self) {
+        use crate::panes::file_panel::human_size;
+        let Some(pending) = &self.pending_paste_write else {
+            return;
+        };
+        let result = match pending.rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return, // aún en curso
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(String::new()),
+        };
+        // Terminó: consumir el pendiente.
+        let dir = self.pending_paste_write.take().and_then(|p| p.dir);
+        match result {
+            Ok(PasteOk::Text {
                 bytes,
                 chars,
                 lines,
-            })) => {
+            }) => {
                 self.status = self
                     .i18n
                     .t("paste.done_text")
@@ -1070,7 +1100,7 @@ impl NaygoApp {
                     self.refresh_pane(id, d);
                 }
             }
-            Ok(Ok(PasteOk::Image { w, h, fmt, bytes })) => {
+            Ok(PasteOk::Image { w, h, fmt, bytes }) => {
                 self.status = self
                     .i18n
                     .t("paste.done_image")
@@ -1082,7 +1112,7 @@ impl NaygoApp {
                     self.refresh_pane(id, d);
                 }
             }
-            _ => self.status = self.i18n.t("paste.error").to_string(),
+            Err(_) => self.status = self.i18n.t("paste.error").to_string(),
         }
     }
 
@@ -1596,8 +1626,13 @@ impl eframe::App for NaygoApp {
         self.pump_all();
         self.pump_tree();
         self.pump_ops();
+        self.pump_paste_write();
         self.handle_input(ctx);
-        if self.any_listing_active() || self.any_tree_listing_active() || self.any_op_active() {
+        if self.any_listing_active()
+            || self.any_tree_listing_active()
+            || self.any_op_active()
+            || self.pending_paste_write.is_some()
+        {
             ctx.request_repaint();
         }
     }

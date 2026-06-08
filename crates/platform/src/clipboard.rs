@@ -49,7 +49,9 @@ mod windows_impl {
         CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
         OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
     };
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
     use windows::Win32::UI::Shell::{DragQueryFileW, DROPFILES, HDROP};
 
@@ -208,6 +210,10 @@ mod windows_impl {
         if base.is_null() {
             return None;
         }
+        // Tamaño REAL del bloque del portapapeles. El portapapeles es entrada hostil:
+        // un DIB malformado puede declarar dimensiones que excedan el buffer. Validamos
+        // contra este tamaño antes de leer un solo píxel (evita lecturas fuera de rango).
+        let buf_size = GlobalSize(hglobal);
 
         // Guard local para garantizar el GlobalUnlock pase lo que pase.
         struct Unlocker(HGLOBAL);
@@ -221,6 +227,10 @@ mod windows_impl {
         let _unlock = Unlocker(hglobal);
 
         let header_size = std::mem::size_of::<BITMAPINFOHEADER>();
+        // El buffer debe contener al menos el header antes de leerlo (entrada hostil).
+        if buf_size < header_size {
+            return None;
+        }
         let header = std::ptr::read_unaligned(base as *const BITMAPINFOHEADER);
 
         // Solo entendemos headers tipo BITMAPINFOHEADER o mayores (biSize >= 40).
@@ -259,6 +269,10 @@ mod windows_impl {
         let (mask_r, mask_g, mask_b);
         let mut pixels_offset = header.biSize as usize;
         if is_bitfields {
+            // Las 3 máscaras (12 bytes) deben caber en el buffer antes de leerlas.
+            if (header.biSize as usize).checked_add(3 * std::mem::size_of::<u32>())? > buf_size {
+                return None;
+            }
             let masks = base.add(header.biSize as usize) as *const u32;
             mask_r = std::ptr::read_unaligned(masks);
             mask_g = std::ptr::read_unaligned(masks.add(1));
@@ -285,6 +299,14 @@ mod windows_impl {
         let bytes_per_px = (bpp / 8) as usize;
         // Stride alineado a 4 bytes (regla de los DIB).
         let stride = ((width_u as usize * bytes_per_px) + 3) & !3usize;
+
+        // Validación de límites contra el tamaño REAL del buffer (entrada hostil): el
+        // bloque debe contener el offset de píxeles + todas las filas declaradas. Si el
+        // header miente y el buffer es más corto, abortamos en vez de leer fuera de rango.
+        let needed = pixels_offset.checked_add((height as usize).checked_mul(stride)?)?;
+        if needed > buf_size {
+            return None;
+        }
 
         let mut rgba = vec![0u8; pixels as usize * 4];
         let pix_base = base.add(pixels_offset);
