@@ -42,6 +42,12 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let lbl_up = app.tr("toolbar.up");
     let lbl_refresh = app.tr("toolbar.refresh");
     let lbl_add_pane = app.tr("toolbar.add_pane");
+    let lbl_copy = app.tr("op.copy");
+    let lbl_cut = app.tr("op.cut");
+    let lbl_paste = app.tr("op.paste");
+    let lbl_delete = app.tr("op.delete");
+    let lbl_new_file = app.tr("op.new_file");
+    let lbl_new_folder = app.tr("op.new_folder");
 
     if icon_button(ui, "◀", &lbl_back, can_back) {
         app.apply_action(Action::GoBack);
@@ -60,6 +66,27 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             app.refresh_pane(id, dir);
         }
     }
+    ui.separator();
+    // Operaciones de archivo: mismos disparadores que el teclado / menú contextual.
+    if icon_button(ui, "⧉", &lbl_copy, true) {
+        app.apply_action(Action::Copy);
+    }
+    if icon_button(ui, "✂", &lbl_cut, true) {
+        app.apply_action(Action::Cut);
+    }
+    if icon_button(ui, "📋", &lbl_paste, true) {
+        app.apply_action(Action::Paste);
+    }
+    if icon_button(ui, "🗑", &lbl_delete, true) {
+        app.apply_action(Action::Delete);
+    }
+    if icon_button(ui, "🗋", &lbl_new_file, true) {
+        app.apply_action(Action::NewFile);
+    }
+    if icon_button(ui, "🗀", &lbl_new_folder, true) {
+        app.apply_action(Action::NewDir);
+    }
+
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
     if icon_button(ui, "➕", &lbl_add_pane, true) {

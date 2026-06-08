@@ -32,6 +32,26 @@ pub enum IconSet {
     Mono,
 }
 
+/// Modo de ejecución de operaciones múltiples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpsMode {
+    /// Una operación a la vez (las demás esperan en cola).
+    Queue,
+    /// Varias en paralelo.
+    Parallel,
+}
+
+/// Cómo se muestra el progreso de operaciones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpsDisplay {
+    /// Panel acoplado abajo (oculto si no hay ops).
+    Panel,
+    /// Diálogo modal.
+    Modal,
+    /// Panel siempre visible.
+    AlwaysVisible,
+}
+
 /// Ajustes de la app (settings.json).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -54,6 +74,18 @@ pub struct Settings {
     /// sin este campo cae al default).
     #[serde(default = "default_theme")]
     pub theme: ThemeId,
+    /// Modo de ejecución de operaciones múltiples. `#[serde(default)]` por retro-compat.
+    #[serde(default = "default_ops_mode")]
+    pub ops_mode: OpsMode,
+    /// Cómo se muestra el progreso de operaciones. `#[serde(default)]` por retro-compat.
+    #[serde(default = "default_ops_display")]
+    pub ops_display: OpsDisplay,
+    /// Confirmar también el borrado a papelera (el permanente siempre confirma).
+    #[serde(default)]
+    pub confirm_trash: bool,
+    /// Mostrar el resumen al terminar una operación. `#[serde(default)]` por retro-compat.
+    #[serde(default = "default_show_op_summary")]
+    pub show_op_summary: bool,
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -77,6 +109,21 @@ fn default_theme() -> ThemeId {
     ThemeId::new("dark-blue")
 }
 
+/// Default de `ops_mode` para `#[serde(default)]`: cola (una a la vez).
+fn default_ops_mode() -> OpsMode {
+    OpsMode::Queue
+}
+
+/// Default de `ops_display` para `#[serde(default)]`: panel acoplado.
+fn default_ops_display() -> OpsDisplay {
+    OpsDisplay::Panel
+}
+
+/// Default de `show_op_summary` para `#[serde(default)]`.
+fn default_show_op_summary() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -87,6 +134,10 @@ impl Default for Settings {
             show_parent_entry: true,
             language: default_language(),
             theme: default_theme(),
+            ops_mode: OpsMode::Queue,
+            ops_display: OpsDisplay::Panel,
+            confirm_trash: false,
+            show_op_summary: true,
         }
     }
 }
@@ -200,6 +251,10 @@ mod tests {
             show_parent_entry: false,
             language: default_language(),
             theme: default_theme(),
+            ops_mode: OpsMode::Parallel,
+            ops_display: OpsDisplay::Modal,
+            confirm_trash: true,
+            show_op_summary: false,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -275,6 +330,23 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"Flat","show_parent_entry":true,"language":"es"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.theme, ThemeId::new("dark-blue"));
+    }
+
+    #[test]
+    fn settings_default_ops() {
+        let s = Settings::default();
+        assert_eq!(s.ops_mode, OpsMode::Queue);
+        assert_eq!(s.ops_display, OpsDisplay::Panel);
+        assert!(!s.confirm_trash);
+        assert!(s.show_op_summary);
+    }
+
+    #[test]
+    fn settings_viejo_sin_ops_cae_a_defaults() {
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"Flat","show_parent_entry":true,"language":"es","theme":"dark-blue"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.ops_mode, OpsMode::Queue);
+        assert!(s.show_op_summary);
     }
 
     #[test]

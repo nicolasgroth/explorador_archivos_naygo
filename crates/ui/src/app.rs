@@ -8,6 +8,7 @@
 
 use crate::icons::IconProvider;
 use crate::input::{map_key, map_mouse_extra, Action, Key as NaygoKey, MouseExtra};
+use crate::ops_dialogs::{ConflictChoice, NameResult};
 use crate::settings_window::SettingsSection;
 use crate::theme_apply::{self, ActiveTheme};
 use eframe::CreationContext;
@@ -16,6 +17,10 @@ use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
+use naygo_core::ops::{
+    self, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress,
+    OpRequest, OpSummary,
+};
 use naygo_core::sort::sort_entries;
 use naygo_core::theme::pack::PackCatalog;
 use naygo_core::theme::ThemeCatalog;
@@ -32,6 +37,57 @@ use std::sync::mpsc::Receiver;
 pub struct PaneListing {
     pub rx: Option<Receiver<ListingMsg>>,
     pub token: CancellationToken,
+}
+
+/// Una operación de archivo en curso (o terminada, mostrándose en el panel).
+pub struct ActiveOp {
+    pub rx: Option<Receiver<OpMsg>>,
+    pub token: CancellationToken,
+    pub label: String, // p. ej. "Copiar → D:\backup"
+    pub progress: Option<OpProgress>,
+    pub summary: Option<OpSummary>,
+    pub started: bool, // false = en cola, true = corriendo
+    /// Plan+kind+conflict pendientes de lanzar (modo cola). None si ya se lanzó.
+    pub pending: Option<(OpPlan, OpKind, ConflictPolicy)>,
+}
+
+/// Clipboard interno de Naygo (para Ctrl+C/X/V entre paneles).
+#[derive(Default)]
+pub struct InternalClipboard {
+    pub paths: Vec<std::path::PathBuf>,
+    pub cut: bool,
+}
+
+/// Diálogo modal pendiente de confirmación. Lleva la `OpRequest` ya armada; al
+/// confirmar se ajusta su política de conflicto / nombre y se llama a `start_op`.
+/// Resolver el conflicto AQUÍ (antes de lanzar) garantiza que el motor nunca
+/// reciba `ConflictPolicy::Ask` (su canal de conflicto se descarta en ops-A).
+pub enum PendingDialog {
+    /// Confirmar borrado (papelera si `permanent==false`, irreversible si true).
+    ConfirmDelete {
+        req: OpRequest,
+        label: String,
+        permanent: bool,
+        count: usize,
+    },
+    /// Resolver un conflicto de nombre antes de copiar/mover.
+    Conflict {
+        req: OpRequest,
+        label: String,
+        /// Nombre del primer choque (para el cuerpo del modal).
+        name: String,
+    },
+    /// Renombrar el elemento `source`: pide el nombre nuevo.
+    Rename {
+        source: std::path::PathBuf,
+        buf: String,
+    },
+    /// Crear archivo/carpeta en `dir`: pide el nombre.
+    Create {
+        dir: std::path::PathBuf,
+        is_dir: bool,
+        buf: String,
+    },
 }
 
 /// Un worker de listado solo-directorios para una rama del árbol.
@@ -61,6 +117,14 @@ pub struct NaygoApp {
     active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
+    /// Operaciones de archivo en curso/terminadas (panel de progreso).
+    active_ops: Vec<ActiveOp>,
+    /// Clipboard interno para Ctrl+C/X/V.
+    clipboard: InternalClipboard,
+    /// Diálogo modal pendiente (confirmación/conflicto/nombre), si hay uno.
+    pending_dialog: Option<PendingDialog>,
+    /// Si el panel de operaciones muestra el detalle expandido.
+    ops_panel_expanded: bool,
 }
 
 impl NaygoApp {
@@ -118,6 +182,10 @@ impl NaygoApp {
             active_theme,
             settings_open: false,
             settings_section: SettingsSection::Appearance,
+            active_ops: Vec::new(),
+            clipboard: InternalClipboard::default(),
+            pending_dialog: None,
+            ops_panel_expanded: false,
         };
         app.start_all_listings();
         app
@@ -337,6 +405,165 @@ impl NaygoApp {
         self.listings.values().any(|l| l.rx.is_some())
     }
 
+    /// Lanza una operación: planifica, spawnea (o encola). Papelera = atómica vía
+    /// platform (no pasa por el motor core). `label` se muestra en el panel.
+    pub fn start_op(&mut self, req: OpRequest, label: String) {
+        // Papelera: caso especial atómico vía platform.
+        if let OpKind::Delete { to_trash: true } = &req.kind {
+            let _ = naygo_platform::trash::move_to_trash(&req.sources);
+            if let (Some(id), Some(dir)) = (
+                self.workspace.active_id(),
+                self.workspace.active_files().map(|f| f.current_dir.clone()),
+            ) {
+                self.refresh_pane(id, dir);
+            }
+            return;
+        }
+        let plan = match ops::plan(&req) {
+            Ok(p) => p,
+            Err(_e) => return, // plan inválido: en futuro mostrar error en UI
+        };
+        let queue = self.settings.ops_mode == naygo_core::config::OpsMode::Queue;
+        let any_running = self.active_ops.iter().any(|o| o.started && o.rx.is_some());
+        let token = CancellationToken::new();
+        if queue && any_running {
+            // Encolar: guardar plan+kind+conflict; se lanza en pump_ops al liberarse.
+            self.active_ops.push(ActiveOp {
+                rx: None,
+                token,
+                label,
+                progress: None,
+                summary: None,
+                started: false,
+                pending: Some((plan, req.kind, req.conflict)),
+            });
+        } else {
+            let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
+            let (rx, _h) = ops::spawn(plan, req.kind, req.conflict, token.clone(), crx);
+            self.active_ops.push(ActiveOp {
+                rx: Some(rx),
+                token,
+                label,
+                progress: None,
+                summary: None,
+                started: true,
+                pending: None,
+            });
+        }
+    }
+
+    /// Drena canales de las ops y gestiona la cola (lanza la siguiente al liberarse).
+    pub fn pump_ops(&mut self) {
+        // Drenar mensajes de las ops corriendo. `just_finished` se marca cuando una
+        // op pasa a tener summary este pump → refrescamos el panel activo después.
+        let mut just_finished = false;
+        for op in &mut self.active_ops {
+            // Drenar a un buffer local primero: no podemos asignar `op.rx = None`
+            // mientras `rx` sigue prestado dentro del while (E0506).
+            let mut msgs = Vec::new();
+            if let Some(rx) = &op.rx {
+                while let Ok(msg) = rx.try_recv() {
+                    msgs.push(msg);
+                }
+            }
+            for msg in msgs {
+                match msg {
+                    OpMsg::Progress(p) => op.progress = Some(p),
+                    OpMsg::Done(s) | OpMsg::Cancelled(s) => {
+                        op.summary = Some(s);
+                        op.rx = None;
+                        just_finished = true;
+                    }
+                    OpMsg::Failed(_) => op.rx = None,
+                    OpMsg::Conflict(_) => {} // ops-A resuelve conflicto antes de spawn
+                }
+            }
+        }
+        // Una op acabó de tocar el filesystem → re-listar el panel activo para
+        // mostrar el resultado (copia/movida/borrada).
+        if just_finished {
+            if let (Some(id), Some(dir)) = (
+                self.workspace.active_id(),
+                self.workspace.active_files().map(|f| f.current_dir.clone()),
+            ) {
+                self.refresh_pane(id, dir);
+            }
+        }
+        // Lanzar la siguiente pendiente (cola) si no hay ninguna corriendo.
+        let none_running_now = !self.active_ops.iter().any(|o| o.started && o.rx.is_some());
+        if none_running_now {
+            if let Some(idx) = self.active_ops.iter().position(|o| o.pending.is_some()) {
+                if let Some((plan, kind, conflict)) = self.active_ops[idx].pending.take() {
+                    let token = self.active_ops[idx].token.clone();
+                    let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
+                    let (rx, _h) = ops::spawn(plan, kind, conflict, token, crx);
+                    self.active_ops[idx].rx = Some(rx);
+                    self.active_ops[idx].started = true;
+                }
+            }
+        }
+    }
+
+    pub fn any_op_active(&self) -> bool {
+        self.active_ops
+            .iter()
+            .any(|o| o.rx.is_some() || o.pending.is_some())
+    }
+
+    /// Quita las ops realmente terminadas y sin nada que mostrar. Regla: una op se
+    /// descarta cuando no corre (`rx==None`), no está en cola (`pending==None`) y
+    /// NO tiene summary. Eso captura las que `Failed` (rx=None, sin summary). Las
+    /// Done/Cancelled conservan su summary → se quedan visibles hasta que el panel
+    /// se cierre (no hay ops) o llegue Task 11 con un "limpiar" explícito.
+    fn prune_finished_ops(&mut self) {
+        // Si el usuario desactivó el resumen, las ops terminadas se descartan en
+        // cuanto dejan de correr: no se conserva su summary para mostrarlo.
+        let keep_summaries = self.settings.show_op_summary;
+        self.active_ops.retain(|o| {
+            o.rx.is_some() || o.pending.is_some() || (keep_summaries && o.summary.is_some())
+        });
+    }
+
+    /// Escribe un reporte de texto del resumen de la op `index` a un archivo en el
+    /// directorio del panel activo: `<dir>/naygo-ops-<unix_secs>.txt`. Sin selector
+    /// nativo (eso es de la fase platform/shell). El reporte es pequeño, así que la
+    /// escritura síncrona es aceptable. Deja la ruta (o el error) en `self.status`.
+    fn export_op_summary(&mut self, index: usize) {
+        let Some(summary) = self.active_ops.get(index).and_then(|o| o.summary.clone()) else {
+            return;
+        };
+
+        // Directorio destino: el del panel activo; si no hay, el dir de config.
+        let dir = self
+            .workspace
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| self.config_dir.clone());
+
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = dir.join(format!("naygo-ops-{secs}.txt"));
+
+        let report = build_summary_report(&summary);
+
+        match std::fs::write(&path, report) {
+            Ok(()) => {
+                self.status = self
+                    .i18n
+                    .t("ops.exported")
+                    .replace("{path}", &path.display().to_string());
+            }
+            Err(e) => {
+                self.status = self
+                    .i18n
+                    .t("ops.export_failed")
+                    .replace("{e}", &e.to_string());
+            }
+        }
+    }
+
     /// Devuelve el `DirTree` del panel `id`, creándolo (con las unidades) la primera
     /// vez. Útil antes de pintar un panel Tree.
     fn ensure_tree(&mut self, id: PaneId) -> &mut DirTree {
@@ -461,7 +688,292 @@ impl NaygoApp {
                 }
             }
             Action::SwitchPane => self.cycle_active_files(),
+            Action::Copy => self.clipboard_set(false),
+            Action::Cut => self.clipboard_set(true),
+            Action::Paste => self.paste(),
+            Action::Delete => self.delete_selection(false),
+            Action::DeletePermanent => self.delete_selection(true),
+            Action::Rename => self.begin_rename(),
+            Action::NewFile => self.begin_create(false),
+            Action::NewDir => self.begin_create(true),
+            Action::CopyToOther => self.transfer_to_other(false),
+            Action::MoveToOther => self.transfer_to_other(true),
         }
+    }
+
+    /// Rutas seleccionadas en el panel activo (mapeadas vista→entries). Si no hay
+    /// selección, usa la entry enfocada. Vacío si no hay nada. Las rutas son las
+    /// de las entries reales (no la fila virtual "..").
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        let Some(f) = self.workspace.active_files() else {
+            return Vec::new();
+        };
+        let view = f.view_indices();
+        // NOTA: `f.selected` está RESERVADO para una futura multi-selección y hoy la UI
+        // nunca lo puebla (siempre vacío en ops-A) → esta rama es código correcto-por-
+        // contrato pero inactivo; en la práctica se usa el fallback al foco de abajo.
+        // `selected` y `focused` viven en espacio de VISTA (pos en view_indices()), por
+        // eso se mapea pos→real antes de indexar `entries`.
+        if !f.selected.is_empty() {
+            return f
+                .selected
+                .iter()
+                .filter_map(|&pos| view.get(pos))
+                .filter_map(|&real| f.entries.get(real))
+                .map(|e| e.path.clone())
+                .collect();
+        }
+        // Sin multi-selección: la entry enfocada.
+        f.focused_view_entry()
+            .map(|e| vec![e.path.clone()])
+            .unwrap_or_default()
+    }
+
+    /// Carpeta del panel de archivos activo.
+    fn active_dir(&self) -> Option<PathBuf> {
+        self.workspace.active_files().map(|f| f.current_dir.clone())
+    }
+
+    /// La carpeta del OTRO panel `Files` (para F5/F6). `None` si solo hay uno.
+    fn other_files_dir(&self) -> Option<PathBuf> {
+        let active = self.workspace.active_id();
+        self.workspace
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Files && Some(p.id) != active)
+            .find_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
+    }
+
+    /// Copia/corta la selección actual al clipboard interno.
+    fn clipboard_set(&mut self, cut: bool) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        self.clipboard = InternalClipboard { paths, cut };
+    }
+
+    /// ¿Existe ya `dest_dir/name` para alguna de las fuentes de nivel superior?
+    /// Devuelve el primer nombre que choca (para el cuerpo del modal de conflicto).
+    fn first_collision(sources: &[PathBuf], dest_dir: &Path) -> Option<String> {
+        for src in sources {
+            if let Some(name) = src.file_name() {
+                if dest_dir.join(name).exists() {
+                    return Some(name.to_string_lossy().into_owned());
+                }
+            }
+        }
+        None
+    }
+
+    /// Lanza una transferencia (copia/movida) resolviendo conflictos ANTES de
+    /// spawnear. Si hay colisión y la política es Ask, abre el modal de conflicto;
+    /// si no, usa `Overwrite` (no habrá conflicto) y arranca. `clear_clipboard`
+    /// indica si una movida exitosa debe vaciar el clipboard (paste de un "cut").
+    fn launch_transfer(&mut self, mut req: OpRequest, label: String) {
+        let Some(dest) = req.dest_dir.clone() else {
+            return;
+        };
+        match Self::first_collision(&req.sources, &dest) {
+            Some(name) => {
+                // Hay choque y la política aún es Ask → preguntar.
+                self.pending_dialog = Some(PendingDialog::Conflict { req, label, name });
+            }
+            None => {
+                // Sin choque: Overwrite es inocuo (no se gatilla ningún conflicto).
+                req.conflict = ConflictPolicy::Overwrite;
+                self.start_op(req, label);
+            }
+        }
+    }
+
+    /// Pega el clipboard interno en la carpeta activa (copia o movida según `cut`).
+    fn paste(&mut self) {
+        if self.clipboard.paths.is_empty() {
+            return;
+        }
+        let Some(dest) = self.active_dir() else {
+            return;
+        };
+        let cut = self.clipboard.cut;
+        let sources = self.clipboard.paths.clone();
+        let req = crate::ops_actions::transfer(cut, sources, dest.clone());
+        let verb = if cut {
+            self.i18n.t("op.cut")
+        } else {
+            self.i18n.t("op.paste")
+        };
+        let label = format!("{verb} → {}", dest.display());
+        // Una movida (cut) exitosa vacía el clipboard; la copia lo conserva.
+        if cut {
+            self.clipboard = InternalClipboard::default();
+        }
+        self.launch_transfer(req, label);
+    }
+
+    /// Copia/mueve la selección al OTRO panel (F5 copia, F6 mueve).
+    fn transfer_to_other(&mut self, move_it: bool) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let Some(dest) = self.other_files_dir() else {
+            return;
+        };
+        let req = crate::ops_actions::transfer(move_it, sources, dest.clone());
+        let verb = if move_it {
+            self.i18n.t("op.cut")
+        } else {
+            self.i18n.t("op.copy")
+        };
+        let label = format!("{verb} → {}", dest.display());
+        self.launch_transfer(req, label);
+    }
+
+    /// Elimina la selección. Papelera: confirma solo si `settings.confirm_trash`.
+    /// Permanente: confirma SIEMPRE (irreversible).
+    fn delete_selection(&mut self, permanent: bool) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let count = sources.len();
+        let to_trash = !permanent;
+        let req = crate::ops_actions::delete(sources, to_trash);
+        let label = if permanent {
+            self.i18n.t("op.delete_permanent").to_string()
+        } else {
+            self.i18n.t("op.delete").to_string()
+        };
+        let needs_confirm = permanent || self.settings.confirm_trash;
+        if needs_confirm {
+            self.pending_dialog = Some(PendingDialog::ConfirmDelete {
+                req,
+                label,
+                permanent,
+                count,
+            });
+        } else {
+            self.start_op(req, label);
+        }
+    }
+
+    /// Abre el modal de renombrar para la entry enfocada (precarga su nombre).
+    fn begin_rename(&mut self) {
+        let entry = self
+            .workspace
+            .active_files()
+            .and_then(|f| f.focused_view_entry())
+            .map(|e| (e.path.clone(), e.name.clone()));
+        if let Some((source, name)) = entry {
+            self.pending_dialog = Some(PendingDialog::Rename { source, buf: name });
+        }
+    }
+
+    /// Abre el modal de crear archivo/carpeta en la carpeta activa.
+    fn begin_create(&mut self, is_dir: bool) {
+        if let Some(dir) = self.active_dir() {
+            self.pending_dialog = Some(PendingDialog::Create {
+                dir,
+                is_dir,
+                buf: String::new(),
+            });
+        }
+    }
+
+    /// Pinta el diálogo modal pendiente (si hay) y, al recibir una decisión,
+    /// finaliza la operación: ajusta la política/nombre del request y la lanza.
+    /// Se llama cada frame desde `ui()`.
+    fn process_pending_dialog(&mut self, ctx: &egui::Context) {
+        // `take` para poder mutar `self` (start_op) sin un préstamo doble; si el
+        // modal sigue abierto sin decisión, lo volvemos a colocar al final.
+        let Some(dialog) = self.pending_dialog.take() else {
+            return;
+        };
+        match dialog {
+            PendingDialog::ConfirmDelete {
+                req,
+                label,
+                permanent,
+                count,
+            } => match crate::ops_dialogs::confirm_delete(ctx, &self.i18n, count, permanent) {
+                Some(true) => self.start_op(req, label),
+                Some(false) => {} // cancelado: descartar
+                None => {
+                    self.pending_dialog = Some(PendingDialog::ConfirmDelete {
+                        req,
+                        label,
+                        permanent,
+                        count,
+                    });
+                }
+            },
+            PendingDialog::Conflict { req, label, name } => {
+                match crate::ops_dialogs::conflict(ctx, &self.i18n, &name) {
+                    Some(choice) => self.resolve_conflict(req, label, choice),
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Conflict { req, label, name });
+                    }
+                }
+            }
+            PendingDialog::Rename { source, mut buf } => {
+                match crate::ops_dialogs::name_input(ctx, &self.i18n, "op.rename_title", &mut buf) {
+                    Some(NameResult::Confirmed(new_name)) => {
+                        let req = crate::ops_actions::rename(source, new_name);
+                        let label = self.i18n.t("op.rename").to_string();
+                        // Renombrar no genera conflicto vía nuestro flujo de paste;
+                        // el motor maneja el choque con la política del request. Para
+                        // ops-A usamos Overwrite (decisión simple) — el plan de rename
+                        // es un solo paso.
+                        let mut req = req;
+                        req.conflict = ConflictPolicy::Overwrite;
+                        self.start_op(req, label);
+                    }
+                    Some(NameResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Rename { source, buf });
+                    }
+                }
+            }
+            PendingDialog::Create {
+                dir,
+                is_dir,
+                mut buf,
+            } => {
+                let title = if is_dir {
+                    "op.new_folder_title"
+                } else {
+                    "op.new_file_title"
+                };
+                match crate::ops_dialogs::name_input(ctx, &self.i18n, title, &mut buf) {
+                    Some(NameResult::Confirmed(name)) => {
+                        let mut req = crate::ops_actions::create(dir, name, is_dir);
+                        req.conflict = ConflictPolicy::Overwrite;
+                        let label = if is_dir {
+                            self.i18n.t("op.new_folder").to_string()
+                        } else {
+                            self.i18n.t("op.new_file").to_string()
+                        };
+                        self.start_op(req, label);
+                    }
+                    Some(NameResult::Cancelled) => {}
+                    None => {
+                        self.pending_dialog = Some(PendingDialog::Create { dir, is_dir, buf });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Aplica la elección de conflicto a un request de copia/movida y lo lanza.
+    /// Skip cancela la operación (en ops-A el conflicto es a nivel de request).
+    fn resolve_conflict(&mut self, mut req: OpRequest, label: String, choice: ConflictChoice) {
+        match choice {
+            ConflictChoice::Overwrite => req.conflict = ConflictPolicy::Overwrite,
+            ConflictChoice::Rename => req.conflict = ConflictPolicy::Rename,
+            ConflictChoice::Skip => return, // saltar = no hacer nada
+        }
+        self.start_op(req, label);
     }
 
     /// Ejecuta una navegación sobre el panel activo y, si cambió de carpeta, lanza
@@ -559,6 +1071,12 @@ impl NaygoApp {
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // Si hay un diálogo modal abierto, él se queda con el teclado: no
+        // procesamos navegación ni disparadores (evita que escribir "C/V/N" en el
+        // campo de nombre gatille Copiar/Pegar/Nuevo, o que Delete borre detrás).
+        if self.pending_dialog.is_some() {
+            return;
+        }
         let keys = [
             (egui::Key::ArrowUp, NaygoKey::ArrowUp),
             (egui::Key::ArrowDown, NaygoKey::ArrowDown),
@@ -572,6 +1090,8 @@ impl NaygoApp {
         let mut typed = String::new();
         ctx.input(|i| {
             let alt = i.modifiers.alt;
+            let ctrl = i.modifiers.ctrl;
+            let shift = i.modifiers.shift;
             if alt && i.key_pressed(egui::Key::ArrowLeft) {
                 actions.push(Action::GoBack);
             } else if alt && i.key_pressed(egui::Key::ArrowRight) {
@@ -584,6 +1104,37 @@ impl NaygoApp {
                         }
                     }
                 }
+            }
+
+            // Disparadores de operaciones (con modificadores; no salen del mapa
+            // simple de `input::map_key`). Se evalúan aparte de la navegación.
+            if ctrl && i.key_pressed(egui::Key::C) {
+                actions.push(Action::Copy);
+            }
+            if ctrl && i.key_pressed(egui::Key::X) {
+                actions.push(Action::Cut);
+            }
+            if ctrl && i.key_pressed(egui::Key::V) {
+                actions.push(Action::Paste);
+            }
+            if ctrl && shift && i.key_pressed(egui::Key::N) {
+                actions.push(Action::NewDir);
+            } else if ctrl && i.key_pressed(egui::Key::N) {
+                actions.push(Action::NewFile);
+            }
+            if shift && i.key_pressed(egui::Key::Delete) {
+                actions.push(Action::DeletePermanent);
+            } else if i.key_pressed(egui::Key::Delete) {
+                actions.push(Action::Delete);
+            }
+            if i.key_pressed(egui::Key::F2) {
+                actions.push(Action::Rename);
+            }
+            if i.key_pressed(egui::Key::F5) {
+                actions.push(Action::CopyToOther);
+            }
+            if i.key_pressed(egui::Key::F6) {
+                actions.push(Action::MoveToOther);
             }
             if i.pointer.button_pressed(egui::PointerButton::Extra1) {
                 actions.push(map_mouse_extra(MouseExtra::Back));
@@ -638,8 +1189,9 @@ impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_all();
         self.pump_tree();
+        self.pump_ops();
         self.handle_input(ctx);
-        if self.any_listing_active() || self.any_tree_listing_active() {
+        if self.any_listing_active() || self.any_tree_listing_active() || self.any_op_active() {
             ctx.request_repaint();
         }
     }
@@ -679,6 +1231,33 @@ impl eframe::App for NaygoApp {
                 ui.label(&self.status);
             });
         });
+
+        // Panel de operaciones (acoplado abajo). Se muestra si hay ops o si el modo
+        // de display es "siempre visible". En modo Modal seguimos mostrándolo como
+        // panel (un modal de progreso a pantalla completa es de Task 11+); aquí el
+        // panel cumple para ops-A. Las ✕ devueltas se cancelan tras pintar.
+        let show_panel = !self.active_ops.is_empty()
+            || self.settings.ops_display == naygo_core::config::OpsDisplay::AlwaysVisible;
+        if show_panel {
+            let active_ops = &self.active_ops;
+            let i18n = &self.i18n;
+            let expanded = &mut self.ops_panel_expanded;
+            let mut output = crate::ops_panel::OpsPanelOutput::default();
+            egui::Panel::bottom("ops_panel")
+                .resizable(true)
+                .show_inside(ui, |ui| {
+                    output = crate::ops_panel::show(ui, active_ops, i18n, expanded);
+                });
+            for i in output.cancel {
+                if let Some(op) = self.active_ops.get(i) {
+                    op.token.cancel();
+                }
+            }
+            if let Some(i) = output.export {
+                self.export_op_summary(i);
+            }
+            self.prune_finished_ops();
+        }
 
         // --- Sincronización del árbol con el panel Files activo ---
         // Aseguramos un DirTree por cada panel Tree y lo apuntamos a la carpeta del
@@ -730,6 +1309,7 @@ impl eframe::App for NaygoApp {
         let mut tree_actions: Vec<(PaneId, crate::tree_actions::TreeAction)> = Vec::new();
         let mut tree_revealed: HashSet<PaneId> = HashSet::new();
         let mut table_actions: Vec<(PaneId, crate::table_actions::TableAction)> = Vec::new();
+        let mut ops_actions: Vec<Action> = Vec::new();
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -743,6 +1323,7 @@ impl eframe::App for NaygoApp {
                 tree_actions: &mut tree_actions,
                 tree_revealed: &mut tree_revealed,
                 table_actions: &mut table_actions,
+                ops_actions: &mut ops_actions,
             };
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -763,6 +1344,13 @@ impl eframe::App for NaygoApp {
                     }
                 }
             }
+        }
+
+        // Disparadores de operaciones del menú contextual. Se aplican DESPUÉS del
+        // `pending` (que ya enfocó/activó la fila del clic derecho), así las acciones
+        // basadas en foco actúan sobre la entry correcta.
+        for action in ops_actions {
+            self.apply_action(action);
         }
 
         // Acciones del árbol acumuladas durante el pintado.
@@ -833,6 +1421,15 @@ impl eframe::App for NaygoApp {
             let ctx = ui.ctx().clone();
             crate::settings_window::show_settings_viewport(self, &ctx);
         }
+
+        // Diálogo modal pendiente (confirmar/conflicto/nombre). Se pinta al final
+        // para quedar sobre todo. Si hay uno abierto, repintamos para que el modal
+        // responda con fluidez aunque no haya workers activos.
+        if self.pending_dialog.is_some() {
+            let ctx = ui.ctx().clone();
+            self.process_pending_dialog(&ctx);
+            ui.ctx().request_repaint();
+        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -843,6 +1440,35 @@ impl eframe::App for NaygoApp {
 }
 
 /// Carpeta inicial: home del usuario o C:\ como fallback.
+/// Construye el reporte de texto plano del resumen de una operación. Una línea de
+/// cabecera con conteos + bytes + tiempo, y luego una línea por archivo:
+/// `<OUTCOME>\t<ruta>` (con el motivo tras un tab más en los `FAILED`).
+fn build_summary_report(summary: &OpSummary) -> String {
+    let mut out = String::new();
+    out.push_str("Naygo — resumen de operación\n");
+    out.push_str(&format!(
+        "Hechos: {}  Omitidos: {}  Con error: {}\n",
+        summary.count_done(),
+        summary.count_skipped(),
+        summary.count_failed()
+    ));
+    out.push_str(&format!(
+        "Bytes: {}  Tiempo: {:.1}s\n",
+        summary.bytes_done, summary.elapsed_secs
+    ));
+    out.push_str("---\n");
+    for (path, outcome) in &summary.items {
+        match outcome {
+            OpOutcome::Done => out.push_str(&format!("DONE\t{}\n", path.display())),
+            OpOutcome::Skipped => out.push_str(&format!("SKIPPED\t{}\n", path.display())),
+            OpOutcome::Failed(reason) => {
+                out.push_str(&format!("FAILED\t{}\t{}\n", path.display(), reason))
+            }
+        }
+    }
+    out
+}
+
 fn default_start_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
