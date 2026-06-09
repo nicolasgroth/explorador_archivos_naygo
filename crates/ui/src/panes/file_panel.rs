@@ -386,6 +386,18 @@ pub fn show(
                         }
                         row_resp.context_menu(|ui| {
                             context_focus = Some(i);
+                            // Encabezado deshabilitado con el conteo de selección múltiple.
+                            let n = selected_set.len();
+                            if n >= 2 {
+                                ui.add_enabled(
+                                    false,
+                                    egui::Button::new(format!(
+                                        "{n} {}",
+                                        i18n.t("menu.selected_count")
+                                    )),
+                                );
+                                ui.separator();
+                            }
                             if ui.button(i18n.t("op.open")).clicked() {
                                 ops_actions.push(Action::Open);
                                 ui.close();

@@ -2310,6 +2310,32 @@ impl NaygoApp {
         };
         config::save_workspace(&self.config_dir, &persist);
     }
+
+    /// Resumen de selección múltiple en la barra de estado (N + tamaño conocido sumado).
+    /// Las carpetas sin tamaño calculado NO suman (no se dispara cálculo). Solo aplica con
+    /// 2+ seleccionados; con 0/1 el status lo maneja el flujo normal.
+    fn update_selection_status(&mut self) {
+        let Some(f) = self.workspace.active_files() else {
+            return;
+        };
+        let count = f.selection_count();
+        if count < 2 {
+            return;
+        }
+        let view = f.view_indices();
+        let total: u64 = f
+            .selected
+            .iter()
+            .filter_map(|&pos| view.get(pos))
+            .filter_map(|&real| f.entries.get(real))
+            .filter_map(|e| e.size)
+            .sum();
+        let suffix = self.i18n.t("status.selected_suffix").to_string();
+        self.status = format!(
+            "{count} {suffix} · {}",
+            naygo_core::format::human_size(total)
+        );
+    }
 }
 
 impl eframe::App for NaygoApp {
@@ -2339,6 +2365,14 @@ impl eframe::App for NaygoApp {
         }
         if !capture_consumed {
             self.handle_input(ctx);
+        }
+        // Resumen de selección múltiple en la barra de estado. Se recomputa cada frame
+        // desde la selección actual del panel activo (se actualiza solo al cambiar la
+        // selección, sin importar dónde ocurrió el clic). Solo pisa el status cuando hay
+        // 2+ seleccionados y no hay ninguna op en curso: así no clobberea el progreso/error
+        // efímero de una operación (que debe permanecer visible mientras corre).
+        if !self.any_op_active() {
+            self.update_selection_status();
         }
         if self.any_listing_active()
             || self.any_tree_listing_active()

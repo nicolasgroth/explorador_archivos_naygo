@@ -80,6 +80,8 @@
   "template.dual_pane": "Dual-pane",
   "template.power_user": "Power-user",
   "status.elements": "{n} elementos",
+  "status.selected_suffix": "seleccionados",
+  "menu.selected_count": "seleccionados",
   "status.error": "Error: {e}",
   "status.opening": "Abriendo {name}",
   "status.no_association": "No hay programa asociado a {name}",
