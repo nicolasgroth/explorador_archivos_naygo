@@ -17,10 +17,7 @@ pub fn first_positional(args: &[String]) -> Option<&str> {
 /// Resuelve la carpeta inicial: `Some(dir)` solo si el primer argumento es un
 /// directorio existente. Validación de existencia mediante el predicado `is_dir`
 /// (inyectable para test puro; en producción se pasa `|p| p.is_dir()`).
-pub fn resolve_initial_dir(
-    args: &[String],
-    is_dir: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
+pub fn resolve_initial_dir(args: &[String], is_dir: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let candidate = first_positional(args)?;
     let path = PathBuf::from(candidate);
     if is_dir(&path) {
