@@ -33,18 +33,42 @@ fn main() -> eframe::Result<()> {
     let _log_guard = logging::init();
     install_panic_handler();
 
+    // Carpeta inicial opcional: naygo.exe <ruta> abre esa carpeta.
+    let args: Vec<String> = std::env::args().collect();
+    let initial_dir = naygo_core::cli::parse_initial_dir(args.get(1..).unwrap_or(&[]));
+    if let Some(d) = &initial_dir {
+        tracing::info!("carpeta inicial por CLI: {}", d.display());
+    }
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Naygo")
+        .with_inner_size([1100.0, 700.0]);
+    if let Some(icon) = load_window_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Naygo")
-            .with_inner_size([1100.0, 700.0]),
+        viewport,
         ..Default::default()
     };
 
     eframe::run_native(
         "Naygo",
         native_options,
-        Box::new(|cc| Ok(Box::new(NaygoApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(NaygoApp::new(cc, initial_dir.clone())))),
     )
+}
+
+/// Carga el ícono de la ventana desde el PNG del logo embebido. Si falla la
+/// decodificación, devuelve None (la app arranca igual, sin ícono de ventana).
+fn load_window_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../../../assets/icons/logo_naygo.png");
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = (img.width(), img.height());
+    Some(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
 }
 
 /// Captura panics: los loguea en vez de morir en silencio. Sigue el principio del

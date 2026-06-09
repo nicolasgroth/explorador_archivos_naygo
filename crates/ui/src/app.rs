@@ -288,7 +288,7 @@ struct PendingPasteWrite {
 }
 
 impl NaygoApp {
-    pub fn new(cc: &CreationContext<'_>) -> Self {
+    pub fn new(cc: &CreationContext<'_>, initial_dir: Option<std::path::PathBuf>) -> Self {
         let config_dir = config::portable_dir();
         let settings = config::load_settings(&config_dir);
         let templates = config::load_templates(&config_dir);
@@ -372,6 +372,12 @@ impl NaygoApp {
             size_partial: std::collections::HashSet::new(),
         };
         app.start_all_listings();
+
+        // Carpeta inicial por línea de comandos (naygo.exe <ruta>): si se pasó una
+        // carpeta válida, el panel activo se navega ahí; si no, queda el arranque normal.
+        if let Some(dir) = initial_dir {
+            app.navigate_active_to(dir);
+        }
         app
     }
 
