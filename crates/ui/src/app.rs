@@ -2822,6 +2822,10 @@ impl eframe::App for NaygoApp {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        // Capturar el layout VIVO del dock antes de persistir: así sobreviven al
+        // reinicio los paneles añadidos con ➕ y los reacomodos por arrastre, que
+        // mutan `dock_state` pero no `workspace.layout`.
+        self.workspace.layout = crate::dock_translate::from_dock_state(&self.dock_state);
         self.save_workspace();
         config::save_settings(&self.config_dir, &self.settings);
         config::save_templates(&self.config_dir, &self.templates);
