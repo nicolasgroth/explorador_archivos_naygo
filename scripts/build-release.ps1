@@ -1,6 +1,7 @@
 # Naygo - orquestador de empaquetado: compila release, arma el ZIP portable y
 # (si Inno Setup esta instalado) genera el instalador.
 # Copyright (c) 2026 Nicolas Groth / ISGroth. MIT License.
+# Autor: Nicolás Groth <ngroth@gmail.com> — ISGroth.
 #
 # Uso:  powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 # Prerequisitos: Rust (toolchain MSVC). Inno Setup (ISCC.exe) opcional: si falta,
