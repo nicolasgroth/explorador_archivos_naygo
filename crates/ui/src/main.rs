@@ -43,7 +43,8 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Naygo")
-        .with_inner_size([1100.0, 700.0]);
+        .with_inner_size([1100.0, 700.0])
+        .with_min_inner_size([640.0, 400.0]);
     if let Some(icon) = load_window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
