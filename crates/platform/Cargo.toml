@@ -19,8 +19,13 @@ windows = { workspace = true, features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_System_Com_StructuredStorage",
     "Win32_Graphics_Gdi",
 ] }
+# El macro `#[implement]` genera rutas absolutas `::windows_core::...`; necesitamos el
+# crate disponible por ese nombre como dependencia directa.
+windows-core = "0.62"
 
 [dependencies]
 naygo-core = { path = "../core" }

@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod context_menu;
 pub mod device_watch;
 pub mod dir_watch;
+pub mod dnd;
 pub mod drive_space;
 pub mod drives;
 pub mod locale;
