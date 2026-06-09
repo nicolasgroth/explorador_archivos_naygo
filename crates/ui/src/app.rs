@@ -314,7 +314,7 @@ impl NaygoApp {
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
 
-        let icons = IconProvider::new(&cc.egui_ctx, settings.icon_set);
+        let icons = IconProvider::new(&cc.egui_ctx, &settings.icon_set);
 
         let theme_catalog = ThemeCatalog::load(&config_dir, &settings.theme);
         let active_theme = {
@@ -509,8 +509,15 @@ impl NaygoApp {
 
     /// Activa un pack: setea tema + icon set (siguen independientes después).
     pub fn apply_pack(&mut self, pack: &naygo_core::theme::pack::Pack) {
+        use naygo_core::config::IconSet;
         self.settings.theme = pack.theme.clone();
-        self.settings.icon_set = pack.icon_set;
+        // `Pack` aún expone el enum embebido; lo mapeamos al id string del set.
+        self.settings.icon_set = match pack.icon_set {
+            IconSet::Flat => "flat",
+            IconSet::Fluent => "fluent",
+            IconSet::Mono => "mono",
+        }
+        .to_string();
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
@@ -2259,8 +2266,8 @@ impl eframe::App for NaygoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.icons.set() != self.settings.icon_set {
-            let set = self.settings.icon_set;
-            self.icons.reload(ui.ctx(), set);
+            let set = self.settings.icon_set.clone();
+            self.icons.reload(ui.ctx(), &set);
         }
 
         if self.active_theme.id != self.settings.theme {

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 use crate::app::NaygoApp;
-use naygo_core::config::IconSet;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     ui.heading(app.tr("settings.appearance"));
@@ -15,9 +14,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.tr("settings.icons.mono"),
     );
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Flat, l_flat);
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Fluent, l_fluent);
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Mono, l_mono);
+        ui.selectable_value(&mut app.settings.icon_set, "flat".to_string(), l_flat);
+        ui.selectable_value(&mut app.settings.icon_set, "fluent".to_string(), l_fluent);
+        ui.selectable_value(&mut app.settings.icon_set, "mono".to_string(), l_mono);
     });
     ui.add_space(8.0);
 
