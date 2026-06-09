@@ -28,9 +28,21 @@ impl IconSetCatalog {
     /// Tolerante: si `read_dir` falla, solo los embebidos.
     pub fn load(dir: &Path) -> IconSetCatalog {
         let mut sets = vec![
-            IconSetInfo { id: "flat".into(), label: "Flat".into(), builtin: true },
-            IconSetInfo { id: "fluent".into(), label: "Fluent".into(), builtin: true },
-            IconSetInfo { id: "mono".into(), label: "Mono".into(), builtin: true },
+            IconSetInfo {
+                id: "flat".into(),
+                label: "Flat".into(),
+                builtin: true,
+            },
+            IconSetInfo {
+                id: "fluent".into(),
+                label: "Fluent".into(),
+                builtin: true,
+            },
+            IconSetInfo {
+                id: "mono".into(),
+                label: "Mono".into(),
+                builtin: true,
+            },
         ];
         let icons_dir = dir.join("icons");
         if let Ok(entries) = std::fs::read_dir(&icons_dir) {
