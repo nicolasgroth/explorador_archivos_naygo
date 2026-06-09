@@ -21,3 +21,6 @@ assets/icons/*.zip
 *.swp
 Thumbs.db
 desktop.ini
+
+# Artefactos de empaquetado generados (ZIP portable, setup.exe). No se versionan.
+/dist
