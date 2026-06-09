@@ -47,6 +47,55 @@ pub enum IconKey {
     Drive(DriveKind),
     /// Fallback genérico (tipo no clasificable).
     Unknown,
+    /// Acción de la barra de herramientas.
+    Action(ActionIcon),
+}
+
+/// Ícono de una acción de la barra de herramientas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ActionIcon {
+    Back,
+    Forward,
+    Up,
+    Refresh,
+    Copy,
+    Cut,
+    Paste,
+    Delete,
+    NewFile,
+    NewFolder,
+    AddPane,
+    Settings,
+}
+
+impl ActionIcon {
+    /// Todas las acciones (para precargar el atlas).
+    pub fn all() -> &'static [ActionIcon] {
+        use ActionIcon::*;
+        &[
+            Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder,
+            AddPane, Settings,
+        ]
+    }
+
+    /// Nombre de archivo (sin extensión) del ícono en un set, p. ej. "action_back".
+    pub fn file_name(self) -> &'static str {
+        use ActionIcon::*;
+        match self {
+            Back => "action_back",
+            Forward => "action_forward",
+            Up => "action_up",
+            Refresh => "action_refresh",
+            Copy => "action_copy",
+            Cut => "action_cut",
+            Paste => "action_paste",
+            Delete => "action_delete",
+            NewFile => "action_new_file",
+            NewFolder => "action_new_folder",
+            AddPane => "action_add_pane",
+            Settings => "action_settings",
+        }
+    }
 }
 
 /// Tabla extensión (minúsculas, sin punto) → categoría. Construida una sola vez.
@@ -240,5 +289,25 @@ mod tests {
             hidden: false,
         };
         assert_eq!(icon_key_for(&other), IconKey::Unknown);
+    }
+
+    #[test]
+    fn action_icon_all_son_12_con_file_name_unico() {
+        let all = ActionIcon::all();
+        assert_eq!(all.len(), 12);
+        let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 12, "cada acción tiene un nombre de archivo único");
+        assert!(all.iter().all(|a| a.file_name().starts_with("action_")));
+    }
+
+    #[test]
+    fn icon_key_action_es_copy_hashable() {
+        use std::collections::HashSet;
+        let mut s = HashSet::new();
+        s.insert(IconKey::Action(ActionIcon::Copy));
+        assert!(s.contains(&IconKey::Action(ActionIcon::Copy)));
+        assert!(!s.contains(&IconKey::Action(ActionIcon::Cut)));
     }
 }
