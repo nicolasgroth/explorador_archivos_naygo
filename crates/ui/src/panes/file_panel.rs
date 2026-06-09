@@ -69,6 +69,10 @@ pub fn show(
         return;
     };
     let focused = f.focused;
+    // Posiciones de vista seleccionadas (Vec pequeño). Se clona antes de la tabla
+    // para usarlo dentro del closure de `body.rows` sin conflictos de préstamo,
+    // igual que `focused`. Pintamos TODA la selección, no solo el foco.
+    let selected_set = f.selected.clone();
     let show_dirs = f.show_dirs;
     let sort = f.sort; // SortSpec es Copy; se lee antes de los closures
     let current_dir = f.current_dir.clone();
@@ -171,6 +175,11 @@ pub fn show(
     // Ambos en coordenadas de pantalla (las mismas que devuelve `interact_pointer_pos`).
     let mut row_rects: Vec<(usize, egui::Rect)> = Vec::new();
     let mut name_rects: Vec<egui::Rect> = Vec::new();
+    // Rect de la fila con el foco/ancla. Dentro del closure de `body.rows` el `ui` ya
+    // está movido al `TableBuilder`, así que no podemos pintar ahí; capturamos el rect
+    // y dibujamos el borde punteado tras construir la tabla (con el `ui` padre, igual
+    // que el rubber-band). Coordenadas de pantalla.
+    let mut focus_rect: Option<egui::Rect> = None;
 
     // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
     // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
@@ -274,7 +283,12 @@ pub fn show(
                     }
                     DisplayRow::Entry(i) => {
                         let entry = &view[i];
-                        let selected = focused == Some(i);
+                        // `selected` refleja TODA la multi-selección (no solo el foco):
+                        // así todas las filas seleccionadas se pintan resaltadas.
+                        let selected = selected_set.contains(&i);
+                        // El foco/ancla es la fila que el teclado mueve; se distingue
+                        // del resto de la selección con un borde punteado (abajo).
+                        let is_focus = focused == Some(i);
                         // Resaltado estilo A: las entries que el watcher marcó como recién
                         // aparecidas se pintan con el fondo teñido del token `highlight` y
                         // el nombre en ese color. La selección tiene prioridad sobre el
@@ -343,6 +357,11 @@ pub fn show(
                         row_rects.push((i, row_resp.rect));
                         if let Some(nr) = name_cell_rect.get() {
                             name_rects.push(nr);
+                        }
+                        // Guardar el rect de la fila con foco para pintar su borde
+                        // punteado tras la tabla (el `ui` aquí ya está movido).
+                        if is_focus {
+                            focus_rect = Some(row_resp.rect);
                         }
                         if row_resp.clicked() {
                             // `ui` ya está movido dentro del `TableBuilder`; leemos los
@@ -481,6 +500,25 @@ pub fn show(
                     ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
                 }
             }
+        }
+    }
+
+    // Borde punteado del foco/ancla: distingue la fila con foco de teclado del resto
+    // de la multi-selección (que ya va resaltada). Se pinta tras la tabla, con el `ui`
+    // padre, para que quede por encima del fondo de la fila. Mismo enfoque de
+    // `dashed_line` que el rubber-band.
+    if let Some(r) = focus_rect {
+        let stroke = egui::Stroke::new(1.0, theme.accent());
+        let corners = [
+            r.left_top(),
+            r.right_top(),
+            r.right_bottom(),
+            r.left_bottom(),
+            r.left_top(),
+        ];
+        let painter = ui.painter();
+        for w in corners.windows(2) {
+            painter.extend(egui::Shape::dashed_line(&[w[0], w[1]], stroke, 3.0, 2.0));
         }
     }
 
