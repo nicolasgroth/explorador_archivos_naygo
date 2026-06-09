@@ -709,6 +709,12 @@ impl NaygoApp {
                     .and_then(|p| p.files.as_ref())
                     .map(|f| f.current_dir.clone())
                 {
+                    // La selección son posiciones de vista; si el watcher cambió las entries,
+                    // dejarían de apuntar al archivo correcto → limpiar (evita operar sobre el
+                    // archivo equivocado).
+                    if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        f.clear_selection();
+                    }
                     self.start_listing(id, dir);
                 }
                 continue;
@@ -725,6 +731,11 @@ impl NaygoApp {
                 let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &events, &read);
                 let spec = f.sort;
                 naygo_core::sort::sort_entries(&mut f.entries, &spec);
+                // La selección son posiciones de vista; si el watcher cambió las entries,
+                // dejarían de apuntar al archivo correcto → limpiar (evita operar sobre el
+                // archivo equivocado). El lote llega no vacío (filtrado arriba), así que
+                // las entries efectivamente cambiaron y/o se reordenaron.
+                f.clear_selection();
                 if !nuevas.is_empty() {
                     for p in nuevas {
                         f.highlighted.insert(p);
@@ -780,6 +791,10 @@ impl NaygoApp {
         if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.entries.clear();
             f.focused = None;
+            // La selección son posiciones de vista; al re-listar la vista se reconstruye →
+            // limpiar (paridad con navigate_to/enter; evita operar sobre el archivo
+            // equivocado mientras el nuevo listado llega en streaming).
+            f.clear_selection();
         }
         // Carpetas que tenían tamaño calculado → recalcular tras re-listar.
         let to_recompute: Vec<PathBuf> = self
@@ -1556,11 +1571,9 @@ impl NaygoApp {
             return Vec::new();
         };
         let view = f.view_indices();
-        // NOTA: `f.selected` está RESERVADO para una futura multi-selección y hoy la UI
-        // nunca lo puebla (siempre vacío en ops-A) → esta rama es código correcto-por-
-        // contrato pero inactivo; en la práctica se usa el fallback al foco de abajo.
-        // `selected` y `focused` viven en espacio de VISTA (pos en view_indices()), por
-        // eso se mapea pos→real antes de indexar `entries`.
+        // Multi-selección: `f.selected` son posiciones de VISTA pobladas por la selección
+        // (clic/Ctrl/Shift/rectángulo/teclado). Se mapean pos vista→view_indices→entries;
+        // las posiciones fuera de rango se descartan (filter_map), nunca indexan mal.
         if !f.selected.is_empty() {
             return f
                 .selected
@@ -2205,6 +2218,7 @@ impl NaygoApp {
             egui::Key::Tab,
             egui::Key::Escape,
             egui::Key::Delete,
+            egui::Key::Space,
             egui::Key::F2,
             egui::Key::F3,
             egui::Key::F5,
