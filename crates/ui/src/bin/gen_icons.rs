@@ -1,5 +1,6 @@
 // Naygo — generador de los PNG iniciales de íconos (set propio, reemplazable).
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Autor: Nicolás Groth <ngroth@gmail.com>.
 //
 // Genera un PNG 32x32 por IconKey por set bajo assets/icons/{flat,fluent,mono}/.
 // Los íconos son formas de color simples por categoría — placeholders de calidad

@@ -284,6 +284,14 @@ pub struct NaygoApp {
     splash: Option<crate::splash::Splash>,
     /// HWND de la ventana para el menú contextual nativo (shell-B). None → ítem deshabilitado.
     hwnd: Option<isize>,
+    /// Guard del drop target OLE (recibir arrastres del SO). Mantiene vivo el `IDropTarget`
+    /// registrado; al dropearse (cierre de la app) revoca el registro. `None` si no se pudo
+    /// registrar (la app sigue, simplemente sin recibir drops externos). Solo en Windows.
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    drop_guard: Option<naygo_platform::dnd::DropTargetGuard>,
+    /// Receptor de archivos soltados desde el SO (Explorador → Naygo).
+    drop_rx: Option<std::sync::mpsc::Receiver<naygo_platform::dnd::DroppedFiles>>,
     /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic. La procesa NaygoApp fuera del closure de egui.
     native_menu_request: Option<(f32, f32)>,
 }
@@ -357,6 +365,23 @@ impl NaygoApp {
             }
         };
 
+        // Drop target OLE: si tenemos HWND, registramos un IDropTarget para recibir
+        // arrastres del SO (Explorador → Naygo). El guard mantiene vivo el registro y lo
+        // revoca al cerrar. Si falla (o no es Windows), drop_rx queda None y la app sigue.
+        #[cfg(windows)]
+        let (drop_guard, drop_rx) = match hwnd {
+            Some(h) => {
+                let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+                match naygo_platform::dnd::register_drop_target(h, drop_tx) {
+                    Some(guard) => (Some(guard), Some(drop_rx)),
+                    None => (None, None),
+                }
+            }
+            None => (None, None),
+        };
+        #[cfg(not(windows))]
+        let drop_rx: Option<std::sync::mpsc::Receiver<naygo_platform::dnd::DroppedFiles>> = None;
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -398,6 +423,9 @@ impl NaygoApp {
             size_partial: std::collections::HashSet::new(),
             splash,
             hwnd,
+            #[cfg(windows)]
+            drop_guard,
+            drop_rx,
             native_menu_request: None,
         };
         app.start_all_listings();
@@ -783,6 +811,47 @@ impl NaygoApp {
         }
         if changed {
             self.start_disk_scan();
+        }
+    }
+
+    /// Drena los archivos soltados (vía OLE/`IDropTarget`) sobre la ventana de Naygo y los
+    /// transfiere al panel activo, honrando el efecto (mover vs copiar) que decidió el
+    /// `IDropTarget` a partir de los modificadores (Shift=mover, Ctrl/sin tecla=copiar).
+    /// Esto cubre tanto los drops EXTERNOS (Explorador → Naygo) como los INTRA-app entre
+    /// paneles: como `DoDragDrop` bloquea y captura el mouse, todo arrastre de archivos sale
+    /// y vuelve por OLE.
+    ///
+    /// El mapeo coords-de-pantalla → panel exacto bajo el cursor sigue pendiente (Task:
+    /// screen→pane): mientras el bucle modal de `DoDragDrop` corre, egui está congelado y no
+    /// hay un mapeo directo de coordenadas de pantalla a panel; haría falta rastrear el rect
+    /// en pantalla de cada panel por frame. Por ahora los archivos caen en la carpeta del
+    /// panel ACTIVO, comportamiento aceptable acordado. Lo que SÍ honramos ya es el efecto.
+    fn pump_dropped_files(&mut self) {
+        // Recolectar primero para no mantener prestado `self.drop_rx` mientras lanzamos las
+        // transferencias (que toman `&mut self`).
+        let mut dropped: Vec<naygo_platform::dnd::DroppedFiles> = Vec::new();
+        if let Some(rx) = &self.drop_rx {
+            while let Ok(d) = rx.try_recv() {
+                dropped.push(d);
+            }
+        }
+        for d in dropped {
+            if d.paths.is_empty() {
+                continue;
+            }
+            let Some(dest) = self.active_dir() else {
+                continue;
+            };
+            // Honrar el efecto que decidió el IDropTarget (Shift=mover, si no copiar).
+            let move_it = !d.effect_copy;
+            let req = crate::ops_actions::transfer(move_it, d.paths, dest.clone());
+            let verb = if move_it {
+                self.i18n.t("op.cut")
+            } else {
+                self.i18n.t("op.copy")
+            };
+            let label = format!("{verb} → {}", dest.display());
+            self.launch_transfer(req, label);
         }
     }
 
@@ -1562,6 +1631,32 @@ impl NaygoApp {
             Err(e) => {
                 tracing::warn!("menú nativo falló: {e:?}");
                 self.status = self.i18n.t("op.more_windows_error").to_string();
+            }
+        }
+    }
+
+    /// Inicia un arrastre OLE de `paths` hacia el SO (Explorer, escritorio, correo…).
+    /// BLOQUEANTE: `DoDragDrop` corre su propio bucle modal hasta que el usuario suelta o
+    /// cancela. Debe llamarse FUERA del closure de render de egui. Si el resultado es MOVER,
+    /// refresca el panel activo (el archivo ya no está en el origen). Tolerante: cualquier
+    /// fallo se reporta discreto en logs, nunca tumba la app.
+    fn start_os_drag(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        match naygo_platform::dnd::start_drag(&paths) {
+            Ok(naygo_platform::dnd::DragOutcome::Moved) => {
+                // El destino movió los archivos: el origen quedó obsoleto. Refrescar.
+                if let (Some(id), Some(dir)) = (self.workspace.active_id(), self.active_dir()) {
+                    self.refresh_pane(id, dir);
+                }
+            }
+            Ok(naygo_platform::dnd::DragOutcome::Copied)
+            | Ok(naygo_platform::dnd::DragOutcome::Cancelled) => {
+                // Copia: el origen no cambia. Cancelado: nada que hacer.
+            }
+            Err(e) => {
+                tracing::warn!("arrastre OLE al SO falló: {e:?}");
             }
         }
     }
@@ -2368,6 +2463,7 @@ impl eframe::App for NaygoApp {
         self.pump_sizing();
         self.pump_watchers();
         self.pump_devices();
+        self.pump_dropped_files();
         self.pump_paste_write();
         // La captura de atajos consume el teclado de este frame. Si capturó o canceló una
         // tecla, NO corremos handle_input este frame: si no, la misma tecla (que sigue
@@ -2400,7 +2496,7 @@ impl eframe::App for NaygoApp {
         // Los eventos de carpeta llegan por canal sin input del usuario: despertamos la
         // UI ~2 veces/seg para drenarlos. Barato y respeta el bajo consumo (no es un
         // bucle ocupado: si no hay cambios, los pumps no hacen trabajo).
-        if !self.watchers.is_empty() || self.device_watch.is_some() {
+        if !self.watchers.is_empty() || self.device_watch.is_some() || self.drop_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
         // Fluidez del hover/selección: mientras el puntero está sobre la UI, repintamos
@@ -2580,6 +2676,10 @@ impl eframe::App for NaygoApp {
         // vigilando una carpeta de un panel cerrado (consumo). Sin esto, el bucle de
         // repintado de 500 ms nunca se apagaría tras cerrar un panel.
         self.prune_closed_panes();
+        // Petición de arrastre OLE hacia el SO (Naygo → Explorer). Se acumula aquí y se
+        // procesa DESPUÉS del bucle `pending`, fuera del closure de egui: `DoDragDrop` corre
+        // un bucle modal que toma el control del mouse. Mismo patrón que `native_menu`.
+        let mut os_drag_request: Option<Vec<PathBuf>> = None;
         for req in pending {
             match req {
                 crate::docking::PaneRequest::Activate { id } => {
@@ -2597,7 +2697,20 @@ impl eframe::App for NaygoApp {
                         self.start_listing(id, dir);
                     }
                 }
+                crate::docking::PaneRequest::StartOsDrag { paths } => {
+                    // Solo un arrastre a la vez tiene sentido; last-writer-wins.
+                    os_drag_request = Some(paths);
+                }
             }
+        }
+
+        // Arrastre OLE hacia el SO: FUERA del closure de egui (DoDragDrop bloquea con su
+        // bucle modal mientras el usuario arrastra). Tras soltar, si el efecto fue MOVER,
+        // refrescamos el panel activo (el dato ya no está en el origen). El arrastre interno
+        // entre paneles de Naygo (Task 2) sigue intacto: si el usuario suelta DENTRO de la
+        // ventana, nuestro IDropTarget lo recibe; si suelta fuera, lo recibe el SO.
+        if let Some(paths) = os_drag_request.take() {
+            self.start_os_drag(paths);
         }
 
         // Disparadores de operaciones del menú contextual. Se aplican DESPUÉS del
@@ -2707,6 +2820,10 @@ impl eframe::App for NaygoApp {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        // Capturar el layout VIVO del dock antes de persistir: así sobreviven al
+        // reinicio los paneles añadidos con ➕ y los reacomodos por arrastre, que
+        // mutan `dock_state` pero no `workspace.layout`.
+        self.workspace.layout = crate::dock_translate::from_dock_state(&self.dock_state);
         self.save_workspace();
         config::save_settings(&self.config_dir, &self.settings);
         config::save_templates(&self.config_dir, &self.templates);

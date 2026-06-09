@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod columns;
 pub mod config;
 pub mod disk;
+pub mod dnd;
 pub mod filter;
 pub mod format;
 pub mod fs_model;

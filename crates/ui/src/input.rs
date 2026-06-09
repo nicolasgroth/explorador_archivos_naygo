@@ -82,7 +82,7 @@ pub fn chord_text(chord: &Chord) -> String {
         KeyCode::F3 => "F3",
         KeyCode::F5 => "F5",
         KeyCode::F6 => "F6",
-        KeyCode::Space => "Espacio",
+        KeyCode::Space => "␣",
         KeyCode::Char(c) => {
             s.push(c.to_ascii_uppercase());
             return s;
@@ -144,6 +144,6 @@ mod tests {
         assert_eq!(chord_text(&Chord::plain(KeyCode::F3)), "F3");
         assert_eq!(chord_text(&Chord::plain(KeyCode::ArrowUp)), "↑");
         assert_eq!(chord_text(&Chord::alt(KeyCode::ArrowLeft)), "Alt+←");
-        assert_eq!(chord_text(&Chord::plain(KeyCode::Space)), "Espacio");
+        assert_eq!(chord_text(&Chord::plain(KeyCode::Space)), "␣");
     }
 }
