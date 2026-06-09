@@ -318,7 +318,11 @@ fn normalize_icon_set_id(id: &str) -> String {
 pub fn load_settings(dir: &Path) -> Settings {
     match read_json::<Settings>(&dir.join("settings.json")) {
         Some(mut s) if s.version == CONFIG_VERSION => {
-            s.icon_set = normalize_icon_set_id(&s.icon_set);
+            // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
+            // suelto que ya no existe en disco (carpeta borrada) cae a "flat" en vez de
+            // quedar como selección colgada con la toolbar rota.
+            let normalized = normalize_icon_set_id(&s.icon_set);
+            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
             s
         }
         Some(_) => {
@@ -472,11 +476,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("settings.json"),
-            br#"{"version":1,"icon_set":"Flat"}"#,
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"Flat"}"#,
         )
         .unwrap();
         let s = load_settings(dir.path());
         assert_eq!(s.icon_set, "flat");
+    }
+
+    #[test]
+    fn icon_set_de_pack_borrado_cae_a_flat() {
+        // Un id de pack suelto guardado cuya carpeta ya no existe en disco se coacciona
+        // a "flat" al cargar (no queda como selección colgada con la toolbar rota).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"pack-borrado"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "flat");
+    }
+
+    #[test]
+    fn icon_set_de_pack_suelto_existente_se_conserva() {
+        // Si la carpeta del pack suelto sí existe en <config>/icons/<id>/, el id se conserva.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("icons").join("mi-pack")).unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"mi-pack"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "mi-pack");
     }
 
     #[test]
