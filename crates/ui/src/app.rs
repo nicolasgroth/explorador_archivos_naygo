@@ -231,11 +231,11 @@ pub struct NaygoApp {
     pub(crate) shortcut_search: String,
     /// Mensaje del banner de conflicto tras un bind que robó un atajo (efímero).
     pub(crate) shortcut_conflict: Option<String>,
-    icons: IconProvider,
+    pub(crate) icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
     pack_catalog: PackCatalog,
-    active_theme: ActiveTheme,
+    pub(crate) active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
     /// Operaciones de archivo en curso/terminadas (panel de progreso).

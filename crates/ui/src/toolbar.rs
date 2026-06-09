@@ -8,6 +8,7 @@
 use crate::app::NaygoApp;
 use crate::input::Action;
 use naygo_core::config::BarPosition;
+use naygo_core::icon_kind::ActionIcon;
 
 /// Pinta la barra en la posición configurada. Debe llamarse al inicio de `ui()`.
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
@@ -48,49 +49,85 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let lbl_delete = app.tr("op.delete");
     let lbl_new_file = app.tr("op.new_file");
     let lbl_new_folder = app.tr("op.new_folder");
+    let lbl_settings = app.tr("toolbar.settings");
 
-    if icon_button(ui, "◀", &lbl_back, can_back) {
-        app.apply_action(Action::GoBack);
+    // Estilo de íconos y colores resueltos UNA vez, antes de tomar `&app.icons`
+    // (préstamo inmutable que coexiste con los cuerpos de los `if`, ya que estos
+    // solo mutan `app` *después* de que el botón devolvió su `bool`).
+    let style = app.settings.toolbar_icon_style;
+    let glyph_color = match app.settings.toolbar_glyph_color {
+        Some(tc) => egui::Color32::from_rgb(tc.r, tc.g, tc.b),
+        None => app.active_theme.accent(),
+    };
+    // El set `mono` son siluetas monocromáticas: se tiñen con el color de texto del
+    // tema. Cualquier otro set se pinta tal cual (sin tinte).
+    let tint_mono = if app.icons.set() == "mono" {
+        Some(app.active_theme.text())
+    } else {
+        None
+    };
+
+    // Recolectar el botón pulsado y procesar la acción DESPUÉS de pintarlos, para no
+    // solapar el préstamo inmutable de `&app.icons` con los métodos `&mut app`. Cada
+    // `icon_button` re-toma `&app.icons` de forma puntual; el `layouts_button`
+    // intercalado mutará `app` en su propio statement, sin solape.
+    let mut clicked: Option<ActionIcon> = None;
+    macro_rules! btn {
+        ($glyph:expr, $action:expr, $tip:expr, $enabled:expr) => {
+            if icon_button(
+                ui,
+                $glyph,
+                $action,
+                $tip,
+                $enabled,
+                style,
+                glyph_color,
+                &app.icons,
+                tint_mono,
+            ) {
+                clicked = Some($action);
+            }
+        };
     }
-    if icon_button(ui, "▶", &lbl_forward, can_forward) {
-        app.apply_action(Action::GoForward);
-    }
-    if icon_button(ui, "▲", &lbl_up, true) {
-        app.apply_action(Action::GoUp);
-    }
-    if icon_button(ui, "⟳", &lbl_refresh, true) {
-        if let (Some(id), Some(dir)) = (
-            app.workspace.active_id(),
-            app.workspace.active_files().map(|f| f.current_dir.clone()),
-        ) {
-            app.refresh_pane(id, dir);
-        }
-    }
+    btn!("◀", ActionIcon::Back, &lbl_back, can_back);
+    btn!("▶", ActionIcon::Forward, &lbl_forward, can_forward);
+    btn!("▲", ActionIcon::Up, &lbl_up, true);
+    btn!("⟳", ActionIcon::Refresh, &lbl_refresh, true);
     ui.separator();
     // Operaciones de archivo: mismos disparadores que el teclado / menú contextual.
-    if icon_button(ui, "⧉", &lbl_copy, true) {
-        app.apply_action(Action::Copy);
-    }
-    if icon_button(ui, "✂", &lbl_cut, true) {
-        app.apply_action(Action::Cut);
-    }
-    if icon_button(ui, "📋", &lbl_paste, true) {
-        app.apply_action(Action::Paste);
-    }
-    if icon_button(ui, "🗑", &lbl_delete, true) {
-        app.apply_action(Action::Delete);
-    }
-    if icon_button(ui, "🗋", &lbl_new_file, true) {
-        app.apply_action(Action::NewFile);
-    }
-    if icon_button(ui, "🗀", &lbl_new_folder, true) {
-        app.apply_action(Action::NewDir);
-    }
+    btn!("⧉", ActionIcon::Copy, &lbl_copy, true);
+    btn!("✂", ActionIcon::Cut, &lbl_cut, true);
+    btn!("📋", ActionIcon::Paste, &lbl_paste, true);
+    btn!("🗑", ActionIcon::Delete, &lbl_delete, true);
+    btn!("🗋", ActionIcon::NewFile, &lbl_new_file, true);
+    btn!("🗀", ActionIcon::NewFolder, &lbl_new_folder, true);
 
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
-    if icon_button(ui, "➕", &lbl_add_pane, true) {
-        app.add_files_pane();
+    btn!("➕", ActionIcon::AddPane, &lbl_add_pane, true);
+
+    if let Some(action) = clicked {
+        match action {
+            ActionIcon::Back => app.apply_action(Action::GoBack),
+            ActionIcon::Forward => app.apply_action(Action::GoForward),
+            ActionIcon::Up => app.apply_action(Action::GoUp),
+            ActionIcon::Refresh => {
+                if let (Some(id), Some(dir)) = (
+                    app.workspace.active_id(),
+                    app.workspace.active_files().map(|f| f.current_dir.clone()),
+                ) {
+                    app.refresh_pane(id, dir);
+                }
+            }
+            ActionIcon::Copy => app.apply_action(Action::Copy),
+            ActionIcon::Cut => app.apply_action(Action::Cut),
+            ActionIcon::Paste => app.apply_action(Action::Paste),
+            ActionIcon::Delete => app.apply_action(Action::Delete),
+            ActionIcon::NewFile => app.apply_action(Action::NewFile),
+            ActionIcon::NewFolder => app.apply_action(Action::NewDir),
+            ActionIcon::AddPane => app.add_files_pane(),
+            ActionIcon::Settings => app.settings_open = true,
+        }
     }
 
     ui.separator();
@@ -104,9 +141,11 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
         .collect();
     let mut navigate_to: Option<std::path::PathBuf> = None;
     for (label, path) in &drive_roots {
-        // Mostrar la letra de unidad (p. ej. "C:") de forma compacta.
+        // Mostrar la letra de unidad (p. ej. "C:") de forma compacta. Las unidades
+        // son etiquetas de texto (no acciones del pack), así que se pintan como
+        // botón de texto con el color de glifo resuelto.
         let short = label.trim_end_matches(['\\', '/']).to_string();
-        if icon_button(ui, &short, label, true) {
+        if drive_button(ui, &short, label, glyph_color) {
             navigate_to = Some(path.clone());
         }
     }
@@ -114,27 +153,77 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.navigate_active_to(path);
     }
 
-    // Botón de ajustes: a la derecha del todo si la barra es horizontal (Top).
-    if matches!(app.settings.bar_position, BarPosition::Top) {
+    // Botón de ajustes: a la derecha del todo si la barra es horizontal (Top). Honra
+    // el mismo estilo (glifo coloreado o ícono del pack) que el resto de la barra.
+    let icons = &app.icons;
+    let settings_clicked = if matches!(app.settings.bar_position, BarPosition::Top) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            settings_button(ui, app);
-        });
+            icon_button(
+                ui,
+                "⚙",
+                ActionIcon::Settings,
+                &lbl_settings,
+                true,
+                style,
+                glyph_color,
+                icons,
+                tint_mono,
+            )
+        })
+        .inner
     } else {
-        settings_button(ui, app);
-    }
-}
-
-/// Botón de ajustes: abre la ventana de Configuración (viewport separado).
-fn settings_button(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    let lbl = app.tr("toolbar.settings");
-    if ui.button("⚙").on_hover_text(lbl).clicked() {
+        icon_button(
+            ui,
+            "⚙",
+            ActionIcon::Settings,
+            &lbl_settings,
+            true,
+            style,
+            glyph_color,
+            icons,
+            tint_mono,
+        )
+    };
+    if settings_clicked {
         app.settings_open = true;
     }
 }
 
-/// Un botón solo-ícono con tooltip; deshabilitado si `enabled` es false.
-fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str, enabled: bool) -> bool {
-    ui.add_enabled(enabled, egui::Button::new(icon))
-        .on_hover_text(tip)
-        .clicked()
+/// Botón de texto (etiqueta de unidad) con tooltip; usa el color de glifo resuelto.
+fn drive_button(ui: &mut egui::Ui, label: &str, tip: &str, color: egui::Color32) -> bool {
+    let txt = egui::RichText::new(label).color(color);
+    ui.button(txt).on_hover_text(tip).clicked()
+}
+
+/// Un botón de acción de la barra: glifo Unicode coloreado (`Glyphs`) o el ícono del
+/// pack activo (`Pack`), tinteado solo cuando el set activo es `mono`. Tooltip y
+/// estado habilitado idénticos en ambos estilos.
+#[allow(clippy::too_many_arguments)]
+fn icon_button(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    action: ActionIcon,
+    tip: &str,
+    enabled: bool,
+    style: naygo_core::config::ToolbarIconStyle,
+    glyph_color: egui::Color32,
+    icons: &crate::icons::IconProvider,
+    tint_mono: Option<egui::Color32>,
+) -> bool {
+    use naygo_core::config::ToolbarIconStyle;
+    let resp = match style {
+        ToolbarIconStyle::Glyphs => {
+            let txt = egui::RichText::new(glyph).color(glyph_color).size(16.0);
+            ui.add_enabled(enabled, egui::Button::new(txt))
+        }
+        ToolbarIconStyle::Pack => {
+            let tex = icons.texture(naygo_core::icon_kind::IconKey::Action(action));
+            let mut img = egui::Image::new(tex).fit_to_exact_size(egui::vec2(18.0, 18.0));
+            if let Some(c) = tint_mono {
+                img = img.tint(c);
+            }
+            ui.add_enabled(enabled, egui::Button::image(img))
+        }
+    };
+    resp.on_hover_text(tip).clicked()
 }

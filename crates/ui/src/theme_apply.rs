@@ -21,6 +21,11 @@ impl ActiveTheme {
     pub fn accent(&self) -> egui::Color32 {
         to_color32(self.theme.accent)
     }
+    /// Color de texto principal del tema. Se usa para teñir los íconos del set
+    /// `mono` (siluetas monocromáticas) en la barra de herramientas.
+    pub fn text(&self) -> egui::Color32 {
+        to_color32(self.theme.text)
+    }
     /// Color base del resaltado de archivos recién aparecidos (se tiñe el fondo de la fila).
     pub fn highlight(&self) -> egui::Color32 {
         to_color32(self.theme.highlight)
