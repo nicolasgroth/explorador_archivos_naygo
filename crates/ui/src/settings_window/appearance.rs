@@ -2,22 +2,75 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 use crate::app::NaygoApp;
-use naygo_core::config::IconSet;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     ui.heading(app.tr("settings.appearance"));
     ui.add_space(8.0);
 
+    // Sets disponibles del catálogo: los 3 embebidos + packs sueltos del usuario.
+    let catalog = naygo_core::icon_set::IconSetCatalog::load(app.config_dir());
+    let items: Vec<(String, String)> = catalog
+        .available()
+        .iter()
+        .map(|info| {
+            // Embebidos: etiqueta i18n. Sueltos: el nombre de la carpeta.
+            let label = match info.id.as_str() {
+                "flat" => app.tr("settings.icons.flat"),
+                "fluent" => app.tr("settings.icons.fluent"),
+                "mono" => app.tr("settings.icons.mono"),
+                _ => info.label.clone(),
+            };
+            (info.id.clone(), label)
+        })
+        .collect();
     ui.label(app.tr("settings.icon_set"));
-    let (l_flat, l_fluent, l_mono) = (
-        app.tr("settings.icons.flat"),
-        app.tr("settings.icons.fluent"),
-        app.tr("settings.icons.mono"),
-    );
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Flat, l_flat);
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Fluent, l_fluent);
-        ui.selectable_value(&mut app.settings.icon_set, IconSet::Mono, l_mono);
+        for (id, label) in &items {
+            ui.selectable_value(&mut app.settings.icon_set, id.clone(), label);
+        }
+    });
+    ui.add_space(8.0);
+
+    // Sección Barra de herramientas: estilo de íconos + color de los glifos.
+    ui.separator();
+    let sec = app.tr("settings.toolbar.section");
+    let lbl_style = app.tr("settings.toolbar.style");
+    let lbl_glyphs = app.tr("settings.toolbar.glyphs");
+    let lbl_pack = app.tr("settings.toolbar.pack");
+    let lbl_color = app.tr("settings.toolbar.glyph_color");
+    let lbl_use_theme = app.tr("settings.toolbar.use_theme_color");
+    ui.label(sec);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(lbl_style);
+        ui.selectable_value(
+            &mut app.settings.toolbar_icon_style,
+            naygo_core::config::ToolbarIconStyle::Glyphs,
+            lbl_glyphs,
+        );
+        ui.selectable_value(
+            &mut app.settings.toolbar_icon_style,
+            naygo_core::config::ToolbarIconStyle::Pack,
+            lbl_pack,
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(lbl_color);
+        let mut use_theme = app.settings.toolbar_glyph_color.is_none();
+        if ui.checkbox(&mut use_theme, lbl_use_theme).changed() {
+            app.settings.toolbar_glyph_color = if use_theme {
+                None
+            } else {
+                Some(naygo_core::theme::ThemeColor::new(0x2f, 0x81, 0xf7))
+            };
+        }
+        if let Some(tc) = app.settings.toolbar_glyph_color {
+            let mut c = egui::Color32::from_rgb(tc.r, tc.g, tc.b);
+            if ui.color_edit_button_srgba(&mut c).changed() {
+                app.settings.toolbar_glyph_color =
+                    Some(naygo_core::theme::ThemeColor::new(c.r(), c.g(), c.b()));
+            }
+        }
     });
     ui.add_space(8.0);
 

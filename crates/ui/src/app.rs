@@ -231,11 +231,11 @@ pub struct NaygoApp {
     pub(crate) shortcut_search: String,
     /// Mensaje del banner de conflicto tras un bind que robó un atajo (efímero).
     pub(crate) shortcut_conflict: Option<String>,
-    icons: IconProvider,
+    pub(crate) icons: IconProvider,
     i18n: I18n,
     theme_catalog: ThemeCatalog,
     pack_catalog: PackCatalog,
-    active_theme: ActiveTheme,
+    pub(crate) active_theme: ActiveTheme,
     pub settings_open: bool,
     pub settings_section: SettingsSection,
     /// Operaciones de archivo en curso/terminadas (panel de progreso).
@@ -314,7 +314,7 @@ impl NaygoApp {
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
 
-        let icons = IconProvider::new(&cc.egui_ctx, settings.icon_set);
+        let icons = IconProvider::new(&cc.egui_ctx, &settings.icon_set, &config_dir);
 
         let theme_catalog = ThemeCatalog::load(&config_dir, &settings.theme);
         let active_theme = {
@@ -493,6 +493,11 @@ impl NaygoApp {
         self.config_dir.display().to_string()
     }
 
+    /// Carpeta de config (para descubrir packs/sets sueltos desde la UI de Ajustes).
+    pub fn config_dir(&self) -> &std::path::Path {
+        &self.config_dir
+    }
+
     /// Ids + Theme de cada tema disponible (para pintar las tarjetas del selector).
     pub fn theme_cards(&self) -> Vec<(naygo_core::theme::ThemeId, naygo_core::theme::Theme)> {
         self.theme_catalog
@@ -509,8 +514,15 @@ impl NaygoApp {
 
     /// Activa un pack: setea tema + icon set (siguen independientes después).
     pub fn apply_pack(&mut self, pack: &naygo_core::theme::pack::Pack) {
+        use naygo_core::config::IconSet;
         self.settings.theme = pack.theme.clone();
-        self.settings.icon_set = pack.icon_set;
+        // `Pack` aún expone el enum embebido; lo mapeamos al id string del set.
+        self.settings.icon_set = match pack.icon_set {
+            IconSet::Flat => "flat",
+            IconSet::Fluent => "fluent",
+            IconSet::Mono => "mono",
+        }
+        .to_string();
     }
 
     /// Lanza un worker de listing para CADA panel `Files`, en su carpeta.
@@ -2259,8 +2271,8 @@ impl eframe::App for NaygoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.icons.set() != self.settings.icon_set {
-            let set = self.settings.icon_set;
-            self.icons.reload(ui.ctx(), set);
+            let set = self.settings.icon_set.clone();
+            self.icons.reload(ui.ctx(), &set, &self.config_dir);
         }
 
         if self.active_theme.id != self.settings.theme {

@@ -6,11 +6,11 @@
 //! `unknown` (genérico), que siempre existe. Función pura y testeable.
 
 use naygo_core::config::IconSet;
-use naygo_core::icon_kind::{FileCategory, IconKey};
+use naygo_core::icon_kind::{ActionIcon, FileCategory, IconKey};
 
 /// Nombre de archivo (sin extensión) para una `IconKey`. Debe coincidir con lo que
 /// generó `gen_icons.rs`.
-fn file_name(key: IconKey) -> &'static str {
+pub fn file_name(key: IconKey) -> &'static str {
     match key {
         IconKey::Folder => "folder",
         IconKey::Drive(_) => "drive",
@@ -27,6 +27,7 @@ fn file_name(key: IconKey) -> &'static str {
             FileCategory::Font => "file_font",
             FileCategory::Generic => "file_generic",
         },
+        IconKey::Action(a) => a.file_name(),
     }
 }
 
@@ -61,6 +62,18 @@ macro_rules! set_table {
             ("file_generic", png!($set, "file_generic")),
             ("drive", png!($set, "drive")),
             ("unknown", png!($set, "unknown")),
+            ("action_back", png!($set, "action_back")),
+            ("action_forward", png!($set, "action_forward")),
+            ("action_up", png!($set, "action_up")),
+            ("action_refresh", png!($set, "action_refresh")),
+            ("action_copy", png!($set, "action_copy")),
+            ("action_cut", png!($set, "action_cut")),
+            ("action_paste", png!($set, "action_paste")),
+            ("action_delete", png!($set, "action_delete")),
+            ("action_new_file", png!($set, "action_new_file")),
+            ("action_new_folder", png!($set, "action_new_folder")),
+            ("action_add_pane", png!($set, "action_add_pane")),
+            ("action_settings", png!($set, "action_settings")),
         ];
     };
 }
@@ -102,6 +115,9 @@ pub fn all_keys() -> Vec<IconKey> {
         Image, Video, Audio, Document, Code, Archive, Executable, Model3D, Font, Generic,
     ] {
         v.push(IconKey::File(cat));
+    }
+    for a in ActionIcon::all() {
+        v.push(IconKey::Action(*a));
     }
     v
 }

@@ -32,6 +32,15 @@ pub enum IconSet {
     Mono,
 }
 
+/// Estilo de los íconos de la barra de herramientas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolbarIconStyle {
+    /// Glifos Unicode (liviano; default).
+    Glyphs,
+    /// Íconos del set activo (pack).
+    Pack,
+}
+
 /// Modo de ejecución de operaciones múltiples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpsMode {
@@ -73,7 +82,15 @@ pub struct Settings {
     /// Set de íconos activo. `#[serde(default)]`: un settings.json v1 previo (sin
     /// este campo) conserva el resto y solo este cae al default (honra CONFIG_VERSION).
     #[serde(default = "default_icon_set")]
-    pub icon_set: IconSet,
+    pub icon_set: String,
+    /// Estilo de los íconos de la barra de herramientas (glifos vs pack). `#[serde(default)]`
+    /// por retro-compat.
+    #[serde(default = "default_toolbar_icon_style")]
+    pub toolbar_icon_style: ToolbarIconStyle,
+    /// Color de los glifos de la barra (cuando el estilo es Glyphs). `None` = usa el color
+    /// del tema. `#[serde(default)]` por retro-compat.
+    #[serde(default)]
+    pub toolbar_glyph_color: Option<crate::theme::ThemeColor>,
     /// Mostrar la fila virtual ".." al tope del panel de archivos. `#[serde(default)]`
     /// por la misma razón que `icon_set`.
     #[serde(default = "default_show_parent_entry")]
@@ -130,8 +147,13 @@ pub struct Settings {
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
-fn default_icon_set() -> IconSet {
-    IconSet::Flat
+fn default_icon_set() -> String {
+    "flat".to_string()
+}
+
+/// Default de `toolbar_icon_style` para `#[serde(default)]`: glifos Unicode.
+fn default_toolbar_icon_style() -> ToolbarIconStyle {
+    ToolbarIconStyle::Glyphs
 }
 
 /// Default de `show_parent_entry` para `#[serde(default)]`.
@@ -216,7 +238,9 @@ impl Default for Settings {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Top,
             icon_only: true,
-            icon_set: IconSet::Flat,
+            icon_set: "flat".into(),
+            toolbar_icon_style: ToolbarIconStyle::Glyphs,
+            toolbar_glyph_color: None,
             show_parent_entry: true,
             language: default_language(),
             theme: default_theme(),
@@ -278,10 +302,29 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
     }
 }
 
+/// Normaliza el id del set de íconos: mapea las formas capitalizadas del enum viejo
+/// (`"Flat"`, `"Fluent"`, `"Mono"`) a los ids en minúscula actuales. Cualquier otro id
+/// se conserva tal cual (packs sueltos; el catálogo/IconProvider resuelven los desconocidos).
+fn normalize_icon_set_id(id: &str) -> String {
+    match id {
+        "Flat" => "flat".to_string(),
+        "Fluent" => "fluent".to_string(),
+        "Mono" => "mono".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Carga settings; si falta/corrupto/versión incompatible → default.
 pub fn load_settings(dir: &Path) -> Settings {
     match read_json::<Settings>(&dir.join("settings.json")) {
-        Some(s) if s.version == CONFIG_VERSION => s,
+        Some(mut s) if s.version == CONFIG_VERSION => {
+            // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
+            // suelto que ya no existe en disco (carpeta borrada) cae a "flat" en vez de
+            // quedar como selección colgada con la toolbar rota.
+            let normalized = normalize_icon_set_id(&s.icon_set);
+            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
+            s
+        }
         Some(_) => {
             tracing::warn!("settings.json de versión incompatible; usando default");
             Settings::default()
@@ -353,7 +396,9 @@ mod tests {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Side,
             icon_only: false,
-            icon_set: IconSet::Mono,
+            icon_set: "mono".to_string(),
+            toolbar_icon_style: ToolbarIconStyle::Pack,
+            toolbar_glyph_color: Some(crate::theme::ThemeColor::new(0x10, 0x20, 0x30)),
             show_parent_entry: false,
             language: default_language(),
             theme: default_theme(),
@@ -404,8 +449,66 @@ mod tests {
     #[test]
     fn settings_default_tiene_iconos_flat_y_fila_padre_on() {
         let s = Settings::default();
-        assert_eq!(s.icon_set, IconSet::Flat);
+        assert_eq!(s.icon_set, "flat");
         assert!(s.show_parent_entry);
+    }
+
+    #[test]
+    fn toolbar_defaults_y_round_trip() {
+        let mut s = Settings::default();
+        assert_eq!(s.toolbar_icon_style, ToolbarIconStyle::Glyphs);
+        assert!(s.toolbar_glyph_color.is_none());
+        s.toolbar_icon_style = ToolbarIconStyle::Pack;
+        s.toolbar_glyph_color = Some(crate::theme::ThemeColor::new(0xe0, 0xa0, 0x30));
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.toolbar_icon_style, ToolbarIconStyle::Pack);
+        assert_eq!(back.toolbar_glyph_color, s.toolbar_glyph_color);
+    }
+
+    #[test]
+    fn icon_set_id_default_es_flat() {
+        assert_eq!(Settings::default().icon_set, "flat");
+    }
+
+    #[test]
+    fn icon_set_migra_del_enum_viejo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"Flat"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "flat");
+    }
+
+    #[test]
+    fn icon_set_de_pack_borrado_cae_a_flat() {
+        // Un id de pack suelto guardado cuya carpeta ya no existe en disco se coacciona
+        // a "flat" al cargar (no queda como selección colgada con la toolbar rota).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"pack-borrado"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "flat");
+    }
+
+    #[test]
+    fn icon_set_de_pack_suelto_existente_se_conserva() {
+        // Si la carpeta del pack suelto sí existe en <config>/icons/<id>/, el id se conserva.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("icons").join("mi-pack")).unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"mi-pack"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "mi-pack");
     }
 
     #[test]
@@ -428,7 +531,7 @@ mod tests {
         let s = load_settings(dir.path());
         assert_eq!(s.bar_position, BarPosition::Side, "conserva lo viejo");
         assert!(!s.icon_only, "conserva lo viejo");
-        assert_eq!(s.icon_set, IconSet::Flat, "campo nuevo cae al default");
+        assert_eq!(s.icon_set, "flat", "campo nuevo cae al default");
         assert!(s.show_parent_entry, "campo nuevo cae al default");
     }
 
