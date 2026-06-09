@@ -44,8 +44,16 @@ Autor: Nicolás Groth / ISGroth (Chile), 2026, MIT.
   - Shift+clic → rango desde el foco (ancla) hasta el clic (reemplaza la selección por
     el rango; el ancla NO se mueve).
   - Rectángulo sin modificador → reemplaza con lo que toca. **Ctrl+arrastrar → SUMA**.
-- **Arrastrar sobre una FILA**: NO dibuja rectángulo — se reserva para el drag&drop
-  interno futuro. El rectángulo SOLO arranca desde espacio vacío.
+- **Arrastrar — modelo HÍBRIDO** (decidido tras repensar el caso de Windows):
+  - **Clic simple en CUALQUIER celda** (nombre, tamaño, tipo, extensión, fecha) →
+    selecciona esa fila (con Ctrl/Shift). Toda la fila responde al clic, como hoy.
+  - **Arrastrar empezando sobre la celda del NOMBRE** → NO dibuja rectángulo; se reserva
+    para el drag&drop interno futuro (mover/copiar el archivo).
+  - **Arrastrar empezando sobre las OTRAS celdas de una fila** (tamaño/tipo/extensión/
+    fecha) **o sobre el espacio vacío** → dibuja el rectángulo de selección.
+  - Esto da más superficie para iniciar el rectángulo (todas las celdas no-nombre + el
+    vacío) sin chocar con el drag&drop del nombre. NO es exactamente Windows (que trata
+    toda la fila como el archivo), es una mejora deliberada de usabilidad en tabla densa.
 - **Feedback visual (los 3)**:
   1. Barra de estado: "N seleccionados · <tamaño sumado>" (suma lo conocido; carpetas
      sin tamaño calculado no suman hasta F3).
@@ -136,13 +144,20 @@ la vista, toggle que vacía, respeto del filtro (posiciones de vista, no de entr
 
 ## Notas de riesgo / cuidado para el plan
 
-- **Rubber-band desde el fondo vs filas** (lo más delicado): el TableBuilder de
-  egui_extras pinta filas con su propio `Sense`. Hay que detectar el arrastre que empieza
-  en el ESPACIO VACÍO (debajo de la última fila, o el fondo del ScrollArea) sin que las
-  filas lo capturen, y NO dispararlo cuando empieza sobre una fila (esa zona es para
-  drag&drop futuro). Investigar la mecánica: quizá un `ui.interact(panel_rect, id,
-  Sense::click_and_drag())` de fondo + chequear que el punto inicial no caiga sobre
-  ninguna `row_rect`. Verificar contra egui 0.34 / egui_extras.
+- **Rubber-band: dónde arranca** (lo más delicado, modelo HÍBRIDO): el rectángulo se
+  dibuja al arrastrar desde (a) el espacio vacío debajo de la última fila, O (b) cualquier
+  celda de una fila que NO sea la del NOMBRE. Arrastrar sobre la celda del NOMBRE se
+  reserva para drag&drop futuro. Mecánica a resolver en el plan: durante el render,
+  guardar el rect de la celda-nombre de cada fila (la columna Name conoce su rect); al
+  detectar `drag_started()`, mirar dónde cayó el punto inicial — si está sobre alguna
+  celda-nombre → no rubber-band (futuro drag); si está sobre otra celda o el vacío →
+  rubber-band. Alternativa más simple si distinguir por columna es frágil con el
+  TableBuilder: un `ui.interact(panel_rect, id, Sense::click_and_drag())` de fondo que
+  capture el arrastre salvo cuando el punto inicial cae sobre una celda-nombre (guardar
+  solo los rects de las celdas-nombre, no de toda la fila). El clic SIMPLE en cualquier
+  celda sigue seleccionando la fila (eso lo maneja el `Sense::click()` de la fila, que es
+  independiente del arrastre de fondo). Verificar contra egui 0.34 / egui_extras que el
+  click-de-fila y el drag-de-fondo coexisten sin robarse el evento.
 - **Intersección rect↔filas**: cada fila conoce su `Response.rect` (coords de pantalla);
   guardar esos rects durante el render para intersectar con el rect del rubber-band y
   derivar las posiciones de vista tocadas.
