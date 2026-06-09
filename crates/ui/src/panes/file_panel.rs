@@ -581,21 +581,30 @@ pub fn show(
     let mut rubber_select: Option<(Vec<usize>, bool)> = None;
     if band_resp.dragged() || band_resp.drag_stopped() {
         if let Some(start) = ui.memory(|m| m.data.get_temp::<egui::Pos2>(start_key)) {
+            // Si tenemos posición actual del puntero, calculamos el rectángulo y los
+            // golpes. En `drag_stopped()` esto puede ser `None` si el puntero salió de la
+            // ventana en el frame del soltar; en ese caso no hay selección, pero igual hay
+            // que limpiar el temp más abajo.
             if let Some(cur) = band_resp.interact_pointer_pos() {
                 let band = egui::Rect::from_two_pos(start, cur);
                 if band_resp.dragged() {
                     paint_rubber_band(ui, band, theme.accent());
                 }
-                let hit: Vec<usize> = row_rects
-                    .iter()
-                    .filter(|(_, r)| r.intersects(band))
-                    .map(|(pos, _)| *pos)
-                    .collect();
                 if band_resp.drag_stopped() {
+                    let hit: Vec<usize> = row_rects
+                        .iter()
+                        .filter(|(_, r)| r.intersects(band))
+                        .map(|(pos, _)| *pos)
+                        .collect();
                     let additive = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                     rubber_select = Some((hit, additive));
-                    ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
                 }
+            }
+            // Limpieza INCONDICIONAL del temp al soltar: aunque `interact_pointer_pos()`
+            // devuelva `None` (puntero fuera de la ventana en el frame del soltar), el
+            // start guardado no debe persistir entre arrastres.
+            if band_resp.drag_stopped() {
+                ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
             }
         }
     }
