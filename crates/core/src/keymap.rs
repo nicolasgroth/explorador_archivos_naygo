@@ -24,6 +24,8 @@ pub enum KeyCode {
     F3,
     F5,
     F6,
+    /// Barra espaciadora.
+    Space,
     /// Letra o dígito; normalizada a minúscula al construirla.
     Char(char),
 }
@@ -110,6 +112,14 @@ pub enum Action {
     MoveToOther,
     /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing).
     ComputeSize,
+    /// Seleccionar todos los ítems de la vista (fase multi-selección).
+    SelectAll,
+    /// Extender la selección hacia arriba desde el ancla (Shift+↑).
+    ExtendUp,
+    /// Extender la selección hacia abajo desde el ancla (Shift+↓).
+    ExtendDown,
+    /// Marcar/desmarcar el ítem enfocado (Espacio).
+    ToggleSelect,
 }
 
 impl Action {
@@ -138,6 +148,10 @@ impl Action {
             CopyToOther,
             MoveToOther,
             ComputeSize,
+            SelectAll,
+            ExtendUp,
+            ExtendDown,
+            ToggleSelect,
         ]
     }
 
@@ -166,6 +180,10 @@ impl Action {
             CopyToOther => "action.copy_to_other",
             MoveToOther => "action.move_to_other",
             ComputeSize => "action.compute_size",
+            SelectAll => "action.select_all",
+            ExtendUp => "action.extend_up",
+            ExtendDown => "action.extend_down",
+            ToggleSelect => "action.toggle_select",
         }
     }
 }
@@ -203,6 +221,10 @@ impl KeyMap {
             (CopyToOther, vec![Chord::plain(F5)]),
             (MoveToOther, vec![Chord::plain(F6)]),
             (ComputeSize, vec![Chord::plain(F3)]),
+            (SelectAll, vec![Chord::ctrl(Char('a'))]),
+            (ExtendUp, vec![Chord::shift(ArrowUp)]),
+            (ExtendDown, vec![Chord::shift(ArrowDown)]),
+            (ToggleSelect, vec![Chord::plain(Space)]),
         ];
         KeyMap { bindings: b }
     }
@@ -322,13 +344,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_21_acciones_con_clave_i18n_unica() {
+    fn all_tiene_25_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 21);
+        assert_eq!(all.len(), 25);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 21, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 25, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -420,6 +442,22 @@ mod tests {
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::ArrowDown)),
             Some(Action::MoveDown)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('a'))),
+            Some(Action::SelectAll)
+        );
+        assert_eq!(
+            km.action_for(&Chord::shift(KeyCode::ArrowUp)),
+            Some(Action::ExtendUp)
+        );
+        assert_eq!(
+            km.action_for(&Chord::shift(KeyCode::ArrowDown)),
+            Some(Action::ExtendDown)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Space)),
+            Some(Action::ToggleSelect)
         );
     }
 

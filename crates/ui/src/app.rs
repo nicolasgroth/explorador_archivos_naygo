@@ -451,6 +451,7 @@ impl NaygoApp {
                 egui::Key::F3,
                 egui::Key::F5,
                 egui::Key::F6,
+                egui::Key::Space,
                 egui::Key::A,
                 egui::Key::B,
                 egui::Key::C,
@@ -1413,6 +1414,28 @@ impl NaygoApp {
             Action::CopyToOther => self.transfer_to_other(false),
             Action::MoveToOther => self.transfer_to_other(true),
             Action::ComputeSize => self.compute_size(),
+            Action::ExtendUp => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.move_focus_extend(-1, true);
+                }
+            }
+            Action::ExtendDown => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.move_focus_extend(1, true);
+                }
+            }
+            Action::SelectAll => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.select_all();
+                }
+            }
+            Action::ToggleSelect => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    if let Some(pos) = f.focused {
+                        f.select_toggle(pos);
+                    }
+                }
+            }
         }
     }
 
@@ -2052,12 +2075,9 @@ impl NaygoApp {
         if let Some(f) = self.workspace.active_files_mut() {
             // El foco es una posición en la VISTA (entries que pasan el filtro), no
             // en `entries` crudas: navegar con flechas se mueve por lo que se ve.
-            let view_len = f.view_indices().len();
-            if view_len == 0 {
-                return;
-            }
-            let cur = f.focused.unwrap_or(0) as isize;
-            f.focused = Some((cur + delta).clamp(0, view_len as isize - 1) as usize);
+            // Sin Shift, mover el foco hace selección simple del nuevo foco (descarta
+            // cualquier multi-selección previa).
+            f.move_focus_extend(delta, false);
         }
     }
 
