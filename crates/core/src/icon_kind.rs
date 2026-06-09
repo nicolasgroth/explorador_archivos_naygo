@@ -73,8 +73,8 @@ impl ActionIcon {
     pub fn all() -> &'static [ActionIcon] {
         use ActionIcon::*;
         &[
-            Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder,
-            AddPane, Settings,
+            Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder, AddPane,
+            Settings,
         ]
     }
 
@@ -298,7 +298,11 @@ mod tests {
         let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 12, "cada acción tiene un nombre de archivo único");
+        assert_eq!(
+            names.len(),
+            12,
+            "cada acción tiene un nombre de archivo único"
+        );
         assert!(all.iter().all(|a| a.file_name().starts_with("action_")));
     }
 
