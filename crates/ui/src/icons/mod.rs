@@ -9,6 +9,7 @@ pub mod assets;
 
 use naygo_core::icon_kind::IconKey;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Dueño de las texturas del set activo.
 pub struct IconProvider {
@@ -18,8 +19,8 @@ pub struct IconProvider {
     fallback: egui::TextureHandle,
 }
 
-/// Mapea un id de set embebido a su enum; ids desconocidos → Flat (fallback temporal,
-/// los packs sueltos llegan en una tarea posterior).
+/// Mapea un id de set embebido a su enum; ids desconocidos → Flat (solo se consulta
+/// para ids de sets embebidos; los packs sueltos resuelven desde disco).
 fn embedded_set(id: &str) -> naygo_core::config::IconSet {
     use naygo_core::config::IconSet;
     match id {
@@ -30,12 +31,16 @@ fn embedded_set(id: &str) -> naygo_core::config::IconSet {
 }
 
 impl IconProvider {
-    /// Carga el set con id `set_id` en el contexto `ctx`.
-    pub fn new(ctx: &egui::Context, set_id: &str) -> Self {
-        let fallback = load_texture(ctx, set_id, IconKey::Unknown);
+    /// Carga el set con id `set_id` (embebido o pack suelto bajo `config_dir`).
+    pub fn new(ctx: &egui::Context, set_id: &str, config_dir: &Path) -> Self {
+        let loader = TextureLoader {
+            set_id: set_id.to_string(),
+            config_dir: config_dir.to_path_buf(),
+        };
+        let fallback = loader.load(ctx, IconKey::Unknown);
         let mut textures = HashMap::new();
         for key in assets::all_keys() {
-            textures.insert(key, load_texture(ctx, set_id, key));
+            textures.insert(key, loader.load(ctx, key));
         }
         IconProvider {
             set_id: set_id.to_string(),
@@ -50,11 +55,11 @@ impl IconProvider {
     }
 
     /// Recarga el atlas para `set_id` (operación única, no por-frame).
-    pub fn reload(&mut self, ctx: &egui::Context, set_id: &str) {
+    pub fn reload(&mut self, ctx: &egui::Context, set_id: &str, config_dir: &Path) {
         if set_id == self.set_id {
             return;
         }
-        *self = IconProvider::new(ctx, set_id);
+        *self = IconProvider::new(ctx, set_id, config_dir);
     }
 
     /// Textura cacheada para `key`; cae al fallback si no está.
@@ -63,17 +68,50 @@ impl IconProvider {
     }
 }
 
-/// Decodifica el PNG embebido de `set_id`+`key` y lo sube como textura. Si el PNG es
-/// ilegible, sube una textura 1x1 transparente (nunca crashea).
-fn load_texture(ctx: &egui::Context, set_id: &str, key: IconKey) -> egui::TextureHandle {
-    let set = embedded_set(set_id);
-    let bytes = assets::bytes_for(set, key);
-    let color_image = decode_png(bytes).unwrap_or_else(|| {
-        tracing::warn!("ícono ilegible para {set_id}/{:?}; usando vacío", key);
-        egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 0])
-    });
-    let name = format!("icon_{set_id}_{:?}", key);
-    ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR)
+/// Resuelve y sube a textura el ícono de una `key` para un set (embebido o suelto).
+struct TextureLoader {
+    set_id: String,
+    config_dir: PathBuf,
+}
+
+impl TextureLoader {
+    /// Sube la textura del ícono de `key`. Si nada resuelve, sube una 1x1 transparente
+    /// (nunca crashea).
+    fn load(&self, ctx: &egui::Context, key: IconKey) -> egui::TextureHandle {
+        let color_image = self.color_image_for(key).unwrap_or_else(|| {
+            tracing::warn!(
+                "ícono ilegible para {}/{:?}; usando vacío",
+                self.set_id,
+                key
+            );
+            egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 0])
+        });
+        let name = format!("icon_{}_{:?}", self.set_id, key);
+        ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR)
+    }
+
+    /// Decodifica la imagen del ícono: de los assets embebidos para los sets
+    /// `flat`/`fluent`/`mono`, o de `<config>/icons/<id>/<file_name>.png` para un pack
+    /// suelto, con fallback al `unknown` embebido (flat) si el archivo falta o es ilegible.
+    fn color_image_for(&self, key: IconKey) -> Option<egui::ColorImage> {
+        let builtin = matches!(self.set_id.as_str(), "flat" | "fluent" | "mono");
+        if builtin {
+            decode_png(assets::bytes_for(embedded_set(&self.set_id), key))
+        } else {
+            let path = self
+                .config_dir
+                .join("icons")
+                .join(&self.set_id)
+                .join(format!("{}.png", assets::file_name(key)));
+            let from_disk = std::fs::read(&path).ok().and_then(|b| decode_png(&b));
+            from_disk.or_else(|| {
+                decode_png(assets::bytes_for(
+                    naygo_core::config::IconSet::Flat,
+                    IconKey::Unknown,
+                ))
+            })
+        }
+    }
 }
 
 /// Decodifica bytes PNG a `ColorImage` RGBA, o `None` si falla.

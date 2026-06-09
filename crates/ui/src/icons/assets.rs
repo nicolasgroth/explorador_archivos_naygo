@@ -10,7 +10,7 @@ use naygo_core::icon_kind::{ActionIcon, FileCategory, IconKey};
 
 /// Nombre de archivo (sin extensión) para una `IconKey`. Debe coincidir con lo que
 /// generó `gen_icons.rs`.
-fn file_name(key: IconKey) -> &'static str {
+pub fn file_name(key: IconKey) -> &'static str {
     match key {
         IconKey::Folder => "folder",
         IconKey::Drive(_) => "drive",

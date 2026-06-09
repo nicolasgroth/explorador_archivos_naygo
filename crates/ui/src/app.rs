@@ -314,7 +314,7 @@ impl NaygoApp {
         let workspace = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
 
-        let icons = IconProvider::new(&cc.egui_ctx, &settings.icon_set);
+        let icons = IconProvider::new(&cc.egui_ctx, &settings.icon_set, &config_dir);
 
         let theme_catalog = ThemeCatalog::load(&config_dir, &settings.theme);
         let active_theme = {
@@ -2267,7 +2267,7 @@ impl eframe::App for NaygoApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.icons.set() != self.settings.icon_set {
             let set = self.settings.icon_set.clone();
-            self.icons.reload(ui.ctx(), &set);
+            self.icons.reload(ui.ctx(), &set, &self.config_dir);
         }
 
         if self.active_theme.id != self.settings.theme {
