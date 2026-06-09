@@ -52,6 +52,20 @@ fn icon_specs() -> Vec<(&'static str, [u8; 4])> {
         ("file_generic", [158, 158, 158, 255]),
         ("drive", [69, 90, 100, 255]),
         ("unknown", [120, 120, 120, 255]),
+        // Acciones de la barra de herramientas (placeholders azul grisáceo;
+        // Tarea 8 los reemplaza por íconos reales).
+        ("action_back", [90, 120, 170, 255]),
+        ("action_forward", [90, 120, 170, 255]),
+        ("action_up", [90, 120, 170, 255]),
+        ("action_refresh", [90, 120, 170, 255]),
+        ("action_copy", [90, 120, 170, 255]),
+        ("action_cut", [90, 120, 170, 255]),
+        ("action_paste", [90, 120, 170, 255]),
+        ("action_delete", [90, 120, 170, 255]),
+        ("action_new_file", [90, 120, 170, 255]),
+        ("action_new_folder", [90, 120, 170, 255]),
+        ("action_add_pane", [90, 120, 170, 255]),
+        ("action_settings", [90, 120, 170, 255]),
     ]
 }
 
