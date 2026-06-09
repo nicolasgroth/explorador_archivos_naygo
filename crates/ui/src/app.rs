@@ -2496,8 +2496,14 @@ impl eframe::App for NaygoApp {
                 new_items_at_end: self.settings.new_items_at_end,
                 size_partial: &self.size_partial,
             };
+            let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
+            // Ancho mínimo de cada tab del dock para que no se compriman hasta
+            // volverse ilegibles cuando hay varios paneles. Solo limita el tab,
+            // no la división arrastrable; el mínimo de la ventana (Task 2) cubre
+            // ese caso.
+            dock_style.tab.minimum_width = Some(150.0);
             egui_dock::DockArea::new(&mut self.dock_state)
-                .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+                .style(dock_style)
                 .show_inside(ui, &mut viewer);
         }
         // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el

@@ -32,6 +32,7 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
     let builder = egui::ViewportBuilder::default()
         .with_title(app.tr("settings.title"))
         .with_inner_size([560.0, 420.0])
+        .with_min_inner_size([460.0, 360.0])
         .with_close_button(true);
 
     ctx.show_viewport_immediate(viewport_id, builder, |ui, _class| {
@@ -51,12 +52,14 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
                 section_item(ui, app, SettingsSection::Advanced, "settings.advanced");
             });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| match app.settings_section {
-            SettingsSection::Appearance => appearance::show(ui, app),
-            SettingsSection::Panes => panes::show(ui, app),
-            SettingsSection::Shortcuts => shortcuts::show(ui, app),
-            SettingsSection::Language => language::show(ui, app),
-            SettingsSection::Advanced => advanced::show(ui, app),
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| match app.settings_section {
+                SettingsSection::Appearance => appearance::show(ui, app),
+                SettingsSection::Panes => panes::show(ui, app),
+                SettingsSection::Shortcuts => shortcuts::show(ui, app),
+                SettingsSection::Language => language::show(ui, app),
+                SettingsSection::Advanced => advanced::show(ui, app),
+            });
         });
     });
 }
