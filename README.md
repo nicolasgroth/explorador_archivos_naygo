@@ -4,11 +4,9 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Sprint de funcionalidad COMPLETO. Operaciones (ops-A/B), paste
-> inteligente, shell-A (abrir + discos), watcher, atajos configurables, sizing (F3),
-> toolbar-icons, distribución/instalador y shell-B (menú contextual nativo de Windows)
-> mergeados a `main`. Diseño de shell-B en
-> [`docs/superpowers/specs/2026-06-09-naygo-shell-b-design.md`](docs/superpowers/specs/2026-06-09-naygo-shell-b-design.md).
+> **Estado:** Sprint de funcionalidad completo + pulido + multi-selección estilo Explorer
+> (clic/Ctrl/Shift, rectángulo de selección, teclado). Diseño en
+> [`docs/superpowers/specs/2026-06-09-naygo-multiseleccion-design.md`](docs/superpowers/specs/2026-06-09-naygo-multiseleccion-design.md).
 
 ## Objetivos
 

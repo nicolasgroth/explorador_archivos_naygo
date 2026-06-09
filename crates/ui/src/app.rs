@@ -451,6 +451,7 @@ impl NaygoApp {
                 egui::Key::F3,
                 egui::Key::F5,
                 egui::Key::F6,
+                egui::Key::Space,
                 egui::Key::A,
                 egui::Key::B,
                 egui::Key::C,
@@ -708,6 +709,12 @@ impl NaygoApp {
                     .and_then(|p| p.files.as_ref())
                     .map(|f| f.current_dir.clone())
                 {
+                    // La selección son posiciones de vista; si el watcher cambió las entries,
+                    // dejarían de apuntar al archivo correcto → limpiar (evita operar sobre el
+                    // archivo equivocado).
+                    if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        f.clear_selection();
+                    }
                     self.start_listing(id, dir);
                 }
                 continue;
@@ -724,6 +731,11 @@ impl NaygoApp {
                 let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &events, &read);
                 let spec = f.sort;
                 naygo_core::sort::sort_entries(&mut f.entries, &spec);
+                // La selección son posiciones de vista; si el watcher cambió las entries,
+                // dejarían de apuntar al archivo correcto → limpiar (evita operar sobre el
+                // archivo equivocado). El lote llega no vacío (filtrado arriba), así que
+                // las entries efectivamente cambiaron y/o se reordenaron.
+                f.clear_selection();
                 if !nuevas.is_empty() {
                     for p in nuevas {
                         f.highlighted.insert(p);
@@ -779,6 +791,10 @@ impl NaygoApp {
         if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.entries.clear();
             f.focused = None;
+            // La selección son posiciones de vista; al re-listar la vista se reconstruye →
+            // limpiar (paridad con navigate_to/enter; evita operar sobre el archivo
+            // equivocado mientras el nuevo listado llega en streaming).
+            f.clear_selection();
         }
         // Carpetas que tenían tamaño calculado → recalcular tras re-listar.
         let to_recompute: Vec<PathBuf> = self
@@ -1413,6 +1429,28 @@ impl NaygoApp {
             Action::CopyToOther => self.transfer_to_other(false),
             Action::MoveToOther => self.transfer_to_other(true),
             Action::ComputeSize => self.compute_size(),
+            Action::ExtendUp => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.move_focus_extend(-1, true);
+                }
+            }
+            Action::ExtendDown => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.move_focus_extend(1, true);
+                }
+            }
+            Action::SelectAll => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    f.select_all();
+                }
+            }
+            Action::ToggleSelect => {
+                if let Some(f) = self.workspace.active_files_mut() {
+                    if let Some(pos) = f.focused {
+                        f.select_toggle(pos);
+                    }
+                }
+            }
         }
     }
 
@@ -1533,11 +1571,9 @@ impl NaygoApp {
             return Vec::new();
         };
         let view = f.view_indices();
-        // NOTA: `f.selected` está RESERVADO para una futura multi-selección y hoy la UI
-        // nunca lo puebla (siempre vacío en ops-A) → esta rama es código correcto-por-
-        // contrato pero inactivo; en la práctica se usa el fallback al foco de abajo.
-        // `selected` y `focused` viven en espacio de VISTA (pos en view_indices()), por
-        // eso se mapea pos→real antes de indexar `entries`.
+        // Multi-selección: `f.selected` son posiciones de VISTA pobladas por la selección
+        // (clic/Ctrl/Shift/rectángulo/teclado). Se mapean pos vista→view_indices→entries;
+        // las posiciones fuera de rango se descartan (filter_map), nunca indexan mal.
         if !f.selected.is_empty() {
             return f
                 .selected
@@ -2052,12 +2088,9 @@ impl NaygoApp {
         if let Some(f) = self.workspace.active_files_mut() {
             // El foco es una posición en la VISTA (entries que pasan el filtro), no
             // en `entries` crudas: navegar con flechas se mueve por lo que se ve.
-            let view_len = f.view_indices().len();
-            if view_len == 0 {
-                return;
-            }
-            let cur = f.focused.unwrap_or(0) as isize;
-            f.focused = Some((cur + delta).clamp(0, view_len as isize - 1) as usize);
+            // Sin Shift, mover el foco hace selección simple del nuevo foco (descarta
+            // cualquier multi-selección previa).
+            f.move_focus_extend(delta, false);
         }
     }
 
@@ -2185,6 +2218,7 @@ impl NaygoApp {
             egui::Key::Tab,
             egui::Key::Escape,
             egui::Key::Delete,
+            egui::Key::Space,
             egui::Key::F2,
             egui::Key::F3,
             egui::Key::F5,
@@ -2290,6 +2324,32 @@ impl NaygoApp {
         };
         config::save_workspace(&self.config_dir, &persist);
     }
+
+    /// Resumen de selección múltiple en la barra de estado (N + tamaño conocido sumado).
+    /// Las carpetas sin tamaño calculado NO suman (no se dispara cálculo). Solo aplica con
+    /// 2+ seleccionados; con 0/1 el status lo maneja el flujo normal.
+    fn update_selection_status(&mut self) {
+        let Some(f) = self.workspace.active_files() else {
+            return;
+        };
+        let count = f.selection_count();
+        if count < 2 {
+            return;
+        }
+        let view = f.view_indices();
+        let total: u64 = f
+            .selected
+            .iter()
+            .filter_map(|&pos| view.get(pos))
+            .filter_map(|&real| f.entries.get(real))
+            .filter_map(|e| e.size)
+            .sum();
+        let suffix = self.i18n.t("status.selected_suffix").to_string();
+        self.status = format!(
+            "{count} {suffix} · {}",
+            naygo_core::format::human_size(total)
+        );
+    }
 }
 
 impl eframe::App for NaygoApp {
@@ -2319,6 +2379,14 @@ impl eframe::App for NaygoApp {
         }
         if !capture_consumed {
             self.handle_input(ctx);
+        }
+        // Resumen de selección múltiple en la barra de estado. Se recomputa cada frame
+        // desde la selección actual del panel activo (se actualiza solo al cambiar la
+        // selección, sin importar dónde ocurrió el clic). Solo pisa el status cuando hay
+        // 2+ seleccionados y no hay ninguna op en curso: así no clobberea el progreso/error
+        // efímero de una operación (que debe permanecer visible mientras corre).
+        if !self.any_op_active() {
+            self.update_selection_status();
         }
         if self.any_listing_active()
             || self.any_tree_listing_active()
@@ -2575,12 +2643,19 @@ impl eframe::App for NaygoApp {
                         // pinta el file_panel. Si no, foco/teclado divergirían de la vista
                         // tras cambiar el orden sin re-listar.
                         sort_entries(&mut f.entries, &spec);
+                        // El orden cambió: las posiciones de vista guardadas ya no apuntan a
+                        // las mismas filas. Limpiar selección/ancla para no seleccionar al azar.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::SetFilter(kind, filter) => {
                         f.table.set_filter(kind, filter);
+                        // El filtro cambió qué filas son visibles → posiciones de vista stale.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::ClearFilter(kind) => {
                         f.table.clear_filter(kind);
+                        // Idem: cambia la vista → posiciones de vista stale.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::ToggleColumn(kind) => {
                         f.table.toggle_visible(kind);

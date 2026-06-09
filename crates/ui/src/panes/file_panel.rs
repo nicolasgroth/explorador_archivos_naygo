@@ -69,6 +69,10 @@ pub fn show(
         return;
     };
     let focused = f.focused;
+    // Posiciones de vista seleccionadas (Vec pequeño). Se clona antes de la tabla
+    // para usarlo dentro del closure de `body.rows` sin conflictos de préstamo,
+    // igual que `focused`. Pintamos TODA la selección, no solo el foco.
+    let selected_set = f.selected.clone();
     let show_dirs = f.show_dirs;
     let sort = f.sort; // SortSpec es Copy; se lee antes de los closures
     let current_dir = f.current_dir.clone();
@@ -117,7 +121,7 @@ pub fn show(
     // Índice de la entry seleccionada se referencia respecto a la VISTA filtrada/
     // ordenada (lo que el usuario ve), no respecto a `f.entries`. El `focused` del
     // panel también se interpreta sobre la vista (consistente con el pintado).
-    let mut clicked: Option<usize> = None;
+    let mut clicked: Option<(usize, bool, bool)> = None; // (pos en vista, ctrl, shift)
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
     // Fila sobre la que se abrió el menú contextual (para enfocarla antes de actuar).
@@ -162,6 +166,20 @@ pub fn show(
         egui::Order::Foreground,
         egui::Id::new(("col_drop_line", id.0)),
     );
+
+    // Rectángulos capturados ESTE frame para el rubber-band (Step 1):
+    // - `row_rects`: (posición en la vista, rect de la fila completa). Lo que toque el
+    //   rectángulo de selección se selecciona.
+    // - `name_rects`: rects de la celda NOMBRE. Si el arrastre empieza sobre una de
+    //   ellas NO se dibuja rubber-band (se reserva para drag&drop futuro).
+    // Ambos en coordenadas de pantalla (las mismas que devuelve `interact_pointer_pos`).
+    let mut row_rects: Vec<(usize, egui::Rect)> = Vec::new();
+    let mut name_rects: Vec<egui::Rect> = Vec::new();
+    // Rect de la fila con el foco/ancla. Dentro del closure de `body.rows` el `ui` ya
+    // está movido al `TableBuilder`, así que no podemos pintar ahí; capturamos el rect
+    // y dibujamos el borde punteado tras construir la tabla (con el `ui` padre, igual
+    // que el rubber-band). Coordenadas de pantalla.
+    let mut focus_rect: Option<egui::Rect> = None;
 
     // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
     // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
@@ -265,7 +283,12 @@ pub fn show(
                     }
                     DisplayRow::Entry(i) => {
                         let entry = &view[i];
-                        let selected = focused == Some(i);
+                        // `selected` refleja TODA la multi-selección (no solo el foco):
+                        // así todas las filas seleccionadas se pintan resaltadas.
+                        let selected = selected_set.contains(&i);
+                        // El foco/ancla es la fila que el teclado mueve; se distingue
+                        // del resto de la selección con un borde punteado (abajo).
+                        let is_focus = focused == Some(i);
                         // Resaltado estilo A: las entries que el watcher marcó como recién
                         // aparecidas se pintan con el fondo teñido del token `highlight` y
                         // el nombre en ese color. La selección tiene prioridad sobre el
@@ -285,6 +308,12 @@ pub fn show(
                         } else {
                             None
                         };
+                        // Rect de la celda NOMBRE de esta fila. Se rellena dentro del
+                        // closure `ci == 0` (que es `FnOnce`) vía `Cell` (mutabilidad
+                        // interior, evita el conflicto de prestar `&mut name_rects`); se
+                        // lee tras pintar todas las columnas.
+                        let name_cell_rect: std::cell::Cell<Option<egui::Rect>> =
+                            std::cell::Cell::new(None);
                         for (ci, col) in visible_cols.iter().enumerate() {
                             row.col(|ui| {
                                 // Teñir el fondo de la celda (cubre el ancho completo de la
@@ -295,6 +324,10 @@ pub fn show(
                                     ui.painter().rect_filled(ui.max_rect(), 0.0, tint);
                                 }
                                 if ci == 0 {
+                                    // El rect de la celda Nombre cubre el ancho completo de
+                                    // la columna: lo guardamos para excluir el rubber-band
+                                    // que empiece sobre el nombre (drag&drop futuro).
+                                    name_cell_rect.set(Some(ui.max_rect()));
                                     let key = icon_key_for(entry);
                                     // El ícono+nombre se pintan; el clic se captura sobre
                                     // la FILA completa (abajo), no por celda. Si es nuevo,
@@ -320,8 +353,26 @@ pub fn show(
                         // Fila completa clicable: clic en cualquier celda/zona selecciona;
                         // doble clic navega/activa.
                         let row_resp = row.response();
+                        // Capturar rects para el rubber-band (Step 1).
+                        row_rects.push((i, row_resp.rect));
+                        if let Some(nr) = name_cell_rect.get() {
+                            name_rects.push(nr);
+                        }
+                        // Guardar el rect de la fila con foco para pintar su borde
+                        // punteado tras la tabla (el `ui` aquí ya está movido).
+                        if is_focus {
+                            focus_rect = Some(row_resp.rect);
+                        }
                         if row_resp.clicked() {
-                            clicked = Some(i);
+                            // `ui` ya está movido dentro del `TableBuilder`; leemos los
+                            // modificadores desde el `Context` capturado (ctx.input).
+                            let (ctrl, shift) = ctx.input(|inp| {
+                                (
+                                    inp.modifiers.command || inp.modifiers.ctrl,
+                                    inp.modifiers.shift,
+                                )
+                            });
+                            clicked = Some((i, ctrl, shift));
                         }
                         if row_resp.double_clicked() {
                             activated = Some(i);
@@ -335,6 +386,18 @@ pub fn show(
                         }
                         row_resp.context_menu(|ui| {
                             context_focus = Some(i);
+                            // Encabezado deshabilitado con el conteo de selección múltiple.
+                            let n = selected_set.len();
+                            if n >= 2 {
+                                ui.add_enabled(
+                                    false,
+                                    egui::Button::new(format!(
+                                        "{n} {}",
+                                        i18n.t("menu.selected_count")
+                                    )),
+                                );
+                                ui.separator();
+                            }
                             if ui.button(i18n.t("op.open")).clicked() {
                                 ops_actions.push(Action::Open);
                                 ui.close();
@@ -404,6 +467,73 @@ pub fn show(
             });
         });
 
+    // Rubber-band (Step 2): arrastrar desde el espacio vacío o desde una celda que NO
+    // sea el nombre dibuja un rectángulo de selección. Arrastrar sobre la celda del
+    // NOMBRE se reserva para drag&drop futuro (no dibuja). El clic simple de fila lo
+    // maneja el `Sense::click` de cada fila (clics), independiente de este arrastre de
+    // fondo (`click_and_drag`): egui distingue clic de arrastre, así que un clic va a
+    // la fila y un arrastre va a este interact de fondo; no se pisan.
+    //
+    // `ui.min_rect()` tras construir la tabla cubre el viewport que ocupó la tabla en el
+    // ui padre (la tabla gestiona su propio ScrollArea interno), incluido el espacio
+    // vacío bajo la última fila. Es el área correcta para captar el arrastre de fondo.
+    let band_area = ui.min_rect();
+    let band_id = egui::Id::new(("naygo_rubberband", id.0));
+    let band_resp = ui.interact(band_area, band_id, egui::Sense::click_and_drag());
+    let start_key = egui::Id::new(("naygo_rubberband_start", id.0));
+
+    if band_resp.drag_started() {
+        if let Some(start) = band_resp.interact_pointer_pos() {
+            // Si el arrastre empieza sobre la celda del NOMBRE → NO rubber-band.
+            let on_name = name_rects.iter().any(|r| r.contains(start));
+            if !on_name {
+                ui.memory_mut(|m| m.data.insert_temp(start_key, start));
+            }
+        }
+    }
+
+    // Resultado del rubber-band al soltar: (posiciones tocadas, aditivo con Ctrl).
+    let mut rubber_select: Option<(Vec<usize>, bool)> = None;
+    if band_resp.dragged() || band_resp.drag_stopped() {
+        if let Some(start) = ui.memory(|m| m.data.get_temp::<egui::Pos2>(start_key)) {
+            if let Some(cur) = band_resp.interact_pointer_pos() {
+                let band = egui::Rect::from_two_pos(start, cur);
+                if band_resp.dragged() {
+                    paint_rubber_band(ui, band, theme.accent());
+                }
+                let hit: Vec<usize> = row_rects
+                    .iter()
+                    .filter(|(_, r)| r.intersects(band))
+                    .map(|(pos, _)| *pos)
+                    .collect();
+                if band_resp.drag_stopped() {
+                    let additive = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                    rubber_select = Some((hit, additive));
+                    ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
+                }
+            }
+        }
+    }
+
+    // Borde punteado del foco/ancla: distingue la fila con foco de teclado del resto
+    // de la multi-selección (que ya va resaltada). Se pinta tras la tabla, con el `ui`
+    // padre, para que quede por encima del fondo de la fila. Mismo enfoque de
+    // `dashed_line` que el rubber-band.
+    if let Some(r) = focus_rect {
+        let stroke = egui::Stroke::new(1.0, theme.accent());
+        let corners = [
+            r.left_top(),
+            r.right_top(),
+            r.right_bottom(),
+            r.left_bottom(),
+            r.left_top(),
+        ];
+        let painter = ui.painter();
+        for w in corners.windows(2) {
+            painter.extend(egui::Shape::dashed_line(&[w[0], w[1]], stroke, 3.0, 2.0));
+        }
+    }
+
     // Detectar resize: si el ancho medido de una columna difiere del guardado en el
     // modelo, el usuario arrastró el borde → persistir el nuevo ancho. El clamp lo
     // hace `set_width` en core. El umbral evita re-emitir por jitter de float.
@@ -431,9 +561,27 @@ pub fn show(
         }
         pending.push(PaneRequest::Activate { id });
     }
-    if let Some(i) = clicked {
+    // Clic izquierdo: puebla la multi-selección según modificadores. Los métodos
+    // puros (`select_*`) fijan el foco ellos mismos, así que NO se setea `focused`
+    // a mano aquí; se conserva la activación del panel (el clic da foco al panel).
+    if let Some((pos, ctrl, shift)) = clicked {
         if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            f.focused = Some(i);
+            if shift {
+                f.select_range_to(pos);
+            } else if ctrl {
+                f.select_toggle(pos);
+            } else {
+                f.select_single(pos);
+            }
+        }
+        pending.push(PaneRequest::Activate { id });
+    }
+    // Rubber-band (Step 4): aplicar la selección por rectángulo al soltar. Un arrastre
+    // no dispara `clicked` (egui distingue clic de arrastre), así que esto no choca con
+    // el manejador de `clicked` de arriba.
+    if let Some((positions, additive)) = rubber_select {
+        if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.select_rect(&positions, additive);
         }
         pending.push(PaneRequest::Activate { id });
     }
@@ -447,6 +595,28 @@ pub fn show(
                 });
             }
         }
+    }
+}
+
+/// Pinta el rectángulo de selección (rubber-band): relleno tenue del color de acento
+/// y borde punteado del acento (estilo clásico de Windows). `dashed_line` devuelve un
+/// `Vec<Shape>` en egui 0.34, así que se vuelca con `painter.extend`.
+fn paint_rubber_band(ui: &egui::Ui, rect: egui::Rect, accent: egui::Color32) {
+    let painter = ui.painter();
+    let fill = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 16);
+    painter.rect_filled(rect, 0.0, fill);
+    let stroke = egui::Stroke::new(1.0, accent);
+    // Recorrer las cuatro aristas (cerrando el polígono) y puntearlas.
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    for w in corners.windows(2) {
+        let dashes = egui::Shape::dashed_line(&[w[0], w[1]], stroke, 4.0, 3.0);
+        painter.extend(dashes);
     }
 }
 

@@ -25,6 +25,7 @@ pub fn egui_key_to_code(key: egui::Key) -> Option<KeyCode> {
         egui::Key::F3 => KeyCode::F3,
         egui::Key::F5 => KeyCode::F5,
         egui::Key::F6 => KeyCode::F6,
+        egui::Key::Space => KeyCode::Space,
         egui::Key::A => KeyCode::Char('a'),
         egui::Key::B => KeyCode::Char('b'),
         egui::Key::C => KeyCode::Char('c'),
@@ -81,6 +82,7 @@ pub fn chord_text(chord: &Chord) -> String {
         KeyCode::F3 => "F3",
         KeyCode::F5 => "F5",
         KeyCode::F6 => "F6",
+        KeyCode::Space => "Espacio",
         KeyCode::Char(c) => {
             s.push(c.to_ascii_uppercase());
             return s;
@@ -127,6 +129,7 @@ mod tests {
         );
         assert_eq!(egui_key_to_code(egui::Key::F2), Some(KeyCode::F2));
         assert_eq!(egui_key_to_code(egui::Key::Delete), Some(KeyCode::Delete));
+        assert_eq!(egui_key_to_code(egui::Key::Space), Some(KeyCode::Space));
         // Una tecla que no mapeamos.
         assert_eq!(egui_key_to_code(egui::Key::Num0), None);
     }
@@ -141,5 +144,6 @@ mod tests {
         assert_eq!(chord_text(&Chord::plain(KeyCode::F3)), "F3");
         assert_eq!(chord_text(&Chord::plain(KeyCode::ArrowUp)), "↑");
         assert_eq!(chord_text(&Chord::alt(KeyCode::ArrowLeft)), "Alt+←");
+        assert_eq!(chord_text(&Chord::plain(KeyCode::Space)), "Espacio");
     }
 }

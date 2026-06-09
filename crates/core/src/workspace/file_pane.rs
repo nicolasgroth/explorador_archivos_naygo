@@ -23,6 +23,8 @@ pub struct FilePaneState {
     pub view: ViewMode,
     pub focused: Option<usize>,
     pub selected: Vec<usize>,
+    /// Ancla de la selección por rango (Shift). Efímero, NO se persiste.
+    pub anchor: Option<usize>,
     pub history: NavHistory,
     /// Si es `false`, el panel oculta las carpetas (muestra solo archivos).
     pub show_dirs: bool,
@@ -61,6 +63,7 @@ impl FilePaneState {
             view: ViewMode::default(),
             focused: None,
             selected: Vec::new(),
+            anchor: None,
             history,
             show_dirs: true,
             table: TableState::default(),
@@ -147,6 +150,125 @@ impl FilePaneState {
         self.entries.clear();
         self.focused = None;
         self.selected.clear();
+        self.anchor = None;
+    }
+
+    /// Posición válida en la vista (clamp a [0, len-1]); None si la vista está vacía.
+    fn clamp_pos(&self, pos: usize) -> Option<usize> {
+        let len = self.view_indices().len();
+        if len == 0 {
+            None
+        } else {
+            Some(pos.min(len - 1))
+        }
+    }
+
+    /// Selección simple (clic): solo `pos`; fija foco y ancla ahí.
+    pub fn select_single(&mut self, pos: usize) {
+        if let Some(p) = self.clamp_pos(pos) {
+            self.selected = vec![p];
+            self.focused = Some(p);
+            self.anchor = Some(p);
+        }
+    }
+
+    /// Toggle (Ctrl+clic): agrega/quita `pos`; mueve foco y ancla a `pos`.
+    pub fn select_toggle(&mut self, pos: usize) {
+        if let Some(p) = self.clamp_pos(pos) {
+            if let Some(idx) = self.selected.iter().position(|&x| x == p) {
+                self.selected.remove(idx);
+            } else {
+                self.selected.push(p);
+            }
+            self.focused = Some(p);
+            self.anchor = Some(p);
+        }
+    }
+
+    /// Rango (Shift+clic): selecciona desde el ancla hasta `pos` (el ancla NO cambia).
+    /// Sin ancla previa equivale a `select_single`.
+    pub fn select_range_to(&mut self, pos: usize) {
+        let Some(p) = self.clamp_pos(pos) else {
+            return;
+        };
+        let Some(anchor) = self.anchor else {
+            self.select_single(p);
+            return;
+        };
+        let anchor = anchor.min(self.view_indices().len().saturating_sub(1));
+        let (lo, hi) = if anchor <= p {
+            (anchor, p)
+        } else {
+            (p, anchor)
+        };
+        self.selected = (lo..=hi).collect();
+        self.focused = Some(p);
+        // anchor se mantiene
+    }
+
+    /// Rectángulo (rubber-band): reemplaza con `positions`, o suma si `additive`.
+    pub fn select_rect(&mut self, positions: &[usize], additive: bool) {
+        let len = self.view_indices().len();
+        let valid: Vec<usize> = positions.iter().copied().filter(|&p| p < len).collect();
+        if additive {
+            for p in &valid {
+                if !self.selected.contains(p) {
+                    self.selected.push(*p);
+                }
+            }
+        } else {
+            self.selected = valid.clone();
+        }
+        if let Some(&last) = valid.last() {
+            self.focused = Some(last);
+            self.anchor = Some(last);
+        }
+    }
+
+    /// Selecciona toda la vista.
+    pub fn select_all(&mut self) {
+        let len = self.view_indices().len();
+        self.selected = (0..len).collect();
+        if len > 0 {
+            self.focused = Some(len - 1);
+        }
+    }
+
+    /// Limpia la selección y el ancla (p. ej. al cambiar el filtro u orden: las
+    /// posiciones de vista dejan de ser válidas). El foco se conserva si sigue en rango;
+    /// si no, el clamp natural de la navegación por teclado lo corrige.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.anchor = None;
+    }
+
+    /// Mueve el foco `delta` (teclado). Con `extend` (Shift) extiende el rango desde el
+    /// ancla; sin extend es selección simple del nuevo foco.
+    pub fn move_focus_extend(&mut self, delta: isize, extend: bool) {
+        let len = self.view_indices().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.focused.unwrap_or(0) as isize;
+        let new = (cur + delta).clamp(0, len as isize - 1) as usize;
+        if extend {
+            if self.anchor.is_none() {
+                self.anchor = Some(cur.max(0) as usize);
+            }
+            self.select_range_to(new);
+        } else {
+            self.select_single(new);
+        }
+    }
+
+    /// ¿La posición de vista `pos` está seleccionada?
+    pub fn is_selected(&self, pos: usize) -> bool {
+        self.selected.contains(&pos)
+    }
+
+    /// Cuántos ítems seleccionados.
+    pub fn selection_count(&self) -> usize {
+        self.selected.len()
     }
 
     /// Estado persistible (sin entries ni history).
@@ -353,6 +475,144 @@ mod tests {
         };
         s.entries = vec![mk("a"), mk("b")];
         assert_eq!(s.view_indices(), vec![0, 1]);
+    }
+
+    fn pane_n(n: usize) -> FilePaneState {
+        use crate::fs_model::{Entry, EntryKind};
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(name),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        };
+        let mut p = FilePaneState::new(PathBuf::from("C:/"));
+        p.entries = (0..n).map(|i| mk(&format!("f{i}.txt"))).collect();
+        p
+    }
+
+    #[test]
+    fn sel_single_fija_ancla() {
+        let mut p = pane_n(5);
+        p.select_single(2);
+        assert_eq!(p.selected, vec![2]);
+        assert_eq!(p.focused, Some(2));
+        assert_eq!(p.anchor, Some(2));
+        p.select_single(4);
+        assert_eq!(p.selected, vec![4]);
+        assert_eq!(p.anchor, Some(4));
+    }
+
+    #[test]
+    fn sel_toggle_agrega_y_quita() {
+        let mut p = pane_n(5);
+        p.select_single(1);
+        p.select_toggle(3);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![1, 3]);
+        assert_eq!(p.focused, Some(3));
+        p.select_toggle(1);
+        assert_eq!(p.selected, vec![3]);
+    }
+
+    #[test]
+    fn sel_range_normaliza_y_no_mueve_ancla() {
+        let mut p = pane_n(6);
+        p.select_single(4);
+        p.select_range_to(1);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![1, 2, 3, 4]);
+        assert_eq!(p.anchor, Some(4));
+        assert_eq!(p.focused, Some(1));
+    }
+
+    #[test]
+    fn sel_range_sin_ancla_es_single() {
+        let mut p = pane_n(5);
+        // sin ancla previa
+        p.select_range_to(2);
+        assert_eq!(p.selected, vec![2]);
+        assert_eq!(p.anchor, Some(2));
+    }
+
+    #[test]
+    fn sel_rect_reemplaza_o_suma() {
+        let mut p = pane_n(6);
+        p.select_single(0);
+        p.select_rect(&[2, 3], false);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![2, 3]);
+        p.select_rect(&[5], true);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![2, 3, 5]);
+    }
+
+    #[test]
+    fn sel_all_toma_la_vista() {
+        let mut p = pane_n(4);
+        p.select_all();
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn clear_selection_vacia_seleccion_y_ancla() {
+        let mut p = pane_n(5);
+        p.select_single(2);
+        assert_eq!(p.selected, vec![2]);
+        assert_eq!(p.anchor, Some(2));
+        p.clear_selection();
+        assert!(p.selected.is_empty());
+        assert_eq!(p.anchor, None);
+    }
+
+    #[test]
+    fn move_focus_extend_shift_extiende_desde_ancla() {
+        let mut p = pane_n(6);
+        p.select_single(2);
+        p.move_focus_extend(1, true);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![2, 3]);
+        p.move_focus_extend(1, true);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s, vec![2, 3, 4]);
+        assert_eq!(p.anchor, Some(2));
+    }
+
+    #[test]
+    fn move_focus_extend_sin_shift_es_single() {
+        let mut p = pane_n(6);
+        p.select_single(2);
+        p.move_focus_extend(1, false);
+        assert_eq!(p.selected, vec![3]);
+        assert_eq!(p.anchor, Some(3));
+    }
+
+    #[test]
+    fn ops_clampean_a_la_vista() {
+        let mut p = pane_n(3);
+        p.select_single(99);
+        assert_eq!(p.focused, Some(2));
+        assert_eq!(p.selected, vec![2]);
+    }
+
+    #[test]
+    fn ancla_se_limpia_al_navegar() {
+        let mut p = pane_n(3);
+        p.select_single(1);
+        assert_eq!(p.anchor, Some(1));
+        p.navigate_to(PathBuf::from("C:/otra"));
+        assert_eq!(p.anchor, None);
+        assert!(p.selected.is_empty());
     }
 
     #[test]
