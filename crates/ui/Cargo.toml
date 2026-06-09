@@ -16,6 +16,7 @@ eframe = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 egui_dock = { workspace = true }
+raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

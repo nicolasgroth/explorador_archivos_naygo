@@ -58,6 +58,7 @@ pub fn show(
     table_actions: &mut Vec<TableAction>,
     theme: &crate::theme_apply::ActiveTheme,
     ops_actions: &mut Vec<Action>,
+    native_menu_request: &mut Option<(f32, f32)>,
     new_items_at_end: bool,
     size_partial: &std::collections::HashSet<std::path::PathBuf>,
 ) {
@@ -365,10 +366,28 @@ pub fn show(
                                 ui.close();
                             }
                             ui.separator();
-                            // Placeholder shell-B: el menú COM nativo se construye SOLO
-                            // bajo demanda (lento de enumerar). Deshabilitado aquí.
-                            ui.add_enabled(false, egui::Button::new(i18n.t("op.more_windows")))
-                                .on_disabled_hover_text(i18n.t("op.more_windows_soon"));
+                            // Menú contextual NATIVO de Windows para los ítems
+                            // seleccionados (shell-B). Se difiere a NaygoApp con las
+                            // coords de PANTALLA del clic (TrackPopupMenuEx usa pantalla,
+                            // no coords de ventana).
+                            if ui
+                                .button(i18n.t("op.more_windows"))
+                                .on_hover_text(i18n.t("op.more_windows_soon"))
+                                .clicked()
+                            {
+                                context_focus = Some(i);
+                                let screen = ui.input(|inp| {
+                                    let p = inp.pointer.interact_pos().unwrap_or_default();
+                                    let origin = inp
+                                        .viewport()
+                                        .outer_rect
+                                        .map(|r| r.min)
+                                        .unwrap_or_default();
+                                    (p.x + origin.x, p.y + origin.y)
+                                });
+                                *native_menu_request = Some(screen);
+                                ui.close();
+                            }
                         });
                     }
                     DisplayRow::NoMatches => {
