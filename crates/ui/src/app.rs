@@ -283,10 +283,8 @@ pub struct NaygoApp {
     /// limpia (None) al expirar o al primer input. En debug siempre es None.
     splash: Option<crate::splash::Splash>,
     /// HWND de la ventana para el menú contextual nativo (shell-B). None → ítem deshabilitado.
-    #[allow(dead_code)] // usado en Task 5 (shell-B)
     hwnd: Option<isize>,
     /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic. La procesa NaygoApp fuera del closure de egui.
-    #[allow(dead_code)] // usado en Task 5 (shell-B)
     native_menu_request: Option<(f32, f32)>,
 }
 
@@ -1504,6 +1502,32 @@ impl NaygoApp {
     /// Rutas seleccionadas en el panel activo (mapeadas vista→entries). Si no hay
     /// selección, usa la entry enfocada. Vacío si no hay nada. Las rutas son las
     /// de las entries reales (no la fila virtual "..").
+    /// Muestra el menú contextual NATIVO de Windows para la selección del panel activo
+    /// en las coords de PANTALLA (sx, sy). Tras invocar un comando, re-lista el panel
+    /// (consistencia inmediata; un comando puede crear/renombrar/borrar). Tolerante:
+    /// sin HWND o sin selección no hace nada; un fallo se reporta discreto en el status.
+    fn show_native_menu(&mut self, sx: i32, sy: i32) {
+        let Some(hwnd) = self.hwnd else {
+            return;
+        };
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        match naygo_platform::context_menu::show_native_context_menu(hwnd, &paths, sx, sy) {
+            Ok(naygo_platform::context_menu::NativeMenuOutcome::Invoked) => {
+                if let (Some(id), Some(dir)) = (self.workspace.active_id(), self.active_dir()) {
+                    self.refresh_pane(id, dir);
+                }
+            }
+            Ok(naygo_platform::context_menu::NativeMenuOutcome::Cancelled) => {}
+            Err(e) => {
+                tracing::warn!("menú nativo falló: {e:?}");
+                self.status = self.i18n.t("op.more_windows_error").to_string();
+            }
+        }
+    }
+
     fn selected_paths(&self) -> Vec<PathBuf> {
         let Some(f) = self.workspace.active_files() else {
             return Vec::new();
@@ -2501,6 +2525,14 @@ impl eframe::App for NaygoApp {
         // procese fuera del closure de egui (la consume Task 5).
         if native_menu_request.is_some() {
             self.native_menu_request = native_menu_request;
+        }
+
+        // Menú contextual nativo de Windows (shell-B): se procesa FUERA del closure de
+        // egui (COM no debe correr dentro del render del menú). TrackPopupMenuEx bloquea
+        // el hilo de UI mientras el menú modal está abierto — interacción explícita del
+        // usuario, no I/O de fondo, así que es aceptable.
+        if let Some((sx, sy)) = self.native_menu_request.take() {
+            self.show_native_menu(sx as i32, sy as i32);
         }
 
         // Acciones del árbol acumuladas durante el pintado.
