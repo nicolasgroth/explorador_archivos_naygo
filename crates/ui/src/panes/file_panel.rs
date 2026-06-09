@@ -162,6 +162,10 @@ pub fn show(
     let mut clicked: Option<(usize, bool, bool)> = None; // (pos en vista, ctrl, shift)
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
+    // Posición de vista cuya celda Nombre empezó a arrastrarse este frame → dispara el
+    // arrastre OLE hacia el SO (Naygo → Explorer). Se resuelve a rutas tras la tabla y se
+    // difiere a `NaygoApp` (que llama a `platform::dnd::start_drag` fuera del closure egui).
+    let mut os_drag_start: Option<usize> = None;
     // Fila sobre la que se abrió el menú contextual (para enfocarla antes de actuar).
     let mut context_focus: Option<usize> = None;
 
@@ -387,9 +391,17 @@ pub fn show(
                                         src_pane: id,
                                         src_pos: i,
                                     };
-                                    ui.dnd_drag_source(drag_id, payload, |ui| {
+                                    let drag_resp = ui.dnd_drag_source(drag_id, payload, |ui| {
                                         let _ = icon_row(ui, icons, key, &entry.name, name_color);
                                     });
+                                    // Al EMPEZAR el arrastre de la celda Nombre disparamos el
+                                    // arrastre OLE hacia el SO. La selección real se resuelve
+                                    // tras la tabla (igual que el drop interno). Solo el primer
+                                    // disparo del frame gana (last-writer-wins es indistinto:
+                                    // solo una celda puede iniciar arrastre por frame).
+                                    if drag_resp.response.drag_started() {
+                                        os_drag_start = Some(i);
+                                    }
                                 } else {
                                     let mut text = cell_text(entry, col.kind);
                                     if col.kind == ColumnKind::Size
@@ -541,6 +553,27 @@ pub fn show(
             if !on_name {
                 ui.memory_mut(|m| m.data.insert_temp(start_key, start));
             }
+        }
+    }
+
+    // Arrastre OLE hacia el SO: si la celda Nombre empezó a arrastrarse, resolvemos las
+    // rutas (multi-selección si la hay; si no, la entry arrastrada) y diferimos el inicio
+    // de `DoDragDrop` a `NaygoApp`, FUERA del closure de egui. `view` es la vista pintada
+    // (filtrada/ordenada); `selected_set` son posiciones de vista.
+    if let Some(pos) = os_drag_start {
+        let paths: Vec<std::path::PathBuf> = if !selected_set.is_empty() {
+            selected_set
+                .iter()
+                .filter_map(|&p| view.get(p))
+                .map(|e| e.path.clone())
+                .collect()
+        } else {
+            view.get(pos)
+                .map(|e| vec![e.path.clone()])
+                .unwrap_or_default()
+        };
+        if !paths.is_empty() {
+            pending.push(PaneRequest::StartOsDrag { paths });
         }
     }
 

@@ -36,7 +36,7 @@ pub fn write_files(paths: &[PathBuf], cut: bool) -> Result<(), ClipboardError> {
 }
 
 #[cfg(windows)]
-mod windows_impl {
+pub(crate) mod windows_impl {
     use super::ClipboardError;
     use naygo_core::clipboard::{ClipboardContent, ClipboardImage, MAX_IMAGE_PIXELS};
     use std::os::windows::ffi::OsStrExt;
@@ -412,8 +412,15 @@ mod windows_impl {
     }
 
     /// Construye el HGLOBAL con la estructura DROPFILES + rutas UTF-16 doble-NUL.
+    ///
+    /// Es el formato **CF_HDROP**: lo usa tanto el portapapeles (`write_files`) como el
+    /// arrastre OLE hacia el SO (`dnd::start_drag`). `pub(crate)` para reutilizarlo desde
+    /// `dnd.rs` sin duplicar la construcción de DROPFILES. El llamador es dueño del HGLOBAL
+    /// devuelto: debe entregarlo a una API que lo consuma (SetClipboardData / STGMEDIUM con
+    /// `pUnkForRelease == null`, que el SO libera con `GlobalFree`) o liberarlo él mismo.
+    ///
     /// SAFETY: escribe en memoria recién asignada por GlobalAlloc.
-    unsafe fn build_hdrop_global(paths: &[PathBuf]) -> Result<HGLOBAL, ClipboardError> {
+    pub(crate) unsafe fn build_hdrop_global(paths: &[PathBuf]) -> Result<HGLOBAL, ClipboardError> {
         // Bloque de rutas: cada ruta UTF-16 + NUL, y un NUL extra al final.
         let mut block: Vec<u16> = Vec::new();
         for p in paths {

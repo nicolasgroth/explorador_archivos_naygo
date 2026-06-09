@@ -23,6 +23,12 @@ pub enum PaneRequest {
         dest: PathBuf,
         move_it: bool,
     },
+    /// Iniciar un arrastre OLE hacia el SO (Naygo → Explorer/escritorio/correo). Lo emite
+    /// la celda Nombre de un file panel cuando el usuario empieza a arrastrar. `NaygoApp`
+    /// lo despacha **fuera** del closure de egui (vía `platform::dnd::start_drag`), porque
+    /// `DoDragDrop` corre un bucle modal que toma el control del mouse. Mismo patrón que el
+    /// menú contextual nativo (`native_menu_request`).
+    StartOsDrag { paths: Vec<PathBuf> },
 }
 
 pub struct NaygoTabViewer<'a> {

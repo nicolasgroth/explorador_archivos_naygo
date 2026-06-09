@@ -1622,6 +1622,32 @@ impl NaygoApp {
         }
     }
 
+    /// Inicia un arrastre OLE de `paths` hacia el SO (Explorer, escritorio, correo…).
+    /// BLOQUEANTE: `DoDragDrop` corre su propio bucle modal hasta que el usuario suelta o
+    /// cancela. Debe llamarse FUERA del closure de render de egui. Si el resultado es MOVER,
+    /// refresca el panel activo (el archivo ya no está en el origen). Tolerante: cualquier
+    /// fallo se reporta discreto en logs, nunca tumba la app.
+    fn start_os_drag(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        match naygo_platform::dnd::start_drag(&paths) {
+            Ok(naygo_platform::dnd::DragOutcome::Moved) => {
+                // El destino movió los archivos: el origen quedó obsoleto. Refrescar.
+                if let (Some(id), Some(dir)) = (self.workspace.active_id(), self.active_dir()) {
+                    self.refresh_pane(id, dir);
+                }
+            }
+            Ok(naygo_platform::dnd::DragOutcome::Copied)
+            | Ok(naygo_platform::dnd::DragOutcome::Cancelled) => {
+                // Copia: el origen no cambia. Cancelado: nada que hacer.
+            }
+            Err(e) => {
+                tracing::warn!("arrastre OLE al SO falló: {e:?}");
+            }
+        }
+    }
+
     fn selected_paths(&self) -> Vec<PathBuf> {
         let Some(f) = self.workspace.active_files() else {
             return Vec::new();
@@ -2637,6 +2663,10 @@ impl eframe::App for NaygoApp {
         // vigilando una carpeta de un panel cerrado (consumo). Sin esto, el bucle de
         // repintado de 500 ms nunca se apagaría tras cerrar un panel.
         self.prune_closed_panes();
+        // Petición de arrastre OLE hacia el SO (Naygo → Explorer). Se acumula aquí y se
+        // procesa DESPUÉS del bucle `pending`, fuera del closure de egui: `DoDragDrop` corre
+        // un bucle modal que toma el control del mouse. Mismo patrón que `native_menu`.
+        let mut os_drag_request: Option<Vec<PathBuf>> = None;
         for req in pending {
             match req {
                 crate::docking::PaneRequest::Activate { id } => {
@@ -2669,7 +2699,20 @@ impl eframe::App for NaygoApp {
                     let label = format!("{verb} → {}", dest.display());
                     self.launch_transfer(req, label);
                 }
+                crate::docking::PaneRequest::StartOsDrag { paths } => {
+                    // Solo un arrastre a la vez tiene sentido; last-writer-wins.
+                    os_drag_request = Some(paths);
+                }
             }
+        }
+
+        // Arrastre OLE hacia el SO: FUERA del closure de egui (DoDragDrop bloquea con su
+        // bucle modal mientras el usuario arrastra). Tras soltar, si el efecto fue MOVER,
+        // refrescamos el panel activo (el dato ya no está en el origen). El arrastre interno
+        // entre paneles de Naygo (Task 2) sigue intacto: si el usuario suelta DENTRO de la
+        // ventana, nuestro IDropTarget lo recibe; si suelta fuera, lo recibe el SO.
+        if let Some(paths) = os_drag_request.take() {
+            self.start_os_drag(paths);
         }
 
         // Disparadores de operaciones del menú contextual. Se aplican DESPUÉS del
