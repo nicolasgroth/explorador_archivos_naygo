@@ -2629,12 +2629,19 @@ impl eframe::App for NaygoApp {
                         // pinta el file_panel. Si no, foco/teclado divergirían de la vista
                         // tras cambiar el orden sin re-listar.
                         sort_entries(&mut f.entries, &spec);
+                        // El orden cambió: las posiciones de vista guardadas ya no apuntan a
+                        // las mismas filas. Limpiar selección/ancla para no seleccionar al azar.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::SetFilter(kind, filter) => {
                         f.table.set_filter(kind, filter);
+                        // El filtro cambió qué filas son visibles → posiciones de vista stale.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::ClearFilter(kind) => {
                         f.table.clear_filter(kind);
+                        // Idem: cambia la vista → posiciones de vista stale.
+                        f.clear_selection();
                     }
                     crate::table_actions::TableAction::ToggleColumn(kind) => {
                         f.table.toggle_visible(kind);

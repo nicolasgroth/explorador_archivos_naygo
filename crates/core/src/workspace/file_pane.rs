@@ -234,6 +234,14 @@ impl FilePaneState {
         }
     }
 
+    /// Limpia la selección y el ancla (p. ej. al cambiar el filtro u orden: las
+    /// posiciones de vista dejan de ser válidas). El foco se conserva si sigue en rango;
+    /// si no, el clamp natural de la navegación por teclado lo corrige.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.anchor = None;
+    }
+
     /// Mueve el foco `delta` (teclado). Con `extend` (Shift) extiende el rango desde el
     /// ancla; sin extend es selección simple del nuevo foco.
     pub fn move_focus_extend(&mut self, delta: isize, extend: bool) {
@@ -552,6 +560,17 @@ mod tests {
         let mut s = p.selected.clone();
         s.sort_unstable();
         assert_eq!(s, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn clear_selection_vacia_seleccion_y_ancla() {
+        let mut p = pane_n(5);
+        p.select_single(2);
+        assert_eq!(p.selected, vec![2]);
+        assert_eq!(p.anchor, Some(2));
+        p.clear_selection();
+        assert!(p.selected.is_empty());
+        assert_eq!(p.anchor, None);
     }
 
     #[test]
