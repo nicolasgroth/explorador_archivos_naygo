@@ -117,7 +117,7 @@ pub fn show(
     // Índice de la entry seleccionada se referencia respecto a la VISTA filtrada/
     // ordenada (lo que el usuario ve), no respecto a `f.entries`. El `focused` del
     // panel también se interpreta sobre la vista (consistente con el pintado).
-    let mut clicked: Option<usize> = None;
+    let mut clicked: Option<(usize, bool, bool)> = None; // (pos en vista, ctrl, shift)
     let mut activated: Option<usize> = None;
     let mut parent_activated = false;
     // Fila sobre la que se abrió el menú contextual (para enfocarla antes de actuar).
@@ -321,7 +321,15 @@ pub fn show(
                         // doble clic navega/activa.
                         let row_resp = row.response();
                         if row_resp.clicked() {
-                            clicked = Some(i);
+                            // `ui` ya está movido dentro del `TableBuilder`; leemos los
+                            // modificadores desde el `Context` capturado (ctx.input).
+                            let (ctrl, shift) = ctx.input(|inp| {
+                                (
+                                    inp.modifiers.command || inp.modifiers.ctrl,
+                                    inp.modifiers.shift,
+                                )
+                            });
+                            clicked = Some((i, ctrl, shift));
                         }
                         if row_resp.double_clicked() {
                             activated = Some(i);
@@ -431,9 +439,18 @@ pub fn show(
         }
         pending.push(PaneRequest::Activate { id });
     }
-    if let Some(i) = clicked {
+    // Clic izquierdo: puebla la multi-selección según modificadores. Los métodos
+    // puros (`select_*`) fijan el foco ellos mismos, así que NO se setea `focused`
+    // a mano aquí; se conserva la activación del panel (el clic da foco al panel).
+    if let Some((pos, ctrl, shift)) = clicked {
         if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            f.focused = Some(i);
+            if shift {
+                f.select_range_to(pos);
+            } else if ctrl {
+                f.select_toggle(pos);
+            } else {
+                f.select_single(pos);
+            }
         }
         pending.push(PaneRequest::Activate { id });
     }
