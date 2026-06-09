@@ -27,3 +27,6 @@ desktop.ini
 
 # Imágenes del asistente del instalador, generadas desde logo_naygo.png. No versionar.
 installer/*.bmp
+
+# Estado transitorio del harness (locks de sesión, etc.). No versionar.
+.claude/
