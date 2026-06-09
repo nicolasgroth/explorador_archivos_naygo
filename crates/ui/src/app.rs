@@ -493,6 +493,11 @@ impl NaygoApp {
         self.config_dir.display().to_string()
     }
 
+    /// Carpeta de config (para descubrir packs/sets sueltos desde la UI de Ajustes).
+    pub fn config_dir(&self) -> &std::path::Path {
+        &self.config_dir
+    }
+
     /// Ids + Theme de cada tema disponible (para pintar las tarjetas del selector).
     pub fn theme_cards(&self) -> Vec<(naygo_core::theme::ThemeId, naygo_core::theme::Theme)> {
         self.theme_catalog
