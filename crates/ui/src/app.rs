@@ -814,10 +814,18 @@ impl NaygoApp {
         }
     }
 
-    /// Drena los archivos soltados desde el SO (Explorador → Naygo) y los copia al panel
-    /// activo. El mapeo coords-de-pantalla → panel exacto bajo el cursor es un seguimiento
-    /// futuro (Task: screen→pane); por ahora caen en la carpeta del panel ACTIVO, que es el
-    /// comportamiento aceptable acordado. Para drops externos copiamos (no movemos).
+    /// Drena los archivos soltados (vía OLE/`IDropTarget`) sobre la ventana de Naygo y los
+    /// transfiere al panel activo, honrando el efecto (mover vs copiar) que decidió el
+    /// `IDropTarget` a partir de los modificadores (Shift=mover, Ctrl/sin tecla=copiar).
+    /// Esto cubre tanto los drops EXTERNOS (Explorador → Naygo) como los INTRA-app entre
+    /// paneles: como `DoDragDrop` bloquea y captura el mouse, todo arrastre de archivos sale
+    /// y vuelve por OLE.
+    ///
+    /// El mapeo coords-de-pantalla → panel exacto bajo el cursor sigue pendiente (Task:
+    /// screen→pane): mientras el bucle modal de `DoDragDrop` corre, egui está congelado y no
+    /// hay un mapeo directo de coordenadas de pantalla a panel; haría falta rastrear el rect
+    /// en pantalla de cada panel por frame. Por ahora los archivos caen en la carpeta del
+    /// panel ACTIVO, comportamiento aceptable acordado. Lo que SÍ honramos ya es el efecto.
     fn pump_dropped_files(&mut self) {
         // Recolectar primero para no mantener prestado `self.drop_rx` mientras lanzamos las
         // transferencias (que toman `&mut self`).
@@ -834,9 +842,14 @@ impl NaygoApp {
             let Some(dest) = self.active_dir() else {
                 continue;
             };
-            // Drops externos: copiar por defecto (no honramos mover aún).
-            let req = crate::ops_actions::transfer(false, d.paths, dest.clone());
-            let verb = self.i18n.t("op.copy");
+            // Honrar el efecto que decidió el IDropTarget (Shift=mover, si no copiar).
+            let move_it = !d.effect_copy;
+            let req = crate::ops_actions::transfer(move_it, d.paths, dest.clone());
+            let verb = if move_it {
+                self.i18n.t("op.cut")
+            } else {
+                self.i18n.t("op.copy")
+            };
             let label = format!("{verb} → {}", dest.display());
             self.launch_transfer(req, label);
         }
@@ -2683,21 +2696,6 @@ impl eframe::App for NaygoApp {
                         f.navigate_to(dir.clone());
                         self.start_listing(id, dir);
                     }
-                }
-                crate::docking::PaneRequest::DropTransfer {
-                    sources,
-                    dest,
-                    move_it,
-                } => {
-                    // Drop interno entre paneles: mismo camino que `transfer_to_other`.
-                    let req = crate::ops_actions::transfer(move_it, sources, dest.clone());
-                    let verb = if move_it {
-                        self.i18n.t("op.cut")
-                    } else {
-                        self.i18n.t("op.copy")
-                    };
-                    let label = format!("{verb} → {}", dest.display());
-                    self.launch_transfer(req, label);
                 }
                 crate::docking::PaneRequest::StartOsDrag { paths } => {
                     // Solo un arrastre a la vez tiene sentido; last-writer-wins.

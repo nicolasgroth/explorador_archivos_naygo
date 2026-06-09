@@ -15,14 +15,6 @@ pub enum PaneRequest {
     NavigateTo { id: PaneId, dir: PathBuf },
     /// El panel `id` pasa a ser el activo.
     Activate { id: PaneId },
-    /// Soltar arrastre de archivos: copiar/mover `sources` a la carpeta de `dest`
-    /// (`move_it` decide mover vs copiar). Lo emite un panel destino al recibir un
-    /// drop interno entre paneles; `NaygoApp` lo despacha vía `launch_transfer`.
-    DropTransfer {
-        sources: Vec<PathBuf>,
-        dest: PathBuf,
-        move_it: bool,
-    },
     /// Iniciar un arrastre OLE hacia el SO (Naygo → Explorer/escritorio/correo). Lo emite
     /// la celda Nombre de un file panel cuando el usuario empieza a arrastrar. `NaygoApp`
     /// lo despacha **fuera** del closure de egui (vía `platform::dnd::start_drag`), porque

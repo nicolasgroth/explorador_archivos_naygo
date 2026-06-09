@@ -107,8 +107,38 @@ mod windows_impl {
         OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP, DROPEFFECT,
         DROPEFFECT_COPY, DROPEFFECT_MOVE,
     };
-    use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
+    use windows::Win32::System::SystemServices::{
+        MK_CONTROL, MK_LBUTTON, MK_SHIFT, MODIFIERKEYS_FLAGS,
+    };
     use windows::Win32::UI::Shell::{DragQueryFileW, SHCreateStdEnumFmtEtc, HDROP};
+
+    /// Decide el efecto del drop (copiar/mover) a partir de los modificadores del SO y de
+    /// lo que el origen permite. Reusa la regla pura y testeada `core::dnd::decide_drop_action`
+    /// (Shift→mover, Ctrl→copiar, sin tecla→copiar por defecto seguro: no conocemos el disco
+    /// origen en el lado receptor, así que tratamos como discos distintos). El efecto elegido
+    /// se enmascara con `allowed` (lo que el SO/origen ofrecen en `*pdweffect` de entrada): si
+    /// el origen no permite mover, caemos a copiar (y viceversa). Si nada queda permitido,
+    /// `DROPEFFECT(0)` (NONE) → el SO muestra "no soltar aquí".
+    fn effect_for_drop(grfkeystate: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT) -> DROPEFFECT {
+        let shift = (grfkeystate.0 & MK_SHIFT.0) != 0;
+        let ctrl = (grfkeystate.0 & MK_CONTROL.0) != 0;
+        // same_drive=false: lado receptor sin info del disco origen → copiar por defecto.
+        let want = match naygo_core::dnd::decide_drop_action(ctrl, shift, false) {
+            naygo_core::dnd::DropAction::Move => DROPEFFECT_MOVE,
+            naygo_core::dnd::DropAction::Copy => DROPEFFECT_COPY,
+        };
+        // Enmascarar con lo permitido por el origen.
+        let masked = DROPEFFECT(want.0 & allowed.0);
+        if masked.0 != 0 {
+            masked
+        } else if (allowed.0 & DROPEFFECT_COPY.0) != 0 {
+            // El efecto deseado no está permitido pero sí copiar → copiar.
+            DROPEFFECT_COPY
+        } else {
+            // Nada permitido (o allowed=0) → NONE.
+            DROPEFFECT(0)
+        }
+    }
 
     /// Objeto COM que implementa `IDropTarget`. Sostiene el `Sender` por el que despacha
     /// los archivos soltados a la app. `#[implement(IDropTarget)]` genera el andamiaje
@@ -122,14 +152,17 @@ mod windows_impl {
         fn DragEnter(
             &self,
             _pdataobj: Ref<IDataObject>,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
+            grfkeystate: MODIFIERKEYS_FLAGS,
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // Aceptamos el arrastre como "copiar". SAFETY: el SO provee un puntero válido.
+            // El efecto se decide por los modificadores (Shift=mover/Ctrl=copiar/…) y se
+            // enmascara con lo que el origen permite (el `*pdweffect` de entrada). Así el
+            // cursor muestra mover/copiar correctamente. SAFETY: el SO provee un puntero
+            // válido; lo leemos (efectos permitidos) y escribimos el elegido si no es nulo.
             unsafe {
                 if !pdweffect.is_null() {
-                    *pdweffect = DROPEFFECT_COPY;
+                    *pdweffect = effect_for_drop(grfkeystate, *pdweffect);
                 }
             }
             Ok(())
@@ -137,14 +170,15 @@ mod windows_impl {
 
         fn DragOver(
             &self,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
+            grfkeystate: MODIFIERKEYS_FLAGS,
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // SAFETY: puntero del SO; lo escribimos solo si no es nulo.
+            // Igual que DragEnter: recalculamos en cada movimiento (el usuario puede
+            // presionar/soltar Shift/Ctrl durante el arrastre). SAFETY: puntero del SO.
             unsafe {
                 if !pdweffect.is_null() {
-                    *pdweffect = DROPEFFECT_COPY;
+                    *pdweffect = effect_for_drop(grfkeystate, *pdweffect);
                 }
             }
             Ok(())
@@ -157,17 +191,22 @@ mod windows_impl {
         fn Drop(
             &self,
             pdataobj: Ref<IDataObject>,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
+            grfkeystate: MODIFIERKEYS_FLAGS,
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // Reportamos "copiar" como efecto final (lo que pintamos en DragOver). SAFETY:
-            // puntero del SO. Esto debe pasar pase lo que pase con la extracción.
-            unsafe {
-                if !pdweffect.is_null() {
-                    *pdweffect = DROPEFFECT_COPY;
+            // Efecto final = el mismo cálculo que en DragOver (modificadores + lo permitido).
+            // SAFETY: puntero del SO. Esto debe pasar pase lo que pase con la extracción.
+            let chosen = unsafe {
+                if pdweffect.is_null() {
+                    // Sin puntero de efecto no podemos negociar: tratamos como copiar.
+                    DROPEFFECT_COPY
+                } else {
+                    let c = effect_for_drop(grfkeystate, *pdweffect);
+                    *pdweffect = c;
+                    c
                 }
-            }
+            };
 
             // Extraer rutas del IDataObject. Tolerante: si algo falla, no enviamos nada y
             // devolvemos Ok (nunca hacemos panic ni rompemos el arrastre del SO).
@@ -177,11 +216,13 @@ mod windows_impl {
                 .unwrap_or_default();
 
             if !paths.is_empty() {
+                // `effect_copy = false` solo si el efecto elegido es exactamente MOVER.
+                let effect_copy = (chosen.0 & DROPEFFECT_MOVE.0) == 0;
                 let dropped = DroppedFiles {
                     paths,
                     screen_x: pt.x,
                     screen_y: pt.y,
-                    effect_copy: true,
+                    effect_copy,
                 };
                 // Si el receptor ya no existe (app cerrando), ignorar.
                 let _ = self.tx.send(dropped);
