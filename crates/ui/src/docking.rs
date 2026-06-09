@@ -42,6 +42,9 @@ pub struct NaygoTabViewer<'a> {
     /// Disparadores de operaciones del menú contextual de un file panel, a aplicar
     /// (vía `apply_action`) tras pintar. Patrón de acción diferida del file panel.
     pub ops_actions: &'a mut Vec<crate::input::Action>,
+    /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic del
+    /// ítem "Más opciones de Windows…". La procesa NaygoApp tras pintar el dock.
+    pub native_menu_request: &'a mut Option<(f32, f32)>,
     /// Espacio por unidad (root → uso) para pintar la barra de uso en el árbol.
     pub disk_usage: &'a std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
     /// Si los archivos recién aparecidos (resaltados) se agrupan al final de la vista.
@@ -98,6 +101,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                     &mut local,
                     self.theme,
                     self.ops_actions,
+                    self.native_menu_request,
                     self.new_items_at_end,
                     self.size_partial,
                 );

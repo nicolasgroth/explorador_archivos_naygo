@@ -285,6 +285,9 @@ pub struct NaygoApp {
     /// HWND de la ventana para el menú contextual nativo (shell-B). None → ítem deshabilitado.
     #[allow(dead_code)] // usado en Task 5 (shell-B)
     hwnd: Option<isize>,
+    /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic. La procesa NaygoApp fuera del closure de egui.
+    #[allow(dead_code)] // usado en Task 5 (shell-B)
+    native_menu_request: Option<(f32, f32)>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -397,6 +400,7 @@ impl NaygoApp {
             size_partial: std::collections::HashSet::new(),
             splash,
             hwnd,
+            native_menu_request: None,
         };
         app.start_all_listings();
 
@@ -2434,6 +2438,9 @@ impl eframe::App for NaygoApp {
         let mut tree_revealed: HashSet<PaneId> = HashSet::new();
         let mut table_actions: Vec<(PaneId, crate::table_actions::TableAction)> = Vec::new();
         let mut ops_actions: Vec<Action> = Vec::new();
+        // Petición de menú nativo (shell-B): se declara UNA vez; cada pane que pinte su
+        // menú contextual escribe aquí. Solo hay un menú abierto a la vez → last-writer-wins.
+        let mut native_menu_request: Option<(f32, f32)> = None;
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
@@ -2448,6 +2455,7 @@ impl eframe::App for NaygoApp {
                 tree_revealed: &mut tree_revealed,
                 table_actions: &mut table_actions,
                 ops_actions: &mut ops_actions,
+                native_menu_request: &mut native_menu_request,
                 disk_usage: &self.disk_usage,
                 new_items_at_end: self.settings.new_items_at_end,
                 size_partial: &self.size_partial,
@@ -2487,6 +2495,12 @@ impl eframe::App for NaygoApp {
         // basadas en foco actúan sobre la entry correcta.
         for action in ops_actions {
             self.apply_action(action);
+        }
+
+        // Petición de menú contextual nativo (shell-B): se almacena para que NaygoApp la
+        // procese fuera del closure de egui (la consume Task 5).
+        if native_menu_request.is_some() {
+            self.native_menu_request = native_menu_request;
         }
 
         // Acciones del árbol acumuladas durante el pintado.
