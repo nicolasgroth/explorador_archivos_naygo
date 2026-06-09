@@ -4,12 +4,12 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Fase toolbar-icons (estilo de toolbar + íconos reales + packs sueltos) en
+> **Estado:** Fase distribución/instalador (instalador + portable + ícono + splash) en
 > desarrollo. Diseño en
-> [`docs/superpowers/specs/2026-06-08-naygo-toolbar-icons-design.md`](docs/superpowers/specs/2026-06-08-naygo-toolbar-icons-design.md);
+> [`docs/superpowers/specs/2026-06-09-naygo-distribucion-instalador-design.md`](docs/superpowers/specs/2026-06-09-naygo-distribucion-instalador-design.md);
 > plan en
-> [`docs/superpowers/plans/2026-06-08-naygo-toolbar-icons.md`](docs/superpowers/plans/2026-06-08-naygo-toolbar-icons.md).
-> Operaciones (ops-A/B), paste, shell-A, watcher, atajos configurables, sizing (F3) y
+> [`docs/superpowers/plans/2026-06-09-naygo-distribucion-instalador.md`](docs/superpowers/plans/2026-06-09-naygo-distribucion-instalador.md).
+> Operaciones (ops-A/B), paste, shell-A, watcher, atajos, sizing (F3), toolbar-icons y
 > bloque visual completos.
 
 ## Objetivos
@@ -31,6 +31,20 @@ multi-idioma y temas personalizables.
 Rust + [egui](https://github.com/emilk/egui) (UI por GPU) + el crate oficial
 `windows` para la integración con el Shell de Windows. 100% open source, sin
 dependencias de pago.
+
+## Instalación / Build
+
+Para usar Naygo:
+
+- **Portable**: descargá `Naygo-<versión>-portable.zip`, descomprimí y ejecutá
+  `naygo.exe`. No instala nada.
+- **Instalador**: ejecutá `Naygo-<versión>-setup.exe` y seguí el asistente.
+
+La primera vez, Windows SmartScreen puede advertir "editor desconocido" (el `.exe` no
+está firmado): hacé clic en **"Más información" → "Ejecutar de todos modos"**.
+
+Para compilar y empaquetar desde el código, ver
+[`docs/BUILD.md`](docs/BUILD.md) y [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
 
 ## Licencia
 

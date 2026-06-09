@@ -1,3 +1,8 @@
+// Ícono de la aplicación. El primer recurso ICON del .rc es el que Windows usa
+// para el .exe (Explorer, taskbar, Alt-Tab, accesos directos). Ruta relativa a
+// este archivo (crates/ui/), sube a la raíz del repo a assets/icons/.
+IDI_NAYGO ICON "../../assets/icons/naygo_icon.ico"
+
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
