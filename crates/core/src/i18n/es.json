@@ -11,6 +11,7 @@
   "settings.icons.flat": "Flat (color)",
   "settings.icons.fluent": "Fluent",
   "settings.icons.mono": "Monocromo",
+  "settings.icons.preview": "Vista previa del pack:",
   "settings.theme.section": "Tema",
   "settings.packs.section": "Packs",
   "settings.packs.hint": "Un pack activa un tema y un set de íconos juntos.",

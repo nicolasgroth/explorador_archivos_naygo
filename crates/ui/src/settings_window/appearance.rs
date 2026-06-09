@@ -29,6 +29,27 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
             ui.selectable_value(&mut app.settings.icon_set, id.clone(), label);
         }
     });
+
+    // Vista previa del pack activo: el usuario ve cómo lucen los íconos del set elegido
+    // (Flat/Fluent/Mono) — el set se cambia arriba en "Set de íconos"; el toggle
+    // Glifos/Pack decide si la toolbar usa glifos o estos íconos.
+    ui.add_space(4.0);
+    let preview_label = app.tr("settings.icons.preview");
+    ui.label(preview_label);
+    ui.horizontal(|ui| {
+        use naygo_core::icon_kind::{ActionIcon, FileCategory, IconKey};
+        let keys = [
+            IconKey::Folder,
+            IconKey::File(FileCategory::Image),
+            IconKey::File(FileCategory::Code),
+            IconKey::Action(ActionIcon::Copy),
+            IconKey::Action(ActionIcon::Settings),
+        ];
+        for key in keys {
+            let tex = app.icons.texture(key);
+            ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(24.0, 24.0)));
+        }
+    });
     ui.add_space(8.0);
 
     // Sección Barra de herramientas: estilo de íconos + color de los glifos.
