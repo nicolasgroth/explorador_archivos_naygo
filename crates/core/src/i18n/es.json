@@ -94,6 +94,8 @@
   "op.copy": "Copiar",
   "op.cut": "Cortar",
   "op.paste": "Pegar",
+  "dnd.drop_move": "Soltar para mover aquí",
+  "dnd.drop_copy": "Soltar para copiar aquí",
   "paste.empty": "Portapapeles vacío",
   "paste.done_text": "Texto pegado · {bytes} · {chars} caracteres · {lines} líneas",
   "paste.done_image": "Imagen pegada · {w}×{h} · {fmt} · {bytes}",

@@ -46,6 +46,44 @@ enum DisplayRow {
     NoMatches,
 }
 
+/// Payload de un arrastre de archivos entre paneles: identifica el panel ORIGEN
+/// (su selección se resuelve al soltar) y la posición de vista concreta arrastrada
+/// (por si no hay multi-selección). `Clone + Send + Sync + 'static` para servir como
+/// payload de `egui`'s dnd (`PaneId` es `Copy(u64)`).
+#[derive(Clone)]
+struct FileDragPayload {
+    src_pane: PaneId,
+    src_pos: usize,
+}
+
+/// Resuelve las rutas de origen de un arrastre: si el panel origen tiene
+/// multi-selección, mapea esas posiciones de vista → entries → rutas; si no, usa la
+/// única posición arrastrada. Espeja la lógica de `NaygoApp::selected_paths`, pero
+/// para un `PaneId` específico (el origen, que puede no ser el panel activo).
+fn source_paths_for_drag(
+    workspace: &Workspace,
+    src_pane: PaneId,
+    src_pos: usize,
+) -> Vec<std::path::PathBuf> {
+    let Some(f) = workspace.pane(src_pane).and_then(|p| p.files.as_ref()) else {
+        return Vec::new();
+    };
+    let view = f.view_indices();
+    if !f.selected.is_empty() {
+        return f
+            .selected
+            .iter()
+            .filter_map(|&pos| view.get(pos))
+            .filter_map(|&real| f.entries.get(real))
+            .map(|e| e.path.clone())
+            .collect();
+    }
+    view.get(src_pos)
+        .and_then(|&real| f.entries.get(real))
+        .map(|e| vec![e.path.clone()])
+        .unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
@@ -326,7 +364,8 @@ pub fn show(
                                 if ci == 0 {
                                     // El rect de la celda Nombre cubre el ancho completo de
                                     // la columna: lo guardamos para excluir el rubber-band
-                                    // que empiece sobre el nombre (drag&drop futuro).
+                                    // que empiece sobre el nombre (reservada para ESTE
+                                    // arrastre de archivos).
                                     name_cell_rect.set(Some(ui.max_rect()));
                                     let key = icon_key_for(entry);
                                     // El ícono+nombre se pintan; el clic se captura sobre
@@ -337,7 +376,20 @@ pub fn show(
                                     } else {
                                         None
                                     };
-                                    let _ = icon_row(ui, icons, key, &entry.name, name_color);
+                                    // La celda Nombre es FUENTE de arrastre de archivos:
+                                    // `dnd_drag_source` solo INICIA el arrastre al detectar
+                                    // movimiento del puntero; un clic simple no lo dispara y
+                                    // sigue propagándose a la respuesta de la fila (que es la
+                                    // que selecciona). El payload identifica panel+posición de
+                                    // origen; la selección real se resuelve al soltar.
+                                    let drag_id = egui::Id::new(("naygo_file_drag", id.0, i));
+                                    let payload = FileDragPayload {
+                                        src_pane: id,
+                                        src_pos: i,
+                                    };
+                                    ui.dnd_drag_source(drag_id, payload, |ui| {
+                                        let _ = icon_row(ui, icons, key, &entry.name, name_color);
+                                    });
                                 } else {
                                     let mut text = cell_text(entry, col.kind);
                                     if col.kind == ColumnKind::Size
@@ -512,6 +564,80 @@ pub fn show(
                     ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
                 }
             }
+        }
+    }
+
+    // Panel como DESTINO de drop de archivos. Reusa el patrón dnd de columnas
+    // (`dnd_hover_payload`/`dnd_release_payload`) pero con `FileDragPayload`. Un
+    // `interact` de hover sobre el rect del panel permite consultar el payload sin
+    // sensar clic (no choca con el rubber-band ni con las filas). Solo actúa si el
+    // arrastre viene de OTRO panel (no tiene sentido soltar sobre uno mismo).
+    let panel_rect = ui.min_rect();
+    let drop_resp = ui.interact(
+        panel_rect,
+        egui::Id::new(("naygo_pane_drop", id.0)),
+        egui::Sense::hover(),
+    );
+    if let Some(payload) = drop_resp.dnd_hover_payload::<FileDragPayload>() {
+        if payload.src_pane != id {
+            // Banner fino en el tope del panel: "Soltar para {mover|copiar} aquí",
+            // según las reglas de Windows (Ctrl=copiar, Shift=mover, mismo disco=mover).
+            let (ctrl, shift) =
+                ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift));
+            let dest = workspace
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone());
+            let src = workspace
+                .pane(payload.src_pane)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone());
+            if let (Some(dest), Some(src)) = (dest, src) {
+                let same = naygo_core::dnd::same_drive(&src, &dest);
+                let action = naygo_core::dnd::decide_drop_action(ctrl, shift, same);
+                let label = match action {
+                    naygo_core::dnd::DropAction::Move => i18n.t("dnd.drop_move"),
+                    naygo_core::dnd::DropAction::Copy => i18n.t("dnd.drop_copy"),
+                };
+                let painter = ui.painter();
+                let banner =
+                    egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_rect.width(), 20.0));
+                painter.rect_filled(banner, 0.0, theme.accent());
+                painter.text(
+                    banner.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+    }
+    if let Some(payload) = drop_resp.dnd_release_payload::<FileDragPayload>() {
+        if payload.src_pane != id {
+            // Resolver las fuentes del panel ORIGEN (toda su selección, o el ítem
+            // arrastrado). La decisión mover/copiar se toma con el disco de la primera
+            // fuente vs. el destino (Windows decide por disco, no por archivo).
+            let sources = source_paths_for_drag(workspace, payload.src_pane, payload.src_pos);
+            let dest = workspace
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone());
+            if let (false, Some(dest)) = (sources.is_empty(), dest) {
+                let (ctrl, shift) =
+                    ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift));
+                let same = naygo_core::dnd::same_drive(&sources[0], &dest);
+                let move_it = matches!(
+                    naygo_core::dnd::decide_drop_action(ctrl, shift, same),
+                    naygo_core::dnd::DropAction::Move
+                );
+                pending.push(PaneRequest::DropTransfer {
+                    sources,
+                    dest,
+                    move_it,
+                });
+            }
+            pending.push(PaneRequest::Activate { id });
         }
     }
 

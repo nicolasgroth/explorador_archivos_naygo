@@ -2597,6 +2597,21 @@ impl eframe::App for NaygoApp {
                         self.start_listing(id, dir);
                     }
                 }
+                crate::docking::PaneRequest::DropTransfer {
+                    sources,
+                    dest,
+                    move_it,
+                } => {
+                    // Drop interno entre paneles: mismo camino que `transfer_to_other`.
+                    let req = crate::ops_actions::transfer(move_it, sources, dest.clone());
+                    let verb = if move_it {
+                        self.i18n.t("op.cut")
+                    } else {
+                        self.i18n.t("op.copy")
+                    };
+                    let label = format!("{verb} → {}", dest.display());
+                    self.launch_transfer(req, label);
+                }
             }
         }
 

@@ -94,6 +94,8 @@
   "op.copy": "Copy",
   "op.cut": "Cut",
   "op.paste": "Paste",
+  "dnd.drop_move": "Drop to move here",
+  "dnd.drop_copy": "Drop to copy here",
   "paste.empty": "Clipboard empty",
   "paste.done_text": "Text pasted · {bytes} · {chars} chars · {lines} lines",
   "paste.done_image": "Image pasted · {w}×{h} · {fmt} · {bytes}",
