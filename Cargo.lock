@@ -2035,6 +2035,7 @@ dependencies = [
  "image",
  "naygo-core",
  "naygo-platform",
+ "raw-window-handle",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

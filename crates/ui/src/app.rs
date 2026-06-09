@@ -282,6 +282,9 @@ pub struct NaygoApp {
     /// Splash de arranque (solo release): pinta el logo un instante al iniciar y se
     /// limpia (None) al expirar o al primer input. En debug siempre es None.
     splash: Option<crate::splash::Splash>,
+    /// HWND de la ventana para el menú contextual nativo (shell-B). None → ítem deshabilitado.
+    #[allow(dead_code)] // usado en Task 5 (shell-B)
+    hwnd: Option<isize>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -340,6 +343,19 @@ impl NaygoApp {
         #[cfg(not(debug_assertions))]
         let splash = crate::splash::Splash::new(&cc.egui_ctx);
 
+        // HWND de la ventana (para el menú contextual nativo de Windows, shell-B). Si no
+        // se puede obtener, queda None y el ítem "Más opciones de Windows…" se deshabilita.
+        let hwnd: Option<isize> = {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            match cc.window_handle() {
+                Ok(h) => match h.as_raw() {
+                    RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
+                    _ => None,
+                },
+                Err(_) => None,
+            }
+        };
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -380,6 +396,7 @@ impl NaygoApp {
             sized_paths: HashMap::new(),
             size_partial: std::collections::HashSet::new(),
             splash,
+            hwnd,
         };
         app.start_all_listings();
 
