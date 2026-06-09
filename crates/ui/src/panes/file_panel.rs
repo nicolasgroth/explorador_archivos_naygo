@@ -716,7 +716,17 @@ pub fn show(
     // mutuamente excluyente en la práctica.
     if let Some(i) = context_focus {
         if let Some(f) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            f.focused = Some(i);
+            if f.is_selected(i) {
+                // La fila del clic derecho ya está en la multi-selección: se mantiene
+                // (el menú opera sobre todos los seleccionados, como Windows). Solo se
+                // asegura el foco en la fila clicada.
+                f.focused = Some(i);
+            } else {
+                // Clic derecho sobre una fila FUERA de la selección → se reduce a ese
+                // ítem antes de abrir el menú (comportamiento de Windows). `select_single`
+                // ya fija foco y ancla.
+                f.select_single(i);
+            }
         }
         pending.push(PaneRequest::Activate { id });
     }
