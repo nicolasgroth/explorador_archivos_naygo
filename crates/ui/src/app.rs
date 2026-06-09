@@ -2335,6 +2335,15 @@ impl eframe::App for NaygoApp {
         if !self.watchers.is_empty() || self.device_watch.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
+        // Fluidez del hover/selección: mientras el puntero está sobre la UI, repintamos
+        // continuo para que la fila bajo el mouse y el clic respondan al instante (egui,
+        // por defecto, solo repinta una vez por evento → el hover se siente lento, y los
+        // primeros clics tras cargar pueden "no tomar"). En IDLE con el mouse FUERA de la
+        // ventana NO se repinta → se respeta el bajo consumo. NO convertir esto en un
+        // repaint incondicional (gastaría CPU/GPU sin que pase nada).
+        if ctx.is_pointer_over_egui() {
+            ctx.request_repaint();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -2345,6 +2354,9 @@ impl eframe::App for NaygoApp {
             let keep = splash.show(ui);
             if !keep {
                 self.splash = None;
+                // El primer frame real tras el splash debe renderizar y atender input ya
+                // (sin esperar un evento del usuario); si no, los primeros clics no toman.
+                ui.ctx().request_repaint();
             }
             return;
         }
@@ -2484,8 +2496,14 @@ impl eframe::App for NaygoApp {
                 new_items_at_end: self.settings.new_items_at_end,
                 size_partial: &self.size_partial,
             };
+            let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
+            // Ancho mínimo de cada tab del dock para que no se compriman hasta
+            // volverse ilegibles cuando hay varios paneles. Solo limita el tab,
+            // no la división arrastrable; el mínimo de la ventana (Task 2) cubre
+            // ese caso.
+            dock_style.tab.minimum_width = Some(150.0);
             egui_dock::DockArea::new(&mut self.dock_state)
-                .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+                .style(dock_style)
                 .show_inside(ui, &mut viewer);
         }
         // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el

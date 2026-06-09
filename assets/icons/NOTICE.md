@@ -4,7 +4,9 @@ Los íconos embebidos en Naygo provienen de proyectos de código abierto, usados
 sus licencias (todas permisivas, compatibles con la licencia MIT de Naygo):
 
 - **Flat (set `flat`)** — Flat Color Icons (Icons8) —
-  <https://github.com/icons8/flat-color-icons> — MIT.
+  <https://github.com/icons8/flat-color-icons> — MIT. Siete íconos sin equivalente en
+  este pack (copy, cut, paste, new_file, new_folder, font, model3d) se tomaron de
+  Fluent UI Emoji (Microsoft, MIT) para que el set quede completo y a color.
 - **Fluent (set `fluent`)** — Fluent UI Emoji (Microsoft) —
   <https://github.com/microsoft/fluentui-emoji> — MIT.
 - **Mono (set `mono`)** — Lucide — <https://github.com/lucide-icons/lucide> — ISC.
