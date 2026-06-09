@@ -279,6 +279,9 @@ pub struct NaygoApp {
     sized_paths: std::collections::HashMap<PaneId, std::collections::HashSet<std::path::PathBuf>>,
     /// Paths cuyo tamaño calculado es PARCIAL (accesos denegados) — para el render.
     size_partial: std::collections::HashSet<std::path::PathBuf>,
+    /// Splash de arranque (solo release): pinta el logo un instante al iniciar y se
+    /// limpia (None) al expirar o al primer input. En debug siempre es None.
+    splash: Option<crate::splash::Splash>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -331,6 +334,12 @@ impl NaygoApp {
         let (dev_tx, dev_rx) = std::sync::mpsc::channel();
         let device_watch = Some(naygo_platform::device_watch::watch(dev_tx));
 
+        // Splash de arranque: solo en release. En debug no hay splash (None).
+        #[cfg(debug_assertions)]
+        let splash = None;
+        #[cfg(not(debug_assertions))]
+        let splash = crate::splash::Splash::new(&cc.egui_ctx);
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -370,6 +379,7 @@ impl NaygoApp {
             size_jobs: HashMap::new(),
             sized_paths: HashMap::new(),
             size_partial: std::collections::HashSet::new(),
+            splash,
         };
         app.start_all_listings();
 
@@ -2239,6 +2249,13 @@ impl NaygoApp {
 
 impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Mientras el splash esté activo no hacemos trabajo pesado ni procesamos input:
+        // solo pedimos repaint (el pintado y la decisión de cerrarlo van en `ui`). No se
+        // puede pintar en `logic` (regla de eframe). En debug `splash` es None: no aplica.
+        if self.splash.is_some() {
+            ctx.request_repaint();
+            return;
+        }
         self.pump_all();
         self.pump_tree();
         self.pump_ops();
@@ -2276,6 +2293,17 @@ impl eframe::App for NaygoApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Mientras el splash esté activo lo pintamos centrado y NO dibujamos la UI real.
+        // `show` devuelve `false` al expirar el tiempo o ante el primer input: ahí lo
+        // limpiamos y el próximo frame ya muestra la UI normal. En debug es None.
+        if let Some(splash) = &self.splash {
+            let keep = splash.show(ui);
+            if !keep {
+                self.splash = None;
+            }
+            return;
+        }
+
         if self.icons.set() != self.settings.icon_set {
             let set = self.settings.icon_set.clone();
             self.icons.reload(ui.ctx(), &set, &self.config_dir);

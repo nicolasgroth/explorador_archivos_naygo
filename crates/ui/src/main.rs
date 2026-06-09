@@ -20,6 +20,7 @@ mod ops_panel;
 mod panes;
 mod settings_window;
 mod sort_ui;
+mod splash;
 mod table_actions;
 mod templates_menu;
 mod theme_apply;
