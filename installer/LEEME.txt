@@ -1,0 +1,20 @@
+Naygo — versión portable
+=========================
+
+Naygo es un explorador de archivos rápido para Windows 10/11.
+Copyright (c) 2026 Nicolás Groth / ISGroth. Licencia MIT.
+
+Cómo usar
+---------
+1. Descomprime este ZIP donde quieras (un pendrive, una carpeta, el escritorio).
+2. Ejecuta naygo.exe haciendo doble clic. No requiere instalación.
+
+Notas
+-----
+- La configuración se guarda JUNTO a naygo.exe (modo portable). Si mueves el .exe,
+  llévate también los archivos de configuración que crea a su lado.
+- También puedes abrir una carpeta directamente:  naygo.exe "C:\ruta\a\carpeta"
+- La primera vez, Windows SmartScreen puede advertir "editor desconocido" (el .exe
+  no está firmado). Haz clic en "Más información" y luego en "Ejecutar de todos modos".
+
+Más información: https://github.com/nicolasgroth/explorador_archivos_naygo

@@ -24,3 +24,6 @@ desktop.ini
 
 # Artefactos de empaquetado generados (ZIP portable, setup.exe). No se versionan.
 /dist
+
+# Imágenes del asistente del instalador, generadas desde logo_naygo.png. No versionar.
+installer/*.bmp
