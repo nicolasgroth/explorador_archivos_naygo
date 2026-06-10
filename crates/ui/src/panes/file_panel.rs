@@ -171,14 +171,10 @@ pub fn show(
         egui::Id::new(("col_drop_line", id.0)),
     );
 
-    // Rectángulos capturados ESTE frame para el rubber-band (Step 1):
-    // - `row_rects`: (posición en la vista, rect de la fila completa). Lo que toque el
-    //   rectángulo de selección se selecciona.
-    // - `name_rects`: rects de la celda NOMBRE. Si el arrastre empieza sobre una de
-    //   ellas NO se dibuja rubber-band (se reserva para drag&drop futuro).
-    // Ambos en coordenadas de pantalla (las mismas que devuelve `interact_pointer_pos`).
+    // Rectángulos de fila capturados ESTE frame: (posición en la vista, rect de la fila
+    // completa), en coordenadas de pantalla. Doble uso: el rubber-band selecciona lo que
+    // toque, y un press FUERA de toda fila es el inicio válido del rubber-band.
     let mut row_rects: Vec<(usize, egui::Rect)> = Vec::new();
-    let mut name_rects: Vec<egui::Rect> = Vec::new();
     // Rect de la fila con el foco/ancla. Dentro del closure de `body.rows` el `ui` ya
     // está movido al `TableBuilder`, así que no podemos pintar ahí; capturamos el rect
     // y dibujamos el borde punteado tras construir la tabla (con el `ui` padre, igual
@@ -191,10 +187,14 @@ pub fn show(
         .id_salt(("file_table", id.0))
         .striped(true)
         .resizable(true)
-        // Las celdas sensan clic para que `row.response()` (unión de las celdas de la
-        // fila) registre clics en CUALQUIER celda/zona de la fila, no solo en Nombre.
-        // Por defecto las celdas solo sensan hover y la fila completa no sería clicable.
-        .sense(egui::Sense::click())
+        // La FILA es la ÚNICA superficie de interacción del mouse: sensa clic Y arrastre.
+        // Con ambos senses, egui pospone la decisión clic-vs-arrastre hasta superar el
+        // umbral de movimiento (interaction.rs: "could be either, so we postpone the
+        // decision until we know") → el clic selecciona y el arrastre real inicia el
+        // drag&drop OLE, sin pisarse. LECCIÓN (3 bugs seguidos): NO apilar interacts
+        // drag-only sobre las filas — quedan "dragging" desde el press sin umbral,
+        // roban el hit-test y rompen clic y hover.
+        .sense(egui::Sense::click_and_drag())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
     for col in &visible_cols {
         // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
@@ -312,12 +312,6 @@ pub fn show(
                         } else {
                             None
                         };
-                        // Rect de la celda NOMBRE de esta fila. Se rellena dentro del
-                        // closure `ci == 0` (que es `FnOnce`) vía `Cell` (mutabilidad
-                        // interior, evita el conflicto de prestar `&mut name_rects`); se
-                        // lee tras pintar todas las columnas.
-                        let name_cell_rect: std::cell::Cell<Option<egui::Rect>> =
-                            std::cell::Cell::new(None);
                         for (ci, col) in visible_cols.iter().enumerate() {
                             row.col(|ui| {
                                 // Teñir el fondo de la celda (cubre el ancho completo de la
@@ -328,11 +322,6 @@ pub fn show(
                                     ui.painter().rect_filled(ui.max_rect(), 0.0, tint);
                                 }
                                 if ci == 0 {
-                                    // El rect de la celda Nombre cubre el ancho completo de
-                                    // la columna: lo guardamos para excluir el rubber-band
-                                    // que empiece sobre el nombre (reservada para ESTE
-                                    // arrastre de archivos).
-                                    name_cell_rect.set(Some(ui.max_rect()));
                                     let key = icon_key_for(entry);
                                     // El ícono+nombre se pintan; el clic se captura sobre
                                     // la FILA completa (abajo), no por celda. Si es nuevo,
@@ -342,30 +331,9 @@ pub fn show(
                                     } else {
                                         None
                                     };
-                                    // La celda Nombre es FUENTE de arrastre de archivos: un
-                                    // arrastre REAL desde aquí dispara el arrastre OLE hacia el
-                                    // SO (`DoDragDrop`), que maneja TODO el drag&drop de archivos
-                                    // (intra-app y externo). El interact sensa SOLO drag, así que
-                                    // el clic simple no participa del hit-test de clics y sigue
-                                    // yendo a la respuesta de la fila (que selecciona).
+                                    // El arrastre de archivos lo sensa la FILA completa (como
+                                    // el Explorer en vista detalles); acá solo se pinta.
                                     let _ = icon_row(ui, icons, key, &entry.name, name_color);
-                                    let drag_id = egui::Id::new(("naygo_file_drag", id.0, i));
-                                    let drag_resp =
-                                        ui.interact(ui.max_rect(), drag_id, egui::Sense::drag());
-                                    // CLAVE (era un bug): un widget que sensa SOLO drag queda
-                                    // "arrastrando" desde el primer press, SIN umbral de
-                                    // movimiento (egui interaction.rs: "just sensitive to drags
-                                    // → mark it as dragged right away"). Con `drag_started()` a
-                                    // secas, un CLIC simple disparaba DoDragDrop y el drop
-                                    // instantáneo caía sobre nuestra propia ventana → intento de
-                                    // auto-copia + diálogo "el destino ya existe" en cada clic.
-                                    // Exigimos que el puntero haya superado el umbral
-                                    // clic-vs-arrastre de egui antes de iniciar el arrastre OLE.
-                                    if drag_resp.dragged()
-                                        && ctx.input(|inp| inp.pointer.is_decidedly_dragging())
-                                    {
-                                        os_drag_start = Some(i);
-                                    }
                                 } else {
                                     let mut text = cell_text(entry, col.kind);
                                     if col.kind == ColumnKind::Size
@@ -379,12 +347,16 @@ pub fn show(
                             });
                         }
                         // Fila completa clicable: clic en cualquier celda/zona selecciona;
-                        // doble clic navega/activa.
+                        // doble clic navega/activa; arrastre real inicia el drag OLE.
                         let row_resp = row.response();
                         // Capturar rects para el rubber-band (Step 1).
                         row_rects.push((i, row_resp.rect));
-                        if let Some(nr) = name_cell_rect.get() {
-                            name_rects.push(nr);
+                        // Arrastre de archivos: la fila sensa click_and_drag, así que
+                        // `drag_started()` SOLO dispara cuando el gesto superó el umbral
+                        // clic-vs-arrastre de egui (decisión pospuesta) — un clic simple
+                        // jamás llega acá. Es un evento de transición: un disparo por gesto.
+                        if row_resp.drag_started() {
+                            os_drag_start = Some(i);
                         }
                         // Guardar el rect de la fila con foco para pintar su borde
                         // punteado tras la tabla (el `ui` aquí ya está movido).
@@ -495,98 +467,79 @@ pub fn show(
             });
         });
 
-    // Rubber-band (Step 2): arrastrar desde el espacio vacío o desde una celda que NO
-    // sea el nombre dibuja un rectángulo de selección. Arrastrar sobre la celda del
-    // NOMBRE se reserva para drag&drop futuro (no dibuja).
-    //
-    // CLAVE (era un bug): este interact de fondo cubre TODA el área de la tabla (incluidas
-    // las filas) y se crea DESPUÉS de la tabla, así que en el hit-test de egui queda
-    // ENCIMA de las filas. Si sensa CLIC (`click_and_drag`), egui le asigna el clic a este
-    // fondo (topmost gana, ver hit_test.rs "in tie, pick last = topmost") y la fila NUNCA
-    // recibe `clicked()` → no se podía seleccionar con el mouse. Por eso sensa SOLO
-    // `drag()`: las filas sensan `click()` (no drag) y el fondo sensa `drag()` (no click),
-    // así egui separa los gestos por TIPO de sense, no por z-order: el clic va a la fila,
-    // el arrastre al fondo. No se pisan.
-    //
-    // `ui.min_rect()` tras construir la tabla cubre el viewport que ocupó la tabla en el
-    // ui padre (la tabla gestiona su propio ScrollArea interno), incluido el espacio
-    // vacío bajo la última fila. Es el área correcta para captar el arrastre de fondo.
-    let band_area = ui.min_rect();
-    let band_id = egui::Id::new(("naygo_rubberband", id.0));
-    let band_resp = ui.interact(band_area, band_id, egui::Sense::drag());
-    let start_key = egui::Id::new(("naygo_rubberband_start", id.0));
-
-    if band_resp.drag_started() {
-        if let Some(start) = band_resp.interact_pointer_pos() {
-            // Si el arrastre empieza sobre la celda del NOMBRE → NO rubber-band.
-            let on_name = name_rects.iter().any(|r| r.contains(start));
-            if !on_name {
-                ui.memory_mut(|m| m.data.insert_temp(start_key, start));
-            }
-        }
-    }
-
-    // Arrastre OLE hacia el SO: si la celda Nombre superó el umbral de arrastre,
-    // resolvemos las rutas (multi-selección si la hay; si no, la entry arrastrada) y
-    // diferimos el inicio de `DoDragDrop` a `NaygoApp`, FUERA del closure de egui.
-    // `view` es la vista pintada (filtrada/ordenada); `selected_set` son posiciones de
-    // vista. El flag `fired` asegura UN disparo por gesto: `dragged()` sigue true
-    // mientras dure el press (DoDragDrop bloquea, pero si fallara rápido el gesto
-    // seguiría vivo y sin el flag re-dispararíamos cada frame).
-    let os_drag_fired_key = egui::Id::new(("naygo_os_drag_fired", id.0));
+    // Arrastre OLE hacia el SO: si una fila superó el umbral de arrastre, resolvemos
+    // las rutas (multi-selección si la hay; si no, la entry arrastrada) y diferimos el
+    // inicio de `DoDragDrop` a `NaygoApp`, FUERA del closure de egui. `view` es la vista
+    // pintada (filtrada/ordenada); `selected_set` son posiciones de vista.
     if let Some(pos) = os_drag_start {
-        let fired = ui
-            .memory(|m| m.data.get_temp::<bool>(os_drag_fired_key))
-            .unwrap_or(false);
-        if !fired {
-            let paths: Vec<std::path::PathBuf> = if !selected_set.is_empty() {
-                selected_set
-                    .iter()
-                    .filter_map(|&p| view.get(p))
-                    .map(|e| e.path.clone())
-                    .collect()
-            } else {
-                view.get(pos)
-                    .map(|e| vec![e.path.clone()])
-                    .unwrap_or_default()
-            };
-            if !paths.is_empty() {
-                pending.push(PaneRequest::StartOsDrag { paths });
-                ui.memory_mut(|m| m.data.insert_temp(os_drag_fired_key, true));
-            }
+        let paths: Vec<std::path::PathBuf> = if !selected_set.is_empty() {
+            selected_set
+                .iter()
+                .filter_map(|&p| view.get(p))
+                .map(|e| e.path.clone())
+                .collect()
+        } else {
+            view.get(pos)
+                .map(|e| vec![e.path.clone()])
+                .unwrap_or_default()
+        };
+        if !paths.is_empty() {
+            pending.push(PaneRequest::StartOsDrag { paths });
         }
     }
-    // El flag se limpia al soltar el botón (fin del gesto).
-    if ui.input(|i| !i.pointer.any_down()) {
-        ui.memory_mut(|m| m.data.remove::<bool>(os_drag_fired_key));
+
+    // Rubber-band (selección por rectángulo) SIN widget propio: se lee el puntero crudo.
+    // LECCIÓN (3 bugs seguidos): un `ui.interact` de fondo apilado sobre las filas pelea
+    // con el hit-test de egui (roba clics, "arrastra" desde el press sin umbral, rompe el
+    // hover: al arrastrar egui deja hovered SOLO el widget arrastrado). En cambio: un
+    // press que EMPIEZA dentro del cuerpo de la tabla, FUERA de toda fila visible (el
+    // espacio vacío) y sin que otro widget capture el arrastre (scrollbar, resize de
+    // columna, dnd de encabezados) arma el rectángulo cuando el gesto supera el umbral
+    // clic-vs-arrastre. Las filas no participan: su arrastre es el drag OLE de archivos.
+    let band_area = ui.min_rect();
+    let start_key = egui::Id::new(("naygo_rubberband_start", id.0));
+    let active_key = egui::Id::new(("naygo_rubberband_active", id.0));
+
+    if ui.input(|i| i.pointer.primary_pressed()) {
+        if let Some(origin) = ui.input(|i| i.pointer.interact_pos()) {
+            // Excluir el encabezado (sus gestos son orden/filtro/dnd de columnas).
+            let below_header = origin.y > band_area.top() + HEADER_HEIGHT;
+            let on_row = row_rects.iter().any(|(_, r)| r.contains(origin));
+            if band_area.contains(origin) && below_header && !on_row {
+                ui.memory_mut(|m| m.data.insert_temp(start_key, origin));
+            }
+        }
     }
 
     // Resultado del rubber-band al soltar: (posiciones tocadas, aditivo con Ctrl).
     let mut rubber_select: Option<(Vec<usize>, bool)> = None;
-    if band_resp.dragged() || band_resp.drag_stopped() {
-        if let Some(start) = ui.memory(|m| m.data.get_temp::<egui::Pos2>(start_key)) {
-            // El band solo se ACTIVA cuando el gesto superó el umbral clic-vs-arrastre
-            // de egui. Un widget drag-only "arrastra" desde el primer press, así que sin
-            // esta guarda un CLIC simple pintaría/seleccionaría con un rectángulo
-            // degenerado de 0 px. El flag (no la consulta directa) se necesita porque en
-            // el frame del soltar `is_decidedly_dragging` ya puede haber vuelto a false.
-            let active_key = egui::Id::new(("naygo_rubberband_active", id.0));
-            if band_resp.dragged() && ui.input(|i| i.pointer.is_decidedly_dragging()) {
+    if let Some(start) = ui.memory(|m| m.data.get_temp::<egui::Pos2>(start_key)) {
+        if ctx.dragged_id().is_some() {
+            // Otro widget capturó el arrastre (scrollbar, resize, dnd de columnas):
+            // cancelar el band.
+            ui.memory_mut(|m| {
+                m.data.remove::<egui::Pos2>(start_key);
+                m.data.remove::<bool>(active_key);
+            });
+        } else {
+            // El band se ACTIVA recién cuando el gesto supera el umbral; el flag se
+            // necesita porque en el frame del soltar `is_decidedly_dragging` puede ya
+            // haber vuelto a false.
+            if ui.input(|i| i.pointer.primary_down() && i.pointer.is_decidedly_dragging()) {
                 ui.memory_mut(|m| m.data.insert_temp(active_key, true));
             }
             let active = ui
                 .memory(|m| m.data.get_temp::<bool>(active_key))
                 .unwrap_or(false);
-            // Si tenemos posición actual del puntero, calculamos el rectángulo y los
-            // golpes. En `drag_stopped()` esto puede ser `None` si el puntero salió de la
-            // ventana en el frame del soltar; en ese caso no hay selección, pero igual hay
-            // que limpiar el temp más abajo.
-            if let Some(cur) = band_resp.interact_pointer_pos() {
+            let released = ui.input(|i| i.pointer.primary_released());
+            // `interact_pos()` puede ser `None` si el puntero salió de la ventana; en
+            // ese caso no se pinta ni selecciona, pero igual se limpia al soltar.
+            if let Some(cur) = ui.input(|i| i.pointer.interact_pos()) {
                 let band = egui::Rect::from_two_pos(start, cur);
-                if band_resp.dragged() && active {
+                if active && !released {
                     paint_rubber_band(ui, band, theme.accent());
                 }
-                if band_resp.drag_stopped() && active {
+                if active && released {
                     let hit: Vec<usize> = row_rects
                         .iter()
                         .filter(|(_, r)| r.intersects(band))
@@ -596,10 +549,7 @@ pub fn show(
                     rubber_select = Some((hit, additive));
                 }
             }
-            // Limpieza INCONDICIONAL de los temps al soltar: aunque `interact_pointer_pos()`
-            // devuelva `None` (puntero fuera de la ventana en el frame del soltar), el
-            // start/active guardados no deben persistir entre arrastres.
-            if band_resp.drag_stopped() {
+            if released {
                 ui.memory_mut(|m| {
                     m.data.remove::<egui::Pos2>(start_key);
                     m.data.remove::<bool>(active_key);
@@ -610,9 +560,9 @@ pub fn show(
 
     // NOTA: el panel NO es un destino de drop egui-interno. Todo el drag&drop de
     // archivos (intra-app pane→pane y externo) pasa por OLE: `DoDragDrop` corre un
-    // bucle modal que captura el mouse, y los drops vuelven por nuestro `IDropTarget`
-    // (platform::dnd) → canal → `NaygoApp::pump_dropped_files`. Un destino egui aquí
-    // sería código muerto (OLE siempre gana el arrastre), así que no existe.
+    // bucle modal que captura el mouse, y los drops vuelven por el `IDropTarget` que
+    // registra winit → egui `dropped_files` → `NaygoApp::pump_dropped_files`. Un
+    // destino egui aquí sería código muerto (OLE siempre gana el arrastre).
 
     // Borde punteado del foco/ancla: distingue la fila con foco de teclado del resto
     // de la multi-selección (que ya va resaltada). Se pinta tras la tabla, con el `ui`
@@ -693,6 +643,33 @@ pub fn show(
                 });
             }
         }
+    }
+
+    // Activar este panel con CUALQUIER press dentro de su área (no solo el clic en una
+    // fila): el panel activo es el destino del árbol, del teclado y de las operaciones,
+    // así que debe seguir al mouse como en cualquier explorador. Sin esto, clicar el
+    // espacio vacío o el encabezado del segundo panel no lo activaba y el árbol seguía
+    // navegando el primero.
+    let pane_rect = ui.min_rect();
+    let pressed_inside = ui.input(|i| {
+        (i.pointer.primary_pressed() || i.pointer.secondary_pressed())
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|p| pane_rect.contains(p))
+    });
+    if pressed_inside {
+        pending.push(PaneRequest::Activate { id });
+    }
+
+    // Resaltar el panel ACTIVO con un borde del color de acento (pedido de Nicolás:
+    // distinguir de un vistazo qué panel recibe teclado/árbol/operaciones).
+    if workspace.active_id() == Some(id) {
+        ui.painter().rect_stroke(
+            pane_rect,
+            2.0,
+            egui::Stroke::new(1.5, theme.accent()),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
