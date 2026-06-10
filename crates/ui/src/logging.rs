@@ -13,8 +13,15 @@ pub fn init() -> WorkerGuard {
     let file_appender = tracing_appender::rolling::daily("logs", "naygo.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,naygo_core=debug,naygo_ui=debug"));
+    // Por defecto: info general + debug de nuestros crates + WARN de las capas gráficas
+    // (wgpu/winit/eframe), para capturar errores de dispositivo/superficie que podrían
+    // cerrar la app sin un panic de Rust. Override con la variable RUST_LOG si hace falta.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,naygo_core=debug,naygo_ui=debug,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,\
+             winit=warn,eframe=debug,egui_wgpu=debug",
+        )
+    });
 
     tracing_subscriber::registry()
         .with(filter)

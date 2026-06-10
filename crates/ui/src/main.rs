@@ -78,6 +78,24 @@ fn load_window_icon() -> Option<egui::IconData> {
 fn install_panic_handler() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // El log normal usa un appender en hilo aparte (non_blocking): si el proceso
+        // muere por el panic, el último mensaje se puede perder antes de vaciarse el
+        // buffer. Por eso ESCRIBIMOS EL PANIC TAMBIÉN de forma SÍNCRONA a un archivo
+        // dedicado (flush inmediato), para que un crash de arranque quede registrado.
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "?".to_string());
+        let _ = std::fs::create_dir_all("logs");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("logs/naygo-panic.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "PANIC en {loc}: {info}");
+            let _ = f.flush();
+        }
         tracing::error!("PANIC: {info}");
         default_hook(info);
     }));

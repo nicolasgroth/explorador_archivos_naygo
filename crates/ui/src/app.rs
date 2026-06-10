@@ -2494,6 +2494,7 @@ impl eframe::App for NaygoApp {
             let keep = splash.show(ui);
             if !keep {
                 self.splash = None;
+                tracing::info!("splash cerrado; primer frame real de la UI");
                 // El primer frame real tras el splash debe renderizar y atender input ya
                 // (sin esperar un evento); si no, los primeros clics no toman.
                 ui.ctx().request_repaint();
