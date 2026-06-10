@@ -650,7 +650,11 @@ pub fn show(
     // así que debe seguir al mouse como en cualquier explorador. Sin esto, clicar el
     // espacio vacío o el encabezado del segundo panel no lo activaba y el árbol seguía
     // navegando el primero.
-    let pane_rect = ui.min_rect();
+    // OJO: `min_rect()` puede extenderse MÁS ALLÁ del área visible (la tabla reserva el
+    // ancho total de sus columnas aunque queden clipeadas). Intersectar con el clip:
+    // (a) el borde de acento cierra también por la derecha, y (b) un press en el panel
+    // VECINO no cae dentro del rect extendido de este (activaría el panel equivocado).
+    let pane_rect = ui.min_rect().intersect(ui.clip_rect());
     let pressed_inside = ui.input(|i| {
         (i.pointer.primary_pressed() || i.pointer.secondary_pressed())
             && i.pointer

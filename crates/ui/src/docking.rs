@@ -92,6 +92,22 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         let id = *tab;
+        // CRÍTICO: aislar el espacio de IDs de egui de CADA panel. egui_dock entrega a
+        // todos los tabs `ui`s con el mismo id base, así que los auto-ids internos de dos
+        // paneles del mismo tipo COLISIONAN (mismo widget ID para las celdas/ScrollArea de
+        // ambas tablas — visible con las advertencias rojas "First/Second use of widget ID"
+        // en builds debug). Con IDs duplicados la interacción de egui queda indefinida: los
+        // clics en las filas se pierden aunque el hover se pinte. `push_id` con el PaneId
+        // hace único todo lo que el panel cree adentro.
+        ui.push_id(("naygo_tab_id_scope", id.0), |ui| {
+            self.tab_contents(ui, id);
+        });
+    }
+}
+
+impl NaygoTabViewer<'_> {
+    /// Contenido real de un tab (separado de `ui()` para poder envolverlo en `push_id`).
+    fn tab_contents(&mut self, ui: &mut egui::Ui, id: PaneId) {
         let purpose = self.workspace.pane(id).map(|p| p.purpose);
         match purpose {
             Some(PanePurpose::Files) => {
