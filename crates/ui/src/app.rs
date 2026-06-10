@@ -2423,12 +2423,20 @@ impl NaygoApp {
 
 impl eframe::App for NaygoApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Mientras el splash esté activo no hacemos trabajo pesado ni procesamos input:
-        // solo pedimos repaint (el pintado y la decisión de cerrarlo van en `ui`). No se
-        // puede pintar en `logic` (regla de eframe). En debug `splash` es None: no aplica.
-        if self.splash.is_some() {
-            ctx.request_repaint();
-            return;
+        // Splash de arranque: es una VENTANA propia sin bordes (deferred viewport), no se
+        // pinta dentro de la ventana principal. La app principal sigue su lógica normal por
+        // detrás (sin early-return): el splash flota encima un instante. `show` registra el
+        // viewport y devuelve `false` al expirar el tiempo o ante el primer input; ahí
+        // limpiamos el estado y cerramos explícitamente el viewport. En debug es None.
+        if let Some(splash) = &self.splash {
+            let keep = splash.show(ctx);
+            if !keep {
+                self.splash = None;
+                ctx.send_viewport_cmd_to(
+                    crate::splash::viewport_id(),
+                    egui::ViewportCommand::Close,
+                );
+            }
         }
         self.pump_all();
         self.pump_tree();
@@ -2485,19 +2493,8 @@ impl eframe::App for NaygoApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Mientras el splash esté activo lo pintamos centrado y NO dibujamos la UI real.
-        // `show` devuelve `false` al expirar el tiempo o ante el primer input: ahí lo
-        // limpiamos y el próximo frame ya muestra la UI normal. En debug es None.
-        if let Some(splash) = &self.splash {
-            let keep = splash.show(ui);
-            if !keep {
-                self.splash = None;
-                // El primer frame real tras el splash debe renderizar y atender input ya
-                // (sin esperar un evento del usuario); si no, los primeros clics no toman.
-                ui.ctx().request_repaint();
-            }
-            return;
-        }
+        // El splash es una ventana propia (deferred viewport) gestionada en `logic`: la
+        // ventana principal se dibuja normal desde el primer frame y el splash flota encima.
 
         if self.icons.set() != self.settings.icon_set {
             let set = self.settings.icon_set.clone();
