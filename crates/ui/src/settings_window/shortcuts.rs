@@ -6,8 +6,11 @@ use crate::input::chord_text;
 use naygo_core::keymap::{Action, Chord};
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    ui.heading(app.tr("settings.shortcuts"));
-    ui.add_space(6.0);
+    let (title, sub) = (
+        app.tr("settings.shortcuts"),
+        app.tr("settings.shortcuts.sub"),
+    );
+    super::section_header(ui, &title, &sub);
 
     let search_hint = app.tr("settings.shortcuts.search");
     let reset_all_label = app.tr("settings.shortcuts.reset_all");

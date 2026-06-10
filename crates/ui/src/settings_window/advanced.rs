@@ -5,9 +5,8 @@ use crate::app::NaygoApp;
 use naygo_core::config::HighlightDuration;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    let title = app.tr("settings.advanced");
-    ui.heading(title);
-    ui.add_space(8.0);
+    let (title, sub) = (app.tr("settings.advanced"), app.tr("settings.advanced.sub"));
+    super::section_header(ui, &title, &sub);
     let (l_dir, dir) = (app.tr("settings.config_dir"), app.config_dir_display());
     ui.horizontal(|ui| {
         ui.label(l_dir);
@@ -19,9 +18,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         ui.monospace(env!("CARGO_PKG_VERSION"));
     });
 
-    ui.add_space(12.0);
-    ui.heading(app.tr("settings.ops.section"));
-    ui.add_space(6.0);
+    super::group_sep(ui);
+    super::group_label(ui, &app.tr("settings.ops.section"));
 
     // Modo de ejecución.
     let (l_mode, l_queue, l_parallel) = (
@@ -83,9 +81,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.settings.show_op_summary = show_summary;
     }
 
-    ui.add_space(12.0);
-    ui.heading(app.tr("settings.paste.section"));
-    ui.add_space(6.0);
+    super::group_sep(ui);
+    super::group_label(ui, &app.tr("settings.paste.section"));
 
     // Confirmar antes de crear (modo B).
     let l_confirm = app.tr("settings.paste.confirm");
@@ -150,9 +147,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         },
     );
 
-    ui.add_space(12.0);
-    ui.heading(app.tr("settings.watch.section"));
-    ui.add_space(6.0);
+    super::group_sep(ui);
+    super::group_label(ui, &app.tr("settings.watch.section"));
 
     // Duración del resaltado de archivos recién aparecidos (watcher).
     let (l_dur, l_until_interact, l_fade, l_until_refresh) = (
@@ -199,9 +195,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
 
     // Integración con Windows: tray + cerrar-a-bandeja + inicio con Windows.
-    ui.add_space(12.0);
-    ui.heading(app.tr("settings.system.section"));
-    ui.add_space(6.0);
+    super::group_sep(ui);
+    super::group_label(ui, &app.tr("settings.system.section"));
     let l_tray = app.tr("settings.system.tray");
     let mut tray_on = app.settings.tray_enabled;
     if ui.checkbox(&mut tray_on, l_tray).changed() {

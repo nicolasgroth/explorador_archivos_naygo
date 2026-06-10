@@ -44,15 +44,33 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
 
         egui::Panel::left("settings_sections")
             .resizable(false)
-            .exact_size(160.0)
+            .exact_size(176.0)
             .show_inside(ui, |ui| {
-                ui.add_space(6.0);
-                section_item(ui, app, SettingsSection::Appearance, "settings.appearance");
-                section_item(ui, app, SettingsSection::Panes, "settings.panes");
-                section_item(ui, app, SettingsSection::Shortcuts, "settings.shortcuts");
-                section_item(ui, app, SettingsSection::Language, "settings.language");
-                section_item(ui, app, SettingsSection::Advanced, "settings.advanced");
-                section_item(ui, app, SettingsSection::About, "settings.about");
+                ui.add_space(8.0);
+                section_item(
+                    ui,
+                    app,
+                    SettingsSection::Appearance,
+                    "🎨",
+                    "settings.appearance",
+                );
+                section_item(ui, app, SettingsSection::Panes, "▦", "settings.panes");
+                section_item(
+                    ui,
+                    app,
+                    SettingsSection::Shortcuts,
+                    "⌨",
+                    "settings.shortcuts",
+                );
+                section_item(
+                    ui,
+                    app,
+                    SettingsSection::Language,
+                    "🌐",
+                    "settings.language",
+                );
+                section_item(ui, app, SettingsSection::Advanced, "⚙", "settings.advanced");
+                section_item(ui, app, SettingsSection::About, "ℹ", "settings.about");
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -68,11 +86,88 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
     });
 }
 
-/// Un ítem clicable de la lista de secciones (resaltado si es el activo).
-fn section_item(ui: &mut egui::Ui, app: &mut NaygoApp, section: SettingsSection, key: &str) {
+/// Un ítem de la lista de secciones (rediseño A): ícono + texto en una fila de 32 px.
+/// El activo lleva barra de acento de 3 px a la izquierda + fondo tintado con el
+/// acento del tema + ícono en acento. Hover sutil en los inactivos. Los colores salen
+/// SIEMPRE del tema activo (los 4 temas se ven bien).
+fn section_item(
+    ui: &mut egui::Ui,
+    app: &mut NaygoApp,
+    section: SettingsSection,
+    icon: &str,
+    key: &str,
+) {
     let selected = app.settings_section == section;
-    let label = app.tr(key);
-    if ui.selectable_label(selected, label).clicked() {
+    let label = app.tr(key).to_string();
+    let accent = app.active_theme.accent();
+
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    if resp.clicked() {
         app.settings_section = section;
     }
+
+    let painter = ui.painter();
+    if selected {
+        // Fondo tintado: el acento muy atenuado, detrás de toda la fila.
+        let tint = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 26);
+        painter.rect_filled(rect, 0.0, tint);
+        let bar = egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + 3.0, rect.bottom()),
+        );
+        painter.rect_filled(bar, 0.0, accent);
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 0.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+
+    let icon_color = if selected {
+        accent
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let text_color = if selected {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    painter.text(
+        egui::pos2(rect.left() + 16.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        icon_color,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 42.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.5),
+        text_color,
+    );
+}
+
+/// Encabezado de una sección (rediseño A): título fuerte + subtítulo débil + aire.
+pub(crate) fn section_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(title)
+            .size(17.0)
+            .color(ui.visuals().strong_text_color()),
+    );
+    ui.label(egui::RichText::new(subtitle).size(12.0).weak());
+    ui.add_space(14.0);
+}
+
+/// Etiqueta de grupo (rediseño A): pequeña, débil y en mayúsculas.
+pub(crate) fn group_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text.to_uppercase()).size(11.0).weak());
+    ui.add_space(6.0);
+}
+
+/// Separador entre grupos, con aire arriba y abajo.
+pub(crate) fn group_sep(ui: &mut egui::Ui) {
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(12.0);
 }

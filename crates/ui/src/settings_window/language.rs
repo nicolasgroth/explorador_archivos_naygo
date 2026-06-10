@@ -5,9 +5,8 @@ use crate::app::NaygoApp;
 use naygo_core::i18n::LangId;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    let title = app.tr("settings.language");
-    ui.heading(title);
-    ui.add_space(8.0);
+    let (title, sub) = (app.tr("settings.language"), app.tr("settings.language.sub"));
+    super::section_header(ui, &title, &sub);
 
     let langs: Vec<LangId> = app.i18n_available();
     let current = app.settings.language.clone();

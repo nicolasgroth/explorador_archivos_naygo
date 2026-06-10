@@ -5,9 +5,8 @@ use crate::app::NaygoApp;
 use naygo_core::config::BarPosition;
 
 pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
-    let title = app.tr("settings.panes");
-    ui.heading(title);
-    ui.add_space(8.0);
+    let (title, sub) = (app.tr("settings.panes"), app.tr("settings.panes.sub"));
+    super::section_header(ui, &title, &sub);
 
     let mut show_parent = app.settings.show_parent_entry;
     let lbl = app.tr("settings.show_parent");
