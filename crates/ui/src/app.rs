@@ -228,6 +228,14 @@ pub struct NaygoApp {
     last_workspace_autosave: std::time::Instant,
     /// La sección Avanzado pidió restaurar valores de fábrica; se procesa en `logic`.
     pub(crate) factory_reset_requested: bool,
+    /// Logo para la sección "Acerca de" (lazy; se decodifica al abrirla por 1ª vez).
+    pub(crate) about_logo: Option<egui::TextureHandle>,
+    /// Easter egg de "Acerca de": clics encadenados sobre el logo.
+    pub(crate) egg_clicks: u8,
+    /// Momento del último clic del egg (para encadenar dentro de la ventana de 2 s).
+    pub(crate) egg_last_click: Option<std::time::Instant>,
+    /// El egg está activo hasta este instante (None = inactivo).
+    pub(crate) egg_until: Option<std::time::Instant>,
     pub templates: TemplateStore,
     config_dir: PathBuf,
     pub status: String,
@@ -395,6 +403,10 @@ impl NaygoApp {
             settings,
             last_workspace_autosave: std::time::Instant::now(),
             factory_reset_requested: false,
+            about_logo: None,
+            egg_clicks: 0,
+            egg_last_click: None,
+            egg_until: None,
             templates,
             config_dir,
             status: initial_status,

@@ -7,6 +7,7 @@
 //! con un panel lateral (`Panel::left`) de secciones y un `CentralPanel` que
 //! despacha a cada una.
 
+mod about;
 mod advanced;
 mod appearance;
 mod language;
@@ -23,6 +24,7 @@ pub enum SettingsSection {
     Shortcuts,
     Language,
     Advanced,
+    About,
 }
 
 /// Abre/pinta el viewport de Configuración. Debe llamarse cada frame mientras
@@ -50,6 +52,7 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
                 section_item(ui, app, SettingsSection::Shortcuts, "settings.shortcuts");
                 section_item(ui, app, SettingsSection::Language, "settings.language");
                 section_item(ui, app, SettingsSection::Advanced, "settings.advanced");
+                section_item(ui, app, SettingsSection::About, "settings.about");
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -59,6 +62,7 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
                 SettingsSection::Shortcuts => shortcuts::show(ui, app),
                 SettingsSection::Language => language::show(ui, app),
                 SettingsSection::Advanced => advanced::show(ui, app),
+                SettingsSection::About => about::show(ui, app),
             });
         });
     });
