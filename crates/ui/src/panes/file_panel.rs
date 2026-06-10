@@ -342,21 +342,28 @@ pub fn show(
                                     } else {
                                         None
                                     };
-                                    // La celda Nombre es FUENTE de arrastre de archivos: al
-                                    // detectar el INICIO de un arrastre disparamos el arrastre
-                                    // OLE hacia el SO (`DoDragDrop`), que es quien maneja TODO
-                                    // el drag&drop de archivos (intra-app y externo). Sensamos
-                                    // el arrastre con un `interact` propio sobre el rect de la
-                                    // celda: un clic simple no lo dispara (egui distingue clic
-                                    // de arrastre) y sigue yendo a la respuesta de la fila (que
-                                    // selecciona). La selección real se resuelve tras la tabla.
+                                    // La celda Nombre es FUENTE de arrastre de archivos: un
+                                    // arrastre REAL desde aquí dispara el arrastre OLE hacia el
+                                    // SO (`DoDragDrop`), que maneja TODO el drag&drop de archivos
+                                    // (intra-app y externo). El interact sensa SOLO drag, así que
+                                    // el clic simple no participa del hit-test de clics y sigue
+                                    // yendo a la respuesta de la fila (que selecciona).
                                     let _ = icon_row(ui, icons, key, &entry.name, name_color);
                                     let drag_id = egui::Id::new(("naygo_file_drag", id.0, i));
                                     let drag_resp =
                                         ui.interact(ui.max_rect(), drag_id, egui::Sense::drag());
-                                    // Solo el primer disparo del frame gana (last-writer-wins es
-                                    // indistinto: solo una celda puede iniciar arrastre por frame).
-                                    if drag_resp.drag_started() {
+                                    // CLAVE (era un bug): un widget que sensa SOLO drag queda
+                                    // "arrastrando" desde el primer press, SIN umbral de
+                                    // movimiento (egui interaction.rs: "just sensitive to drags
+                                    // → mark it as dragged right away"). Con `drag_started()` a
+                                    // secas, un CLIC simple disparaba DoDragDrop y el drop
+                                    // instantáneo caía sobre nuestra propia ventana → intento de
+                                    // auto-copia + diálogo "el destino ya existe" en cada clic.
+                                    // Exigimos que el puntero haya superado el umbral
+                                    // clic-vs-arrastre de egui antes de iniciar el arrastre OLE.
+                                    if drag_resp.dragged()
+                                        && ctx.input(|inp| inp.pointer.is_decidedly_dragging())
+                                    {
                                         os_drag_start = Some(i);
                                     }
                                 } else {
@@ -519,41 +526,67 @@ pub fn show(
         }
     }
 
-    // Arrastre OLE hacia el SO: si la celda Nombre empezó a arrastrarse, resolvemos las
-    // rutas (multi-selección si la hay; si no, la entry arrastrada) y diferimos el inicio
-    // de `DoDragDrop` a `NaygoApp`, FUERA del closure de egui. `view` es la vista pintada
-    // (filtrada/ordenada); `selected_set` son posiciones de vista.
+    // Arrastre OLE hacia el SO: si la celda Nombre superó el umbral de arrastre,
+    // resolvemos las rutas (multi-selección si la hay; si no, la entry arrastrada) y
+    // diferimos el inicio de `DoDragDrop` a `NaygoApp`, FUERA del closure de egui.
+    // `view` es la vista pintada (filtrada/ordenada); `selected_set` son posiciones de
+    // vista. El flag `fired` asegura UN disparo por gesto: `dragged()` sigue true
+    // mientras dure el press (DoDragDrop bloquea, pero si fallara rápido el gesto
+    // seguiría vivo y sin el flag re-dispararíamos cada frame).
+    let os_drag_fired_key = egui::Id::new(("naygo_os_drag_fired", id.0));
     if let Some(pos) = os_drag_start {
-        let paths: Vec<std::path::PathBuf> = if !selected_set.is_empty() {
-            selected_set
-                .iter()
-                .filter_map(|&p| view.get(p))
-                .map(|e| e.path.clone())
-                .collect()
-        } else {
-            view.get(pos)
-                .map(|e| vec![e.path.clone()])
-                .unwrap_or_default()
-        };
-        if !paths.is_empty() {
-            pending.push(PaneRequest::StartOsDrag { paths });
+        let fired = ui
+            .memory(|m| m.data.get_temp::<bool>(os_drag_fired_key))
+            .unwrap_or(false);
+        if !fired {
+            let paths: Vec<std::path::PathBuf> = if !selected_set.is_empty() {
+                selected_set
+                    .iter()
+                    .filter_map(|&p| view.get(p))
+                    .map(|e| e.path.clone())
+                    .collect()
+            } else {
+                view.get(pos)
+                    .map(|e| vec![e.path.clone()])
+                    .unwrap_or_default()
+            };
+            if !paths.is_empty() {
+                pending.push(PaneRequest::StartOsDrag { paths });
+                ui.memory_mut(|m| m.data.insert_temp(os_drag_fired_key, true));
+            }
         }
+    }
+    // El flag se limpia al soltar el botón (fin del gesto).
+    if ui.input(|i| !i.pointer.any_down()) {
+        ui.memory_mut(|m| m.data.remove::<bool>(os_drag_fired_key));
     }
 
     // Resultado del rubber-band al soltar: (posiciones tocadas, aditivo con Ctrl).
     let mut rubber_select: Option<(Vec<usize>, bool)> = None;
     if band_resp.dragged() || band_resp.drag_stopped() {
         if let Some(start) = ui.memory(|m| m.data.get_temp::<egui::Pos2>(start_key)) {
+            // El band solo se ACTIVA cuando el gesto superó el umbral clic-vs-arrastre
+            // de egui. Un widget drag-only "arrastra" desde el primer press, así que sin
+            // esta guarda un CLIC simple pintaría/seleccionaría con un rectángulo
+            // degenerado de 0 px. El flag (no la consulta directa) se necesita porque en
+            // el frame del soltar `is_decidedly_dragging` ya puede haber vuelto a false.
+            let active_key = egui::Id::new(("naygo_rubberband_active", id.0));
+            if band_resp.dragged() && ui.input(|i| i.pointer.is_decidedly_dragging()) {
+                ui.memory_mut(|m| m.data.insert_temp(active_key, true));
+            }
+            let active = ui
+                .memory(|m| m.data.get_temp::<bool>(active_key))
+                .unwrap_or(false);
             // Si tenemos posición actual del puntero, calculamos el rectángulo y los
             // golpes. En `drag_stopped()` esto puede ser `None` si el puntero salió de la
             // ventana en el frame del soltar; en ese caso no hay selección, pero igual hay
             // que limpiar el temp más abajo.
             if let Some(cur) = band_resp.interact_pointer_pos() {
                 let band = egui::Rect::from_two_pos(start, cur);
-                if band_resp.dragged() {
+                if band_resp.dragged() && active {
                     paint_rubber_band(ui, band, theme.accent());
                 }
-                if band_resp.drag_stopped() {
+                if band_resp.drag_stopped() && active {
                     let hit: Vec<usize> = row_rects
                         .iter()
                         .filter(|(_, r)| r.intersects(band))
@@ -563,11 +596,14 @@ pub fn show(
                     rubber_select = Some((hit, additive));
                 }
             }
-            // Limpieza INCONDICIONAL del temp al soltar: aunque `interact_pointer_pos()`
+            // Limpieza INCONDICIONAL de los temps al soltar: aunque `interact_pointer_pos()`
             // devuelva `None` (puntero fuera de la ventana en el frame del soltar), el
-            // start guardado no debe persistir entre arrastres.
+            // start/active guardados no deben persistir entre arrastres.
             if band_resp.drag_stopped() {
-                ui.memory_mut(|m| m.data.remove::<egui::Pos2>(start_key));
+                ui.memory_mut(|m| {
+                    m.data.remove::<egui::Pos2>(start_key);
+                    m.data.remove::<bool>(active_key);
+                });
             }
         }
     }
