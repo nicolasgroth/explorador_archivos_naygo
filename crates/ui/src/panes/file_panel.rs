@@ -490,17 +490,23 @@ pub fn show(
 
     // Rubber-band (Step 2): arrastrar desde el espacio vacío o desde una celda que NO
     // sea el nombre dibuja un rectángulo de selección. Arrastrar sobre la celda del
-    // NOMBRE se reserva para drag&drop futuro (no dibuja). El clic simple de fila lo
-    // maneja el `Sense::click` de cada fila (clics), independiente de este arrastre de
-    // fondo (`click_and_drag`): egui distingue clic de arrastre, así que un clic va a
-    // la fila y un arrastre va a este interact de fondo; no se pisan.
+    // NOMBRE se reserva para drag&drop futuro (no dibuja).
+    //
+    // CLAVE (era un bug): este interact de fondo cubre TODA el área de la tabla (incluidas
+    // las filas) y se crea DESPUÉS de la tabla, así que en el hit-test de egui queda
+    // ENCIMA de las filas. Si sensa CLIC (`click_and_drag`), egui le asigna el clic a este
+    // fondo (topmost gana, ver hit_test.rs "in tie, pick last = topmost") y la fila NUNCA
+    // recibe `clicked()` → no se podía seleccionar con el mouse. Por eso sensa SOLO
+    // `drag()`: las filas sensan `click()` (no drag) y el fondo sensa `drag()` (no click),
+    // así egui separa los gestos por TIPO de sense, no por z-order: el clic va a la fila,
+    // el arrastre al fondo. No se pisan.
     //
     // `ui.min_rect()` tras construir la tabla cubre el viewport que ocupó la tabla en el
     // ui padre (la tabla gestiona su propio ScrollArea interno), incluido el espacio
     // vacío bajo la última fila. Es el área correcta para captar el arrastre de fondo.
     let band_area = ui.min_rect();
     let band_id = egui::Id::new(("naygo_rubberband", id.0));
-    let band_resp = ui.interact(band_area, band_id, egui::Sense::click_and_drag());
+    let band_resp = ui.interact(band_area, band_id, egui::Sense::drag());
     let start_key = egui::Id::new(("naygo_rubberband_start", id.0));
 
     if band_resp.drag_started() {
