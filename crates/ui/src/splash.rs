@@ -1,26 +1,23 @@
-// Naygo — splash de arranque: ventana propia sin bordes con el logo (solo release).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Naygo — splash de arranque: el logo a pantalla completa (solo release).
+// Copyright (c) 2026 Nicolás Groth / ISGroth.
+// Autor: Nicolás Groth <ngroth@gmail.com> — ISGroth. MIT License.
 
-//! Splash de arranque como VENTANA propia del SO sin bordes (deferred viewport),
-//! del tamaño del logo y centrada. Evita el "cuadrado flotante": el logo (con su
-//! fondo claro horneado) llena toda la ventana, sin borde oscuro del tema. Se cierra
-//! solo tras `MAX_VISIBLE` o al primer input (clic/tecla), lo que pase primero. No
-//! frena el arranque: la app principal sigue su lógica normal por detrás. Tolerante:
-//! si el logo no carga, no hay splash y la app arranca igual.
+//! Splash de arranque pintado DENTRO de la ventana principal: un panel a pantalla
+//! completa con el fondo del logo (claro) y el logo centrado. No usa un viewport
+//! aparte (eso impedía que la ventana principal se presentara). Evita el "cuadrado
+//! flotante" y el borde oscuro: TODO el panel se pinta con el color de fondo del logo,
+//! así el logo se funde con el fondo en vez de verse como una tarjeta sobre el tema
+//! oscuro. Se cierra solo tras `MAX_VISIBLE` o al primer input (clic/tecla), lo que
+//! pase primero. Tolerante: si el logo no carga, no hay splash y la app arranca igual.
 
 use std::time::{Duration, Instant};
 
 /// Tiempo máximo visible del splash.
 const MAX_VISIBLE: Duration = Duration::from_millis(1200);
 
-/// Lado (px lógicos) de la ventana del splash. El logo es cuadrado (1254²); se
-/// escala a este tamaño para una ventana compacta y nítida.
-const SPLASH_SIZE: f32 = 360.0;
-
-/// Id estable del viewport del splash (compartido con `app.rs` para cerrarlo).
-pub fn viewport_id() -> egui::ViewportId {
-    egui::ViewportId::from_hash_of("naygo_splash")
-}
+/// Color de fondo del logo (esquina del PNG, ~blanco). El panel entero se pinta de
+/// este color para que el logo no se vea como un cuadro flotando sobre el tema oscuro.
+const LOGO_BG: egui::Color32 = egui::Color32::from_rgb(249, 249, 249);
 
 /// Estado del splash mientras está activo.
 pub struct Splash {
@@ -45,51 +42,33 @@ impl Splash {
         })
     }
 
-    /// Pinta el splash como una VENTANA propia sin bordes (deferred viewport), del
-    /// tamaño del logo. Devuelve `true` si debe seguir visible; `false` cuando expira
-    /// el tiempo o hubo input (clic/tecla) → el llamador limpia el estado y cierra el
-    /// viewport. Recibe el `ctx` de la app principal (no se puede pintar en `logic`,
-    /// pero `show_viewport_deferred` solo registra el viewport: el pintado real ocurre
-    /// dentro del closure, en el contexto del viewport hijo).
-    pub fn show(&self, ctx: &egui::Context) -> bool {
-        // Input que descarta el splash: clic o cualquier tecla, en CUALQUIER viewport.
-        let expired = self.started.elapsed() >= MAX_VISIBLE;
+    /// Pinta el splash a pantalla completa en la ventana principal. Devuelve `true` si
+    /// debe seguir visible; `false` cuando expira el tiempo o hubo input (clic/tecla),
+    /// y ahí el llamador limpia el estado y deja pasar a la UI real.
+    pub fn show(&self, ui: &mut egui::Ui) -> bool {
+        let ctx = ui.ctx().clone();
         let dismissed = ctx.input(|i| {
             i.pointer.any_click()
                 || i.events
                     .iter()
                     .any(|e| matches!(e, egui::Event::Key { .. }))
         });
-        if expired || dismissed {
-            return false;
-        }
 
-        let builder = egui::ViewportBuilder::default()
-            .with_title("Naygo")
-            .with_inner_size([SPLASH_SIZE, SPLASH_SIZE])
-            .with_decorations(false) // sin barra de título ni borde del SO
-            .with_resizable(false)
-            .with_taskbar(false) // no aparece en la barra de tareas
-            .with_always_on_top();
-
-        let tex = self.texture.clone();
-        ctx.show_viewport_deferred(viewport_id(), builder, move |ui, _class| {
-            // El closure recibe el `Ui` raíz del viewport hijo (egui 0.34). Pintamos un
-            // CentralPanel SIN margen ni fondo del tema (`Frame::NONE`): el logo cubre
-            // toda la ventana, así no hay borde oscuro ni "cuadrado flotante".
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| {
-                    let size = ui.available_size();
-                    ui.add(egui::Image::new(&tex).fit_to_exact_size(size));
+        // Panel a pantalla completa con el fondo del logo (sin borde oscuro / sin
+        // cuadrado flotante): el logo centrado se funde con el fondo claro.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(LOGO_BG))
+            .show_inside(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    // El logo a ~60% del lado menor, centrado y nítido.
+                    let side = ui.available_width().min(ui.available_height()) * 0.6;
+                    ui.add(egui::Image::new(&self.texture).fit_to_exact_size(egui::vec2(side, side)));
                 });
-            // Mantener el viewport repintando para que su timer (en el ctx padre) avance.
-            ui.ctx().request_repaint();
-        });
+            });
 
-        // Que el ctx PADRE siga corriendo: así el timer del splash avanza aunque no
-        // haya input y la app principal sigue cargando por detrás.
+        // Repaint para que el tiempo avance aunque no haya input.
         ctx.request_repaint();
-        true
+        let expired = self.started.elapsed() >= MAX_VISIBLE;
+        !(expired || dismissed)
     }
 }
