@@ -140,6 +140,8 @@ fn show_node(
     // Barra de uso de disco: solo bajo las raíces (unidades), justo debajo del
     // nombre y sobre las carpetas hijas. La rellena el worker async de espacio.
     if depth == 0 && node.drive_kind.is_some() {
+        // Rect del bloque de uso (barra + texto), para hacerlo clicable abajo.
+        let mut usage_rect: Option<egui::Rect> = None;
         if let Some(usage) = disk_usage.get(&node.path) {
             let pct = usage.percent_used();
             let frac = pct as f32 / 100.0;
@@ -150,25 +152,64 @@ fn show_node(
             } else {
                 theme.accent()
             };
-            ui.horizontal(|ui| {
-                ui.add_space(INDENT);
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(120.0, 5.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, 2.0, egui::Color32::from_gray(60));
-                let mut fill = rect;
-                fill.set_width(rect.width() * frac);
-                ui.painter().rect_filled(fill, 2.0, color);
-            });
+            let bar_row = ui
+                .horizontal(|ui| {
+                    ui.add_space(INDENT);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(120.0, 5.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 2.0, egui::Color32::from_gray(60));
+                    let mut fill = rect;
+                    fill.set_width(rect.width() * frac);
+                    ui.painter().rect_filled(fill, 2.0, color);
+                })
+                .response;
             let label = i18n
                 .t("disk.usage")
                 .replace("{free}", &naygo_core::format::human_size(usage.free))
                 .replace("{total}", &naygo_core::format::human_size(usage.total))
                 .replace("{pct}", &pct.to_string());
-            ui.horizontal(|ui| {
-                ui.add_space(INDENT);
-                ui.label(egui::RichText::new(label).weak().small());
-            });
+            let text_row = ui
+                .horizontal(|ui| {
+                    ui.add_space(INDENT);
+                    ui.label(egui::RichText::new(label).weak().small());
+                })
+                .response;
+            usage_rect = Some(bar_row.rect.union(text_row.rect));
+        }
+
+        // La unidad es un BLOQUE clicable completo (pedido de Nicolás): además del
+        // ícono+nombre, también navegan (a) el espacio a la DERECHA del nombre en su
+        // fila y (b) la barra de uso + el texto de espacio. Son DOS interacts sobre
+        // zonas sin widgets clicables — no se solapan con el triángulo ni el nombre,
+        // así que no les roban el clic (lección del hit-test de egui).
+        let panel_right = ui.max_rect().right();
+        let strip = egui::Rect::from_min_max(
+            egui::pos2(row.rect.right(), row.rect.top()),
+            egui::pos2(panel_right, row.rect.bottom()),
+        );
+        let mut navigate = ui
+            .interact(
+                strip,
+                egui::Id::new(("naygo_drive_strip", &node.path)),
+                egui::Sense::click(),
+            )
+            .clicked();
+        if let Some(u) = usage_rect {
+            let below = egui::Rect::from_min_max(
+                egui::pos2(row.rect.left(), u.top()),
+                egui::pos2(panel_right, u.bottom()),
+            );
+            navigate |= ui
+                .interact(
+                    below,
+                    egui::Id::new(("naygo_drive_usage", &node.path)),
+                    egui::Sense::click(),
+                )
+                .clicked();
+        }
+        if navigate {
+            actions.push(TreeAction::Navigate(node.path.clone()));
         }
     }
 
