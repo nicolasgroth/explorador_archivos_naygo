@@ -219,6 +219,15 @@ pub struct NaygoApp {
     /// Workers solo-directorios del árbol, por (panel, carpeta) expandida.
     tree_listings: HashMap<(PaneId, PathBuf), TreeListing>,
     pub settings: Settings,
+    /// Snapshot de los settings tal como quedaron GUARDADOS por última vez. Si al final
+    /// de un frame difieren de `settings`, se guarda de inmediato (persistencia real:
+    /// eframe sin la feature `persistence` jamás llama a `App::save`).
+    last_saved_settings: Settings,
+    /// Último autosave del workspace (cada `WORKSPACE_AUTOSAVE` también se guarda, para
+    /// tolerar cierres abruptos sin perder más que ese intervalo).
+    last_workspace_autosave: std::time::Instant,
+    /// La sección Avanzado pidió restaurar valores de fábrica; se procesa en `logic`.
+    pub(crate) factory_reset_requested: bool,
     pub templates: TemplateStore,
     config_dir: PathBuf,
     pub status: String,
@@ -297,7 +306,9 @@ struct PendingPasteWrite {
 impl NaygoApp {
     pub fn new(cc: &CreationContext<'_>, initial_dir: Option<std::path::PathBuf>) -> Self {
         let config_dir = config::portable_dir();
-        let settings = config::load_settings(&config_dir);
+        // Carga con ARRANQUE SEGURO: un archivo corrupto se respalda como .bad y se
+        // arranca con defaults; el flag alimenta el aviso en la barra de estado.
+        let (settings, settings_recovered) = config::load_settings_flagged(&config_dir);
         let templates = config::load_templates(&config_dir);
         let keymap = config::load_keymap(&config_dir);
         let home = default_start_dir();
@@ -317,9 +328,20 @@ impl NaygoApp {
         i18n.set_language(&lang);
         let mut settings = settings;
         settings.language = lang;
+        // Primer arranque (o recuperación): persistir de inmediato los settings
+        // iniciales para que settings.json exista desde ya.
+        if !settings_exists {
+            config::save_settings(&config_dir, &settings);
+        }
 
-        let workspace = load_or_default_workspace(&config_dir, &home);
+        let (workspace, workspace_recovered) = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
+        // Aviso de recuperación (config corrupta respaldada) en la barra de estado.
+        let initial_status = if settings_recovered || workspace_recovered {
+            i18n.t("status.config_recovered").to_string()
+        } else {
+            String::new()
+        };
 
         let icons = IconProvider::new(&cc.egui_ctx, &settings.icon_set, &config_dir);
 
@@ -369,10 +391,13 @@ impl NaygoApp {
             listings: HashMap::new(),
             trees: HashMap::new(),
             tree_listings: HashMap::new(),
+            last_saved_settings: settings.clone(),
             settings,
+            last_workspace_autosave: std::time::Instant::now(),
+            factory_reset_requested: false,
             templates,
             config_dir,
-            status: String::new(),
+            status: initial_status,
             typeahead_buf: String::new(),
             keymap,
             shortcut_capture: None,
@@ -2381,6 +2406,30 @@ impl NaygoApp {
     }
 
     /// Guarda el workspace persistible.
+    /// Restaura los valores de fábrica: settings por defecto (idioma re-detectado del
+    /// SO, como un primer arranque), workspace Dual-pane por defecto en el home, y
+    /// persiste ambos de inmediato. NO toca plantillas guardadas, keymap ni logs.
+    fn apply_factory_reset(&mut self) {
+        let locale = naygo_platform::locale::os_locale().unwrap_or_default();
+        let s = Settings {
+            language: pick_default_language(&locale, self.i18n.available()),
+            ..Settings::default()
+        };
+        self.i18n.set_language(&s.language);
+        self.settings = s;
+        // El cambio de tema/íconos lo aplican los watchers existentes de `ui()` al
+        // detectar la diferencia con el estado activo.
+        let home = default_start_dir();
+        self.workspace = Workspace::from_template(&LayoutTemplate::dual_pane(), &home);
+        self.dock_state = crate::dock_translate::to_dock_state(&self.workspace.layout);
+        self.start_all_listings();
+        self.save_workspace();
+        config::save_settings(&self.config_dir, &self.settings);
+        self.last_saved_settings = self.settings.clone();
+        self.status = self.i18n.t("status.factory_done").to_string();
+        tracing::info!("valores de fábrica restaurados");
+    }
+
     fn save_workspace(&self) {
         let files = self
             .workspace
@@ -2493,6 +2542,30 @@ impl eframe::App for NaygoApp {
             ctx.input(|i| i.pointer.is_moving() && i.pointer.interact_pos().is_some());
         if pointer_moving {
             ctx.request_repaint();
+        }
+
+        // ── Persistencia real (eframe sin la feature `persistence` jamás llama a
+        // `App::save`, así que el guardado lo dirigimos nosotros) ──
+        // Restaurar valores de fábrica (pedido desde Configuración → Avanzado).
+        if self.factory_reset_requested {
+            self.factory_reset_requested = false;
+            self.apply_factory_reset();
+        }
+        // Settings: guardar de inmediato cuando cambian (struct chica, comparación
+        // barata; escribe solo ante un cambio real).
+        if self.settings != self.last_saved_settings {
+            config::save_settings(&self.config_dir, &self.settings);
+            self.last_saved_settings = self.settings.clone();
+        }
+        // Workspace: autosave periódico (tolera cierres abruptos) + guardado al cerrar.
+        const WORKSPACE_AUTOSAVE: std::time::Duration = std::time::Duration::from_secs(60);
+        if self.last_workspace_autosave.elapsed() >= WORKSPACE_AUTOSAVE {
+            self.save_workspace();
+            self.last_workspace_autosave = std::time::Instant::now();
+        }
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.save_workspace();
+            config::save_settings(&self.config_dir, &self.settings);
         }
     }
 
@@ -2855,14 +2928,19 @@ fn default_start_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("C:\\"))
 }
 
-/// Carga el workspace persistido y lo reconstruye, o cae al Dual-pane default.
-fn load_or_default_workspace(dir: &Path, home: &Path) -> Workspace {
-    if let Some(persist) = config::load_workspace(dir) {
+/// Carga el workspace persistido y lo reconstruye, o cae al Dual-pane default. El
+/// bool informa si hubo RECUPERACIÓN (workspace.json corrupto respaldado como .bad).
+fn load_or_default_workspace(dir: &Path, home: &Path) -> (Workspace, bool) {
+    let (persist, recovered) = config::load_workspace_flagged(dir);
+    if let Some(persist) = persist {
         if let Some(w) = rebuild_workspace(persist, home) {
-            return w;
+            return (w, recovered);
         }
     }
-    Workspace::from_template(&LayoutTemplate::dual_pane(), home)
+    (
+        Workspace::from_template(&LayoutTemplate::dual_pane(), home),
+        recovered,
+    )
 }
 
 /// Reconstruye un `Workspace` desde lo persistido. `None` si el layout es

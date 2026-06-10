@@ -280,12 +280,29 @@ pub struct WorkspacePersist {
 
 /// Lee un archivo JSON y lo deserializa, devolviendo `None` si no existe o falla.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
-    let text = std::fs::read_to_string(path).ok()?;
+    read_json_recovering(path).0
+}
+
+/// Como `read_json`, pero con ARRANQUE SEGURO: si el archivo existe y está corrupto
+/// (no parsea), lo renombra a `<nombre>.json.bad` (backup: no se pierde y no se
+/// reintenta al próximo arranque) y devuelve `(None, true)` — el llamador cae a
+/// defaults y puede avisar al usuario. `(_, false)` = no había archivo o se leyó bien.
+fn read_json_recovering<T: for<'de> Deserialize<'de>>(path: &Path) -> (Option<T>, bool) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (None, false);
+    };
     match serde_json::from_str::<T>(&text) {
-        Ok(v) => Some(v),
+        Ok(v) => (Some(v), false),
         Err(e) => {
-            tracing::warn!("config ilegible en {}: {e}", path.display());
-            None
+            tracing::warn!(
+                "config ilegible en {}: {e}; respaldando como .bad",
+                path.display()
+            );
+            let bad = path.with_extension("json.bad");
+            if let Err(re) = std::fs::rename(path, &bad) {
+                tracing::warn!("no se pudo respaldar {}: {re}", path.display());
+            }
+            (None, true)
         }
     }
 }
@@ -316,7 +333,14 @@ fn normalize_icon_set_id(id: &str) -> String {
 
 /// Carga settings; si falta/corrupto/versión incompatible → default.
 pub fn load_settings(dir: &Path) -> Settings {
-    match read_json::<Settings>(&dir.join("settings.json")) {
+    load_settings_flagged(dir).0
+}
+
+/// Como `load_settings`, pero informa si hubo RECUPERACIÓN (archivo corrupto
+/// respaldado como .bad y defaults aplicados) para que la UI avise al usuario.
+pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
+    let (read, recovered) = read_json_recovering::<Settings>(&dir.join("settings.json"));
+    let settings = match read {
         Some(mut s) if s.version == CONFIG_VERSION => {
             // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
             // suelto que ya no existe en disco (carpeta borrada) cae a "flat" en vez de
@@ -330,7 +354,8 @@ pub fn load_settings(dir: &Path) -> Settings {
             Settings::default()
         }
         None => Settings::default(),
-    }
+    };
+    (settings, recovered)
 }
 
 /// Guarda settings.
@@ -351,14 +376,22 @@ pub fn save_templates(dir: &Path, store: &TemplateStore) {
 /// Carga el workspace persistido; `None` si falta/corrupto/versión incompatible
 /// (el llamador cae a la plantilla default).
 pub fn load_workspace(dir: &Path) -> Option<WorkspacePersist> {
-    match read_json::<WorkspacePersist>(&dir.join("workspace.json")) {
+    load_workspace_flagged(dir).0
+}
+
+/// Como `load_workspace`, pero informa si hubo RECUPERACIÓN (archivo corrupto
+/// respaldado como .bad) para que la UI avise al usuario.
+pub fn load_workspace_flagged(dir: &Path) -> (Option<WorkspacePersist>, bool) {
+    let (read, recovered) = read_json_recovering::<WorkspacePersist>(&dir.join("workspace.json"));
+    let ws = match read {
         Some(w) if w.version == CONFIG_VERSION => Some(w),
         Some(_) => {
             tracing::warn!("workspace.json de versión incompatible; ignorando");
             None
         }
         None => None,
-    }
+    };
+    (ws, recovered)
 }
 
 /// Guarda el workspace persistido.
@@ -388,6 +421,40 @@ pub fn portable_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_corrupto_se_respalda_y_cae_a_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{ esto no es json válido ]]").unwrap();
+        let (s, recovered) = load_settings_flagged(dir.path());
+        assert!(recovered, "debe reportar recuperación");
+        assert_eq!(s, Settings::default());
+        assert!(!path.exists(), "el corrupto no debe quedar en su lugar");
+        assert!(
+            dir.path().join("settings.json.bad").exists(),
+            "debe quedar el respaldo .bad"
+        );
+    }
+
+    #[test]
+    fn settings_ausente_no_es_recuperacion() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, recovered) = load_settings_flagged(dir.path());
+        assert!(!recovered);
+        assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn workspace_corrupto_se_respalda() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        std::fs::write(&path, "no-json").unwrap();
+        let (w, recovered) = load_workspace_flagged(dir.path());
+        assert!(recovered);
+        assert!(w.is_none());
+        assert!(dir.path().join("workspace.json.bad").exists());
+    }
 
     #[test]
     fn settings_round_trip() {

@@ -197,4 +197,36 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     if ui.checkbox(&mut size_no_subdirs, l_size).changed() {
         app.settings.size_no_subdirs = size_no_subdirs;
     }
+
+    // Restaurar valores de fábrica: confirmación en dos pasos (el primer clic arma el
+    // botón de confirmar por 4 s; el segundo ejecuta). El reset real lo procesa
+    // `NaygoApp::logic` (patrón de acciones diferidas).
+    ui.add_space(16.0);
+    ui.separator();
+    ui.add_space(8.0);
+    let confirm_id = egui::Id::new("naygo_factory_confirm_armed");
+    let armed_at = ui.memory(|m| m.data.get_temp::<f64>(confirm_id));
+    let now = ui.input(|i| i.time);
+    let armed = armed_at.is_some_and(|t| now - t < 4.0);
+    if armed {
+        let l_confirm = app.tr("settings.factory_reset_confirm");
+        let btn = egui::Button::new(
+            egui::RichText::new(l_confirm).color(egui::Color32::from_rgb(0xE0, 0x55, 0x55)),
+        );
+        if ui.add(btn).clicked() {
+            app.factory_reset_requested = true;
+            ui.memory_mut(|m| m.data.remove::<f64>(confirm_id));
+        }
+        // Mantener vivo el conteo de los 4 s aunque no haya input.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    } else {
+        if armed_at.is_some() {
+            ui.memory_mut(|m| m.data.remove::<f64>(confirm_id));
+        }
+        let l_reset = app.tr("settings.factory_reset");
+        if ui.button(l_reset).clicked() {
+            ui.memory_mut(|m| m.data.insert_temp(confirm_id, now));
+        }
+    }
 }
