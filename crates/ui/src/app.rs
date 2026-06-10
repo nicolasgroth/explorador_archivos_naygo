@@ -822,6 +822,16 @@ impl NaygoApp {
         let Some(dest) = self.active_dir() else {
             return;
         };
+        // Soltar un archivo en su PROPIA carpeta es un no-op (como Windows): sin esta
+        // guarda, arrastrar y soltar dentro del mismo panel intentaría copiar el archivo
+        // sobre sí mismo y abriría el diálogo de conflicto.
+        let paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| p.parent() != Some(dest.as_path()))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
         // egui no expone el efecto (mover/copiar) del drop externo; copiamos por defecto
         // (el comportamiento seguro y habitual al traer archivos de afuera).
         let req = crate::ops_actions::transfer(false, paths, dest.clone());
