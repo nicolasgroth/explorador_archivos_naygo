@@ -1,51 +1,23 @@
-// Naygo — drag & drop con el SO (OLE/COM, aislado): recibir y sacar archivos.
+// Naygo — drag & drop con el SO (OLE/COM, aislado): sacar archivos al SO.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! Interop OLE de arrastre con Windows. Esta parte (recibir) implementa un `IDropTarget`
-//! COM registrado en la ventana de Naygo: cuando el usuario suelta archivos arrastrados
-//! desde el Explorador (u otra app), se extraen las rutas (CF_HDROP) y se envían a la
-//! app por un canal. Patrón COM como `trash.rs`/`context_menu.rs`; OLE inicializado en el
-//! hilo de UI. Tolerante: cualquier fallo se reporta/ignora, nunca hace panic.
+//! Interop OLE de arrastre con Windows. Este módulo cubre solo el lado de **SACAR**
+//! archivos de Naygo hacia el SO (Explorador, escritorio, correo…) vía `DoDragDrop`.
 //!
-//! ## La cadena COM
+//! **Recibir** drops del SO NO se maneja aquí: winit ya registra su propio `IDropTarget`
+//! en la ventana y egui expone las rutas soltadas en `ctx.input(|i| i.raw.dropped_files)`.
+//! La capa de UI lee de ahí. (Antes registrábamos nuestro propio `IDropTarget` con
+//! `RegisterDragDrop`, lo que colisionaba con el de winit —`DRAGDROP_E_ALREADYREGISTERED`—
+//! y la rotación de `OleInitialize`/`OleUninitialize` en el hilo de UI ya OLE-inicializado
+//! por winit desestabilizaba el arranque.)
 //!
-//! Windows entrega un drop a una ventana a través de un objeto COM `IDropTarget` que la
-//! app registra con `RegisterDragDrop`. Mientras el cursor sobrevuela la ventana con un
-//! arrastre activo, el SO llama a `DragEnter`/`DragOver` para preguntar qué efecto
-//! aceptamos (copiar, mover, nada). Al soltar, llama a `Drop` con un `IDataObject` que
-//! describe lo arrastrado en uno o más formatos del portapapeles. Para archivos del
-//! Explorador el formato es **CF_HDROP**: un `HGLOBAL` con una estructura `DROPFILES`
-//! seguida de las rutas. No la parseamos a mano: `DragQueryFileW` la recorre por nosotros.
+//! ## La cadena COM (lado emisor)
 //!
-//! La secuencia en `Drop`:
-//! 1. `IDataObject::GetData(FORMATETC{ cfFormat: CF_HDROP, tymed: TYMED_HGLOBAL, ... })`
-//!    → un `STGMEDIUM` cuyo `hGlobal` es el `HDROP`.
-//! 2. `DragQueryFileW(hdrop, 0xFFFFFFFF, None)` → número de archivos.
-//! 3. Por cada índice, `DragQueryFileW` con un buffer wide → la ruta.
-//! 4. `ReleaseStgMedium` libera el medio (la app es dueña del `STGMEDIUM` que devolvió
-//!    `GetData`).
-//!
-//! ## Sutileza del apartamento + OLE
-//!
-//! `RegisterDragDrop` exige que el hilo tenga **OLE** inicializado (no solo COM): por eso
-//! usamos `OleInitialize`/`OleUninitialize` en vez de `CoInitializeEx`/`CoUninitialize`.
-//! `OleInitialize` ya inicializa COM como STA por debajo. Replicamos el patrón de
-//! `context_menu.rs`: solo desinicializamos (`OleUninitialize`) si **nosotros** logramos
-//! inicializar OLE en este hilo (`hr.is_ok()`); si el hilo ya estaba en otro apartamento
-//! (`RPC_E_CHANGED_MODE`) NO desbalanceamos el refcount. Esto corre en el hilo de UI, que
-//! eframe/winit ya inicializó como STA.
-
-use std::path::PathBuf;
-
-/// Archivos soltados en la ventana de Naygo desde el SO.
-#[derive(Debug, Clone)]
-pub struct DroppedFiles {
-    pub paths: Vec<PathBuf>,
-    pub screen_x: i32,
-    pub screen_y: i32,
-    /// `true` si el efecto fue copiar (vs mover). Para archivos externos, normalmente copy.
-    pub effect_copy: bool,
-}
+//! Para arrastrar archivos FUERA de Naygo se ofrece al SO un objeto COM `IDataObject` que
+//! expone las rutas en CF_HDROP, y un `IDropSource` que decide en cada frame del arrastre
+//! si continuar/soltar/cancelar. `DoDragDrop` corre su propio bucle modal hasta que el
+//! usuario suelta o cancela, y devuelve el efecto final. Tolerante: cualquier fallo se
+//! reporta como `DndError`, nunca hace panic.
 
 /// Resultado de un arrastre OLE iniciado por Naygo hacia el SO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,15 +41,6 @@ pub enum DndError {
     Failed(String),
 }
 
-/// Stub no-Windows: recibir drag&drop del SO no existe fuera de Windows.
-#[cfg(not(windows))]
-pub fn register_drop_target(
-    _hwnd: isize,
-    _tx: std::sync::mpsc::Sender<DroppedFiles>,
-) -> Option<()> {
-    None
-}
-
 /// Stub no-Windows: sacar drag&drop al SO no existe fuera de Windows.
 #[cfg(not(windows))]
 pub fn start_drag(_paths: &[std::path::PathBuf]) -> Result<DragOutcome, DndError> {
@@ -85,288 +48,27 @@ pub fn start_drag(_paths: &[std::path::PathBuf]) -> Result<DragOutcome, DndError
 }
 
 #[cfg(windows)]
-pub use windows_impl::{register_drop_target, start_drag, DropTargetGuard};
+pub use windows_impl::start_drag;
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::{DndError, DragOutcome, DroppedFiles};
-    use std::ffi::c_void;
+    use super::{DndError, DragOutcome};
     use std::path::PathBuf;
-    use std::sync::mpsc::Sender;
     use windows::core::{implement, Ref, BOOL, HRESULT};
     use windows::Win32::Foundation::{
-        DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, HWND,
-        OLE_E_ADVISENOTSUPPORTED, POINTL, S_OK,
+        DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
+        OLE_E_ADVISENOTSUPPORTED, S_OK,
     };
     use windows::Win32::System::Com::{
         IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET,
         DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL,
     };
     use windows::Win32::System::Ole::{
-        DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize,
-        OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP, DROPEFFECT,
-        DROPEFFECT_COPY, DROPEFFECT_MOVE,
+        DoDragDrop, IDropSource, IDropSource_Impl, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY,
+        DROPEFFECT_MOVE,
     };
-    use windows::Win32::System::SystemServices::{
-        MK_CONTROL, MK_LBUTTON, MK_SHIFT, MODIFIERKEYS_FLAGS,
-    };
-    use windows::Win32::UI::Shell::{DragQueryFileW, SHCreateStdEnumFmtEtc, HDROP};
-
-    /// Decide el efecto del drop (copiar/mover) a partir de los modificadores del SO y de
-    /// lo que el origen permite. Reusa la regla pura y testeada `core::dnd::decide_drop_action`
-    /// (Shift→mover, Ctrl→copiar, sin tecla→copiar por defecto seguro: no conocemos el disco
-    /// origen en el lado receptor, así que tratamos como discos distintos). El efecto elegido
-    /// se enmascara con `allowed` (lo que el SO/origen ofrecen en `*pdweffect` de entrada): si
-    /// el origen no permite mover, caemos a copiar (y viceversa). Si nada queda permitido,
-    /// `DROPEFFECT(0)` (NONE) → el SO muestra "no soltar aquí".
-    fn effect_for_drop(grfkeystate: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT) -> DROPEFFECT {
-        let shift = (grfkeystate.0 & MK_SHIFT.0) != 0;
-        let ctrl = (grfkeystate.0 & MK_CONTROL.0) != 0;
-        // same_drive=false: lado receptor sin info del disco origen → copiar por defecto.
-        let want = match naygo_core::dnd::decide_drop_action(ctrl, shift, false) {
-            naygo_core::dnd::DropAction::Move => DROPEFFECT_MOVE,
-            naygo_core::dnd::DropAction::Copy => DROPEFFECT_COPY,
-        };
-        // Enmascarar con lo permitido por el origen.
-        let masked = DROPEFFECT(want.0 & allowed.0);
-        if masked.0 != 0 {
-            masked
-        } else if (allowed.0 & DROPEFFECT_COPY.0) != 0 {
-            // El efecto deseado no está permitido pero sí copiar → copiar.
-            DROPEFFECT_COPY
-        } else {
-            // Nada permitido (o allowed=0) → NONE.
-            DROPEFFECT(0)
-        }
-    }
-
-    /// Objeto COM que implementa `IDropTarget`. Sostiene el `Sender` por el que despacha
-    /// los archivos soltados a la app. `#[implement(IDropTarget)]` genera el andamiaje
-    /// (vtable, refcount, `QueryInterface`) y nos deja escribir solo los métodos del trait.
-    #[implement(IDropTarget)]
-    struct NaygoDropTarget {
-        tx: Sender<DroppedFiles>,
-    }
-
-    impl IDropTarget_Impl for NaygoDropTarget_Impl {
-        fn DragEnter(
-            &self,
-            _pdataobj: Ref<IDataObject>,
-            grfkeystate: MODIFIERKEYS_FLAGS,
-            _pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            // El efecto se decide por los modificadores (Shift=mover/Ctrl=copiar/…) y se
-            // enmascara con lo que el origen permite (el `*pdweffect` de entrada). Así el
-            // cursor muestra mover/copiar correctamente. SAFETY: el SO provee un puntero
-            // válido; lo leemos (efectos permitidos) y escribimos el elegido si no es nulo.
-            unsafe {
-                if !pdweffect.is_null() {
-                    *pdweffect = effect_for_drop(grfkeystate, *pdweffect);
-                }
-            }
-            Ok(())
-        }
-
-        fn DragOver(
-            &self,
-            grfkeystate: MODIFIERKEYS_FLAGS,
-            _pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            // Igual que DragEnter: recalculamos en cada movimiento (el usuario puede
-            // presionar/soltar Shift/Ctrl durante el arrastre). SAFETY: puntero del SO.
-            unsafe {
-                if !pdweffect.is_null() {
-                    *pdweffect = effect_for_drop(grfkeystate, *pdweffect);
-                }
-            }
-            Ok(())
-        }
-
-        fn DragLeave(&self) -> windows::core::Result<()> {
-            Ok(())
-        }
-
-        fn Drop(
-            &self,
-            pdataobj: Ref<IDataObject>,
-            grfkeystate: MODIFIERKEYS_FLAGS,
-            pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            // Efecto final = el mismo cálculo que en DragOver (modificadores + lo permitido).
-            // SAFETY: puntero del SO. Esto debe pasar pase lo que pase con la extracción.
-            let chosen = unsafe {
-                if pdweffect.is_null() {
-                    // Sin puntero de efecto no podemos negociar: tratamos como copiar.
-                    DROPEFFECT_COPY
-                } else {
-                    let c = effect_for_drop(grfkeystate, *pdweffect);
-                    *pdweffect = c;
-                    c
-                }
-            };
-
-            // Extraer rutas del IDataObject. Tolerante: si algo falla, no enviamos nada y
-            // devolvemos Ok (nunca hacemos panic ni rompemos el arrastre del SO).
-            let paths = pdataobj
-                .as_ref()
-                .map(extract_hdrop_paths)
-                .unwrap_or_default();
-
-            if !paths.is_empty() {
-                // `effect_copy = false` solo si el efecto elegido es exactamente MOVER.
-                let effect_copy = (chosen.0 & DROPEFFECT_MOVE.0) == 0;
-                let dropped = DroppedFiles {
-                    paths,
-                    screen_x: pt.x,
-                    screen_y: pt.y,
-                    effect_copy,
-                };
-                // Si el receptor ya no existe (app cerrando), ignorar.
-                let _ = self.tx.send(dropped);
-            }
-
-            Ok(())
-        }
-    }
-
-    /// Extrae las rutas CF_HDROP de un `IDataObject`. Devuelve vacío ante cualquier fallo
-    /// (formato ausente, HGLOBAL nulo, etc.). Libera el `STGMEDIUM` que `GetData` entrega.
-    fn extract_hdrop_paths(data: &IDataObject) -> Vec<PathBuf> {
-        // FORMATETC pidiendo CF_HDROP como HGLOBAL, contenido completo.
-        let format = FORMATETC {
-            cfFormat: CF_HDROP.0,
-            ptd: std::ptr::null_mut(),
-            dwAspect: windows::Win32::System::Com::DVASPECT_CONTENT.0,
-            lindex: -1,
-            tymed: TYMED_HGLOBAL.0 as u32,
-        };
-
-        // SAFETY: `format` es válido; `GetData` devuelve un STGMEDIUM del que somos dueños
-        // y que liberamos con `ReleaseStgMedium`. Si el dato no está en CF_HDROP, GetData
-        // falla y devolvemos vacío.
-        unsafe {
-            let mut medium = match data.GetData(&format) {
-                Ok(m) => m,
-                Err(_) => return Vec::new(),
-            };
-
-            // El HGLOBAL del medio es el HDROP. Si el tipo no es el esperado o es nulo,
-            // liberamos y salimos.
-            let hglobal = medium.u.hGlobal;
-            if hglobal.0.is_null() {
-                ReleaseStgMedium(&mut medium);
-                return Vec::new();
-            }
-            let hdrop = HDROP(hglobal.0);
-
-            let paths = query_hdrop_files(hdrop);
-
-            // Liberar el medio: somos dueños del STGMEDIUM devuelto por GetData.
-            ReleaseStgMedium(&mut medium);
-            paths
-        }
-    }
-
-    /// Recorre un `HDROP` con `DragQueryFileW` y devuelve las rutas como `PathBuf`.
-    ///
-    /// SAFETY: `hdrop` debe ser un HDROP válido (proviene del HGLOBAL del STGMEDIUM de un
-    /// CF_HDROP). `DragQueryFileW(_, 0xFFFFFFFF, None)` devuelve la cuenta; con un índice
-    /// concreto y un buffer del tamaño exacto, copia la ruta (sin NUL final en el conteo).
-    unsafe fn query_hdrop_files(hdrop: HDROP) -> Vec<PathBuf> {
-        use std::os::windows::ffi::OsStringExt;
-
-        let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, None);
-        if count == 0 {
-            return Vec::new();
-        }
-
-        let mut paths = Vec::with_capacity(count as usize);
-        for i in 0..count {
-            // Longitud (en chars, sin NUL) de la ruta i.
-            let len = DragQueryFileW(hdrop, i, None);
-            if len == 0 {
-                continue;
-            }
-            // Buffer con espacio para el NUL final que DragQueryFileW escribe.
-            let mut buf = vec![0u16; len as usize + 1];
-            let copied = DragQueryFileW(hdrop, i, Some(buf.as_mut_slice()));
-            if copied == 0 {
-                continue;
-            }
-            // `copied` es la longitud sin NUL; recortamos a esa longitud.
-            buf.truncate(copied as usize);
-            paths.push(PathBuf::from(std::ffi::OsString::from_wide(&buf)));
-        }
-        paths
-    }
-
-    /// Guard que mantiene vivo el drop target y lo revoca al `Drop`.
-    ///
-    /// Sostiene la interfaz `IDropTarget` (que mantiene vivo el objeto COM con su `Sender`),
-    /// el HWND donde se registró, y si nosotros inicializamos OLE en este hilo. Al dropearse:
-    /// `RevokeDragDrop(hwnd)` y, si corresponde, `OleUninitialize`.
-    ///
-    /// `!Send` (sostiene una interfaz COM STA). Vive en el hilo de UI de Naygo, así que
-    /// nunca cruza de hilo: correcto para apartment threading.
-    pub struct DropTargetGuard {
-        hwnd: isize,
-        // Se mantiene vivo solo por su efecto en el refcount COM (mantiene el objeto y su
-        // Sender vivos mientras el SO pueda invocar el drop target). No se lee.
-        #[allow(dead_code)]
-        target: IDropTarget,
-        needs_uninit: bool,
-    }
-
-    impl Drop for DropTargetGuard {
-        fn drop(&mut self) {
-            // SAFETY: hwnd es el HWND donde registramos el target; RevokeDragDrop deshace
-            // RegisterDragDrop. OleUninitialize SOLO si nosotros inicializamos OLE aquí
-            // (mismo balance que context_menu.rs / trash.rs).
-            unsafe {
-                let hwnd = HWND(self.hwnd as *mut c_void);
-                if let Err(e) = RevokeDragDrop(hwnd) {
-                    tracing::warn!(error = %e, "dnd: RevokeDragDrop falló");
-                }
-                if self.needs_uninit {
-                    OleUninitialize();
-                }
-            }
-        }
-    }
-
-    /// Registra el drop target en la ventana `hwnd`. `None` si no se pudo (la app sigue sin
-    /// recibir drops externos). Debe llamarse en el hilo de UI.
-    pub fn register_drop_target(hwnd: isize, tx: Sender<DroppedFiles>) -> Option<DropTargetGuard> {
-        // SAFETY: secuencia OLE/COM completa. OleInitialize inicializa OLE+COM (STA) en
-        // este hilo; needs_uninit rastrea si fuimos NOSOTROS (para no desbalancear el
-        // refcount si el hilo ya estaba inicializado por eframe → RPC_E_CHANGED_MODE).
-        unsafe {
-            let hr = OleInitialize(None);
-            let needs_uninit = hr.is_ok();
-
-            // Construir el objeto COM y obtener su interfaz IDropTarget.
-            let target: IDropTarget = NaygoDropTarget { tx }.into();
-
-            match RegisterDragDrop(HWND(hwnd as *mut c_void), &target) {
-                Ok(()) => Some(DropTargetGuard {
-                    hwnd,
-                    target,
-                    needs_uninit,
-                }),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dnd: RegisterDragDrop falló; sin drops externos");
-                    // No quedó nada registrado; deshacer el OleInitialize si fue nuestro.
-                    if needs_uninit {
-                        OleUninitialize();
-                    }
-                    None
-                }
-            }
-        }
-    }
+    use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
+    use windows::Win32::UI::Shell::SHCreateStdEnumFmtEtc;
 
     // ====================================================================================
     // SACAR drag&drop al SO: IDataObject + IDropSource + DoDragDrop (Naygo → Explorer).
@@ -586,12 +288,11 @@ mod windows_impl {
             return Err(DndError::NoItems);
         }
 
-        // SAFETY: secuencia OLE/COM completa en el hilo de UI (STA). Balanceamos OLE igual
-        // que register_drop_target: solo desinicializamos si fuimos nosotros quien inicializó.
+        // El hilo de UI ya está OLE-inicializado por winit (registra su propio IDropTarget);
+        // NO hacemos OleInitialize/Uninitialize propios (perturbaba el arranque). DoDragDrop
+        // usa el OLE del hilo.
+        // SAFETY: secuencia OLE/COM completa en el hilo de UI (STA).
         unsafe {
-            let hr = OleInitialize(None);
-            let needs_uninit = hr.is_ok();
-
             // Construir los dos objetos COM y obtener sus interfaces.
             let data_object: IDataObject = FilesDataObject {
                 paths: paths.to_vec(),
@@ -608,10 +309,6 @@ mod windows_impl {
                 DROPEFFECT_COPY | DROPEFFECT_MOVE,
                 &mut effect,
             );
-
-            if needs_uninit {
-                OleUninitialize();
-            }
 
             // Mapear el HRESULT + efecto a nuestro DragOutcome.
             let outcome = if result == DRAGDROP_S_DROP {
@@ -637,14 +334,6 @@ mod windows_impl {
 mod tests {
     use super::*;
 
-    /// El stub no-Windows devuelve None sin crashear.
-    #[cfg(not(windows))]
-    #[test]
-    fn stub_no_windows_es_none() {
-        let (tx, _rx) = std::sync::mpsc::channel();
-        assert!(register_drop_target(0, tx).is_none());
-    }
-
     /// `start_drag` con lista vacía devuelve `NoItems` sin tocar OLE (no entra al bucle
     /// modal). En no-Windows el stub también es `NoItems` por la misma guarda… salvo que
     /// el stub no-Windows devuelve `NotSupported`; por eso solo lo afirmamos en Windows.
@@ -665,18 +354,5 @@ mod tests {
             Err(DndError::NotSupported) => {}
             other => panic!("esperaba NotSupported, vino {other:?}"),
         }
-    }
-
-    /// Smoke de construcción del tipo público (sin registrar en una ventana real).
-    #[test]
-    fn dropped_files_construye() {
-        let d = DroppedFiles {
-            paths: vec![PathBuf::from("C:/x")],
-            screen_x: 10,
-            screen_y: 20,
-            effect_copy: true,
-        };
-        assert_eq!(d.paths.len(), 1);
-        assert!(d.effect_copy);
     }
 }

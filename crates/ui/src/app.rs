@@ -284,14 +284,6 @@ pub struct NaygoApp {
     splash: Option<crate::splash::Splash>,
     /// HWND de la ventana para el menú contextual nativo (shell-B). None → ítem deshabilitado.
     hwnd: Option<isize>,
-    /// Guard del drop target OLE (recibir arrastres del SO). Mantiene vivo el `IDropTarget`
-    /// registrado; al dropearse (cierre de la app) revoca el registro. `None` si no se pudo
-    /// registrar (la app sigue, simplemente sin recibir drops externos). Solo en Windows.
-    #[cfg(windows)]
-    #[allow(dead_code)]
-    drop_guard: Option<naygo_platform::dnd::DropTargetGuard>,
-    /// Receptor de archivos soltados desde el SO (Explorador → Naygo).
-    drop_rx: Option<std::sync::mpsc::Receiver<naygo_platform::dnd::DroppedFiles>>,
     /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic. La procesa NaygoApp fuera del closure de egui.
     native_menu_request: Option<(f32, f32)>,
 }
@@ -365,22 +357,11 @@ impl NaygoApp {
             }
         };
 
-        // Drop target OLE: si tenemos HWND, registramos un IDropTarget para recibir
-        // arrastres del SO (Explorador → Naygo). El guard mantiene vivo el registro y lo
-        // revoca al cerrar. Si falla (o no es Windows), drop_rx queda None y la app sigue.
-        #[cfg(windows)]
-        let (drop_guard, drop_rx) = match hwnd {
-            Some(h) => {
-                let (drop_tx, drop_rx) = std::sync::mpsc::channel();
-                match naygo_platform::dnd::register_drop_target(h, drop_tx) {
-                    Some(guard) => (Some(guard), Some(drop_rx)),
-                    None => (None, None),
-                }
-            }
-            None => (None, None),
-        };
-        #[cfg(not(windows))]
-        let drop_rx: Option<std::sync::mpsc::Receiver<naygo_platform::dnd::DroppedFiles>> = None;
+        // Recibir arrastres del SO (Explorador → Naygo): NO registramos un IDropTarget
+        // propio. winit ya registra el suyo y egui-winit nos entrega los archivos soltados
+        // en el input crudo (`pump_dropped_files` los lee). Un RegisterDragDrop propio
+        // chocaría con el de winit (DRAGDROP_E_ALREADYREGISTERED) y nuestro OleInitialize/
+        // OleUninitialize perturbaba el estado OLE del hilo de UI al arrancar.
 
         let mut app = NaygoApp {
             workspace,
@@ -423,9 +404,6 @@ impl NaygoApp {
             size_partial: std::collections::HashSet::new(),
             splash,
             hwnd,
-            #[cfg(windows)]
-            drop_guard,
-            drop_rx,
             native_menu_request: None,
         };
         app.start_all_listings();
@@ -826,33 +804,29 @@ impl NaygoApp {
     /// hay un mapeo directo de coordenadas de pantalla a panel; haría falta rastrear el rect
     /// en pantalla de cada panel por frame. Por ahora los archivos caen en la carpeta del
     /// panel ACTIVO, comportamiento aceptable acordado. Lo que SÍ honramos ya es el efecto.
-    fn pump_dropped_files(&mut self) {
-        // Recolectar primero para no mantener prestado `self.drop_rx` mientras lanzamos las
-        // transferencias (que toman `&mut self`).
-        let mut dropped: Vec<naygo_platform::dnd::DroppedFiles> = Vec::new();
-        if let Some(rx) = &self.drop_rx {
-            while let Ok(d) = rx.try_recv() {
-                dropped.push(d);
-            }
+    fn pump_dropped_files(&mut self, ctx: &egui::Context) {
+        // Archivos soltados en la ventana desde el SO (Explorer, escritorio, etc.). winit
+        // ya registra su propio IDropTarget y egui-winit nos los entrega en el input crudo;
+        // NO registramos un IDropTarget propio (chocaría con el de winit —
+        // DRAGDROP_E_ALREADYREGISTERED— y perturbaría el estado OLE del hilo de UI).
+        let paths: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if paths.is_empty() {
+            return;
         }
-        for d in dropped {
-            if d.paths.is_empty() {
-                continue;
-            }
-            let Some(dest) = self.active_dir() else {
-                continue;
-            };
-            // Honrar el efecto que decidió el IDropTarget (Shift=mover, si no copiar).
-            let move_it = !d.effect_copy;
-            let req = crate::ops_actions::transfer(move_it, d.paths, dest.clone());
-            let verb = if move_it {
-                self.i18n.t("op.cut")
-            } else {
-                self.i18n.t("op.copy")
-            };
-            let label = format!("{verb} → {}", dest.display());
-            self.launch_transfer(req, label);
-        }
+        let Some(dest) = self.active_dir() else {
+            return;
+        };
+        // egui no expone el efecto (mover/copiar) del drop externo; copiamos por defecto
+        // (el comportamiento seguro y habitual al traer archivos de afuera).
+        let req = crate::ops_actions::transfer(false, paths, dest.clone());
+        let label = format!("{} → {}", self.i18n.t("op.copy"), dest.display());
+        self.launch_transfer(req, label);
     }
 
     /// Re-lista un panel sin tocar su historial (refrescar).
@@ -2463,7 +2437,7 @@ impl eframe::App for NaygoApp {
         self.pump_sizing();
         self.pump_watchers();
         self.pump_devices();
-        self.pump_dropped_files();
+        self.pump_dropped_files(ctx);
         self.pump_paste_write();
         // La captura de atajos consume el teclado de este frame. Si capturó o canceló una
         // tecla, NO corremos handle_input este frame: si no, la misma tecla (que sigue
@@ -2496,7 +2470,7 @@ impl eframe::App for NaygoApp {
         // Los eventos de carpeta llegan por canal sin input del usuario: despertamos la
         // UI ~2 veces/seg para drenarlos. Barato y respeta el bajo consumo (no es un
         // bucle ocupado: si no hay cambios, los pumps no hacen trabajo).
-        if !self.watchers.is_empty() || self.device_watch.is_some() || self.drop_rx.is_some() {
+        if !self.watchers.is_empty() || self.device_watch.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
         // Fluidez del hover/selección: mientras el puntero está sobre la UI, repintamos
