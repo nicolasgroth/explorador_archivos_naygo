@@ -30,6 +30,7 @@ mod table_actions;
 mod templates_menu;
 mod theme_apply;
 mod toolbar;
+mod tray;
 mod tree_actions;
 mod typeahead;
 

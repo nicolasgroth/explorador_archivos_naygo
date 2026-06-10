@@ -144,6 +144,19 @@ pub struct Settings {
     /// primer nivel). Más barato. `false` (default) = recursivo.
     #[serde(default = "default_size_no_subdirs")]
     pub size_no_subdirs: bool,
+    /// Ícono de Naygo en la bandeja del sistema (junto al reloj). `true` por defecto:
+    /// pedido de Nicolás (acceso rápido). `#[serde(default)]` retro-compat.
+    #[serde(default = "default_tray_enabled")]
+    pub tray_enabled: bool,
+    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir. Opt-in (default
+    /// `false`): residente = memoria ocupada, que sea decisión del usuario.
+    #[serde(default)]
+    pub close_to_tray: bool,
+}
+
+/// Default de `tray_enabled` para `#[serde(default)]`.
+fn default_tray_enabled() -> bool {
+    true
 }
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
@@ -257,6 +270,8 @@ impl Default for Settings {
             highlight_duration: HighlightDuration::UntilInteract,
             new_items_at_end: false,
             size_no_subdirs: false,
+            tray_enabled: true,
+            close_to_tray: false,
         }
     }
 }
@@ -482,6 +497,8 @@ mod tests {
             highlight_duration: HighlightDuration::FadeSeconds(6),
             new_items_at_end: true,
             size_no_subdirs: true,
+            tray_enabled: false,
+            close_to_tray: true,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);

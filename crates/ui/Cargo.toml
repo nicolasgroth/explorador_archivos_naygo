@@ -22,10 +22,11 @@ egui = { workspace = true }
 egui_extras = { workspace = true }
 egui_dock = { workspace = true }
 raw-window-handle = "0.6"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+tray-icon = "0.24.1"
 
 [build-dependencies]
 embed-resource = "3"

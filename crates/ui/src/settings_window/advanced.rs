@@ -198,6 +198,32 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.settings.size_no_subdirs = size_no_subdirs;
     }
 
+    // Integración con Windows: tray + cerrar-a-bandeja + inicio con Windows.
+    ui.add_space(12.0);
+    ui.heading(app.tr("settings.system.section"));
+    ui.add_space(6.0);
+    let l_tray = app.tr("settings.system.tray");
+    let mut tray_on = app.settings.tray_enabled;
+    if ui.checkbox(&mut tray_on, l_tray).changed() {
+        app.settings.tray_enabled = tray_on;
+    }
+    ui.add_enabled_ui(app.settings.tray_enabled, |ui| {
+        let l_ctt = app.tr("settings.system.close_to_tray");
+        let mut ctt = app.settings.close_to_tray;
+        if ui.checkbox(&mut ctt, l_ctt).changed() {
+            app.settings.close_to_tray = ctt;
+        }
+    });
+    // El checkbox de autostart refleja el REGISTRO real (no settings.json): así no
+    // puede quedar desincronizado con lo que Windows va a hacer al arrancar.
+    let l_auto = app.tr("settings.system.autostart");
+    let mut auto = naygo_platform::autostart::is_enabled();
+    if ui.checkbox(&mut auto, l_auto).changed() {
+        if let Err(e) = naygo_platform::autostart::set_enabled(auto) {
+            tracing::warn!("autostart: {e}");
+        }
+    }
+
     // Restaurar valores de fábrica: confirmación en dos pasos (el primer clic arma el
     // botón de confirmar por 4 s; el segundo ejecuta). El reset real lo procesa
     // `NaygoApp::logic` (patrón de acciones diferidas).

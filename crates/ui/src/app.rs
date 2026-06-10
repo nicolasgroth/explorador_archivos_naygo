@@ -236,6 +236,14 @@ pub struct NaygoApp {
     pub(crate) egg_last_click: Option<std::time::Instant>,
     /// El egg está activo hasta este instante (None = inactivo).
     pub(crate) egg_until: Option<std::time::Instant>,
+    /// Ícono en la bandeja del sistema (None = deshabilitado o falló al crear).
+    tray: Option<crate::tray::Tray>,
+    /// La creación del tray falló (no reintentar cada frame).
+    tray_failed: bool,
+    /// "Salir" del menú del tray: cierre REAL aunque `close_to_tray` esté activo.
+    quit_requested: bool,
+    /// La ventana está oculta en la bandeja (mantiene un latido para drenar eventos).
+    hidden_to_tray: bool,
     pub templates: TemplateStore,
     config_dir: PathBuf,
     pub status: String,
@@ -407,6 +415,10 @@ impl NaygoApp {
             egg_clicks: 0,
             egg_last_click: None,
             egg_until: None,
+            tray: None,
+            tray_failed: false,
+            quit_requested: false,
+            hidden_to_tray: false,
             templates,
             config_dir,
             status: initial_status,
@@ -2556,6 +2568,44 @@ impl eframe::App for NaygoApp {
             ctx.request_repaint();
         }
 
+        // ── Bandeja del sistema ──
+        // Crear/destruir según el setting (cubre también el arranque). `create` corre
+        // en el hilo del event loop (requisito de tray-icon). Si falla (p. ej. ícono
+        // ilegible), no se reintenta cada frame: queda None y el setting intacto.
+        if self.settings.tray_enabled && self.tray.is_none() && !self.tray_failed {
+            let open = self.i18n.t("tray.open").to_string();
+            let exit = self.i18n.t("tray.exit").to_string();
+            self.tray = crate::tray::create(ctx, &open, &exit);
+            self.tray_failed = self.tray.is_none();
+        } else if !self.settings.tray_enabled && self.tray.is_some() {
+            self.tray = None;
+        }
+        // Drenar los mensajes del tray (los handlers ya despertaron la UI).
+        let (mut tray_open, mut tray_exit) = (false, false);
+        if let Some(t) = &self.tray {
+            while let Ok(msg) = t.rx.try_recv() {
+                match msg {
+                    crate::tray::TrayMsg::Open => tray_open = true,
+                    crate::tray::TrayMsg::Exit => tray_exit = true,
+                }
+            }
+        }
+        if tray_open {
+            self.hidden_to_tray = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if tray_exit {
+            self.quit_requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        // Mientras la ventana está oculta en la bandeja, un latido lento mantiene el
+        // drenado de eventos vivo (una ventana oculta puede no recibir redraws; el
+        // request_repaint del handler podría no bastar). 3 Hz: costo ínfimo.
+        if self.hidden_to_tray {
+            ctx.request_repaint_after(std::time::Duration::from_millis(330));
+        }
+
         // ── Persistencia real (eframe sin la feature `persistence` jamás llama a
         // `App::save`, así que el guardado lo dirigimos nosotros) ──
         // Restaurar valores de fábrica (pedido desde Configuración → Avanzado).
@@ -2578,6 +2628,13 @@ impl eframe::App for NaygoApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             self.save_workspace();
             config::save_settings(&self.config_dir, &self.settings);
+            // Cerrar → ocultar a la bandeja (opt-in). "Salir" del tray fuerza el
+            // cierre real (quit_requested).
+            if self.settings.close_to_tray && self.tray.is_some() && !self.quit_requested {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.hidden_to_tray = true;
+            }
         }
     }
 

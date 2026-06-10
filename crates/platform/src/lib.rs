@@ -6,6 +6,7 @@
 //! (íconos, ShellExecute, papelera, discos) y el drag&drop COM llegan en fases
 //! posteriores. Este crate existe ahora para fijar la frontera arquitectónica.
 
+pub mod autostart;
 pub mod clipboard;
 pub mod context_menu;
 pub mod device_watch;
