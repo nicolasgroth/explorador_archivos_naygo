@@ -2474,13 +2474,14 @@ impl eframe::App for NaygoApp {
         if !self.watchers.is_empty() || self.device_watch.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
-        // Fluidez del hover/selección: mientras el puntero está sobre la UI, repintamos
-        // continuo para que la fila bajo el mouse y el clic respondan al instante (egui,
-        // por defecto, solo repinta una vez por evento → el hover se siente lento, y los
-        // primeros clics tras cargar pueden "no tomar"). En IDLE con el mouse FUERA de la
-        // ventana NO se repinta → se respeta el bajo consumo. NO convertir esto en un
-        // repaint incondicional (gastaría CPU/GPU sin que pase nada).
-        if ctx.is_pointer_over_egui() {
+        // Fluidez del hover SIN quemar recursos: repintamos solo cuando el puntero se está
+        // MOVIENDO sobre la UI (para que la fila bajo el mouse se actualice al instante),
+        // no en cada frame. Con el mouse quieto o fuera de la ventana NO se repinta → la
+        // app queda idle (bajo consumo, la prioridad del proyecto). egui ya repinta ante
+        // clics/teclas por su cuenta, así que la respuesta al clic no depende de esto.
+        let pointer_moving =
+            ctx.input(|i| i.pointer.is_moving() && i.pointer.interact_pos().is_some());
+        if pointer_moving {
             ctx.request_repaint();
         }
     }

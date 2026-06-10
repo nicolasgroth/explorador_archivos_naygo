@@ -62,7 +62,9 @@ impl Splash {
                 ui.centered_and_justified(|ui| {
                     // El logo a ~60% del lado menor, centrado y nítido.
                     let side = ui.available_width().min(ui.available_height()) * 0.6;
-                    ui.add(egui::Image::new(&self.texture).fit_to_exact_size(egui::vec2(side, side)));
+                    ui.add(
+                        egui::Image::new(&self.texture).fit_to_exact_size(egui::vec2(side, side)),
+                    );
                 });
             });
 

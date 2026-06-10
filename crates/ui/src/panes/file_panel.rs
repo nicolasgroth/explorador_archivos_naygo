@@ -577,18 +577,7 @@ pub fn show(
     // padre, para que quede por encima del fondo de la fila. Mismo enfoque de
     // `dashed_line` que el rubber-band.
     if let Some(r) = focus_rect {
-        let stroke = egui::Stroke::new(1.0, theme.accent());
-        let corners = [
-            r.left_top(),
-            r.right_top(),
-            r.right_bottom(),
-            r.left_bottom(),
-            r.left_top(),
-        ];
-        let painter = ui.painter();
-        for w in corners.windows(2) {
-            painter.extend(egui::Shape::dashed_line(&[w[0], w[1]], stroke, 3.0, 2.0));
-        }
+        dashed_rect_border(ui.painter(), r, theme.accent());
     }
 
     // Detectar resize: si el ancho medido de una columna difiere del guardado en el
@@ -669,11 +658,35 @@ pub fn show(
 /// y borde punteado del acento (estilo clásico de Windows). `dashed_line` devuelve un
 /// `Vec<Shape>` en egui 0.34, así que se vuelca con `painter.extend`.
 fn paint_rubber_band(ui: &egui::Ui, rect: egui::Rect, accent: egui::Color32) {
-    let painter = ui.painter();
+    if !is_paintable_rect(rect) {
+        return;
+    }
     let fill = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 16);
-    painter.rect_filled(rect, 0.0, fill);
-    let stroke = egui::Stroke::new(1.0, accent);
-    // Recorrer las cuatro aristas (cerrando el polígono) y puntearlas.
+    ui.painter().rect_filled(rect, 0.0, fill);
+    dashed_rect_border(ui.painter(), rect, accent);
+}
+
+/// ¿El rect es seguro para pintar? Rechaza rects NO FINITOS (egui devuelve
+/// `Rect::NOTHING` = `[+∞..-∞]` para widgets aún sin layout, p. ej. en el primer frame)
+/// y rects absurdamente grandes. CRÍTICO: `Shape::dashed_line` asigna ~`largo/(dash+gap)`
+/// segmentos; un largo infinito/enorme intenta asignar decenas de GB y ABORTA el proceso
+/// (causa del cierre tras el splash). Con esta guarda, simplemente no se pinta.
+fn is_paintable_rect(r: egui::Rect) -> bool {
+    r.is_finite()
+        && r.width() >= 0.0
+        && r.height() >= 0.0
+        && r.width() < 100_000.0
+        && r.height() < 100_000.0
+}
+
+/// Pinta un borde punteado alrededor de `rect` con el color dado. Tolerante: no hace
+/// nada si el rect no es pintable (ver `is_paintable_rect`), evitando que `dashed_line`
+/// asigne memoria desproporcionada con coordenadas no finitas.
+fn dashed_rect_border(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    if !is_paintable_rect(rect) {
+        return;
+    }
+    let stroke = egui::Stroke::new(1.0, color);
     let corners = [
         rect.left_top(),
         rect.right_top(),
@@ -682,8 +695,7 @@ fn paint_rubber_band(ui: &egui::Ui, rect: egui::Rect, accent: egui::Color32) {
         rect.left_top(),
     ];
     for w in corners.windows(2) {
-        let dashes = egui::Shape::dashed_line(&[w[0], w[1]], stroke, 4.0, 3.0);
-        painter.extend(dashes);
+        painter.extend(egui::Shape::dashed_line(&[w[0], w[1]], stroke, 4.0, 3.0));
     }
 }
 

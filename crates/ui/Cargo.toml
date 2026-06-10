@@ -9,6 +9,11 @@ license.workspace = true
 name = "naygo"
 path = "src/main.rs"
 
+[features]
+# Build de diagnóstico: deja la consola abierta en release para ver errores de wgpu/
+# abort que cierran la app sin un panic de Rust. NO usar en la build de distribución.
+console = []
+
 [dependencies]
 naygo-core = { path = "../core" }
 naygo-platform = { path = "../platform" }

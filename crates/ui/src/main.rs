@@ -4,8 +4,13 @@
 // Naygo — un explorador de archivos estilo Commander.
 // Autor: Nicolás Groth / ISGroth (Chile). Licencia MIT.
 
-// En release, no abrir consola en Windows.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// En release, no abrir consola en Windows — EXCEPTO si se compila con la feature
+// `console` (build de diagnóstico): ahí se deja la consola para ver errores de wgpu/
+// abort que cierran la app sin panic de Rust.
+#![cfg_attr(
+    all(not(debug_assertions), not(feature = "console")),
+    windows_subsystem = "windows"
+)]
 
 mod app;
 mod column_menu;
