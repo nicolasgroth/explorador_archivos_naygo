@@ -33,6 +33,8 @@ pub enum PanePurpose {
     Tree,
     /// Inspector de metadatos del elemento enfocado en el panel activo.
     Inspector,
+    /// Historial de operaciones con deshacer (R2b).
+    History,
 }
 
 /// Un panel concreto del workspace. Solo los `Files` llevan `FilePaneState`.

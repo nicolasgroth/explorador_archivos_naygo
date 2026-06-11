@@ -62,6 +62,12 @@ pub struct NaygoTabViewer<'a> {
     pub new_items_at_end: bool,
     /// Carpetas cuyo tamaño calculado es parcial (p. ej. subcarpetas sin acceso).
     pub size_partial: &'a std::collections::HashSet<std::path::PathBuf>,
+    /// Historial de deshacer (lo pinta el panel History; NaygoApp lo posee).
+    pub undo_history: &'a [naygo_core::ops::undo::UndoEntry],
+    /// Ids de entradas del historial a deshacer, EN ORDEN (diferido a NaygoApp).
+    pub undo_clicks: &'a mut Vec<u64>,
+    /// Epoch (s) de este frame, para el "hace cuánto" del historial.
+    pub now_epoch: u64,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -82,6 +88,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
                 .unwrap_or_default(),
             Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").to_string(),
             Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").to_string(),
+            Some(PanePurpose::History) => self.i18n.t("pane.history.title").to_string(),
             None => "—".to_string(),
         };
         // Resaltar el panel activo: título en color de acento + negrita.
@@ -158,6 +165,16 @@ impl NaygoTabViewer<'_> {
                 } else {
                     ui.label(self.i18n.t("tree.loading"));
                 }
+            }
+            Some(PanePurpose::History) => {
+                crate::panes::history_panel::show(
+                    ui,
+                    self.undo_history,
+                    self.i18n,
+                    self.theme,
+                    self.now_epoch,
+                    self.undo_clicks,
+                );
             }
             Some(PanePurpose::Inspector) => {
                 crate::panes::inspector_panel::show(ui, self.workspace, self.i18n)

@@ -199,9 +199,11 @@ pub fn show(
         // Con ambos senses, egui pospone la decisión clic-vs-arrastre hasta superar el
         // umbral de movimiento (interaction.rs: "could be either, so we postpone the
         // decision until we know") → el clic selecciona y el arrastre real inicia el
-        // drag&drop OLE, sin pisarse. LECCIÓN (3 bugs seguidos): NO apilar interacts
-        // drag-only sobre las filas — quedan "dragging" desde el press sin umbral,
-        // roban el hit-test y rompen clic y hover.
+        // drag&drop OLE, sin pisarse. LECCIONES (saga de clics muertos): (1) NO apilar
+        // interacts drag-only sobre las filas — quedan "dragging" desde el press sin
+        // umbral y roban el hit-test; (2) NINGÚN widget de celda puede sensar clic
+        // (labels seleccionables incluidos) — queda encima de la fila, recibe el clic
+        // y lo descarta (ver `icon_row` y `selectable_labels=false` en theme_apply).
         .sense(egui::Sense::click_and_drag())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
     for col in &visible_cols {

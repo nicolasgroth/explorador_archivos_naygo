@@ -2093,6 +2093,22 @@ impl NaygoApp {
             self.status = self.i18n.t("undo.nothing").to_string();
             return;
         };
+        self.undo_at(idx);
+    }
+
+    /// Deshace la entrada con ese id del historial (clic en el panel Historial).
+    fn undo_by_id(&mut self, id: u64) {
+        if let Some(idx) = self.undo_history.iter().position(|e| e.id == id) {
+            self.undo_at(idx);
+        }
+    }
+
+    /// Valida y lanza el inverso de `undo_history[idx]`; marca `undone` y avisa en el
+    /// status. El deshacer corre como ops normales SIN registrarse a sí mismo.
+    fn undo_at(&mut self, idx: usize) {
+        if self.undo_history[idx].undone {
+            return;
+        }
         match naygo_core::ops::undo::validate(&self.undo_history[idx].actions) {
             Err(e) => {
                 self.status = self.i18n.t("undo.invalid").replace("{e}", &e);
@@ -2108,6 +2124,12 @@ impl NaygoApp {
                 self.status = label;
             }
         }
+    }
+
+    /// Agrega un panel genérico (Historial/Árbol/Propiedades) al leaf enfocado.
+    pub fn add_pane_of(&mut self, purpose: PanePurpose) {
+        let id = self.workspace.add_pane(purpose, PathBuf::new());
+        self.dock_state.main_surface_mut().push_to_focused_leaf(id);
     }
 
     /// Arranca el rename INLINE (R1) sobre la entry con foco del panel activo: la
@@ -2651,6 +2673,15 @@ impl eframe::App for NaygoApp {
             ctx.request_repaint();
         }
 
+        // Espejar el setting "nuevos al final" en cada panel: una sola definición de
+        // la vista (core) para render + foco + teclado.
+        let group_new = self.settings.new_items_at_end;
+        for p in self.workspace.panes_mut() {
+            if let Some(f) = p.files.as_mut() {
+                f.group_new_at_end = group_new;
+            }
+        }
+
         // ── Bandeja del sistema ──
         // Crear/destruir según el setting (cubre también el arranque). `create` corre
         // en el hilo del event loop (requisito de tray-icon). Si falla (p. ej. ícono
@@ -2854,10 +2885,19 @@ impl eframe::App for NaygoApp {
         // Petición de menú nativo (shell-B): se declara UNA vez; cada pane que pinte su
         // menú contextual escribe aquí. Solo hay un menú abierto a la vez → last-writer-wins.
         let mut native_menu_request: Option<(f32, f32)> = None;
+        // Deshacer pedidos desde el panel Historial este frame (diferidos como pending).
+        let mut undo_clicks: Vec<u64> = Vec::new();
         {
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
                 inline_rename: &mut self.inline_rename,
+                undo_history: &self.undo_history,
+                undo_clicks: &mut undo_clicks,
+                now_epoch,
                 status: &mut self.status,
                 pending: &mut pending,
                 icons: &self.icons,
@@ -2924,6 +2964,11 @@ impl eframe::App for NaygoApp {
                     self.start_op(req, label);
                 }
             }
+        }
+
+        // Deshacer pedidos desde el panel Historial (en el orden emitido).
+        for uid in undo_clicks {
+            self.undo_by_id(uid);
         }
 
         // Arrastre OLE hacia el SO: FUERA del closure de egui (DoDragDrop bloquea con su

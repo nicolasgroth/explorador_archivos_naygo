@@ -33,6 +33,10 @@ pub struct FilePaneState {
     /// Rutas resaltadas como "recién aparecidas" (estado de presentación efímero; NO se
     /// persiste). El render las tiñe; la interacción/refresh las limpia.
     pub highlighted: std::collections::HashSet<std::path::PathBuf>,
+    /// Espejo runtime del setting "archivos nuevos al final" (lo setea la UI). NO se
+    /// persiste (vive en settings.json); existe para que `view_indices` agrupe IGUAL
+    /// que el render y los índices nunca se desalineen.
+    pub group_new_at_end: bool,
 }
 
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
@@ -68,6 +72,7 @@ impl FilePaneState {
             show_dirs: true,
             table: TableState::default(),
             highlighted: std::collections::HashSet::new(),
+            group_new_at_end: false,
         }
     }
 
@@ -85,11 +90,13 @@ impl FilePaneState {
     /// orden actual de `entries` (que `pump_one` mantiene ordenado por `sort`).
     /// Es el ÚNICO espacio de índices que usan foco/selección/teclado/activación.
     pub fn view_indices(&self) -> Vec<usize> {
-        self.view_indices_ordered(false)
+        self.view_indices_ordered(self.group_new_at_end)
     }
 
-    /// Índices de la vista (filtrada). Si `new_items_at_end`, las filas resaltadas se
-    /// mueven al final de forma ESTABLE (conservando su orden relativo).
+    /// Índices de la vista: filtrada Y ORDENADA por el `sort` del panel (UNA sola
+    /// definición del orden — la misma que pinta la UI; foco/selección/teclado y
+    /// render no pueden desalinearse). Si `new_items_at_end`, las filas resaltadas
+    /// van al final de forma ESTABLE (conservando su orden relativo).
     pub fn view_indices_ordered(&self, new_items_at_end: bool) -> Vec<usize> {
         let mut idx: Vec<usize> = if self.table.filters.is_empty() {
             (0..self.entries.len()).collect()
@@ -101,6 +108,8 @@ impl FilePaneState {
                 .map(|(i, _)| i)
                 .collect()
         };
+        let sort = self.sort;
+        idx.sort_by(|&a, &b| crate::sort::cmp_entries(&self.entries[a], &self.entries[b], &sort));
         if new_items_at_end && !self.highlighted.is_empty() {
             let hl = &self.highlighted;
             idx.sort_by_key(|&i| hl.contains(&self.entries[i].path));

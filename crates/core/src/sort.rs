@@ -9,7 +9,14 @@ use crate::fs_model::{Entry, SortKey, SortSpec};
 
 /// Ordena `entries` in-place según `spec`.
 pub fn sort_entries(entries: &mut [Entry], spec: &SortSpec) {
-    entries.sort_by(|a, b| {
+    entries.sort_by(|a, b| cmp_entries(a, b, spec));
+}
+
+/// Comparador de dos entries bajo un `SortSpec`. Público para que la VISTA por
+/// índices (`view_indices_ordered`) ordene igual que `sort_entries`: UNA sola
+/// definición del orden para UI, foco y teclado.
+pub fn cmp_entries(a: &Entry, b: &Entry, spec: &SortSpec) -> std::cmp::Ordering {
+    {
         // Carpetas primero si así se pidió, sin importar la clave.
         if spec.dirs_first {
             let a_dir = a.is_dir();
@@ -34,7 +41,7 @@ pub fn sort_entries(entries: &mut [Entry], spec: &SortSpec) {
         } else {
             ordering.reverse()
         }
-    });
+    }
 }
 
 /// Comparación de nombres case-insensitive estilo Windows.

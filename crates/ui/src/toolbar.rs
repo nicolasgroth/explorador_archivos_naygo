@@ -105,6 +105,23 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
     btn!("➕", ActionIcon::AddPane, &lbl_add_pane, true);
+    // Menú de OTROS paneles (Historial/Árbol/Propiedades): ▾ chico junto al ➕.
+    ui.menu_button("▾", |ui| {
+        if ui.button(app.tr("pane.history.title")).clicked() {
+            app.add_pane_of(naygo_core::workspace::PanePurpose::History);
+            ui.close();
+        }
+        if ui.button(app.tr("pane.tree.title")).clicked() {
+            app.add_pane_of(naygo_core::workspace::PanePurpose::Tree);
+            ui.close();
+        }
+        if ui.button(app.tr("pane.inspector.title")).clicked() {
+            app.add_pane_of(naygo_core::workspace::PanePurpose::Inspector);
+            ui.close();
+        }
+    })
+    .response
+    .on_hover_text(app.tr("toolbar.add_other"));
 
     if let Some(action) = clicked {
         match action {
