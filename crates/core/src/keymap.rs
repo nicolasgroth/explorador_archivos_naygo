@@ -349,13 +349,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_25_acciones_con_clave_i18n_unica() {
+    fn all_tiene_26_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 25);
+        assert_eq!(all.len(), 26);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 25, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 26, "cada acción tiene una clave i18n única");
     }
 
     #[test]
