@@ -61,6 +61,7 @@ pub fn show(
     native_menu_request: &mut Option<(f32, f32)>,
     new_items_at_end: bool,
     size_partial: &std::collections::HashSet<std::path::PathBuf>,
+    inline_rename: &mut Option<crate::app::InlineRename>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -130,6 +131,13 @@ pub fn show(
     let mut os_drag_start: Option<usize> = None;
     // Fila sobre la que se abrió el menú contextual (para enfocarla antes de actuar).
     let mut context_focus: Option<usize> = None;
+    // Señales del rename inline (F2) emitidas desde la celda Nombre este frame; se
+    // procesan tras la tabla (donde vive la `view`). `rename_commit` = confirmar el
+    // texto actual; `rename_travel` = además moverse a la fila pos±1; `rename_cancel`
+    // = Esc. Solo aplican si `inline_rename` apunta a ESTE panel.
+    let mut rename_commit = false;
+    let mut rename_travel: Option<i32> = None;
+    let mut rename_cancel = false;
 
     let visible_cols: Vec<naygo_core::columns::ColumnSpec> =
         table.visible_columns().cloned().collect();
@@ -331,9 +339,92 @@ pub fn show(
                                     } else {
                                         None
                                     };
-                                    // El arrastre de archivos lo sensa la FILA completa (como
-                                    // el Explorer en vista detalles); acá solo se pinta.
-                                    let _ = icon_row(ui, icons, key, &entry.name, name_color);
+                                    // ¿Esta fila está en rename inline (F2)? → TextEdit en
+                                    // lugar del label. Las teclas del gesto (F2/↑/↓/Esc) se
+                                    // CONSUMEN antes de crear el TextEdit para que no las vea.
+                                    let editing = inline_rename
+                                        .as_ref()
+                                        .is_some_and(|r| r.pane == id && r.path == entry.path);
+                                    if editing {
+                                        let r =
+                                            inline_rename.as_mut().expect("editing implica Some");
+                                        let f2 = ui.input_mut(|inp| {
+                                            inp.consume_key(egui::Modifiers::NONE, egui::Key::F2)
+                                        });
+                                        let up = ui.input_mut(|inp| {
+                                            inp.consume_key(
+                                                egui::Modifiers::NONE,
+                                                egui::Key::ArrowUp,
+                                            )
+                                        });
+                                        let down = ui.input_mut(|inp| {
+                                            inp.consume_key(
+                                                egui::Modifiers::NONE,
+                                                egui::Key::ArrowDown,
+                                            )
+                                        });
+                                        let esc = ui.input_mut(|inp| {
+                                            inp.consume_key(
+                                                egui::Modifiers::NONE,
+                                                egui::Key::Escape,
+                                            )
+                                        });
+                                        let tex = icons.texture(key);
+                                        ui.add(
+                                            egui::Image::new(tex).fit_to_exact_size(egui::vec2(
+                                                ICON_SIZE, ICON_SIZE,
+                                            )),
+                                        );
+                                        let te_id = egui::Id::new(("naygo_inline_rename", id.0));
+                                        // El F2 que ABRIO el rename (handler global) puede seguir
+                                        // en el input de este mismo frame: la celda lo consumiria
+                                        // y ciclaria la etapa de mas. Recien creado (focus aun
+                                        // pendiente) ese F2 se ignora.
+                                        let f2 = f2 && !r.focus_pending;
+                                        if f2 {
+                                            r.stage = (r.stage + 1) % 3;
+                                            r.select_pending = true;
+                                        }
+                                        // ORDEN CRITICO: la seleccion se aplica ANTES de crear el
+                                        // TextEdit (el widget carga su estado al crearse; despues
+                                        // llega 1-2 frames tarde y el tipeo usa el rango viejo).
+                                        if r.select_pending {
+                                            apply_rename_selection(
+                                                ui.ctx(),
+                                                te_id,
+                                                &r.text,
+                                                r.stage,
+                                            );
+                                            r.select_pending = false;
+                                        }
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut r.text)
+                                                .id(te_id)
+                                                .desired_width(ui.available_width().max(80.0))
+                                                .margin(egui::vec2(4.0, 0.0)),
+                                        );
+                                        if r.focus_pending {
+                                            resp.request_focus();
+                                            r.focus_pending = false;
+                                        }
+                                        if esc {
+                                            rename_cancel = true;
+                                        } else if up {
+                                            rename_commit = true;
+                                            rename_travel = Some(-1);
+                                        } else if down {
+                                            rename_commit = true;
+                                            rename_travel = Some(1);
+                                        } else if resp.lost_focus() {
+                                            // Enter o clic afuera: ambos confirman (Esc ya
+                                            // se consumió arriba y no llega acá).
+                                            rename_commit = true;
+                                        }
+                                    } else {
+                                        // El arrastre de archivos lo sensa la FILA completa
+                                        // (como Explorer en detalles); acá solo se pinta.
+                                        let _ = icon_row(ui, icons, key, &entry.name, name_color);
+                                    }
                                 } else {
                                     let mut text = cell_text(entry, col.kind);
                                     if col.kind == ColumnKind::Size
@@ -563,6 +654,73 @@ pub fn show(
     // bucle modal que captura el mouse, y los drops vuelven por el `IDropTarget` que
     // registra winit → egui `dropped_files` → `NaygoApp::pump_dropped_files`. Un
     // destino egui aquí sería código muerto (OLE siempre gana el arrastre).
+
+    // Rename inline (F2): procesar las señales del frame con la `view` a mano. El
+    // estado se ancla por PATH: tras un rename el listado se refresca y la vista
+    // puede estar vacía/reordenada unos frames — se tolera con `missing_frames`.
+    let rename_mine = inline_rename.as_ref().is_some_and(|r| r.pane == id);
+    if rename_mine {
+        let (anchor, text) = {
+            let r = inline_rename.as_ref().expect("rename_mine implica Some");
+            (r.path.clone(), r.text.clone())
+        };
+        match view.iter().position(|e| e.path == anchor) {
+            None => {
+                // El path aún no reaparece (listado en vuelo): mantener vivo el
+                // estado un rato y repintar; pasado el límite, descartar limpio.
+                let r = inline_rename.as_mut().expect("rename_mine implica Some");
+                r.missing_frames = r.missing_frames.saturating_add(1);
+                if r.missing_frames > 60 {
+                    *inline_rename = None;
+                } else {
+                    ui.ctx().request_repaint();
+                }
+            }
+            Some(_) if rename_cancel => {
+                *inline_rename = None;
+            }
+            Some(pos) if rename_commit || rename_travel.is_some() => {
+                let new_name = text.trim().to_string();
+                let old = &view[pos];
+                let valid = !new_name.is_empty()
+                    && !new_name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']);
+                if rename_commit && valid && new_name != old.name {
+                    pending.push(PaneRequest::CommitRename {
+                        source: old.path.clone(),
+                        new_name,
+                    });
+                }
+                match rename_travel {
+                    Some(d) => {
+                        // Viajar a la fila de arriba/abajo y seguir en serie.
+                        let len = view.len() as i32;
+                        let np = (pos as i32 + d).clamp(0, len - 1) as usize;
+                        let next_text = view[np].name.clone();
+                        *inline_rename = Some(crate::app::InlineRename {
+                            pane: id,
+                            path: view[np].path.clone(),
+                            text: next_text,
+                            stage: 0,
+                            focus_pending: true,
+                            select_pending: true,
+                            missing_frames: 0,
+                        });
+                        // El foco/selección del panel acompaña el viaje.
+                        if let Some(fp) = workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                            fp.select_single(np);
+                        }
+                    }
+                    None => *inline_rename = None,
+                }
+            }
+            Some(r) => {
+                let _ = r;
+                if let Some(st) = inline_rename.as_mut() {
+                    st.missing_frames = 0;
+                }
+            }
+        }
+    }
 
     // Borde punteado del foco/ancla: distingue la fila con foco de teclado del resto
     // de la multi-selección (que ya va resaltada). Se pinta tras la tabla, con el `ui`
@@ -842,4 +1000,27 @@ fn format_time(opt: Option<SystemTime>) -> String {
         Some(d) => format!("{}", d.as_secs()),
         None => String::new(),
     }
+}
+
+/// Aplica al TextEdit del rename inline el rango de selección de la etapa del ciclo
+/// F2: 0 = nombre sin extensión, 1 = solo extensión, 2 = todo. Sin extensión (carpetas,
+/// dotfiles tipo ".gitignore") todas las etapas seleccionan todo. Rangos en CHARS.
+fn apply_rename_selection(ctx: &egui::Context, te_id: egui::Id, text: &str, stage: u8) {
+    let total = text.chars().count();
+    let split = text
+        .rsplit_once('.')
+        .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty());
+    let (start, end) = match (stage, split) {
+        (0, Some((stem, _))) => (0, stem.chars().count()),
+        (1, Some((stem, _))) => (stem.chars().count() + 1, total),
+        _ => (0, total),
+    };
+    let mut state = egui::text_edit::TextEditState::load(ctx, te_id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
+        )));
+    state.store(ctx, te_id);
 }

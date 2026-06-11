@@ -179,11 +179,6 @@ pub enum PendingDialog {
         /// Nombre del primer choque (para el cuerpo del modal).
         name: String,
     },
-    /// Renombrar el elemento `source`: pide el nombre nuevo.
-    Rename {
-        source: std::path::PathBuf,
-        buf: String,
-    },
     /// Crear archivo/carpeta en `dir`: pide el nombre.
     Create {
         dir: std::path::PathBuf,
@@ -236,6 +231,8 @@ pub struct NaygoApp {
     pub(crate) egg_last_click: Option<std::time::Instant>,
     /// El egg está activo hasta este instante (None = inactivo).
     pub(crate) egg_until: Option<std::time::Instant>,
+    /// Rename inline en curso (F2). Suspende el input global mientras existe.
+    pub(crate) inline_rename: Option<InlineRename>,
     /// Ícono en la bandeja del sistema (None = deshabilitado o falló al crear).
     tray: Option<crate::tray::Tray>,
     /// La creación del tray falló (no reintentar cada frame).
@@ -317,6 +314,22 @@ pub struct NaygoApp {
 struct PendingPasteWrite {
     rx: std::sync::mpsc::Receiver<Result<PasteOk, String>>,
     dir: Option<std::path::PathBuf>,
+}
+
+/// Estado del rename inline (F2 en serie, R1). `pos` es la posición en la VISTA
+/// (filtrada/ordenada) del panel. `stage`: 0 = nombre sin extensión, 1 = extensión,
+/// 2 = todo (el ciclo de F2). Los `*_pending` se consumen al pintar la celda.
+pub struct InlineRename {
+    pub pane: PaneId,
+    /// Ancla por PATH (no por posición: el refresh tras un rename reordena/vacía la
+    /// vista unos frames y una posición quedaría colgando).
+    pub path: std::path::PathBuf,
+    pub text: String,
+    pub stage: u8,
+    pub focus_pending: bool,
+    pub select_pending: bool,
+    /// Frames seguidos en que el path no aparece en la vista (listado en vuelo).
+    pub missing_frames: u8,
 }
 
 impl NaygoApp {
@@ -415,6 +428,7 @@ impl NaygoApp {
             egg_clicks: 0,
             egg_last_click: None,
             egg_until: None,
+            inline_rename: None,
             tray: None,
             tray_failed: false,
             quit_requested: false,
@@ -2022,14 +2036,27 @@ impl NaygoApp {
     }
 
     /// Abre el modal de renombrar para la entry enfocada (precarga su nombre).
+    /// Arranca el rename INLINE (R1) sobre la entry con foco del panel activo: la
+    /// celda Nombre se vuelve un TextEdit con el nombre pre-seleccionado (etapa 0).
     fn begin_rename(&mut self) {
-        let entry = self
-            .workspace
-            .active_files()
-            .and_then(|f| f.focused_view_entry())
-            .map(|e| (e.path.clone(), e.name.clone()));
-        if let Some((source, name)) = entry {
-            self.pending_dialog = Some(PendingDialog::Rename { source, buf: name });
+        let Some(pane) = self.workspace.active_id() else {
+            return;
+        };
+        let info = self.workspace.active_files().and_then(|f| {
+            let e = f.focused_view_entry()?;
+            Some((e.path.clone(), e.name.clone()))
+        });
+        if let Some((path, name)) = info {
+            tracing::debug!(?path, "rename inline: begin");
+            self.inline_rename = Some(InlineRename {
+                pane,
+                path,
+                text: name,
+                stage: 0,
+                focus_pending: true,
+                select_pending: true,
+                missing_frames: 0,
+            });
         }
     }
 
@@ -2076,25 +2103,6 @@ impl NaygoApp {
                     Some(choice) => self.resolve_conflict(req, label, choice),
                     None => {
                         self.pending_dialog = Some(PendingDialog::Conflict { req, label, name });
-                    }
-                }
-            }
-            PendingDialog::Rename { source, mut buf } => {
-                match crate::ops_dialogs::name_input(ctx, &self.i18n, "op.rename_title", &mut buf) {
-                    Some(NameResult::Confirmed(new_name)) => {
-                        let req = crate::ops_actions::rename(source, new_name);
-                        let label = self.i18n.t("op.rename").to_string();
-                        // Renombrar no genera conflicto vía nuestro flujo de paste;
-                        // el motor maneja el choque con la política del request. Para
-                        // ops-A usamos Overwrite (decisión simple) — el plan de rename
-                        // es un solo paso.
-                        let mut req = req;
-                        req.conflict = ConflictPolicy::Overwrite;
-                        self.start_op(req, label);
-                    }
-                    Some(NameResult::Cancelled) => {}
-                    None => {
-                        self.pending_dialog = Some(PendingDialog::Rename { source, buf });
                     }
                 }
             }
@@ -2330,6 +2338,7 @@ impl NaygoApp {
         if self.pending_dialog.is_some()
             || !self.pending_resume.is_empty()
             || self.shortcut_capture.is_some()
+            || self.inline_rename.is_some()
         {
             return;
         }
@@ -2774,6 +2783,7 @@ impl eframe::App for NaygoApp {
         {
             let mut viewer = crate::docking::NaygoTabViewer {
                 workspace: &mut self.workspace,
+                inline_rename: &mut self.inline_rename,
                 status: &mut self.status,
                 pending: &mut pending,
                 icons: &self.icons,
@@ -2830,6 +2840,14 @@ impl eframe::App for NaygoApp {
                 crate::docking::PaneRequest::StartOsDrag { paths } => {
                     // Solo un arrastre a la vez tiene sentido; last-writer-wins.
                     os_drag_request = Some(paths);
+                }
+                crate::docking::PaneRequest::CommitRename { source, new_name } => {
+                    // Mismo camino que tenía el diálogo de renombrar: rename de un
+                    // paso con Overwrite (el motor maneja el choque).
+                    let mut req = crate::ops_actions::rename(source, new_name);
+                    req.conflict = ConflictPolicy::Overwrite;
+                    let label = self.i18n.t("op.rename").to_string();
+                    self.start_op(req, label);
                 }
             }
         }

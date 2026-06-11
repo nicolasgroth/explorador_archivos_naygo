@@ -21,10 +21,15 @@ pub enum PaneRequest {
     /// `DoDragDrop` corre un bucle modal que toma el control del mouse. Mismo patrón que el
     /// menú contextual nativo (`native_menu_request`).
     StartOsDrag { paths: Vec<PathBuf> },
+    /// Confirmar un rename inline (R1): renombrar `source` a `new_name`. `NaygoApp`
+    /// lo convierte en un OpRequest de Rename (mismo camino que el diálogo viejo).
+    CommitRename { source: PathBuf, new_name: String },
 }
 
 pub struct NaygoTabViewer<'a> {
     pub workspace: &'a mut Workspace,
+    /// Estado del rename inline (F2): vive en `NaygoApp`, lo pinta/maneja file_panel.
+    pub inline_rename: &'a mut Option<crate::app::InlineRename>,
     pub status: &'a mut String,
     pub pending: &'a mut Vec<PaneRequest>,
     pub icons: &'a crate::icons::IconProvider,
@@ -126,6 +131,7 @@ impl NaygoTabViewer<'_> {
                     self.native_menu_request,
                     self.new_items_at_end,
                     self.size_partial,
+                    self.inline_rename,
                 );
                 for a in local {
                     self.table_actions.push((id, a));
