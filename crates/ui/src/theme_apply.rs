@@ -74,6 +74,13 @@ pub fn apply(theme: &Theme, ctx: &egui::Context) {
     v.widgets.noninteractive.fg_stroke.color = to_color32(theme.text);
     v.widgets.noninteractive.bg_stroke.color = to_color32(theme.border);
     ctx.set_visuals(v);
+    // Sin selección de texto en labels: con `selectable_labels` (default true de egui)
+    // CADA `ui.label` sensa `click_and_drag` para el cursor de texto, queda ENCIMA de
+    // la fila de la tabla en el hit-test y le ROBA el clic — la fila nunca recibe
+    // `clicked()` (causa raíz de "no puedo seleccionar con el mouse"). Naygo no
+    // selecciona texto de celdas; un texto que sí deba copiarse puede optar puntual
+    // con `Label::selectable(true)`.
+    ctx.global_style_mut(|s| s.interaction.selectable_labels = false);
 }
 
 #[cfg(test)]

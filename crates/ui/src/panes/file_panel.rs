@@ -931,9 +931,13 @@ fn column_header(
     }
 }
 
-/// Pinta una fila "[ícono] nombre" como un único elemento clicable. Devuelve el
-/// `Response` combinado del ícono Y el label, así clicar en cualquiera de los dos
-/// (incluida el área del ícono) selecciona/activa la fila.
+/// Pinta una celda "[ícono] nombre" puramente visual, SIN sense propio. CAUSA RAÍZ
+/// de los clics muertos de la tabla (bug reportado por Nicolás): cualquier widget
+/// clicable dentro de la celda queda ENCIMA de la fila en el hit-test de egui,
+/// recibe el clic (verificado con `InteractionSnapshot`) y su `Response` se descarta
+/// — la fila nunca ve `clicked()`. La FILA completa (`row.response()`) es la única
+/// superficie de clic de la tabla. Devuelve el `Response` inerte (hover) por si un
+/// caller quiere tooltips.
 fn icon_row(
     ui: &mut egui::Ui,
     icons: &IconProvider,
@@ -943,20 +947,14 @@ fn icon_row(
 ) -> egui::Response {
     ui.horizontal(|ui| {
         let tex = icons.texture(key);
-        // `sense` clicks en la imagen para que el ícono no sea un hueco muerto.
-        let img = ui.add(
-            egui::Image::new(tex)
-                .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
-                .sense(egui::Sense::click()),
-        );
-        // El nombre se pinta como un `selectable_label` no seleccionado (la selección de
-        // fila la maneja `row.set_selected`); si se pide un color (resaltado estilo A),
-        // se aplica al texto.
+        let img = ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE)));
         let text = match name_color {
             Some(c) => egui::RichText::new(name).color(c),
             None => egui::RichText::new(name),
         };
-        let label = ui.selectable_label(false, text);
+        // `Label` plano y NO seleccionable: `selectable_label`/labels seleccionables
+        // sensan click(+drag) para el cursor de texto y roban el clic de la fila.
+        let label = ui.add(egui::Label::new(text).selectable(false));
         img.union(label)
     })
     .inner
