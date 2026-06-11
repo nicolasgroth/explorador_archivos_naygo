@@ -120,6 +120,8 @@ pub enum Action {
     ExtendDown,
     /// Marcar/desmarcar el ítem enfocado (Espacio).
     ToggleSelect,
+    /// Deshacer la última operación de archivos (R2).
+    Undo,
 }
 
 impl Action {
@@ -152,6 +154,7 @@ impl Action {
             ExtendUp,
             ExtendDown,
             ToggleSelect,
+            Undo,
         ]
     }
 
@@ -183,6 +186,7 @@ impl Action {
             SelectAll => "action.select_all",
             ExtendUp => "action.extend_up",
             ExtendDown => "action.extend_down",
+            Undo => "action.undo",
             ToggleSelect => "action.toggle_select",
         }
     }
@@ -225,6 +229,7 @@ impl KeyMap {
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
             (ExtendDown, vec![Chord::shift(ArrowDown)]),
             (ToggleSelect, vec![Chord::plain(Space)]),
+            (Undo, vec![Chord::ctrl(Char('z'))]),
         ];
         KeyMap { bindings: b }
     }
@@ -485,7 +490,7 @@ mod tests {
     #[test]
     fn action_for_libre_es_none() {
         let km = KeyMap::defaults();
-        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('z'))), None);
+        assert_eq!(km.action_for(&Chord::ctrl(KeyCode::Char('j'))), None);
     }
 
     #[test]
@@ -513,7 +518,7 @@ mod tests {
     #[test]
     fn bind_nuevo_libre_no_conflicto() {
         let mut km = KeyMap::defaults();
-        let r = km.bind(Action::Copy, Chord::ctrl(KeyCode::Char('z')));
+        let r = km.bind(Action::Copy, Chord::ctrl(KeyCode::Char('j')));
         assert_eq!(r, None);
         assert_eq!(km.chords_for(Action::Copy).len(), 2);
     }

@@ -58,6 +58,9 @@ pub struct ActiveOp {
     pub pending: Option<(OpPlan, OpKind, ConflictPolicy)>,
     /// Id del journal de esta op (None = no journaleada, p. ej. papelera).
     pub journal_id: Option<String>,
+    /// Request original, para construir el DESHACER al completar. None = no se
+    /// registra (ops que ya son un deshacer, o retomadas tras un crash).
+    pub request: Option<OpRequest>,
 }
 
 /// Trabajo de escritura de un archivo pegado (corre en un worker corto).
@@ -233,6 +236,10 @@ pub struct NaygoApp {
     pub(crate) egg_until: Option<std::time::Instant>,
     /// Rename inline en curso (F2). Suspende el input global mientras existe.
     pub(crate) inline_rename: Option<InlineRename>,
+    /// Historial de deshacer de la sesión (más nuevo al final; tope 100).
+    pub(crate) undo_history: Vec<naygo_core::ops::undo::UndoEntry>,
+    /// Id incremental de las entradas del historial.
+    next_undo_id: u64,
     /// Ícono en la bandeja del sistema (None = deshabilitado o falló al crear).
     tray: Option<crate::tray::Tray>,
     /// La creación del tray falló (no reintentar cada frame).
@@ -429,6 +436,8 @@ impl NaygoApp {
             egg_last_click: None,
             egg_until: None,
             inline_rename: None,
+            undo_history: Vec::new(),
+            next_undo_id: 1,
             tray: None,
             tray_failed: false,
             quit_requested: false,
@@ -1179,12 +1188,19 @@ impl NaygoApp {
             started: true,
             pending: None,
             journal_id: Some(id),
+            request: None,
         });
     }
 
     /// Lanza una operación: planifica, spawnea (o encola). Papelera = atómica vía
     /// platform (no pasa por el motor core). `label` se muestra en el panel.
     pub fn start_op(&mut self, req: OpRequest, label: String) {
+        self.start_op_recorded(req, label, true);
+    }
+
+    /// Como `start_op`, con control de si la op REGISTRA su deshacer al completar.
+    /// Las ops que YA SON un deshacer van con `false` (v1 sin redo, sin bucles).
+    fn start_op_recorded(&mut self, req: OpRequest, label: String, record_undo: bool) {
         // Papelera: caso especial atómico vía platform.
         if let OpKind::Delete { to_trash: true } = &req.kind {
             let _ = naygo_platform::trash::move_to_trash(&req.sources);
@@ -1205,6 +1221,7 @@ impl NaygoApp {
         let token = CancellationToken::new();
         if queue && any_running {
             // Encolar: guardar plan+kind+conflict; se lanza en pump_ops al liberarse.
+            let request = record_undo.then(|| req.clone());
             self.active_ops.push(ActiveOp {
                 rx: None,
                 token,
@@ -1214,6 +1231,7 @@ impl NaygoApp {
                 started: false,
                 pending: Some((plan, req.kind, req.conflict)),
                 journal_id: None, // se journalea al lanzarse en pump_ops
+                request,
             });
         } else {
             let (_ctx, crx) = std::sync::mpsc::channel::<ConflictDecision>();
@@ -1222,6 +1240,7 @@ impl NaygoApp {
                 Some((id, w)) => (Some(id), Some(w)),
                 None => (None, None),
             };
+            let request = record_undo.then(|| req.clone());
             let (rx, _h) = ops::spawn(plan, req.kind, req.conflict, token.clone(), crx, writer);
             self.active_ops.push(ActiveOp {
                 rx: Some(rx),
@@ -1232,6 +1251,7 @@ impl NaygoApp {
                 started: true,
                 pending: None,
                 journal_id,
+                request,
             });
         }
     }
@@ -1241,6 +1261,8 @@ impl NaygoApp {
         // Drenar mensajes de las ops corriendo. `just_finished` se marca cuando una
         // op pasa a tener summary este pump → refrescamos el panel activo después.
         let mut just_finished = false;
+        // Ops terminadas este pump cuyo deshacer hay que registrar (fuera del préstamo).
+        let mut finished_for_undo: Vec<(OpRequest, String, OpSummary)> = Vec::new();
         // Clon previo: no se puede prestar `self.config_dir` dentro del `&mut self.active_ops`.
         let cfg = self.config_dir.clone();
         for op in &mut self.active_ops {
@@ -1256,6 +1278,11 @@ impl NaygoApp {
                 match msg {
                     OpMsg::Progress(p) => op.progress = Some(p),
                     OpMsg::Done(s) | OpMsg::Cancelled(s) => {
+                        // Registrar el deshacer (también de canceladas: lo parcial
+                        // hecho es igualmente reversible — son los Done del summary).
+                        if let Some(req) = op.request.take() {
+                            finished_for_undo.push((req, op.label.clone(), s.clone()));
+                        }
                         op.summary = Some(s);
                         op.rx = None;
                         just_finished = true;
@@ -1275,6 +1302,27 @@ impl NaygoApp {
                         }
                     }
                     OpMsg::Conflict(_) => {} // ops-A resuelve conflicto antes de spawn
+                }
+            }
+        }
+        // Registrar los deshacer de las ops recién terminadas (historial acotado).
+        for (req, label, s) in finished_for_undo {
+            if let Some(actions) = naygo_core::ops::undo::build_undo(&req, &s) {
+                let id = self.next_undo_id;
+                self.next_undo_id += 1;
+                let when_epoch_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                self.undo_history.push(naygo_core::ops::undo::UndoEntry {
+                    id,
+                    label,
+                    when_epoch_secs,
+                    actions,
+                    undone: false,
+                });
+                if self.undo_history.len() > 100 {
+                    self.undo_history.remove(0);
                 }
             }
         }
@@ -1540,6 +1588,7 @@ impl NaygoApp {
             Action::Delete => self.delete_selection(false),
             Action::DeletePermanent => self.delete_selection(true),
             Action::Rename => self.begin_rename(),
+            Action::Undo => self.undo_last(),
             Action::NewFile => self.begin_create(false),
             Action::NewDir => self.begin_create(true),
             Action::CopyToOther => self.transfer_to_other(false),
@@ -2036,6 +2085,31 @@ impl NaygoApp {
     }
 
     /// Abre el modal de renombrar para la entry enfocada (precarga su nombre).
+    /// Deshace la entrada más NUEVA no-deshecha del historial (Ctrl+Z). Valida el
+    /// inverso primero; si ya no aplica (rutas movidas/ocupadas), avisa en el status
+    /// y NO toca nada. El deshacer corre como ops normales sin registrarse a sí mismo.
+    pub(crate) fn undo_last(&mut self) {
+        let Some(idx) = self.undo_history.iter().rposition(|e| !e.undone) else {
+            self.status = self.i18n.t("undo.nothing").to_string();
+            return;
+        };
+        match naygo_core::ops::undo::validate(&self.undo_history[idx].actions) {
+            Err(e) => {
+                self.status = self.i18n.t("undo.invalid").replace("{e}", &e);
+            }
+            Ok(()) => {
+                let original = self.undo_history[idx].label.clone();
+                let reqs = naygo_core::ops::undo::to_requests(&self.undo_history[idx].actions);
+                self.undo_history[idx].undone = true;
+                let label = self.i18n.t("undo.label").replace("{label}", &original);
+                for req in reqs {
+                    self.start_op_recorded(req, label.clone(), false);
+                }
+                self.status = label;
+            }
+        }
+    }
+
     /// Arranca el rename INLINE (R1) sobre la entry con foco del panel activo: la
     /// celda Nombre se vuelve un TextEdit con el nombre pre-seleccionado (etapa 0).
     fn begin_rename(&mut self) {

@@ -10,6 +10,7 @@ pub mod engine;
 pub mod journal;
 pub mod names;
 pub mod plan;
+pub mod undo;
 
 pub use engine::{run_plan, spawn};
 pub use journal::{
