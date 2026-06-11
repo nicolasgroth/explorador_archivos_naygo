@@ -807,14 +807,12 @@ pub fn show(
 
     // Activar este panel con CUALQUIER press dentro de su área (no solo el clic en una
     // fila): el panel activo es el destino del árbol, del teclado y de las operaciones,
-    // así que debe seguir al mouse como en cualquier explorador. Sin esto, clicar el
-    // espacio vacío o el encabezado del segundo panel no lo activaba y el árbol seguía
-    // navegando el primero.
-    // OJO: `min_rect()` puede extenderse MÁS ALLÁ del área visible (la tabla reserva el
-    // ancho total de sus columnas aunque queden clipeadas). Intersectar con el clip:
-    // (a) el borde de acento cierra también por la derecha, y (b) un press en el panel
-    // VECINO no cae dentro del rect extendido de este (activaría el panel equivocado).
-    let pane_rect = ui.min_rect().intersect(ui.clip_rect());
+    // así que debe seguir al mouse como en cualquier explorador.
+    // OJO: tiene que ser `max_rect()` (el área ASIGNADA al panel), no `min_rect()` (lo
+    // PINTADO): con pocas filas el min_rect termina en la última fila y un clic en el
+    // espacio vacío de abajo quedaba fuera → no activaba (bug reportado por Nicolás).
+    // El intersect con el clip protege contra rects extendidos fuera de lo visible.
+    let pane_rect = ui.max_rect().intersect(ui.clip_rect());
     let pressed_inside = ui.input(|i| {
         (i.pointer.primary_pressed() || i.pointer.secondary_pressed())
             && i.pointer
