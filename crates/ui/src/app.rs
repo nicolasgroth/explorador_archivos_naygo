@@ -15,6 +15,7 @@ use eframe::CreationContext;
 use egui_dock::DockState;
 use naygo_core::cancel::CancellationToken;
 use naygo_core::config::{self, Settings};
+use naygo_core::fs_model::Entry;
 use naygo_core::i18n::{pick_default_language, I18n, LangId};
 use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
@@ -38,7 +39,17 @@ use std::sync::mpsc::Receiver;
 pub struct PaneListing {
     pub rx: Option<Receiver<ListingMsg>>,
     pub token: CancellationToken,
+    /// El panel ya muestra el listado CACHEADO de esta carpeta: los resultados
+    /// frescos se acumulan en `fresh` y reemplazan la vista recién al COMPLETAR
+    /// (stale-while-revalidate, sin parpadeo ni duplicados).
+    pub from_cache: bool,
+    /// Buffer de entries frescas mientras se revalida un listado cacheado.
+    pub fresh: Vec<Entry>,
 }
+
+/// Tope TOTAL de entries del caché de carpetas (≈20 MB en el peor caso). El nº de
+/// carpetas lo fija el setting `cache_max_dirs`.
+const CACHE_MAX_TOTAL_ENTRIES: usize = 50_000;
 
 /// Un cálculo de tamaño de carpeta en curso.
 struct SizeJob {
@@ -239,6 +250,11 @@ pub struct NaygoApp {
     /// Diálogo de batch-rename abierto (F2 con multi-selección). Suspende el input
     /// global mientras existe (mismo trato que `pending_dialog`).
     pub(crate) batch_rename: Option<crate::batch_rename_dialog::BatchRenameState>,
+    /// Caché LRU de listados de carpetas visitadas (stale-while-revalidate),
+    /// compartido entre paneles. Solo memoria.
+    listing_cache: naygo_core::listing_cache::ListingCache,
+    /// Carpetas recientes globales (MRU persistente en recents.json).
+    pub(crate) recent_dirs: naygo_core::recent_dirs::RecentDirs,
     /// Historial de deshacer de la sesión (más nuevo al final; tope 100).
     pub(crate) undo_history: Vec<naygo_core::ops::undo::UndoEntry>,
     /// Id incremental de las entradas del historial.
@@ -424,6 +440,13 @@ impl NaygoApp {
         // chocaría con el de winit (DRAGDROP_E_ALREADYREGISTERED) y nuestro OleInitialize/
         // OleUninitialize perturbaba el estado OLE del hilo de UI al arrancar.
 
+        // Caché de carpetas (según settings) + recientes persistidas (carga tolerante).
+        let settings_cache_max_dirs = settings.cache_max_dirs;
+        let recent_dirs =
+            std::fs::read_to_string(naygo_core::recent_dirs::recents_path(&config_dir))
+                .map(|s| naygo_core::recent_dirs::RecentDirs::from_json(&s))
+                .unwrap_or_default();
+
         let mut app = NaygoApp {
             workspace,
             dock_state,
@@ -440,6 +463,11 @@ impl NaygoApp {
             egg_until: None,
             inline_rename: None,
             batch_rename: None,
+            listing_cache: naygo_core::listing_cache::ListingCache::new(
+                settings_cache_max_dirs,
+                CACHE_MAX_TOTAL_ENTRIES,
+            ),
+            recent_dirs,
             undo_history: Vec::new(),
             next_undo_id: 1,
             tray: None,
@@ -658,6 +686,8 @@ impl NaygoApp {
     }
 
     /// (Re)lanza el listado de un panel: cancela el anterior y arranca otro.
+    /// Si la carpeta está en el CACHÉ, sus entries se muestran EN ESTE FRAME y el
+    /// listado real corre por detrás para corregir (stale-while-revalidate).
     pub fn start_listing(&mut self, id: PaneId, dir: PathBuf) {
         if let Some(prev) = self.listings.get(&id) {
             prev.token.cancel();
@@ -666,6 +696,20 @@ impl NaygoApp {
         // `dir`. El insert reemplaza el handle anterior, cuyo Drop detiene el watcher viejo.
         // Se hace antes de mover `dir` al worker de listado.
         self.rewatch_pane(id, &dir);
+        // Carpetas recientes (MRU global): toda carpeta listada cuenta como visita.
+        self.note_recent(&dir);
+        // Cache hit → pintar ya. El foco va a la primera fila (como al completar un
+        // listado normal) para que teclado/Propiedades operen de inmediato.
+        let cached = self.listing_cache.get(&dir).map(|c| c.entries.clone());
+        let from_cache = cached.is_some();
+        if let Some(entries) = cached {
+            if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.entries = entries;
+                if f.focused.is_none() && !f.entries.is_empty() {
+                    f.focused = Some(0);
+                }
+            }
+        }
         let token = CancellationToken::new();
         let (rx, _handle) = spawn_listing(dir, token.clone());
         self.listings.insert(
@@ -673,6 +717,8 @@ impl NaygoApp {
             PaneListing {
                 rx: Some(rx),
                 token,
+                from_cache,
+                fresh: Vec::new(),
             },
         );
         // Re-listar la carpeta es un "refresco": el resaltado de aparecidos previo deja
@@ -712,6 +758,19 @@ impl NaygoApp {
 
     /// (Re)crea el watcher de carpeta del panel `id` apuntando a `dir`. Soltar el viejo
     /// (vía insert que reemplaza) libera su handle del SO.
+    /// Registra una visita en las carpetas recientes y persiste si cambió el frente
+    /// (archivo diminuto; escribe solo ante navegación real, no en cada refresh).
+    fn note_recent(&mut self, dir: &std::path::Path) {
+        if self.recent_dirs.list().first().map(|p| p.as_path()) == Some(dir) {
+            return;
+        }
+        self.recent_dirs.push(dir.to_path_buf());
+        let path = naygo_core::recent_dirs::recents_path(&self.config_dir);
+        if let Err(e) = std::fs::write(&path, self.recent_dirs.to_json()) {
+            tracing::warn!("no se pudo guardar recents.json: {e}");
+        }
+    }
+
     fn rewatch_pane(&mut self, id: PaneId, dir: &std::path::Path) {
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = naygo_platform::dir_watch::watch(dir, tx);
@@ -782,6 +841,8 @@ impl NaygoApp {
         // descartamos el merge incremental y re-listamos la carpeta fuera del hilo de UI
         // (cancelable). Bajo el debounce normal, un lote trae pocos eventos y se fusiona.
         const BURST_THRESHOLD: usize = 256;
+        // Re-cacheos pendientes tras el merge incremental (fuera del préstamo de panes).
+        let mut cache_updates: Vec<(PathBuf, Vec<Entry>)> = Vec::new();
         for (id, events) in batches {
             if events.len() > BURST_THRESHOLD {
                 // Ráfaga: re-listar (off-thread) en vez de fusionar evento por evento.
@@ -833,7 +894,13 @@ impl NaygoApp {
                         f.entries.iter().map(|e| e.path.clone()).collect();
                     f.highlighted.retain(|p| present.contains(p));
                 }
+                // El merge cambió las entries → re-cachear la carpeta con el estado nuevo
+                // (si no, volver a ella mostraría el caché de ANTES del cambio).
+                cache_updates.push((f.current_dir.clone(), f.entries.clone()));
             }
+        }
+        for (dir, entries) in cache_updates {
+            self.listing_cache.put(dir, entries);
         }
         // Caducidad por FadeSeconds: limpia el resaltado del panel cuyo plazo expiró.
         if let naygo_core::config::HighlightDuration::FadeSeconds(secs) =
@@ -1017,7 +1084,9 @@ impl NaygoApp {
         let mut new_entries = Vec::new();
         let mut err = None;
         let mut cancelled = false;
-        if let Some(listing) = self.listings.get(&id) {
+        let mut from_cache = false;
+        let mut fresh: Vec<Entry> = Vec::new();
+        if let Some(listing) = self.listings.get_mut(&id) {
             if let Some(rx) = &listing.rx {
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
@@ -1034,12 +1103,29 @@ impl NaygoApp {
                     }
                 }
             }
+            from_cache = listing.from_cache;
+            // Revalidando un cacheado: lo fresco se ACUMULA aparte (la vista sigue
+            // mostrando el caché) y reemplaza todo recién al completar. Sin esto,
+            // extender sobre lo cacheado duplicaría cada entry.
+            if from_cache {
+                listing.fresh.append(&mut new_entries);
+                if finished {
+                    fresh = std::mem::take(&mut listing.fresh);
+                }
+            }
         }
         let mut count_done = None;
+        let mut cache_update: Option<(PathBuf, Vec<Entry>)> = None;
+        let mut cache_invalidate: Option<PathBuf> = None;
         if let Some(pane) = self.workspace.pane_mut(id) {
             if let Some(f) = pane.files.as_mut() {
-                f.entries.extend(new_entries);
+                if !from_cache {
+                    f.entries.extend(new_entries);
+                }
                 if finished {
+                    if from_cache && err.is_none() && !cancelled {
+                        f.entries = fresh;
+                    }
                     let spec = f.sort;
                     sort_entries(&mut f.entries, &spec);
                     if f.focused.is_none() && !f.entries.is_empty() {
@@ -1047,9 +1133,25 @@ impl NaygoApp {
                     }
                     if err.is_none() && !cancelled {
                         count_done = Some(f.entries.len());
+                        // Listado completo y exitoso → (re)cachear la carpeta.
+                        cache_update = Some((f.current_dir.clone(), f.entries.clone()));
+                    } else if err.is_some() {
+                        // La carpeta falló (desapareció, sin permiso): olvidarla del
+                        // caché y no dejar contenido viejo visible.
+                        cache_invalidate = Some(f.current_dir.clone());
+                        if from_cache {
+                            f.entries.clear();
+                            f.focused = None;
+                        }
                     }
                 }
             }
+        }
+        if let Some((dir, entries)) = cache_update {
+            self.listing_cache.put(dir, entries);
+        }
+        if let Some(dir) = cache_invalidate {
+            self.listing_cache.invalidate(&dir);
         }
         if finished {
             if let Some(listing) = self.listings.get_mut(&id) {
@@ -2350,6 +2452,12 @@ impl NaygoApp {
 
     /// Ejecuta una navegación sobre el panel activo y, si cambió de carpeta, lanza
     /// el listado nuevo.
+    /// Salta a la posición `index` del historial del panel activo (menú contextual
+    /// del botón atrás/adelante).
+    pub fn history_jump_active(&mut self, index: usize) {
+        self.nav(|f| f.go_to_history(index));
+    }
+
     fn nav(&mut self, f: impl FnOnce(&mut FilePaneState) -> Option<PathBuf>) {
         let Some(active) = self.workspace.active_id() else {
             return;
@@ -2779,6 +2887,13 @@ impl eframe::App for NaygoApp {
         // Settings: guardar de inmediato cuando cambian (struct chica, comparación
         // barata; escribe solo ante un cambio real).
         if self.settings != self.last_saved_settings {
+            // Cambió el tamaño del caché de carpetas → recrearlo (aplica en caliente).
+            if self.settings.cache_max_dirs != self.last_saved_settings.cache_max_dirs {
+                self.listing_cache = naygo_core::listing_cache::ListingCache::new(
+                    self.settings.cache_max_dirs,
+                    CACHE_MAX_TOTAL_ENTRIES,
+                );
+            }
             config::save_settings(&self.config_dir, &self.settings);
             self.last_saved_settings = self.settings.clone();
         }

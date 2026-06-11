@@ -71,6 +71,44 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     // solapar el préstamo inmutable de `&app.icons` con los métodos `&mut app`. Cada
     // `icon_button` re-toma `&app.icons` de forma puntual; el `layouts_button`
     // intercalado mutará `app` en su propio statement, sin solape.
+    // Historial del panel activo para el menú contextual de atrás/adelante:
+    // (índice en la pila, nombre corto, ruta completa, es-el-actual). Precalculado
+    // para que el closure del menú no tome prestado `app`.
+    let history_items: Vec<(usize, String, String, bool)> = app
+        .workspace
+        .active_files()
+        .map(|f| {
+            let (stack, cursor) = f.history.stack();
+            stack
+                .iter()
+                .enumerate()
+                .rev() // el más reciente arriba, como en los navegadores
+                .map(|(i, p)| {
+                    let short = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.display().to_string());
+                    (i, short, p.display().to_string(), Some(i) == cursor)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut history_jump: Option<usize> = None;
+    // Menú de historial compartido por atrás y adelante (clic derecho).
+    let history_menu = |ui: &mut egui::Ui, jump: &mut Option<usize>| {
+        for (i, short, full, current) in &history_items {
+            let text = if *current {
+                egui::RichText::new(format!("• {short}")).strong()
+            } else {
+                egui::RichText::new(format!("   {short}"))
+            };
+            if ui.button(text).on_hover_text(full).clicked() {
+                *jump = Some(*i);
+                ui.close();
+            }
+        }
+    };
+
     let mut clicked: Option<ActionIcon> = None;
     macro_rules! btn {
         ($glyph:expr, $action:expr, $tip:expr, $enabled:expr) => {
@@ -84,13 +122,48 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
                 glyph_color,
                 &app.icons,
                 tint_mono,
-            ) {
+            )
+            .clicked()
+            {
                 clicked = Some($action);
             }
         };
     }
-    btn!("◀", ActionIcon::Back, &lbl_back, can_back);
-    btn!("▶", ActionIcon::Forward, &lbl_forward, can_forward);
+    // Atrás/adelante fuera del macro: además del clic, su CLIC DERECHO abre el
+    // menú con el historial del panel activo para saltar varios pasos de una vez.
+    let back_resp = icon_button(
+        ui,
+        "◀",
+        ActionIcon::Back,
+        &lbl_back,
+        can_back,
+        style,
+        glyph_color,
+        &app.icons,
+        tint_mono,
+    );
+    if back_resp.clicked() {
+        clicked = Some(ActionIcon::Back);
+    }
+    back_resp.context_menu(|ui| history_menu(ui, &mut history_jump));
+    let fwd_resp = icon_button(
+        ui,
+        "▶",
+        ActionIcon::Forward,
+        &lbl_forward,
+        can_forward,
+        style,
+        glyph_color,
+        &app.icons,
+        tint_mono,
+    );
+    if fwd_resp.clicked() {
+        clicked = Some(ActionIcon::Forward);
+    }
+    fwd_resp.context_menu(|ui| history_menu(ui, &mut history_jump));
+    if let Some(i) = history_jump {
+        app.history_jump_active(i);
+    }
     btn!("▲", ActionIcon::Up, &lbl_up, true);
     btn!("⟳", ActionIcon::Refresh, &lbl_refresh, true);
     ui.separator();
@@ -186,6 +259,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
                 icons,
                 tint_mono,
             )
+            .clicked()
         })
         .inner
     } else {
@@ -200,6 +274,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             icons,
             tint_mono,
         )
+        .clicked()
     };
     if settings_clicked {
         app.settings_open = true;
@@ -226,7 +301,7 @@ fn icon_button(
     glyph_color: egui::Color32,
     icons: &crate::icons::IconProvider,
     tint_mono: Option<egui::Color32>,
-) -> bool {
+) -> egui::Response {
     use naygo_core::config::ToolbarIconStyle;
     let resp = match style {
         ToolbarIconStyle::Glyphs => {
@@ -242,5 +317,5 @@ fn icon_button(
             ui.add_enabled(enabled, egui::Button::image(img))
         }
     };
-    resp.on_hover_text(tip).clicked()
+    resp.on_hover_text(tip)
 }

@@ -96,6 +96,8 @@
   "undo.ago_secs": "hace {n} s",
   "undo.ago_min": "hace {n} min",
   "undo.ago_hours": "hace {n} h",
+  "settings.cache.max_dirs": "Caché de carpetas visitadas (carpetas máx.)",
+  "settings.cache.hint": "Volver a una carpeta ya visitada la muestra al instante y se revalida por detrás. 0 = desactivado.",
   "op.batch_rename": "Renombrar en lote",
   "batch.title": "Renombrar en lote",
   "batch.count": "{n} archivos seleccionados",

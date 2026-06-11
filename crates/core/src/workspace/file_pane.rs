@@ -146,6 +146,14 @@ impl FilePaneState {
         Some(path)
     }
 
+    /// Salta directo a la posición `index` del historial (menú del botón atrás/
+    /// adelante). Devuelve la nueva carpeta si se movió.
+    pub fn go_to_history(&mut self, index: usize) -> Option<PathBuf> {
+        let path = self.history.jump_to(index).map(Path::to_path_buf)?;
+        self.enter(path.clone());
+        Some(path)
+    }
+
     /// Sube al directorio padre (entra al historial). Devuelve el padre si existe.
     pub fn go_up(&mut self) -> Option<PathBuf> {
         let parent = self.current_dir.parent()?.to_path_buf();

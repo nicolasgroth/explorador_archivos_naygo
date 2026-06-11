@@ -61,6 +61,22 @@ impl NavHistory {
         matches!(self.cursor, Some(i) if i + 1 < self.stack.len())
     }
 
+    /// La pila completa (de la más vieja a la más nueva) y el índice del cursor.
+    /// Para el menú de historial del botón atrás/adelante.
+    pub fn stack(&self) -> (&[PathBuf], Option<usize>) {
+        (&self.stack, self.cursor)
+    }
+
+    /// Salta directo a la posición `index` de la pila (menú de historial) y
+    /// devuelve la ruta nueva. `None` si el índice no existe o ya es el actual.
+    pub fn jump_to(&mut self, index: usize) -> Option<&Path> {
+        if index >= self.stack.len() || Some(index) == self.cursor {
+            return None;
+        }
+        self.cursor = Some(index);
+        Some(self.stack[index].as_path())
+    }
+
     /// Mueve el cursor un paso atrás y devuelve la ruta nueva, o `None` si no se puede.
     pub fn back(&mut self) -> Option<&Path> {
         if self.can_back() {
@@ -123,6 +139,24 @@ mod tests {
         assert!(!h.can_back());
         assert_eq!(h.forward(), Some(p("C:/a/b").as_path()));
         assert_eq!(h.current(), Some(p("C:/a/b").as_path()));
+    }
+
+    #[test]
+    fn jump_to_salta_directo_y_valida_indices() {
+        let mut h = NavHistory::new();
+        h.push(p("C:/a"));
+        h.push(p("C:/a/b"));
+        h.push(p("C:/a/b/c"));
+        assert_eq!(h.jump_to(0), Some(p("C:/a").as_path()));
+        assert_eq!(h.current(), Some(p("C:/a").as_path()));
+        // Adelante sigue disponible (no se truncó la rama).
+        assert!(h.can_forward());
+        assert_eq!(h.jump_to(2), Some(p("C:/a/b/c").as_path()));
+        assert_eq!(h.jump_to(2), None); // ya es el actual
+        assert_eq!(h.jump_to(9), None); // fuera de rango
+        let (stack, cursor) = h.stack();
+        assert_eq!(stack.len(), 3);
+        assert_eq!(cursor, Some(2));
     }
 
     #[test]

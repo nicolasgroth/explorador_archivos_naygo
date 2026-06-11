@@ -152,6 +152,16 @@ pub struct Settings {
     /// `false`): residente = memoria ocupada, que sea decisión del usuario.
     #[serde(default)]
     pub close_to_tray: bool,
+    /// Caché de carpetas visitadas: nº máximo de carpetas recordadas en memoria
+    /// (0 = desactivado). Volver a una carpeta cacheada pinta al instante y el
+    /// listado real corre por detrás (stale-while-revalidate).
+    #[serde(default = "default_cache_max_dirs")]
+    pub cache_max_dirs: usize,
+}
+
+/// Default de `cache_max_dirs` para `#[serde(default)]`.
+fn default_cache_max_dirs() -> usize {
+    50
 }
 
 /// Default de `tray_enabled` para `#[serde(default)]`.
@@ -272,6 +282,7 @@ impl Default for Settings {
             size_no_subdirs: false,
             tray_enabled: true,
             close_to_tray: false,
+            cache_max_dirs: 50,
         }
     }
 }
@@ -499,6 +510,7 @@ mod tests {
             size_no_subdirs: true,
             tray_enabled: false,
             close_to_tray: true,
+            cache_max_dirs: 12,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);

@@ -193,6 +193,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     if ui.checkbox(&mut size_no_subdirs, l_size).changed() {
         app.settings.size_no_subdirs = size_no_subdirs;
     }
+    ui.add_space(6.0);
+
+    // Caché de carpetas visitadas (0 = desactivado). El cambio aplica en caliente:
+    // la app recrea el caché al detectar el setting distinto.
+    let l_cache = app.tr("settings.cache.max_dirs");
+    ui.horizontal(|ui| {
+        ui.label(l_cache);
+        let mut v = app.settings.cache_max_dirs;
+        if ui
+            .add(egui::DragValue::new(&mut v).range(0..=500).speed(1))
+            .changed()
+        {
+            app.settings.cache_max_dirs = v;
+        }
+    });
+    ui.label(egui::RichText::new(app.tr("settings.cache.hint")).weak());
 
     // Integración con Windows: tray + cerrar-a-bandeja + inicio con Windows.
     super::group_sep(ui);

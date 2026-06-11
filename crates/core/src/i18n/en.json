@@ -96,6 +96,8 @@
   "undo.ago_secs": "{n} s ago",
   "undo.ago_min": "{n} min ago",
   "undo.ago_hours": "{n} h ago",
+  "settings.cache.max_dirs": "Visited folder cache (max folders)",
+  "settings.cache.hint": "Returning to a visited folder shows it instantly and revalidates in the background. 0 = disabled.",
   "op.batch_rename": "Batch rename",
   "batch.title": "Batch rename",
   "batch.count": "{n} files selected",
