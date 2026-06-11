@@ -24,6 +24,7 @@ windows = { workspace = true, features = [
     "Win32_System_SystemServices",
     "Win32_System_Com_StructuredStorage",
     "Win32_Graphics_Gdi",
+    "Win32_System_Time",
 ] }
 # El macro `#[implement]` genera rutas absolutas `::windows_core::...`; necesitamos el
 # crate disponible por ese nombre como dependencia directa.

@@ -161,7 +161,9 @@ fn exec_step(
                 (step.to.clone(), outcome, 0, !step.is_dir)
             }
         }
-        OpKind::Rename { .. } => {
+        // BatchRename: cada paso ya viene con su par from→to (ordenado por
+        // dependencia en el plan); se ejecuta igual que un rename simple.
+        OpKind::Rename { .. } | OpKind::BatchRename { .. } => {
             let outcome = exec_rename(step);
             (step.to.clone(), outcome, 0, true)
         }

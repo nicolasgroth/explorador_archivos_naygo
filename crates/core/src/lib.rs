@@ -5,6 +5,7 @@
 //! filesystem, motor de listado por streaming, ordenamiento y cancelación.
 //! No depende de egui ni de Windows.
 
+pub mod batch_rename;
 pub mod cancel;
 pub mod cli;
 pub mod clipboard;

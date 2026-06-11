@@ -48,6 +48,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 total_files: 1,
             })
         }
+        OpKind::BatchRename { new_names } => plan_batch_rename(req, new_names),
         OpKind::CreateDir { name } | OpKind::CreateFile { name } => {
             if !is_valid_name(name) {
                 return Err(PlanError::InvalidName(name.clone()));
@@ -66,6 +67,76 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
             })
         }
     }
+}
+
+/// Plan del renombrado en lote: un paso `from → parent(from)/new_name` por ítem,
+/// ORDENADOS por dependencia — un paso cuyo destino está ocupado por el origen de
+/// otro paso pendiente va después (shifts foto1→foto2, foto2→foto3 se resuelven
+/// solos). Si no hay progreso (ciclo a↔b, no soportado en v1) → `InvalidName` del
+/// destino atascado. El preview del diálogo ya bloquea estos casos; esto es la red
+/// de seguridad para llamadas directas al motor.
+fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, PlanError> {
+    if new_names.len() != req.sources.len() {
+        return Err(PlanError::MissingDest);
+    }
+    for name in new_names {
+        if !is_valid_name(name) {
+            return Err(PlanError::InvalidName(name.clone()));
+        }
+    }
+    let mut pending: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(req.sources.len());
+    for (src, name) in req.sources.iter().zip(new_names) {
+        if !src.exists() {
+            return Err(PlanError::SourceUnreadable(src.clone()));
+        }
+        let to = src
+            .parent()
+            .map(|p| p.join(name))
+            .ok_or(PlanError::MissingDest)?;
+        pending.push((src.clone(), to));
+    }
+    // Clave case-insensitive (semántica de nombres de Windows).
+    let key = |p: &Path| p.to_string_lossy().to_lowercase();
+    let mut steps: Vec<OpStep> = Vec::with_capacity(pending.len());
+    let mut freed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        let mut progressed = false;
+        pending.retain(|(from, to)| {
+            // Puede correr si el destino está libre, lo liberó un paso ya agendado,
+            // o es el propio origen (cambio solo de mayúsculas).
+            let runnable = !to.exists() || freed.contains(&key(to)) || key(from) == key(to);
+            if runnable {
+                freed.insert(key(from));
+                steps.push(OpStep {
+                    from: Some(from.clone()),
+                    to: to.clone(),
+                    bytes: 0,
+                    is_dir: false,
+                });
+                progressed = true;
+                false
+            } else {
+                true
+            }
+        });
+        if !progressed {
+            break;
+        }
+    }
+    if let Some((_, to)) = pending.first() {
+        return Err(PlanError::InvalidName(
+            to.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        ));
+    }
+    let n = steps.len();
+    Ok(OpPlan {
+        steps,
+        total_bytes: 0,
+        total_files: n,
+    })
 }
 
 fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
@@ -230,6 +301,57 @@ mod tests {
         );
         let e = plan(&r).unwrap_err();
         assert!(matches!(e, PlanError::InvalidName(_)));
+    }
+
+    #[test]
+    fn batch_rename_ordena_por_dependencia_y_detecta_ciclo() {
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("foto1.jpg");
+        let f2 = dir.path().join("foto2.jpg");
+        fs::write(&f1, b"1").unwrap();
+        fs::write(&f2, b"2").unwrap();
+
+        // Shift foto1→foto2, foto2→foto3: el paso de foto2 debe ir PRIMERO.
+        let r = req(
+            OpKind::BatchRename {
+                new_names: vec!["foto2.jpg".into(), "foto3.jpg".into()],
+            },
+            vec![f1.clone(), f2.clone()],
+            None,
+        );
+        let p = plan(&r).unwrap();
+        assert_eq!(p.steps.len(), 2);
+        assert_eq!(p.steps[0].from, Some(f2.clone()));
+        assert_eq!(p.steps[0].to, dir.path().join("foto3.jpg"));
+        assert_eq!(p.steps[1].from, Some(f1.clone()));
+        assert_eq!(p.steps[1].to, dir.path().join("foto2.jpg"));
+
+        // Swap foto1↔foto2 (ciclo): error de plan.
+        let r = req(
+            OpKind::BatchRename {
+                new_names: vec!["foto2.jpg".into(), "foto1.jpg".into()],
+            },
+            vec![f1, f2],
+            None,
+        );
+        assert!(matches!(plan(&r), Err(PlanError::InvalidName(_))));
+    }
+
+    #[test]
+    fn batch_rename_valida_nombres_y_cantidad() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"x").unwrap();
+        let r = req(
+            OpKind::BatchRename {
+                new_names: vec!["a/b.txt".into()],
+            },
+            vec![f.clone()],
+            None,
+        );
+        assert!(matches!(plan(&r), Err(PlanError::InvalidName(_))));
+        let r = req(OpKind::BatchRename { new_names: vec![] }, vec![f], None);
+        assert!(matches!(plan(&r), Err(PlanError::MissingDest)));
     }
 
     #[test]

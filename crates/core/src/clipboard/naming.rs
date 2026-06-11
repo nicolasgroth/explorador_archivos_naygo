@@ -8,18 +8,20 @@
 /// Expande `{fecha}` en `template` por "YYYY-MM-DD HH-MM" (UTC) derivado de
 /// `now_secs` (segundos epoch). Tokens `{...}` desconocidos se dejan literales.
 pub fn expand_name_template(template: &str, now_secs: u64) -> String {
-    let (y, mo, d, h, mi) = civil_from_epoch(now_secs);
+    let (y, mo, d, h, mi, _s) = civil_from_epoch(now_secs);
     let fecha = format!("{y:04}-{mo:02}-{d:02} {h:02}-{mi:02}");
     template.replace("{fecha}", &fecha)
 }
 
-/// Convierte segundos epoch (UTC) a (año, mes, día, hora, minuto). Algoritmo de
-/// días-civiles de Howard Hinnant (sin librerías de fecha). Calendario gregoriano.
-fn civil_from_epoch(secs: u64) -> (i64, u32, u32, u32, u32) {
+/// Convierte segundos epoch (UTC) a (año, mes, día, hora, minuto, segundo).
+/// Algoritmo de días-civiles de Howard Hinnant (sin librerías de fecha). Calendario
+/// gregoriano. Compartido con los comodines de fecha del batch-rename.
+pub fn civil_from_epoch(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let hour = (rem / 3_600) as u32;
     let minute = ((rem % 3_600) / 60) as u32;
+    let second = (rem % 60) as u32;
 
     // Hinnant civil_from_days: días desde 1970-01-01.
     let z = days + 719_468;
@@ -32,7 +34,7 @@ fn civil_from_epoch(secs: u64) -> (i64, u32, u32, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
     let year = if m <= 2 { y + 1 } else { y };
-    (year, m, d, hour, minute)
+    (year, m, d, hour, minute, second)
 }
 
 #[cfg(test)]

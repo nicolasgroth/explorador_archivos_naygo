@@ -78,7 +78,7 @@ impl OpJournal {
             OpKind::Copy => "Copiar",
             OpKind::Move => "Mover",
             OpKind::Delete { .. } => "Eliminar",
-            OpKind::Rename { .. } => "Renombrar",
+            OpKind::Rename { .. } | OpKind::BatchRename { .. } => "Renombrar",
             OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => "Crear",
         };
         format!("{verb} → {dest}")

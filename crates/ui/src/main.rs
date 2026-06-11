@@ -13,6 +13,7 @@
 )]
 
 mod app;
+mod batch_rename_dialog;
 mod column_menu;
 mod dock_translate;
 mod docking;

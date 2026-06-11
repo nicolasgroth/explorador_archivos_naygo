@@ -27,10 +27,24 @@ use std::path::PathBuf;
 pub enum OpKind {
     Copy,
     Move,
-    Delete { to_trash: bool },
-    Rename { new_name: String },
-    CreateDir { name: String },
-    CreateFile { name: String },
+    Delete {
+        to_trash: bool,
+    },
+    Rename {
+        new_name: String,
+    },
+    /// Renombrar en lote (R3): `new_names[i]` es el nombre nuevo de `sources[i]`.
+    /// Cada paso renombra dentro de su propia carpeta. UNA sola op → UNA entrada
+    /// en el journal/historial (deshacible como un paso).
+    BatchRename {
+        new_names: Vec<String>,
+    },
+    CreateDir {
+        name: String,
+    },
+    CreateFile {
+        name: String,
+    },
 }
 
 /// Qué hacer ante un nombre que ya existe en el destino.

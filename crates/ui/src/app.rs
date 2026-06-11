@@ -236,6 +236,9 @@ pub struct NaygoApp {
     pub(crate) egg_until: Option<std::time::Instant>,
     /// Rename inline en curso (F2). Suspende el input global mientras existe.
     pub(crate) inline_rename: Option<InlineRename>,
+    /// Diálogo de batch-rename abierto (F2 con multi-selección). Suspende el input
+    /// global mientras existe (mismo trato que `pending_dialog`).
+    pub(crate) batch_rename: Option<crate::batch_rename_dialog::BatchRenameState>,
     /// Historial de deshacer de la sesión (más nuevo al final; tope 100).
     pub(crate) undo_history: Vec<naygo_core::ops::undo::UndoEntry>,
     /// Id incremental de las entradas del historial.
@@ -436,6 +439,7 @@ impl NaygoApp {
             egg_last_click: None,
             egg_until: None,
             inline_rename: None,
+            batch_rename: None,
             undo_history: Vec::new(),
             next_undo_id: 1,
             tray: None,
@@ -2132,9 +2136,19 @@ impl NaygoApp {
         self.dock_state.main_surface_mut().push_to_focused_leaf(id);
     }
 
-    /// Arranca el rename INLINE (R1) sobre la entry con foco del panel activo: la
-    /// celda Nombre se vuelve un TextEdit con el nombre pre-seleccionado (etapa 0).
+    /// F2 / Renombrar: con UN ítem abre el rename INLINE (R1, la celda Nombre se
+    /// vuelve un TextEdit con el nombre pre-seleccionado); con 2+ seleccionados abre
+    /// el diálogo de BATCH-RENAME (R3, preview en vivo + comodines).
     fn begin_rename(&mut self) {
+        if self
+            .workspace
+            .active_files()
+            .map(|f| f.selection_count() >= 2)
+            .unwrap_or(false)
+        {
+            self.begin_batch_rename();
+            return;
+        }
         let Some(pane) = self.workspace.active_id() else {
             return;
         };
@@ -2154,6 +2168,40 @@ impl NaygoApp {
                 missing_frames: 0,
             });
         }
+    }
+
+    /// Abre el diálogo de batch-rename con la selección actual (en orden de vista).
+    fn begin_batch_rename(&mut self) {
+        let Some(f) = self.workspace.active_files() else {
+            return;
+        };
+        let view = f.view_indices();
+        // Posiciones de vista seleccionadas, ORDENADAS como se ven en pantalla (el
+        // contador {n} numera en ese orden, lo predecible para el usuario).
+        let mut positions: Vec<usize> = f.selected.clone();
+        positions.sort_unstable();
+        let epoch = |t: Option<std::time::SystemTime>| {
+            t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        };
+        let items: Vec<naygo_core::batch_rename::BatchItem> = positions
+            .iter()
+            .filter_map(|&pos| view.get(pos))
+            .filter_map(|&real| f.entries.get(real))
+            .map(|e| naygo_core::batch_rename::BatchItem {
+                path: e.path.clone(),
+                modified_epoch_secs: epoch(e.modified),
+            })
+            .collect();
+        if items.len() < 2 {
+            return;
+        }
+        let existing_names: Vec<String> = f.entries.iter().map(|e| e.name.clone()).collect();
+        self.batch_rename = Some(crate::batch_rename_dialog::BatchRenameState::new(
+            items,
+            existing_names,
+            naygo_platform::time::local_utc_offset_secs(),
+        ));
     }
 
     /// Abre el modal de crear archivo/carpeta en la carpeta activa.
@@ -2435,6 +2483,7 @@ impl NaygoApp {
             || !self.pending_resume.is_empty()
             || self.shortcut_capture.is_some()
             || self.inline_rename.is_some()
+            || self.batch_rename.is_some()
         {
             return;
         }
@@ -3075,6 +3124,24 @@ impl eframe::App for NaygoApp {
             let ctx = ui.ctx().clone();
             self.process_pending_dialog(&ctx);
             ui.ctx().request_repaint();
+        }
+
+        // Diálogo de batch-rename (R3): editar campos recalcula el preview en vivo;
+        // Aplicar lanza UNA op BatchRename (journaled → deshacible del Historial).
+        if let Some(mut state) = self.batch_rename.take() {
+            let ctx = ui.ctx().clone();
+            match crate::batch_rename_dialog::show(&ctx, &self.i18n, &self.active_theme, &mut state)
+            {
+                crate::batch_rename_dialog::BatchDialogResult::Open => {
+                    self.batch_rename = Some(state);
+                    ui.ctx().request_repaint();
+                }
+                crate::batch_rename_dialog::BatchDialogResult::Cancelled => {}
+                crate::batch_rename_dialog::BatchDialogResult::Apply(req) => {
+                    let label = self.i18n.t("op.batch_rename").to_string();
+                    self.start_op(req, label);
+                }
+            }
         }
 
         // Modal de retomar ops interrumpidas (detectadas al arrancar). Se pinta al

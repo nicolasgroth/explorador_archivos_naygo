@@ -88,6 +88,31 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
             }
             acts
         }
+        OpKind::BatchRename { new_names } => {
+            // El plan pudo REORDENAR los pasos (dependencias de un shift), así que
+            // el summary no sigue el orden de `sources`. Cada destino se reconoce
+            // por su ruta esperada `parent(source)/new_name`; el inverso se emite
+            // en ORDEN INVERSO de ejecución (deshacer un shift exige desandar al
+            // revés: el último renombrado vuelve primero).
+            let expected: Vec<(PathBuf, &PathBuf)> = req
+                .sources
+                .iter()
+                .zip(new_names)
+                .filter_map(|(src, name)| src.parent().map(|p| (p.join(name), src)))
+                .collect();
+            let mut acts: Vec<UndoAction> = done
+                .iter()
+                .filter_map(|dest| {
+                    let back = expected.iter().find(|(d, _)| d == *dest).map(|(_, s)| *s)?;
+                    Some(UndoAction::MoveBack {
+                        now: (*dest).clone(),
+                        back_to: back.clone(),
+                    })
+                })
+                .collect();
+            acts.reverse();
+            acts
+        }
         OpKind::Copy | OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => done
             .into_iter()
             .map(|p| UndoAction::TrashCreated { path: p.clone() })
@@ -104,16 +129,23 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
 /// ¿El inverso aún aplica? Devuelve `Err(motivo)` con la PRIMERA traba encontrada.
 /// Es la guarda que hace seguro deshacer fuera de orden: si un paso intermedio dejó
 /// las rutas en otro estado, acá se detecta y el deshacer se bloquea con explicación.
+/// Es consciente de la SECUENCIA: un destino ocupado se acepta si una acción
+/// anterior de la misma lista lo libera (deshacer un shift de batch-rename).
 pub fn validate(actions: &[UndoAction]) -> Result<(), String> {
+    let key = |p: &PathBuf| p.to_string_lossy().to_lowercase();
+    let mut freed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for a in actions {
         match a {
             UndoAction::MoveBack { now, back_to } => {
                 if !now.exists() {
                     return Err(format!("ya no existe: {}", now.display()));
                 }
-                if back_to.exists() {
+                // Ocupado de verdad: existe Y no lo libera un paso previo de esta
+                // misma secuencia Y no es el propio archivo (cambio de mayúsculas).
+                if back_to.exists() && !freed.contains(&key(back_to)) && key(now) != key(back_to) {
                     return Err(format!("el destino está ocupado: {}", back_to.display()));
                 }
+                freed.insert(key(now));
                 let parent_ok = back_to.parent().map(|p| p.exists()).unwrap_or(false);
                 if !parent_ok {
                     return Err(format!(
@@ -137,14 +169,16 @@ pub fn validate(actions: &[UndoAction]) -> Result<(), String> {
 
 /// Re-emite el inverso como `OpRequest`s normales para el motor de ops:
 /// - `MoveBack` con el MISMO nombre → Move agrupado por carpeta de destino.
-/// - `MoveBack` con nombre distinto (deshacer un rename) → Rename individual.
+/// - `MoveBack` con nombre distinto (deshacer renames) → UN `BatchRename` con todos
+///   los pares EN ORDEN (build_undo ya los emitió en orden seguro; con uno solo,
+///   un Rename simple).
 /// - `TrashCreated` → un único Delete a papelera.
 ///
 /// Conflictos: `Skip` (deshacer jamás pisa nada; `validate` ya chequeó).
 pub fn to_requests(actions: &[UndoAction]) -> Vec<OpRequest> {
     let mut moves: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> =
         std::collections::BTreeMap::new();
-    let mut renames: Vec<OpRequest> = Vec::new();
+    let mut rename_pairs: Vec<(PathBuf, String)> = Vec::new();
     let mut trash: Vec<PathBuf> = Vec::new();
     for a in actions {
         match a {
@@ -161,14 +195,7 @@ pub fn to_requests(actions: &[UndoAction]) -> Vec<OpRequest> {
                     // Nombre distinto: si además cambia de carpeta haría falta
                     // mover+renombrar; el rename clásico es en la misma carpeta, que
                     // es el caso real (deshacer Rename). Rename cubre ambos nombres.
-                    renames.push(OpRequest {
-                        kind: OpKind::Rename {
-                            new_name: name.to_string_lossy().into_owned(),
-                        },
-                        sources: vec![now.clone()],
-                        dest_dir: None,
-                        conflict: ConflictPolicy::Skip,
-                    });
+                    rename_pairs.push((now.clone(), name.to_string_lossy().into_owned()));
                 }
             }
             UndoAction::TrashCreated { path } => trash.push(path.clone()),
@@ -183,7 +210,27 @@ pub fn to_requests(actions: &[UndoAction]) -> Vec<OpRequest> {
             conflict: ConflictPolicy::Skip,
         });
     }
-    reqs.extend(renames);
+    match rename_pairs.len() {
+        0 => {}
+        1 => {
+            let (now, name) = rename_pairs.remove(0);
+            reqs.push(OpRequest {
+                kind: OpKind::Rename { new_name: name },
+                sources: vec![now],
+                dest_dir: None,
+                conflict: ConflictPolicy::Skip,
+            });
+        }
+        _ => {
+            let (sources, new_names) = rename_pairs.into_iter().unzip();
+            reqs.push(OpRequest {
+                kind: OpKind::BatchRename { new_names },
+                sources,
+                dest_dir: None,
+                conflict: ConflictPolicy::Skip,
+            });
+        }
+    }
     if !trash.is_empty() {
         reqs.push(OpRequest {
             kind: OpKind::Delete { to_trash: true },
@@ -319,6 +366,72 @@ mod tests {
         // `back` ocupado → inválido.
         std::fs::write(&back, "y").unwrap();
         assert!(validate(&acts).is_err());
+    }
+
+    #[test]
+    fn batch_rename_se_invierte_en_orden_inverso_y_valida_secuencia() {
+        // Shift ejecutado: foto2→foto3 primero, foto1→foto2 después (orden del plan).
+        let req = OpRequest {
+            kind: OpKind::BatchRename {
+                new_names: vec!["foto2.jpg".into(), "foto3.jpg".into()],
+            },
+            sources: vec![p("D:/x/foto1.jpg"), p("D:/x/foto2.jpg")],
+            dest_dir: None,
+            conflict: ConflictPolicy::Skip,
+        };
+        let s = summary(vec![
+            ("D:/x/foto3.jpg", OpOutcome::Done),
+            ("D:/x/foto2.jpg", OpOutcome::Done),
+        ]);
+        let acts = build_undo(&req, &s).expect("deshacible");
+        // Inverso en orden inverso de ejecución: primero foto2→foto1 (libera foto2),
+        // después foto3→foto2.
+        assert_eq!(
+            acts,
+            vec![
+                UndoAction::MoveBack {
+                    now: p("D:/x/foto2.jpg"),
+                    back_to: p("D:/x/foto1.jpg"),
+                },
+                UndoAction::MoveBack {
+                    now: p("D:/x/foto3.jpg"),
+                    back_to: p("D:/x/foto2.jpg"),
+                },
+            ]
+        );
+
+        // validate consciente de secuencia: con los archivos REALES del estado
+        // post-op (foto2 y foto3), el inverso es válido aunque foto2 "esté ocupado"
+        // (lo libera la primera acción).
+        let dir = tempfile::tempdir().unwrap();
+        let f2 = dir.path().join("foto2.jpg");
+        let f3 = dir.path().join("foto3.jpg");
+        std::fs::write(&f2, b"1").unwrap();
+        std::fs::write(&f3, b"2").unwrap();
+        let acts = vec![
+            UndoAction::MoveBack {
+                now: f2.clone(),
+                back_to: dir.path().join("foto1.jpg"),
+            },
+            UndoAction::MoveBack {
+                now: f3,
+                back_to: f2,
+            },
+        ];
+        assert!(validate(&acts).is_ok());
+
+        // Y los pares se re-emiten como UN BatchRename en el mismo orden.
+        let reqs = to_requests(&acts);
+        assert_eq!(reqs.len(), 1);
+        match &reqs[0].kind {
+            OpKind::BatchRename { new_names } => {
+                assert_eq!(
+                    new_names,
+                    &vec!["foto1.jpg".to_string(), "foto2.jpg".into()]
+                );
+            }
+            otro => panic!("se esperaba BatchRename, vino {otro:?}"),
+        }
     }
 
     #[test]

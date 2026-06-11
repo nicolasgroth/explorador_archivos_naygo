@@ -16,6 +16,7 @@ pub mod drive_space;
 pub mod drives;
 pub mod locale;
 pub mod open;
+pub mod time;
 pub mod trash;
 
 pub fn hello() -> &'static str {
