@@ -9,6 +9,12 @@
 
 use std::sync::mpsc::Sender;
 
+/// Waker para despertar la UI tras enviar un evento: la UI está DORMIDA en reposo (no
+/// repinta sin motivo, clave para el bajo consumo en VMs sin GPU). Esta vigilancia corre
+/// en su propio hilo, así que necesita un `Fn() + Send + Sync` (típicamente
+/// `egui::Context::request_repaint`) para sacarla del sueño. `platform` no depende de egui.
+pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// Evento de cambio de dispositivos. Por ahora un único caso: el conjunto de
 /// volúmenes/unidades cambió (USB conectado/desconectado, montaje/desmontaje).
 /// La capa superior reacciona re-escaneando las unidades.
@@ -34,23 +40,23 @@ pub struct DeviceWatchHandle {
 /// Stub no-Windows: la detección de dispositivos por mensajes del SO no existe
 /// fuera de Windows. El handle queda inerte (no llegarán eventos).
 #[cfg(not(windows))]
-pub fn watch(_tx: Sender<DeviceEvent>) -> DeviceWatchHandle {
+pub fn watch(_tx: Sender<DeviceEvent>, _waker: Waker) -> DeviceWatchHandle {
     DeviceWatchHandle { _priv: () }
 }
 
 /// Empieza a vigilar cambios de dispositivos. Lanza un hilo dedicado con una
-/// ventana message-only que escucha `WM_DEVICECHANGE` y emite `DrivesChanged`.
-/// Si la ventana no puede crearse (caso raro), el handle queda inerte sin crashear.
+/// ventana message-only que escucha `WM_DEVICECHANGE` y emite `DrivesChanged`, despertando
+/// la UI con `waker`. Si la ventana no puede crearse (caso raro), el handle queda inerte.
 #[cfg(windows)]
-pub fn watch(tx: Sender<DeviceEvent>) -> DeviceWatchHandle {
+pub fn watch(tx: Sender<DeviceEvent>, waker: Waker) -> DeviceWatchHandle {
     DeviceWatchHandle {
-        inner: windows_impl::start(tx),
+        inner: windows_impl::start(tx, waker),
     }
 }
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::DeviceEvent;
+    use super::{DeviceEvent, Waker};
     use std::ffi::c_void;
     use std::sync::mpsc::{sync_channel, Sender};
     use std::sync::Once;
@@ -109,11 +115,15 @@ mod windows_impl {
         });
     }
 
-    /// Procedimiento de ventana. Maneja el ciclo de vida del `Sender` boxeado (guardado
+    /// Carga boxeada que vive en `GWLP_USERDATA`: el `Sender` para emitir el evento y el
+    /// `Waker` para despertar la UI tras emitirlo.
+    type Payload = (Sender<DeviceEvent>, Waker);
+
+    /// Procedimiento de ventana. Maneja el ciclo de vida del `Payload` boxeado (guardado
     /// en `GWLP_USERDATA`) y traduce `WM_DEVICECHANGE` en `DeviceEvent::DrivesChanged`.
     ///
     /// SAFETY: invocado por el SO con un HWND válido. El puntero en GWLP_USERDATA es el
-    /// `Box<Sender>` que pasamos como `lpCreateParams`; lo creamos en WM_NCCREATE y lo
+    /// `Box<Payload>` que pasamos como `lpCreateParams`; lo creamos en WM_NCCREATE y lo
     /// liberamos en WM_DESTROY, así que entre medio es válido y exclusivo de esta ventana.
     unsafe extern "system" fn wndproc(
         hwnd: HWND,
@@ -123,12 +133,12 @@ mod windows_impl {
     ) -> LRESULT {
         match msg {
             WM_NCCREATE => {
-                // `lparam` apunta a un CREATESTRUCTW; su `lpCreateParams` es el Box<Sender>
+                // `lparam` apunta a un CREATESTRUCTW; su `lpCreateParams` es el Box<Payload>
                 // crudo que pasamos a CreateWindowExW. Lo guardamos en GWLP_USERDATA.
                 let cs = lparam.0 as *const CREATESTRUCTW;
                 if !cs.is_null() {
-                    let sender_ptr = (*cs).lpCreateParams as *mut Sender<DeviceEvent>;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, sender_ptr as isize);
+                    let payload_ptr = (*cs).lpCreateParams as *mut Payload;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, payload_ptr as isize);
                 }
                 // Devolver TRUE explícito tras guardar el puntero: si DefWindowProcW
                 // devolviera FALSE aquí, la creación abortaría SIN enviar WM_DESTROY y el
@@ -143,10 +153,13 @@ mod windows_impl {
                 if wparam.0 as u32 == DBT_DEVICEARRIVAL
                     || wparam.0 as u32 == DBT_DEVICEREMOVECOMPLETE
                 {
-                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Sender<DeviceEvent>;
+                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Payload;
                     if !ptr.is_null() {
+                        let (tx, waker) = &*ptr;
                         // Si el receptor se cayó, ignorar (la app puede estar cerrando).
-                        let _ = (*ptr).send(DeviceEvent::DrivesChanged);
+                        let _ = tx.send(DeviceEvent::DrivesChanged);
+                        // Despertar la UI: estaba dormida, debe re-escanear las unidades.
+                        waker();
                     }
                 }
                 // TRUE: concedemos el cambio (relevante para subeventos de query, no para
@@ -158,7 +171,7 @@ mod windows_impl {
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                    drop(Box::from_raw(ptr as *mut Sender<DeviceEvent>));
+                    drop(Box::from_raw(ptr as *mut Payload));
                 }
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -169,7 +182,7 @@ mod windows_impl {
 
     /// Lanza el hilo con la ventana message-only. Devuelve `Some(Inner)` si la ventana
     /// se creó y el bucle arrancó; `None` si la creación falló (handle inerte).
-    pub(super) fn start(tx: Sender<DeviceEvent>) -> Option<Inner> {
+    pub(super) fn start(tx: Sender<DeviceEvent>, waker: Waker) -> Option<Inner> {
         // Canal para que el hilo nos devuelva el HWND (como isize). `Some(bits)` en éxito,
         // `None` si CreateWindowExW falló. sync_channel(1) basta: un único envío.
         let (hwnd_tx, hwnd_rx) = sync_channel::<Option<isize>>(1);
@@ -179,9 +192,10 @@ mod windows_impl {
             .spawn(move || {
                 ensure_class_registered();
 
-                // El Box<Sender> viaja como lpCreateParams; WM_NCCREATE se hace dueño de él.
-                let sender_box = Box::new(tx);
-                let create_params = Box::into_raw(sender_box) as *const c_void;
+                // El Box<Payload> (Sender + Waker) viaja como lpCreateParams; WM_NCCREATE se
+                // hace dueño de él.
+                let payload_box: Box<Payload> = Box::new((tx, waker));
+                let create_params = Box::into_raw(payload_box) as *const c_void;
 
                 // SAFETY: clase ya registrada (o se reporta su falla); HWND_MESSAGE crea una
                 // ventana message-only (sin UI, aislada del HWND de eframe). hinstance del módulo.
@@ -215,7 +229,7 @@ mod windows_impl {
                         // SAFETY: recuperamos el Box solo si la ventana no se creó (no hubo
                         // WM_NCCREATE que se apropiara del puntero).
                         unsafe {
-                            drop(Box::from_raw(create_params as *mut Sender<DeviceEvent>));
+                            drop(Box::from_raw(create_params as *mut Payload));
                         }
                         let _ = hwnd_tx.send(None);
                         return;
@@ -295,7 +309,7 @@ mod tests {
     #[ignore]
     fn device_watch_lifecycle() {
         let (tx, _rx) = channel();
-        let h = watch(tx);
+        let h = watch(tx, std::sync::Arc::new(|| {}));
         std::thread::sleep(Duration::from_millis(200));
         drop(h); // No debe colgarse ni entrar en pánico.
     }
@@ -305,6 +319,6 @@ mod tests {
     #[test]
     fn stub_no_windows_handle_inerte() {
         let (tx, _rx) = channel();
-        let _h = watch(tx);
+        let _h = watch(tx, std::sync::Arc::new(|| {}));
     }
 }

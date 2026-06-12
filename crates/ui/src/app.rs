@@ -327,7 +327,10 @@ pub struct NaygoApp {
     /// `HighlightDuration::FadeSeconds`: cuando transcurre el plazo, se limpia el
     /// resaltado del panel (estado efímero, no se persiste).
     highlight_since: std::collections::HashMap<PaneId, std::time::Instant>,
-    /// Watcher de dispositivos (pendrives) — ventana message-only Win32.
+    /// Watcher de dispositivos (pendrives) — ventana message-only Win32. Vivo por RAII:
+    /// su `Drop` desmonta el hilo/ventana al cerrar; despierta la UI por evento vía su
+    /// waker, así que no se LEE el campo (de ahí `allow(dead_code)`), solo se mantiene.
+    #[allow(dead_code)]
     device_watch: Option<naygo_platform::device_watch::DeviceWatchHandle>,
     /// Receptor de eventos de dispositivos.
     device_rx: Option<std::sync::mpsc::Receiver<naygo_platform::device_watch::DeviceEvent>>,
@@ -358,6 +361,10 @@ pub struct NaygoApp {
     /// Selector de panel destino activo (overlay multi-panel). Mientras es `Some`, el input
     /// global se suspende. Efímero.
     pending_pane_pick: Option<PanePick>,
+    /// `egui::Context` clonado para construir el waker de los watchers (carpeta + device):
+    /// la UI duerme en reposo y los watchers la despiertan por evento con `request_repaint`,
+    /// en vez de un latido de polling constante (clave para el bajo consumo en VMs sin GPU).
+    egui_ctx: egui::Context,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -569,8 +576,16 @@ impl NaygoApp {
         // Ops interrumpidas de una sesión anterior: se ofrecen retomar al arrancar.
         let pending_resume = journal::scan(&config_dir);
 
+        // Waker de los watchers: clona el Context y pide repaint. Sacar a la UI del sueño
+        // SOLO cuando hay un evento real (carpeta/dispositivo), en vez de un latido constante.
+        let waker_ctx = cc.egui_ctx.clone();
+        let watch_waker: std::sync::Arc<dyn Fn() + Send + Sync> =
+            std::sync::Arc::new(move || waker_ctx.request_repaint());
         let (dev_tx, dev_rx) = std::sync::mpsc::channel();
-        let device_watch = Some(naygo_platform::device_watch::watch(dev_tx));
+        let device_watch = Some(naygo_platform::device_watch::watch(
+            dev_tx,
+            watch_waker.clone(),
+        ));
 
         // Splash de arranque: solo en release. En debug no hay splash (None).
         #[cfg(debug_assertions)]
@@ -678,6 +693,7 @@ impl NaygoApp {
             splash,
             hwnd,
             native_menu_request: None,
+            egui_ctx: cc.egui_ctx.clone(),
         };
         app.start_all_listings();
 
@@ -1202,7 +1218,11 @@ impl NaygoApp {
 
     fn rewatch_pane(&mut self, id: PaneId, dir: &std::path::Path) {
         let (tx, rx) = std::sync::mpsc::channel();
-        let handle = naygo_platform::dir_watch::watch(dir, tx);
+        // Waker: el watcher despierta la UI (dormida en reposo) cuando la carpeta cambia.
+        let ctx = self.egui_ctx.clone();
+        let waker: std::sync::Arc<dyn Fn() + Send + Sync> =
+            std::sync::Arc::new(move || ctx.request_repaint());
+        let handle = naygo_platform::dir_watch::watch(dir, tx, waker);
         self.watchers.insert(id, handle);
         self.watch_rx.insert(id, rx);
     }
@@ -3703,12 +3723,10 @@ impl eframe::App for NaygoApp {
         {
             ctx.request_repaint();
         }
-        // Los eventos de carpeta llegan por canal sin input del usuario: despertamos la
-        // UI ~2 veces/seg para drenarlos. Barato y respeta el bajo consumo (no es un
-        // bucle ocupado: si no hay cambios, los pumps no hacen trabajo).
-        if !self.watchers.is_empty() || self.device_watch.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(500));
-        }
+        // Los watchers de carpeta y el de dispositivos DESPIERTAN la UI por evento (su
+        // worker llama `request_repaint` vía el waker). Por eso NO hay latido de polling
+        // aquí: en reposo real la UI no repinta (0 fps), clave para el bajo consumo —
+        // crítico en VMs sin GPU, donde cada repaint se rasteriza por software (caro).
         // Fluidez del hover SIN quemar recursos: repintamos solo cuando el puntero se está
         // MOVIENDO sobre la UI (para que la fila bajo el mouse se actualice al instante),
         // no en cada frame. Con el mouse quieto o fuera de la ventana NO se repinta → la

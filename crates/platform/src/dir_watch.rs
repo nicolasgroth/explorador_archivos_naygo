@@ -25,8 +25,15 @@ pub struct WatchHandle {
 /// Empieza a vigilar `dir` (no recursivo). Emite lotes de `DirEvent` por `tx` con
 /// coalescing ~300 ms. Si falla (red caída, permiso denegado, ruta inexistente),
 /// devuelve un handle inerte (sin crashear): simplemente no llegarán eventos.
-pub fn watch(dir: &Path, tx: Sender<Vec<DirEvent>>) -> WatchHandle {
-    match try_watch(dir, tx) {
+/// Waker para despertar la UI tras enviar eventos: la UI normalmente está DORMIDA (no
+/// repinta en reposo, clave para el bajo consumo en VMs sin GPU). El watcher corre en su
+/// propio hilo, así que necesita un `Fn() + Send + Sync` (típicamente
+/// `egui::Context::request_repaint`) para sacar a la UI del sueño cuando hay un evento
+/// real. `platform` no depende de egui: recibe el waker como trait object.
+pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+pub fn watch(dir: &Path, tx: Sender<Vec<DirEvent>>, waker: Waker) -> WatchHandle {
+    match try_watch(dir, tx, waker) {
         Some(deb) => WatchHandle {
             _debouncer: Some(deb),
         },
@@ -39,7 +46,11 @@ pub fn watch(dir: &Path, tx: Sender<Vec<DirEvent>>) -> WatchHandle {
 
 /// Intenta crear el debouncer y registrar la carpeta. Devuelve el debouncer boxeado
 /// (vivo) o `None` si algo falló. No propaga errores: el contrato es tolerante.
-fn try_watch(dir: &Path, tx: Sender<Vec<DirEvent>>) -> Option<Box<dyn std::any::Any + Send>> {
+fn try_watch(
+    dir: &Path,
+    tx: Sender<Vec<DirEvent>>,
+    waker: Waker,
+) -> Option<Box<dyn std::any::Any + Send>> {
     use notify::RecursiveMode;
     use notify_debouncer_full::new_debouncer;
     use std::time::Duration;
@@ -59,6 +70,8 @@ fn try_watch(dir: &Path, tx: Sender<Vec<DirEvent>>) -> Option<Box<dyn std::any::
                 if !out.is_empty() {
                     // Si el receptor se cayó (la UI cambió de carpeta), ignorar el envío.
                     let _ = tx.send(out);
+                    // Despertar la UI: estaba dormida, debe drenar y aplicar los eventos.
+                    waker();
                 }
             }
         },
@@ -189,11 +202,16 @@ mod tests {
         assert_eq!(out, vec![DirEvent::Modified(PathBuf::from("D:/x/a.txt"))]);
     }
 
+    /// Waker no-op para los tests (no hay UI que despertar).
+    fn noop_waker() -> Waker {
+        std::sync::Arc::new(|| {})
+    }
+
     #[test]
     fn ruta_inexistente_handle_inerte_no_crashea() {
         let (tx, _rx) = channel();
         // No debe entrar en pánico: handle inerte.
-        let _h = watch(Path::new("Z:/ruta/que/no/existe/naygo"), tx);
+        let _h = watch(Path::new("Z:/ruta/que/no/existe/naygo"), tx, noop_waker());
     }
 
     /// Smoke test real con el filesystem. `#[ignore]` por ser sensible a timing (depende
@@ -204,7 +222,7 @@ mod tests {
     fn dir_watch_smoke() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = channel();
-        let _h = watch(dir.path(), tx);
+        let _h = watch(dir.path(), tx, noop_waker());
 
         // Dar un instante al watcher para que registre la carpeta antes de tocarla.
         std::thread::sleep(Duration::from_millis(200));
