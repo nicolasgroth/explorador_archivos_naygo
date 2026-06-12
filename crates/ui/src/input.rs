@@ -26,6 +26,10 @@ pub fn egui_key_to_code(key: egui::Key) -> Option<KeyCode> {
         egui::Key::F4 => KeyCode::F4,
         egui::Key::F5 => KeyCode::F5,
         egui::Key::F6 => KeyCode::F6,
+        egui::Key::PageDown => KeyCode::PageDown,
+        egui::Key::PageUp => KeyCode::PageUp,
+        egui::Key::Home => KeyCode::Home,
+        egui::Key::End => KeyCode::End,
         egui::Key::Space => KeyCode::Space,
         // Dígitos (fila superior y numpad: egui ya los unifica en Num*). Los usan
         // los atajos de favoritos (Ctrl+1..9) y cualquier rebind del usuario.
@@ -96,6 +100,10 @@ pub fn chord_text(chord: &Chord) -> String {
         KeyCode::F4 => "F4",
         KeyCode::F5 => "F5",
         KeyCode::F6 => "F6",
+        KeyCode::PageDown => "AvPág",
+        KeyCode::PageUp => "RePág",
+        KeyCode::Home => "Inicio",
+        KeyCode::End => "Fin",
         KeyCode::Space => "␣",
         KeyCode::Char(c) => {
             s.push(c.to_ascii_uppercase());
@@ -148,6 +156,14 @@ mod tests {
         assert_eq!(egui_key_to_code(egui::Key::Num0), Some(KeyCode::Char('0')));
         assert_eq!(egui_key_to_code(egui::Key::Num9), Some(KeyCode::Char('9')));
         assert_eq!(egui_key_to_code(egui::Key::F4), Some(KeyCode::F4));
+        // Teclas de navegación por bloques (teclado de lista).
+        assert_eq!(
+            egui_key_to_code(egui::Key::PageDown),
+            Some(KeyCode::PageDown)
+        );
+        assert_eq!(egui_key_to_code(egui::Key::PageUp), Some(KeyCode::PageUp));
+        assert_eq!(egui_key_to_code(egui::Key::Home), Some(KeyCode::Home));
+        assert_eq!(egui_key_to_code(egui::Key::End), Some(KeyCode::End));
         // Una tecla que no mapeamos.
         assert_eq!(egui_key_to_code(egui::Key::F12), None);
     }

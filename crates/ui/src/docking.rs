@@ -90,6 +90,12 @@ pub struct NaygoTabViewer<'a> {
     /// `NaygoApp` descarta la edición — si no, el input global quedaría suspendido
     /// apuntando a un panel invisible.
     pub path_edit_seen: &'a mut bool,
+    /// Filas visibles medidas por cada file panel ESTE frame (salida). `NaygoApp` lo
+    /// guarda para el tamaño de página de AvPag/RePag.
+    pub visible_rows: &'a mut std::collections::HashMap<naygo_core::workspace::PaneId, usize>,
+    /// Posición de vista a la que cada file panel debe hacer scroll este frame (foco
+    /// movido por teclado). Lo consume el panel; `NaygoApp` lo limpia tras pintar.
+    pub scroll_to_focus: &'a std::collections::HashMap<naygo_core::workspace::PaneId, usize>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -163,6 +169,7 @@ impl NaygoTabViewer<'_> {
                     ac_names: self.path_ac_names,
                     recents: self.recent_dirs,
                 };
+                let mut visible_rows_out: Option<usize> = None;
                 crate::panes::file_panel::show(
                     ui,
                     self.workspace,
@@ -179,7 +186,12 @@ impl NaygoTabViewer<'_> {
                     self.size_partial,
                     self.inline_rename,
                     pathbar,
+                    self.scroll_to_focus.get(&id).copied(),
+                    &mut visible_rows_out,
                 );
+                if let Some(rows) = visible_rows_out {
+                    self.visible_rows.insert(id, rows);
+                }
                 for a in local {
                     self.table_actions.push((id, a));
                 }

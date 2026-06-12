@@ -63,6 +63,12 @@ pub fn show(
     size_partial: &std::collections::HashSet<std::path::PathBuf>,
     inline_rename: &mut Option<crate::app::InlineRename>,
     pathbar: crate::pathbar::PathBarParams<'_>,
+    // Si `Some(pos)`, el cuerpo de la tabla hace scroll para que la fila de la posición
+    // de vista `pos` quede visible (foco movido por teclado este frame).
+    scroll_to: Option<usize>,
+    // Salida: filas visibles del cuerpo medidas este frame (alto disponible / ROW_HEIGHT).
+    // `NaygoApp` la guarda por panel para el tamaño de página de AvPag/RePag.
+    visible_rows_out: &mut Option<usize>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -190,6 +196,19 @@ pub fn show(
     // que el rubber-band). Coordenadas de pantalla.
     let mut focus_rect: Option<egui::Rect> = None;
 
+    // Filas visibles del cuerpo: el alto disponible ANTES de armar la tabla (ya restada la
+    // path-bar y el separador) menos el encabezado, dividido por el alto de fila. Lo usa
+    // AvPag/RePag como tamaño de página. Se mide cada frame y se devuelve por `visible_rows_out`.
+    let body_height = (ui.available_height() - HEADER_HEIGHT).max(0.0);
+    *visible_rows_out = Some(((body_height / ROW_HEIGHT).floor() as usize).max(1));
+
+    // Si el foco se movió por teclado este frame, traducir la posición de vista al índice
+    // de fila de la tabla (que incluye la fila ".." si está) para pedir el scroll.
+    let scroll_to_row_idx: Option<usize> = scroll_to.and_then(|pos| {
+        rows.iter()
+            .position(|r| matches!(r, DisplayRow::Entry(i) if *i == pos))
+    });
+
     // `TableBuilder` gestiona su propio `ScrollArea` (scroll vertical del cuerpo, con
     // el encabezado fijo arriba). NO lo envolvemos en otro `ScrollArea`.
     let mut builder = TableBuilder::new(ui)
@@ -207,6 +226,12 @@ pub fn show(
         // y lo descarta (ver `icon_row` y `selectable_labels=false` en theme_apply).
         .sense(egui::Sense::click_and_drag())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+    // Foco movido por teclado: hacer scroll para que la fila quede visible. `align = None`
+    // desplaza lo MÍNIMO para que la fila entre en vista (no recentra si ya se ve), que es
+    // el comportamiento de Explorer tanto para flechas como para AvPag/Inicio/Fin.
+    if let Some(row_idx) = scroll_to_row_idx {
+        builder = builder.scroll_to_row(row_idx, None);
+    }
     for col in &visible_cols {
         // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
         // permite encoger por debajo del contenido (si no, el texto largo impide

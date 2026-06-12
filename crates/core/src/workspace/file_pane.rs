@@ -278,6 +278,63 @@ impl FilePaneState {
         }
     }
 
+    /// Lleva el foco a la posición de vista `new` (ya en rango lógico; se clampa). Con
+    /// `extend` (Shift) extiende el rango desde el ancla; sin extend, selección simple
+    /// del nuevo foco. Helper común de la navegación por bloques (página/inicio/fin).
+    fn focus_to(&mut self, new: usize, extend: bool) {
+        let len = self.view_indices().len();
+        if len == 0 {
+            return;
+        }
+        let new = new.min(len - 1);
+        if extend {
+            if self.anchor.is_none() {
+                self.anchor = Some(self.focused.unwrap_or(0).min(len - 1));
+            }
+            self.select_range_to(new);
+        } else {
+            self.select_single(new);
+        }
+    }
+
+    /// Mueve el foco `delta_pages` páginas (cada página = `rows_per_page` filas). Con
+    /// `extend` (Shift+AvPag/RePag) extiende el rango desde el ancla. Clampa a la vista.
+    pub fn focus_page(&mut self, delta_pages: isize, rows_per_page: usize, extend: bool) {
+        let len = self.view_indices().len();
+        if len == 0 {
+            return;
+        }
+        let step = (rows_per_page.max(1) as isize) * delta_pages;
+        let cur = self.focused.unwrap_or(0) as isize;
+        let new = (cur + step).clamp(0, len as isize - 1) as usize;
+        self.focus_to(new, extend);
+    }
+
+    /// Foco al primer ítem de la vista (Inicio/Home). Con `extend`, extiende desde el ancla.
+    pub fn focus_home(&mut self, extend: bool) {
+        self.focus_to(0, extend);
+    }
+
+    /// Foco al último ítem de la vista (Fin/End). Con `extend`, extiende desde el ancla.
+    pub fn focus_end(&mut self, extend: bool) {
+        let len = self.view_indices().len();
+        if len > 0 {
+            self.focus_to(len - 1, extend);
+        }
+    }
+
+    /// Mueve el foco `delta` SIN tocar la selección ni el ancla (Ctrl+↑/↓, estilo
+    /// Explorer): solo viaja el cursor punteado por la vista, clampado.
+    pub fn move_focus_keep(&mut self, delta: isize) {
+        let len = self.view_indices().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.focused.unwrap_or(0) as isize;
+        let new = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.focused = Some(new);
+    }
+
     /// ¿La posición de vista `pos` está seleccionada?
     pub fn is_selected(&self, pos: usize) -> bool {
         self.selected.contains(&pos)
@@ -612,6 +669,85 @@ mod tests {
         p.move_focus_extend(1, false);
         assert_eq!(p.selected, vec![3]);
         assert_eq!(p.anchor, Some(3));
+    }
+
+    #[test]
+    fn focus_page_avanza_y_clampa() {
+        let mut p = pane_n(100);
+        p.select_single(0);
+        // PageDown (1 página de 20) desde 0 → 20.
+        p.focus_page(1, 20, false);
+        assert_eq!(p.focused, Some(20));
+        assert_eq!(p.selected, vec![20]);
+        // Otra página → 40.
+        p.focus_page(1, 20, false);
+        assert_eq!(p.focused, Some(40));
+        // PageUp dos páginas → 0.
+        p.focus_page(-2, 20, false);
+        assert_eq!(p.focused, Some(0));
+        // PageUp más allá del inicio: clampa a 0.
+        p.focus_page(-5, 20, false);
+        assert_eq!(p.focused, Some(0));
+        // PageDown enorme: clampa al último.
+        p.focus_page(10, 20, false);
+        assert_eq!(p.focused, Some(99));
+    }
+
+    #[test]
+    fn focus_home_y_end() {
+        let mut p = pane_n(100);
+        p.select_single(40);
+        p.focus_end(false);
+        assert_eq!(p.focused, Some(99));
+        assert_eq!(p.selected, vec![99]);
+        p.focus_home(false);
+        assert_eq!(p.focused, Some(0));
+        assert_eq!(p.selected, vec![0]);
+    }
+
+    #[test]
+    fn shift_end_extiende_desde_ancla() {
+        let mut p = pane_n(100);
+        // Ancla en 5.
+        p.select_single(5);
+        // Shift+End → selección 5..=99 (50 entradas… en realidad 95).
+        p.focus_end(true);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s.first(), Some(&5));
+        assert_eq!(s.last(), Some(&99));
+        assert_eq!(s.len(), 95);
+        assert_eq!(p.anchor, Some(5));
+        assert_eq!(p.focused, Some(99));
+    }
+
+    #[test]
+    fn shift_page_extiende_por_bloques() {
+        let mut p = pane_n(100);
+        p.select_single(10);
+        // Shift+PageDown (página=20) → ancla 10, foco 30, selección 10..=30.
+        p.focus_page(1, 20, true);
+        let mut s = p.selected.clone();
+        s.sort_unstable();
+        assert_eq!(s.first(), Some(&10));
+        assert_eq!(s.last(), Some(&30));
+        assert_eq!(p.anchor, Some(10));
+    }
+
+    #[test]
+    fn ctrl_flecha_mueve_foco_sin_tocar_seleccion() {
+        let mut p = pane_n(100);
+        p.select_single(40);
+        assert_eq!(p.selected, vec![40]);
+        // Ctrl+↓: el foco baja pero la selección NO cambia.
+        p.move_focus_keep(1);
+        assert_eq!(p.focused, Some(41));
+        assert_eq!(p.selected, vec![40], "Ctrl+↓ no toca la selección");
+        assert_eq!(p.anchor, Some(40), "ni el ancla");
+        // Ctrl+↑ por debajo de 0 clampa.
+        p.move_focus_keep(-100);
+        assert_eq!(p.focused, Some(0));
+        assert_eq!(p.selected, vec![40]);
     }
 
     #[test]

@@ -25,6 +25,14 @@ pub enum KeyCode {
     F4,
     F5,
     F6,
+    /// Avanzar una página (PageDown).
+    PageDown,
+    /// Retroceder una página (PageUp).
+    PageUp,
+    /// Ir al inicio de la lista (Home).
+    Home,
+    /// Ir al final de la lista (End).
+    End,
     /// Barra espaciadora.
     Space,
     /// Letra o dígito; normalizada a minúscula al construirla.
@@ -121,6 +129,28 @@ pub enum Action {
     ExtendDown,
     /// Marcar/desmarcar el ítem enfocado (Espacio).
     ToggleSelect,
+    /// Bajar una página el foco (PageDown) — selección simple del nuevo foco.
+    FocusPageDown,
+    /// Subir una página el foco (PageUp) — selección simple del nuevo foco.
+    FocusPageUp,
+    /// Foco al primer ítem (Home) — selección simple.
+    FocusHome,
+    /// Foco al último ítem (End) — selección simple.
+    FocusEnd,
+    /// Extender la selección una página hacia abajo (Shift+PageDown).
+    ExtendPageDown,
+    /// Extender la selección una página hacia arriba (Shift+PageUp).
+    ExtendPageUp,
+    /// Extender la selección hasta el primer ítem (Shift+Home).
+    ExtendHome,
+    /// Extender la selección hasta el último ítem (Shift+End).
+    ExtendEnd,
+    /// Mover el foco hacia arriba SIN tocar la selección (Ctrl+↑).
+    FocusUpKeep,
+    /// Mover el foco hacia abajo SIN tocar la selección (Ctrl+↓).
+    FocusDownKeep,
+    /// Marcar/desmarcar el ítem enfocado dejando el resto (Ctrl+Espacio).
+    ToggleFocused,
     /// Deshacer la última operación de archivos (R2).
     Undo,
     /// Abrir la edición del path del panel activo (path-bar, Ctrl+L / F4).
@@ -167,6 +197,17 @@ impl Action {
             ExtendUp,
             ExtendDown,
             ToggleSelect,
+            FocusPageDown,
+            FocusPageUp,
+            FocusHome,
+            FocusEnd,
+            ExtendPageDown,
+            ExtendPageUp,
+            ExtendHome,
+            ExtendEnd,
+            FocusUpKeep,
+            FocusDownKeep,
+            ToggleFocused,
             Undo,
             EditPath,
             GoFavorite1,
@@ -211,6 +252,17 @@ impl Action {
             ExtendDown => "action.extend_down",
             Undo => "action.undo",
             ToggleSelect => "action.toggle_select",
+            FocusPageDown => "action.focus_page_down",
+            FocusPageUp => "action.focus_page_up",
+            FocusHome => "action.focus_home",
+            FocusEnd => "action.focus_end",
+            ExtendPageDown => "action.extend_page_down",
+            ExtendPageUp => "action.extend_page_up",
+            ExtendHome => "action.extend_home",
+            ExtendEnd => "action.extend_end",
+            FocusUpKeep => "action.focus_up_keep",
+            FocusDownKeep => "action.focus_down_keep",
+            ToggleFocused => "action.toggle_focused",
             EditPath => "action.edit_path",
             GoFavorite1 => "action.go_favorite_1",
             GoFavorite2 => "action.go_favorite_2",
@@ -279,6 +331,21 @@ impl KeyMap {
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
             (ExtendDown, vec![Chord::shift(ArrowDown)]),
             (ToggleSelect, vec![Chord::plain(Space)]),
+            // Navegación por bloques (estilo Explorer): página, inicio y fin.
+            (FocusPageDown, vec![Chord::plain(PageDown)]),
+            (FocusPageUp, vec![Chord::plain(PageUp)]),
+            (FocusHome, vec![Chord::plain(Home)]),
+            (FocusEnd, vec![Chord::plain(End)]),
+            // Mismas teclas con Shift extienden la selección por bloques.
+            (ExtendPageDown, vec![Chord::shift(PageDown)]),
+            (ExtendPageUp, vec![Chord::shift(PageUp)]),
+            (ExtendHome, vec![Chord::shift(Home)]),
+            (ExtendEnd, vec![Chord::shift(End)]),
+            // Ctrl+flechas mueven el foco SIN tocar la selección.
+            (FocusUpKeep, vec![Chord::ctrl(ArrowUp)]),
+            (FocusDownKeep, vec![Chord::ctrl(ArrowDown)]),
+            // Ctrl+Espacio togglea el ítem enfocado dejando el resto.
+            (ToggleFocused, vec![Chord::ctrl(Space)]),
             (Undo, vec![Chord::ctrl(Char('z'))]),
             // Path-bar: dos atajos (estilo navegador y estilo Explorer/Commander).
             (EditPath, vec![Chord::ctrl(Char('l')), Chord::plain(F4)]),
@@ -411,13 +478,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_36_acciones_con_clave_i18n_unica() {
+    fn all_tiene_47_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 36);
+        assert_eq!(all.len(), 47);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 36, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 47, "cada acción tiene una clave i18n única");
+    }
+
+    #[test]
+    fn teclado_de_lista_por_bloques() {
+        let km = KeyMap::defaults();
+        // Navegación por bloques sin modificador.
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::PageDown)),
+            Some(Action::FocusPageDown)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::PageUp)),
+            Some(Action::FocusPageUp)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Home)),
+            Some(Action::FocusHome)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::End)),
+            Some(Action::FocusEnd)
+        );
+        // Shift extiende la selección por bloques.
+        assert_eq!(
+            km.action_for(&Chord::shift(KeyCode::PageDown)),
+            Some(Action::ExtendPageDown)
+        );
+        assert_eq!(
+            km.action_for(&Chord::shift(KeyCode::End)),
+            Some(Action::ExtendEnd)
+        );
+        // Ctrl+flechas mueven el foco sin tocar la selección; Ctrl+Espacio togglea.
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::ArrowUp)),
+            Some(Action::FocusUpKeep)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::ArrowDown)),
+            Some(Action::FocusDownKeep)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Space)),
+            Some(Action::ToggleFocused)
+        );
     }
 
     #[test]

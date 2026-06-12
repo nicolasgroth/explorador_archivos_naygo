@@ -341,6 +341,14 @@ pub struct NaygoApp {
     hwnd: Option<isize>,
     /// Petición de menú contextual nativo (shell-B): coords de PANTALLA del clic. La procesa NaygoApp fuera del closure de egui.
     native_menu_request: Option<(f32, f32)>,
+    /// Filas visibles del cuerpo de cada file panel, medidas el frame anterior (alto del
+    /// área / ROW_HEIGHT). Las usa AvPag/RePag para el tamaño de página. Default 20 si no
+    /// hay dato aún. Estado efímero de presentación (no se persiste).
+    visible_rows: std::collections::HashMap<PaneId, usize>,
+    /// Posición de vista a la que el cuerpo de un file panel debe hacer scroll este frame
+    /// (foco movido por teclado). La consume `file_panel::show` y `NaygoApp` la limpia tras
+    /// pintar. Efímero.
+    scroll_to_focus: std::collections::HashMap<PaneId, usize>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -552,6 +560,8 @@ impl NaygoApp {
             highlight_since: std::collections::HashMap::new(),
             device_watch,
             device_rx: Some(dev_rx),
+            visible_rows: HashMap::new(),
+            scroll_to_focus: HashMap::new(),
             size_jobs: HashMap::new(),
             sized_paths: HashMap::new(),
             size_partial: std::collections::HashSet::new(),
@@ -1010,6 +1020,8 @@ impl NaygoApp {
                 }
             });
             self.sized_paths.remove(&id);
+            self.visible_rows.remove(&id);
+            self.scroll_to_focus.remove(&id);
             self.workspace.remove_pane(id);
         }
     }
@@ -1897,24 +1909,40 @@ impl NaygoApp {
                 if let Some(f) = self.workspace.active_files_mut() {
                     f.move_focus_extend(-1, true);
                 }
+                self.schedule_scroll_to_active_focus();
             }
             Action::ExtendDown => {
                 if let Some(f) = self.workspace.active_files_mut() {
                     f.move_focus_extend(1, true);
                 }
+                self.schedule_scroll_to_active_focus();
             }
             Action::SelectAll => {
                 if let Some(f) = self.workspace.active_files_mut() {
                     f.select_all();
                 }
             }
-            Action::ToggleSelect => {
+            Action::ToggleSelect | Action::ToggleFocused => {
                 if let Some(f) = self.workspace.active_files_mut() {
                     if let Some(pos) = f.focused {
                         f.select_toggle(pos);
                     }
                 }
             }
+            // Teclado de lista por bloques (AvPag/RePag, Inicio/Fin) y sus variantes con
+            // Shift (extender). El tamaño de página = filas visibles medidas el frame
+            // anterior; tras mover el foco se agenda el scroll para que la fila enfocada
+            // quede visible.
+            Action::FocusPageDown => self.focus_page_active(1, false),
+            Action::FocusPageUp => self.focus_page_active(-1, false),
+            Action::ExtendPageDown => self.focus_page_active(1, true),
+            Action::ExtendPageUp => self.focus_page_active(-1, true),
+            Action::FocusHome => self.focus_home_end_active(false, false),
+            Action::FocusEnd => self.focus_home_end_active(true, false),
+            Action::ExtendHome => self.focus_home_end_active(false, true),
+            Action::ExtendEnd => self.focus_home_end_active(true, true),
+            Action::FocusUpKeep => self.move_focus_keep_active(-1),
+            Action::FocusDownKeep => self.move_focus_keep_active(1),
             Action::EditPath => self.begin_edit_path(),
             Action::GoFavorite1
             | Action::GoFavorite2
@@ -2689,6 +2717,58 @@ impl NaygoApp {
             // cualquier multi-selección previa).
             f.move_focus_extend(delta, false);
         }
+        self.schedule_scroll_to_active_focus();
+    }
+
+    /// Filas visibles del panel activo (tamaño de página de AvPag/RePag): el valor medido
+    /// el frame anterior, o 20 como fallback razonable mientras no hay dato.
+    fn active_page_rows(&self) -> usize {
+        self.workspace
+            .active_id()
+            .and_then(|id| self.visible_rows.get(&id).copied())
+            .filter(|&r| r > 0)
+            .unwrap_or(20)
+    }
+
+    /// AvPag/RePag sobre el panel activo (`delta_pages` ±1). Con `extend` (Shift) extiende
+    /// la selección por bloques; si no, selección simple del nuevo foco. Agenda el scroll.
+    fn focus_page_active(&mut self, delta_pages: isize, extend: bool) {
+        let rows = self.active_page_rows();
+        if let Some(f) = self.workspace.active_files_mut() {
+            f.focus_page(delta_pages, rows, extend);
+        }
+        self.schedule_scroll_to_active_focus();
+    }
+
+    /// Inicio/Fin sobre el panel activo (`to_end` elige Fin). Con `extend` (Shift) extiende.
+    fn focus_home_end_active(&mut self, to_end: bool, extend: bool) {
+        if let Some(f) = self.workspace.active_files_mut() {
+            if to_end {
+                f.focus_end(extend);
+            } else {
+                f.focus_home(extend);
+            }
+        }
+        self.schedule_scroll_to_active_focus();
+    }
+
+    /// Ctrl+↑/↓ sobre el panel activo: mueve el foco sin tocar la selección. Agenda scroll.
+    fn move_focus_keep_active(&mut self, delta: isize) {
+        if let Some(f) = self.workspace.active_files_mut() {
+            f.move_focus_keep(delta);
+        }
+        self.schedule_scroll_to_active_focus();
+    }
+
+    /// Tras mover el foco por teclado, agenda que el cuerpo del panel activo haga scroll a
+    /// la fila enfocada en el próximo pintado (la consume `file_panel::show`).
+    fn schedule_scroll_to_active_focus(&mut self) {
+        let Some(id) = self.workspace.active_id() else {
+            return;
+        };
+        if let Some(pos) = self.workspace.active_files().and_then(|f| f.focused) {
+            self.scroll_to_focus.insert(id, pos);
+        }
     }
 
     fn activate_focused(&mut self) {
@@ -2824,6 +2904,10 @@ impl NaygoApp {
             egui::Key::F4,
             egui::Key::F5,
             egui::Key::F6,
+            egui::Key::PageDown,
+            egui::Key::PageUp,
+            egui::Key::Home,
+            egui::Key::End,
             egui::Key::Num0,
             egui::Key::Num1,
             egui::Key::Num2,
@@ -3333,6 +3417,8 @@ impl eframe::App for NaygoApp {
                 path_ac_parent: self.path_ac.loaded_parent.as_deref().unwrap_or(""),
                 path_ac_names: &self.path_ac.names,
                 path_edit_seen: &mut path_edit_seen,
+                visible_rows: &mut self.visible_rows,
+                scroll_to_focus: &self.scroll_to_focus,
             };
             let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
             // Ancho mínimo de cada tab del dock para que no se compriman hasta
@@ -3344,6 +3430,9 @@ impl eframe::App for NaygoApp {
                 .style(dock_style)
                 .show_inside(ui, &mut viewer);
         }
+        // El scroll-a-foco es una señal de un solo frame: ya se aplicó al pintar, se limpia
+        // para no re-scrollear en frames posteriores (lo que pelearía con el scroll manual).
+        self.scroll_to_focus.clear();
         // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el
         // DockState. Podamos ese panel de TODOS los mapas por-panel (workspace + workers
         // + watchers + estado) para no filtrar handles del SO ni dejar al watcher
