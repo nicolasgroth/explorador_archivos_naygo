@@ -175,15 +175,24 @@ pub struct Settings {
     /// (default) = los paneles nuevos nacen con `TableState::default()`.
     #[serde(default)]
     pub default_table: Option<crate::columns::TableState>,
-    /// Extensiones de texto que el panel Preview previsualiza, como CSV (las imágenes son
-    /// fijas). Editable en Configuración → Previsualización. `#[serde(default)]` retro-compat.
-    #[serde(default = "default_preview_text_exts")]
-    pub preview_text_exts: String,
+    /// Reglas de previsualización (una por extensión): toggle + alias. Editable en
+    /// Configuración → Previsualización. `#[serde(default)]` retro-compat.
+    #[serde(default = "default_preview_rules_cfg")]
+    pub preview_rules: Vec<crate::preview::PreviewRule>,
+    /// DEPRECADO: CSV de extensiones de texto (lote 2). Solo se LEE para migrar a
+    /// `preview_rules`. Ya no se escribe (skip si está vacío). El `rename` lo hace leer
+    /// el campo `preview_text_exts` de un settings.json del lote 2.
+    #[serde(
+        default,
+        rename = "preview_text_exts",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub preview_text_exts_legacy: String,
 }
 
-/// Default de `preview_text_exts`: la lista semilla de `core::preview`.
-fn default_preview_text_exts() -> String {
-    crate::preview::default_text_extensions_csv()
+/// Default de `preview_rules`: las reglas semilla (texto + imagen, habilitadas).
+fn default_preview_rules_cfg() -> Vec<crate::preview::PreviewRule> {
+    crate::preview::default_preview_rules()
 }
 
 /// Default de `column_width_mode` para `#[serde(default)]`: fijo (comportamiento previo).
@@ -317,7 +326,8 @@ impl Default for Settings {
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
-            preview_text_exts: default_preview_text_exts(),
+            preview_rules: default_preview_rules_cfg(),
+            preview_text_exts_legacy: String::new(),
         }
     }
 }
@@ -408,6 +418,16 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
             // quedar como selección colgada con la toolbar rota.
             let normalized = normalize_icon_set_id(&s.icon_set);
             s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
+            // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
+            // hay reglas explícitas (settings anterior al lote 3). Si tras eso siguen
+            // vacías (settings raro), caer a las reglas por defecto.
+            if !s.preview_text_exts_legacy.is_empty() && s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::rules_from_csv(&s.preview_text_exts_legacy);
+            }
+            if s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::default_preview_rules();
+            }
+            s.preview_text_exts_legacy.clear();
             s
         }
         Some(_) => {
@@ -553,10 +573,42 @@ mod tests {
                 t.set_width(crate::columns::ColumnKind::Name, 333.0);
                 t
             }),
-            preview_text_exts: "txt, md, rs".to_string(),
+            preview_rules: vec![
+                crate::preview::PreviewRule {
+                    ext: "sif".into(),
+                    enabled: true,
+                    treat_as: Some("xml".into()),
+                },
+                crate::preview::PreviewRule {
+                    ext: "png".into(),
+                    enabled: false,
+                    treat_as: None,
+                },
+            ],
+            preview_text_exts_legacy: String::new(),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_migra_preview_csv_a_reglas() {
+        let dir = tempfile::tempdir().unwrap();
+        // settings.json del lote 2: trae preview_text_exts (CSV), sin preview_rules.
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat","preview_text_exts":"txt, md"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert!(s.preview_rules.iter().any(|r| r.ext == "txt" && r.enabled));
+        assert!(s.preview_rules.iter().any(|r| r.ext == "md"));
+        // Las imágenes se agregan en la migración.
+        assert!(s.preview_rules.iter().any(|r| r.ext == "png"));
+        assert!(
+            s.preview_text_exts_legacy.is_empty(),
+            "el CSV viejo se limpia"
+        );
     }
 
     #[test]

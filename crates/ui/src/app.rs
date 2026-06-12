@@ -1161,13 +1161,12 @@ impl NaygoApp {
                 .unwrap_or(true);
             if elapsed_ok {
                 let path = self.preview.wanted.clone().expect("needs implica wanted");
-                let text_exts =
-                    naygo_core::preview::parse_text_extensions(&self.settings.preview_text_exts);
+                let rules = self.settings.preview_rules.clone();
                 let token = CancellationToken::new();
                 let (tx, rx) = std::sync::mpsc::channel();
                 let worker_token = token.clone();
                 std::thread::spawn(move || {
-                    let payload = build_preview_payload(&path, &text_exts, &worker_token);
+                    let payload = build_preview_payload(&path, &rules, &worker_token);
                     // Si se canceló a mitad, igual mandamos: el pump descarta por path.
                     let _ = tx.send((path, payload));
                 });
@@ -4266,11 +4265,11 @@ fn build_summary_report(summary: &OpSummary) -> String {
 /// cancelación a mitad devuelve un mensaje neutro (el pump igual lo descarta por path).
 fn build_preview_payload(
     path: &std::path::Path,
-    text_exts: &[String],
+    rules: &[naygo_core::preview::PreviewRule],
     token: &CancellationToken,
 ) -> PreviewPayload {
     use naygo_core::preview::{self, PreviewKind};
-    match preview::classify(path, text_exts) {
+    match preview::classify_rules(path, rules) {
         PreviewKind::None => PreviewPayload::Message("preview.none"),
         PreviewKind::Text => read_text_preview(path),
         PreviewKind::Image => read_image_preview(path, token),

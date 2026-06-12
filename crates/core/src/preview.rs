@@ -2,8 +2,11 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 //! Lógica PURA del panel Preview: decide qué tipo de vista previa admite una ruta
-//! según su extensión (texto / imagen / nada) y trunca el texto a un tope de líneas y
-//! de bytes. No toca disco ni egui: la UI lee el archivo en un worker y aplica esto.
+//! según las reglas configuradas (toggle + alias por extensión) y trunca el texto a un
+//! tope de líneas y de bytes. No toca disco ni egui: la UI lee el archivo en un worker y
+//! aplica esto.
+
+use serde::{Deserialize, Serialize};
 
 /// El tipo de vista previa que admite un archivo, decidido por su extensión.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +38,92 @@ pub const TEXT_MAX_BYTES: usize = 64 * 1024;
 pub const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Lado máximo (px) de la textura de la imagen: si excede, se reescala antes de subirla.
 pub const IMAGE_MAX_SIDE: u32 = 1024;
+
+/// Regla de previsualización para UNA extensión: si se previsualiza y, opcionalmente,
+/// como qué otra extensión tratarla (alias). Editable en Configuración.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewRule {
+    /// Extensión sin punto, en minúscula ("sif", "txt", "png").
+    pub ext: String,
+    /// Si se previsualiza esta extensión.
+    pub enabled: bool,
+    /// Tratar la extensión como otra (alias). `Some("xml")` => un .sif se clasifica
+    /// como .xml. `None` => por sí misma.
+    pub treat_as: Option<String>,
+}
+
+/// Clasifica una ruta según las reglas configuradas. Resuelve el alias `treat_as` (un
+/// salto, sin ciclar) y luego decide Text/Image/None por la extensión efectiva. Una
+/// extensión sin regla, o con la regla deshabilitada, es `None`.
+pub fn classify_rules(path: &std::path::Path, rules: &[PreviewRule]) -> PreviewKind {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if ext.is_empty() {
+        return PreviewKind::None;
+    }
+    let Some(rule) = rules.iter().find(|r| r.ext == ext) else {
+        return PreviewKind::None;
+    };
+    if !rule.enabled {
+        return PreviewKind::None;
+    }
+    // Extensión efectiva: el alias si lo hay (un salto), si no la propia.
+    let effective = rule.treat_as.as_deref().unwrap_or(&ext);
+    kind_of_extension(effective)
+}
+
+/// Tipo intrínseco de una extensión (sin reglas): imagen fija, o texto si está en la
+/// lista semilla de texto, o None. Lo usa `classify_rules` tras resolver el alias.
+fn kind_of_extension(ext: &str) -> PreviewKind {
+    if IMAGE_EXTENSIONS.contains(&ext) {
+        PreviewKind::Image
+    } else if DEFAULT_TEXT_EXTENSIONS.contains(&ext) {
+        PreviewKind::Text
+    } else {
+        PreviewKind::None
+    }
+}
+
+/// Reglas por defecto: cada extensión de texto semilla + cada imagen, todas
+/// habilitadas y sin alias.
+pub fn default_preview_rules() -> Vec<PreviewRule> {
+    let mk = |e: &&str| PreviewRule {
+        ext: (*e).to_string(),
+        enabled: true,
+        treat_as: None,
+    };
+    DEFAULT_TEXT_EXTENSIONS
+        .iter()
+        .chain(IMAGE_EXTENSIONS.iter())
+        .map(mk)
+        .collect()
+}
+
+/// Migra un CSV viejo de extensiones de texto a reglas (cada una habilitada, sin
+/// alias) + las reglas de imagen por defecto. Para settings.json previos (lote 2).
+pub fn rules_from_csv(csv: &str) -> Vec<PreviewRule> {
+    let mut rules: Vec<PreviewRule> = parse_text_extensions(csv)
+        .into_iter()
+        .map(|ext| PreviewRule {
+            ext,
+            enabled: true,
+            treat_as: None,
+        })
+        .collect();
+    // Agregar las imágenes que falten (habilitadas).
+    for img in IMAGE_EXTENSIONS {
+        if !rules.iter().any(|r| r.ext == *img) {
+            rules.push(PreviewRule {
+                ext: (*img).to_string(),
+                enabled: true,
+                treat_as: None,
+            });
+        }
+    }
+    rules
+}
 
 /// Extrae la extensión de una ruta en minúsculas (sin punto). Vacío si no tiene.
 fn extension_lower(path: &std::path::Path) -> String {
@@ -172,5 +261,119 @@ mod tests {
         let bytes = [0xff, 0xfe, b'h', b'i', b'\n'];
         let t = truncate_text(&bytes, false);
         assert!(t.text.contains("hi"));
+    }
+
+    #[test]
+    fn classify_con_reglas_toggle_y_alias() {
+        let rules = vec![
+            PreviewRule {
+                ext: "txt".into(),
+                enabled: true,
+                treat_as: None,
+            },
+            PreviewRule {
+                ext: "log".into(),
+                enabled: false,
+                treat_as: None,
+            },
+            PreviewRule {
+                ext: "sif".into(),
+                enabled: true,
+                treat_as: Some("xml".into()),
+            },
+            PreviewRule {
+                ext: "xml".into(),
+                enabled: true,
+                treat_as: None,
+            },
+            PreviewRule {
+                ext: "png".into(),
+                enabled: true,
+                treat_as: None,
+            },
+            PreviewRule {
+                ext: "jpg".into(),
+                enabled: false,
+                treat_as: None,
+            },
+        ];
+        assert_eq!(
+            classify_rules(Path::new("a.txt"), &rules),
+            PreviewKind::Text
+        );
+        // log deshabilitado -> None aunque sea texto.
+        assert_eq!(
+            classify_rules(Path::new("a.log"), &rules),
+            PreviewKind::None
+        );
+        // sif (alias a xml) -> texto.
+        assert_eq!(
+            classify_rules(Path::new("a.sif"), &rules),
+            PreviewKind::Text
+        );
+        // png habilitado -> imagen.
+        assert_eq!(
+            classify_rules(Path::new("a.PNG"), &rules),
+            PreviewKind::Image
+        );
+        // jpg deshabilitado -> None.
+        assert_eq!(
+            classify_rules(Path::new("a.jpg"), &rules),
+            PreviewKind::None
+        );
+        // extensión sin regla -> None.
+        assert_eq!(
+            classify_rules(Path::new("a.mp4"), &rules),
+            PreviewKind::None
+        );
+    }
+
+    #[test]
+    fn classify_alias_a_imagen_y_alias_roto() {
+        let rules = vec![
+            PreviewRule {
+                ext: "raw".into(),
+                enabled: true,
+                treat_as: Some("png".into()),
+            },
+            PreviewRule {
+                ext: "png".into(),
+                enabled: true,
+                treat_as: None,
+            },
+            PreviewRule {
+                ext: "weird".into(),
+                enabled: true,
+                treat_as: Some("zzz".into()),
+            },
+        ];
+        // raw -> png -> imagen.
+        assert_eq!(
+            classify_rules(Path::new("a.raw"), &rules),
+            PreviewKind::Image
+        );
+        // alias a una extensión sin tipo conocido -> None (un salto, no cicla).
+        assert_eq!(
+            classify_rules(Path::new("a.weird"), &rules),
+            PreviewKind::None
+        );
+    }
+
+    #[test]
+    fn default_rules_tiene_texto_e_imagen_habilitados() {
+        let rules = default_preview_rules();
+        assert!(rules.iter().any(|r| r.ext == "txt" && r.enabled));
+        assert!(rules.iter().any(|r| r.ext == "png" && r.enabled));
+        assert!(rules.iter().all(|r| r.enabled && r.treat_as.is_none()));
+    }
+
+    #[test]
+    fn migracion_csv_a_reglas() {
+        let rules = rules_from_csv("txt, md, .RS,, json");
+        assert!(rules
+            .iter()
+            .any(|r| r.ext == "txt" && r.enabled && r.treat_as.is_none()));
+        assert!(rules.iter().any(|r| r.ext == "rs"));
+        assert!(rules.iter().any(|r| r.ext == "png"));
     }
 }
