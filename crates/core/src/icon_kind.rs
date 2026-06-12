@@ -65,6 +65,10 @@ pub enum ActionIcon {
     NewFile,
     NewFolder,
     AddPane,
+    /// Intercambiar las carpetas de dos paneles (swap ⇄).
+    SwapPanes,
+    /// Clonar la carpeta del panel activo a otro panel.
+    ClonePath,
     Settings,
 }
 
@@ -74,7 +78,7 @@ impl ActionIcon {
         use ActionIcon::*;
         &[
             Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder, AddPane,
-            Settings,
+            SwapPanes, ClonePath, Settings,
         ]
     }
 
@@ -93,6 +97,8 @@ impl ActionIcon {
             NewFile => "action_new_file",
             NewFolder => "action_new_folder",
             AddPane => "action_add_pane",
+            SwapPanes => "action_swap_panes",
+            ClonePath => "action_clone_path",
             Settings => "action_settings",
         }
     }
@@ -292,15 +298,15 @@ mod tests {
     }
 
     #[test]
-    fn action_icon_all_son_12_con_file_name_unico() {
+    fn action_icon_all_son_14_con_file_name_unico() {
         let all = ActionIcon::all();
-        assert_eq!(all.len(), 12);
+        assert_eq!(all.len(), 14);
         let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(
             names.len(),
-            12,
+            14,
             "cada acción tiene un nombre de archivo único"
         );
         assert!(all.iter().all(|a| a.file_name().starts_with("action_")));

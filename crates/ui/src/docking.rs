@@ -24,6 +24,9 @@ pub enum PaneRequest {
     /// Confirmar un rename inline (R1): renombrar `source` a `new_name`. `NaygoApp`
     /// lo convierte en un OpRequest de Rename (mismo camino que el diálogo viejo).
     CommitRename { source: PathBuf, new_name: String },
+    /// Abrir la carpeta `dir` en OTRO panel (Ctrl+doble-clic). `from` es el panel origen
+    /// (que NO navega). `NaygoApp` resuelve el destino (regla 2/3+/1 paneles).
+    OpenInOther { from: PaneId, dir: PathBuf },
 }
 
 pub struct NaygoTabViewer<'a> {
@@ -98,6 +101,9 @@ pub struct NaygoTabViewer<'a> {
     pub scroll_to_focus: &'a std::collections::HashMap<naygo_core::workspace::PaneId, usize>,
     /// Modo de ancho de columnas (fijo vs automático), del setting global.
     pub column_width_mode: naygo_core::config::ColumnWidthMode,
+    /// Rects en pantalla de cada file panel ESTE frame (salida). Los usa el overlay del
+    /// selector de panel (multi-panel) para oscurecer/numerar cada candidato.
+    pub pane_rects: &'a mut std::collections::HashMap<naygo_core::workspace::PaneId, egui::Rect>,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -172,6 +178,7 @@ impl NaygoTabViewer<'_> {
                     recents: self.recent_dirs,
                 };
                 let mut visible_rows_out: Option<usize> = None;
+                let mut pane_rect_out: Option<egui::Rect> = None;
                 crate::panes::file_panel::show(
                     ui,
                     self.workspace,
@@ -191,9 +198,13 @@ impl NaygoTabViewer<'_> {
                     self.scroll_to_focus.get(&id).copied(),
                     &mut visible_rows_out,
                     self.column_width_mode,
+                    &mut pane_rect_out,
                 );
                 if let Some(rows) = visible_rows_out {
                     self.visible_rows.insert(id, rows);
+                }
+                if let Some(rect) = pane_rect_out {
+                    self.pane_rects.insert(id, rect);
                 }
                 for a in local {
                     self.table_actions.push((id, a));

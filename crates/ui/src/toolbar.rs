@@ -42,6 +42,8 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let lbl_forward = app.tr("toolbar.forward");
     let lbl_up = app.tr("toolbar.up");
     let lbl_refresh = app.tr("toolbar.refresh");
+    let lbl_swap = app.tr("toolbar.swap_panes");
+    let lbl_clone = app.tr("toolbar.clone_path");
     let lbl_add_pane = app.tr("toolbar.add_pane");
     let lbl_copy = app.tr("op.copy");
     let lbl_cut = app.tr("op.cut");
@@ -166,6 +168,11 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
     btn!("▲", ActionIcon::Up, &lbl_up, true);
     btn!("⟳", ActionIcon::Refresh, &lbl_refresh, true);
+    // Acciones multi-panel: intercambiar (⇄) y clonar la carpeta (⎘) hacia otro panel.
+    // Swap solo tiene sentido con 2+ paneles Files; con uno solo se deshabilita.
+    let files_count = app.workspace.files_panes().len();
+    btn!("⇄", ActionIcon::SwapPanes, &lbl_swap, files_count >= 2);
+    btn!("⎘", ActionIcon::ClonePath, &lbl_clone, true);
     ui.separator();
     // Operaciones de archivo: mismos disparadores que el teclado / menú contextual.
     btn!("⧉", ActionIcon::Copy, &lbl_copy, true);
@@ -220,6 +227,8 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             ActionIcon::NewFile => app.apply_action(Action::NewFile),
             ActionIcon::NewFolder => app.apply_action(Action::NewDir),
             ActionIcon::AddPane => app.add_files_pane(),
+            ActionIcon::SwapPanes => app.swap_active_with_other(),
+            ActionIcon::ClonePath => app.clone_active_to_other(),
             ActionIcon::Settings => app.settings_open = true,
         }
     }

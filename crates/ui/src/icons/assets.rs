@@ -45,7 +45,7 @@ macro_rules! png {
     };
 }
 
-/// Lista de los 13 nombres con sus bytes embebidos, por set.
+/// Lista de los nombres con sus bytes embebidos, por set (13 base + acciones de barra).
 macro_rules! set_table {
     ($konst:ident, $set:literal) => {
         const $konst: &[(&str, &[u8])] = &[
@@ -73,6 +73,8 @@ macro_rules! set_table {
             ("action_new_file", png!($set, "action_new_file")),
             ("action_new_folder", png!($set, "action_new_folder")),
             ("action_add_pane", png!($set, "action_add_pane")),
+            ("action_swap_panes", png!($set, "action_swap_panes")),
+            ("action_clone_path", png!($set, "action_clone_path")),
             ("action_settings", png!($set, "action_settings")),
         ];
     };

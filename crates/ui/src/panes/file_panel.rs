@@ -72,6 +72,9 @@ pub fn show(
     // Modo de ancho de columnas: en `Auto` la tabla reparte por contenido (no se persiste
     // el resize manual); en `Fixed` se usan los anchos del `TableState` (resizable a mano).
     width_mode: naygo_core::config::ColumnWidthMode,
+    // Salida: el rect en pantalla del área del panel (para el overlay del selector de panel
+    // multi-panel). `NaygoApp` lo guarda por PaneId cada frame.
+    pane_rect_out: &mut Option<egui::Rect>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -134,6 +137,8 @@ pub fn show(
     // panel también se interpreta sobre la vista (consistente con el pintado).
     let mut clicked: Option<(usize, bool, bool)> = None; // (pos en vista, ctrl, shift)
     let mut activated: Option<usize> = None;
+    // Ruta de carpeta a abrir en OTRO panel (Ctrl+doble-clic). Se resuelve tras la tabla.
+    let mut open_in_other: Option<std::path::PathBuf> = None;
     let mut parent_activated = false;
     // Posición de vista cuya celda Nombre empezó a arrastrarse este frame → dispara el
     // arrastre OLE hacia el SO (Naygo → Explorer). Se resuelve a rutas tras la tabla y se
@@ -504,7 +509,14 @@ pub fn show(
                             clicked = Some((i, ctrl, shift));
                         }
                         if row_resp.double_clicked() {
-                            activated = Some(i);
+                            // Ctrl+doble-clic sobre una CARPETA: abrir en otro panel (el
+                            // actual no navega). Sin Ctrl, o sobre archivo: activación normal.
+                            let ctrl = ctx.input(|inp| inp.modifiers.command || inp.modifiers.ctrl);
+                            if ctrl && view.get(i).map(|e| e.is_dir()).unwrap_or(false) {
+                                open_in_other = view.get(i).map(|e| e.path.clone());
+                            } else {
+                                activated = Some(i);
+                            }
                         }
                         // Clic derecho: enfocar esta fila (para que las acciones del
                         // menú operen sobre ella) y abrir el menú contextual de ops.
@@ -833,6 +845,12 @@ pub fn show(
         }
         pending.push(PaneRequest::Activate { id });
     }
+    // Ctrl+doble-clic en una carpeta: abrir en otro panel (el origen conserva el foco;
+    // NaygoApp resuelve el destino). Se emite antes que `activated` (mutuamente excluyentes).
+    if let Some(dir) = open_in_other {
+        pending.push(PaneRequest::Activate { id });
+        pending.push(PaneRequest::OpenInOther { from: id, dir });
+    }
     if let Some(i) = activated {
         if let Some(entry) = view.get(i) {
             if entry.is_dir() {
@@ -860,6 +878,8 @@ pub fn show(
     // espacio vacío de abajo quedaba fuera → no activaba (bug reportado por Nicolás).
     // El intersect con el clip protege contra rects extendidos fuera de lo visible.
     let pane_rect = ui.max_rect().intersect(ui.clip_rect());
+    // Exportar el rect para el overlay del selector de panel (multi-panel).
+    *pane_rect_out = Some(pane_rect);
     let pressed_inside = ui.input(|i| {
         (i.pointer.primary_pressed() || i.pointer.secondary_pressed())
             && i.pointer

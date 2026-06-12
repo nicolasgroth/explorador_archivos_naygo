@@ -66,6 +66,8 @@ fn icon_specs() -> Vec<(&'static str, [u8; 4])> {
         ("action_new_file", [90, 120, 170, 255]),
         ("action_new_folder", [90, 120, 170, 255]),
         ("action_add_pane", [90, 120, 170, 255]),
+        ("action_swap_panes", [90, 120, 170, 255]),
+        ("action_clone_path", [90, 120, 170, 255]),
         ("action_settings", [90, 120, 170, 255]),
     ]
 }

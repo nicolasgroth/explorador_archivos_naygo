@@ -349,6 +349,12 @@ pub struct NaygoApp {
     /// (foco movido por teclado). La consume `file_panel::show` y `NaygoApp` la limpia tras
     /// pintar. Efímero.
     scroll_to_focus: std::collections::HashMap<PaneId, usize>,
+    /// Rects en pantalla de cada file panel, capturados al pintar cada frame. Los usa el
+    /// overlay del selector de panel multi-panel. Efímero.
+    pane_rects: std::collections::HashMap<PaneId, egui::Rect>,
+    /// Selector de panel destino activo (overlay multi-panel). Mientras es `Some`, el input
+    /// global se suspende. Efímero.
+    pending_pane_pick: Option<PanePick>,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -383,6 +389,41 @@ pub struct PathEdit {
     pub focus_pending: bool,
     /// Hay que pre-seleccionar TODO el texto antes de crear el widget.
     pub select_pending: bool,
+}
+
+/// Qué acción «hacia otro panel» está pendiente de elegir destino (selector de panel
+/// con 3+ paneles). El payload viaja con el pick hasta que el usuario elige.
+#[derive(Clone)]
+pub enum PaneAction {
+    /// Abrir `dir` en el panel destino (Ctrl+doble-clic con 3+ paneles).
+    Open { dir: std::path::PathBuf },
+    /// Intercambiar las carpetas del origen y el destino (swap ⇄).
+    Swap,
+    /// Clonar la carpeta del origen al destino.
+    Clone,
+}
+
+/// Selector de panel destino activo (overlay estilo `tmux display-panes`): mientras
+/// existe, el input global se suspende, se oscurece cada candidato con un número grande
+/// y `1..9`/clic elige, `Esc` cancela. Vive en `NaygoApp`.
+pub struct PanePick {
+    /// La acción a ejecutar cuando se elija el destino.
+    pub action: PaneAction,
+    /// El panel origen (excluido de los candidatos).
+    pub origin: PaneId,
+    /// Los paneles candidatos, EN ORDEN VISUAL (izquierda→derecha, arriba→abajo); el
+    /// índice i corresponde al número i+1 del overlay.
+    pub candidates: Vec<PaneId>,
+}
+
+/// Resultado de resolver el destino de una acción «hacia otro panel».
+enum Target {
+    /// Un único destino: ejecutar directo (caso 2 paneles).
+    Direct(PaneId),
+    /// Varios candidatos: abrir el selector (caso 3+ paneles).
+    Pick(Vec<PaneId>),
+    /// No hay otro panel: hay que crear uno antes (caso 1 panel).
+    NeedsSplit,
 }
 
 /// Autocompletado del editor de ruta: un worker corto lista las subcarpetas del
@@ -562,6 +603,8 @@ impl NaygoApp {
             device_rx: Some(dev_rx),
             visible_rows: HashMap::new(),
             scroll_to_focus: HashMap::new(),
+            pane_rects: HashMap::new(),
+            pending_pane_pick: None,
             size_jobs: HashMap::new(),
             sized_paths: HashMap::new(),
             size_partial: std::collections::HashSet::new(),
@@ -1022,6 +1065,7 @@ impl NaygoApp {
             self.sized_paths.remove(&id);
             self.visible_rows.remove(&id);
             self.scroll_to_focus.remove(&id);
+            self.pane_rects.remove(&id);
             self.workspace.remove_pane(id);
         }
     }
@@ -1237,6 +1281,295 @@ impl NaygoApp {
         }
         self.insert_pane_split(id);
         self.start_listing(id, dir);
+    }
+
+    /// Ordena los paneles candidatos por su posición VISUAL (arriba→abajo, luego
+    /// izquierda→derecha) usando los rects capturados el frame anterior. Los paneles sin
+    /// rect conocido (recién creados) van al final, en su orden original. Función de
+    /// presentación: el orden define la numeración 1..9 del overlay.
+    fn order_panes_visually(&self, panes: &[PaneId]) -> Vec<PaneId> {
+        let mut with_rect: Vec<PaneId> = panes.to_vec();
+        with_rect.sort_by(|a, b| {
+            let ra = self.pane_rects.get(a);
+            let rb = self.pane_rects.get(b);
+            match (ra, rb) {
+                (Some(ra), Some(rb)) => {
+                    // Fila primero (top), luego columna (left); tolerante a pequeñas
+                    // diferencias verticales con un umbral de media fila.
+                    if (ra.top() - rb.top()).abs() > 12.0 {
+                        ra.top().total_cmp(&rb.top())
+                    } else {
+                        ra.left().total_cmp(&rb.left())
+                    }
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+        with_rect
+    }
+
+    /// Resuelve el destino de una acción «hacia otro panel» desde `origin` (regla central
+    /// de la spec): 0 otros Files → NeedsSplit; 1 → Direct; 2+ → Pick (orden visual, máx 9).
+    fn resolve_target(&self, origin: PaneId) -> Target {
+        let others = self.workspace.other_files_panes(origin);
+        match others.len() {
+            0 => Target::NeedsSplit,
+            1 => Target::Direct(others[0]),
+            _ => {
+                let ordered = self.order_panes_visually(&others);
+                // Máx 9 candidatos numerables (1..9); más allá no es un caso real.
+                Target::Pick(ordered.into_iter().take(9).collect())
+            }
+        }
+    }
+
+    /// Toolbar ⇄: intercambia la carpeta del panel activo con la de otro panel (selector
+    /// si hay 3+). Sin panel activo Files, no-op.
+    pub fn swap_active_with_other(&mut self) {
+        if let Some(origin) = self.active_files_pane_id() {
+            self.dispatch_pane_action(origin, PaneAction::Swap);
+        }
+    }
+
+    /// Toolbar ⎘: clona la carpeta del panel activo a otro panel (selector si hay 3+; crea
+    /// uno si es el único). Sin panel activo Files, no-op.
+    pub fn clone_active_to_other(&mut self) {
+        if let Some(origin) = self.active_files_pane_id() {
+            self.dispatch_pane_action(origin, PaneAction::Clone);
+        }
+    }
+
+    /// El PaneId del panel Files activo (el activo si es Files; si no, el primer Files).
+    fn active_files_pane_id(&self) -> Option<PaneId> {
+        let active = self.workspace.active_id();
+        if let Some(id) = active {
+            if self
+                .workspace
+                .pane(id)
+                .map(|p| p.purpose == PanePurpose::Files)
+                .unwrap_or(false)
+            {
+                return Some(id);
+            }
+        }
+        self.workspace.files_panes().into_iter().next()
+    }
+
+    /// Despacha una acción «hacia otro panel»: resuelve el destino y o la ejecuta directo,
+    /// o abre el selector, o crea un panel primero (Open/Clone) — Swap necesita 2 paneles.
+    fn dispatch_pane_action(&mut self, origin: PaneId, action: PaneAction) {
+        match self.resolve_target(origin) {
+            Target::Direct(target) => self.exec_pane_action(origin, target, action),
+            Target::Pick(candidates) => {
+                self.status = self.i18n.t("status.pick_pane").to_string();
+                self.pending_pane_pick = Some(PanePick {
+                    action,
+                    origin,
+                    candidates,
+                });
+            }
+            Target::NeedsSplit => {
+                // Swap no tiene sentido con un solo panel; las demás crean el destino.
+                if matches!(action, PaneAction::Swap) {
+                    self.status = self.i18n.t("status.swap_needs_two").to_string();
+                    return;
+                }
+                // Crear un segundo panel (split) parado en la carpeta del origen y usarlo
+                // como destino. add_files_pane lo crea en la carpeta del activo (= origin).
+                self.add_files_pane();
+                if let Some(target) = self.workspace.active_id() {
+                    // add_files_pane dejó el panel nuevo enfocado en el dock, pero el activo
+                    // del workspace sigue siendo el origen; el nuevo es el último Files.
+                    let new_pane = self
+                        .workspace
+                        .files_panes()
+                        .into_iter()
+                        .last()
+                        .unwrap_or(target);
+                    self.exec_pane_action(origin, new_pane, action);
+                }
+            }
+        }
+    }
+
+    /// Ejecuta la acción ya con el destino resuelto.
+    fn exec_pane_action(&mut self, origin: PaneId, target: PaneId, action: PaneAction) {
+        match action {
+            PaneAction::Open { dir } => {
+                if let Some(f) = self
+                    .workspace
+                    .pane_mut(target)
+                    .and_then(|p| p.files.as_mut())
+                {
+                    f.navigate_to(dir.clone());
+                }
+                self.start_listing(target, dir);
+                // El origen conserva el foco (estás explorando desde ahí): no activamos
+                // el destino.
+                let _ = origin;
+            }
+            PaneAction::Clone => {
+                let Some(dir) = self
+                    .workspace
+                    .pane(origin)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone())
+                else {
+                    return;
+                };
+                if let Some(f) = self
+                    .workspace
+                    .pane_mut(target)
+                    .and_then(|p| p.files.as_mut())
+                {
+                    f.navigate_to(dir.clone());
+                }
+                self.start_listing(target, dir);
+            }
+            PaneAction::Swap => {
+                let a = self
+                    .workspace
+                    .pane(origin)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone());
+                let b = self
+                    .workspace
+                    .pane(target)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone());
+                let (Some(a), Some(b)) = (a, b) else {
+                    return;
+                };
+                // Cada panel hace navigate_to de la carpeta del otro: el swap es navegación
+                // (se puede deshacer con atrás), y ambos historiales reciben el push.
+                if let Some(f) = self
+                    .workspace
+                    .pane_mut(origin)
+                    .and_then(|p| p.files.as_mut())
+                {
+                    f.navigate_to(b.clone());
+                }
+                if let Some(f) = self
+                    .workspace
+                    .pane_mut(target)
+                    .and_then(|p| p.files.as_mut())
+                {
+                    f.navigate_to(a.clone());
+                }
+                self.start_listing(origin, b);
+                self.start_listing(target, a);
+            }
+        }
+    }
+
+    /// Pinta el overlay del selector de panel (si hay pick pendiente) y procesa la
+    /// elección. Oscurece cada candidato y dibuja su número (1..9). Lee `1..9`/clic para
+    /// elegir y `Esc` para cancelar. Se llama tras pintar el dock, con el `ui` raíz.
+    fn show_pane_pick_overlay(&mut self, ui: &mut egui::Ui) {
+        let Some(pick) = self.pending_pane_pick.as_ref() else {
+            return;
+        };
+        // Repintar continuo mientras el overlay está activo (es un estado modal liviano).
+        ui.ctx().request_repaint();
+        let accent = self.active_theme.accent();
+        // Capa de foreground para quedar por encima del dock.
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("naygo_pane_pick"));
+        let painter = ui.ctx().layer_painter(layer);
+        // Rect de cada candidato (en orden = su número). Se resuelve desde los rects
+        // capturados al pintar; un candidato sin rect (raro) se omite del dibujo pero
+        // conserva su número para no desalinear el resto.
+        let mut click_target: Option<usize> = None;
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let clicked = ui.input(|i| i.pointer.primary_clicked());
+        for (idx, pane) in pick.candidates.iter().enumerate() {
+            let Some(rect) = self.pane_rects.get(pane).copied() else {
+                continue;
+            };
+            // Oscurecer el candidato.
+            painter.rect_filled(
+                rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+            );
+            painter.rect_stroke(
+                rect,
+                4.0,
+                egui::Stroke::new(2.0, accent),
+                egui::StrokeKind::Inside,
+            );
+            // Número grande centrado.
+            let n = idx + 1;
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                n.to_string(),
+                egui::FontId::proportional((rect.height() * 0.4).clamp(40.0, 160.0)),
+                accent,
+            );
+            // Clic sobre este candidato lo elige.
+            if clicked {
+                if let Some(p) = pointer {
+                    if rect.contains(p) {
+                        click_target = Some(idx);
+                    }
+                }
+            }
+        }
+        // Leyenda flotante.
+        let hint = self.i18n.t("status.pick_pane");
+        let screen = ui.ctx().content_rect();
+        painter.text(
+            egui::pos2(screen.center().x, screen.top() + 28.0),
+            egui::Align2::CENTER_CENTER,
+            hint,
+            egui::FontId::proportional(16.0),
+            accent,
+        );
+
+        // Teclas: Esc cancela; 1..9 elige (sin modificador, así llegan a través del
+        // sintético también). El número se valida contra la cantidad de candidatos.
+        let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let num_keys = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ];
+        let mut key_target: Option<usize> = None;
+        for (i, k) in num_keys.iter().enumerate() {
+            if ui.input(|inp| inp.key_pressed(*k)) {
+                key_target = Some(i);
+                break;
+            }
+        }
+
+        if cancel {
+            self.pending_pane_pick = None;
+            self.status.clear();
+            return;
+        }
+        if let Some(idx) = click_target.or(key_target) {
+            self.pick_pane(idx);
+        }
+    }
+
+    /// El usuario eligió el panel destino del selector (número o clic): ejecuta la acción
+    /// pendiente y cierra el selector. `idx` es el índice 0-based dentro de `candidates`.
+    fn pick_pane(&mut self, idx: usize) {
+        let Some(pick) = self.pending_pane_pick.take() else {
+            return;
+        };
+        if let Some(&target) = pick.candidates.get(idx) {
+            self.exec_pane_action(pick.origin, target, pick.action);
+        }
+        self.status.clear();
     }
 
     /// Inserta `id` en el dock DIVIDIENDO el leaf enfocado al 50% (estilo Commander:
@@ -2920,6 +3253,9 @@ impl NaygoApp {
             || self.inline_rename.is_some()
             || self.batch_rename.is_some()
             || self.path_edit.is_some()
+            // El selector de panel multi-panel se queda con el teclado (1..9/Esc/clic): el
+            // input global no debe procesar esas teclas mientras elige destino.
+            || self.pending_pane_pick.is_some()
         {
             return;
         }
@@ -3458,6 +3794,7 @@ impl eframe::App for NaygoApp {
                 visible_rows: &mut self.visible_rows,
                 scroll_to_focus: &self.scroll_to_focus,
                 column_width_mode: self.settings.column_width_mode,
+                pane_rects: &mut self.pane_rects,
             };
             let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
             // Ancho mínimo de cada tab del dock para que no se compriman hasta
@@ -3472,6 +3809,12 @@ impl eframe::App for NaygoApp {
         // El scroll-a-foco es una señal de un solo frame: ya se aplicó al pintar, se limpia
         // para no re-scrollear en frames posteriores (lo que pelearía con el scroll manual).
         self.scroll_to_focus.clear();
+
+        // Selector de panel destino (overlay multi-panel, estilo tmux display-panes): si hay
+        // un pick pendiente, oscurecer cada candidato y pintar su número grande. La elección
+        // (1..9 / clic / Esc) se lee aquí y se aplica tras pintar (el input global está
+        // suspendido mientras `pending_pane_pick` es Some — ver handle_input).
+        self.show_pane_pick_overlay(ui);
         // Tras pintar el dock: si el usuario cerró un tab, su PaneId ya no está en el
         // DockState. Podamos ese panel de TODOS los mapas por-panel (workspace + workers
         // + watchers + estado) para no filtrar handles del SO ni dejar al watcher
@@ -3517,6 +3860,9 @@ impl eframe::App for NaygoApp {
                     req.conflict = ConflictPolicy::Overwrite;
                     let label = self.i18n.t("op.rename").to_string();
                     self.start_op(req, label);
+                }
+                crate::docking::PaneRequest::OpenInOther { from, dir } => {
+                    self.dispatch_pane_action(from, PaneAction::Open { dir });
                 }
             }
         }

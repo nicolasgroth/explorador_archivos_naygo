@@ -155,6 +155,25 @@ impl Workspace {
         self.pane_mut(target).and_then(|p| p.files.as_mut())
     }
 
+    /// Ids de los paneles `Files`, en orden de inserción.
+    pub fn files_panes(&self) -> Vec<PaneId> {
+        self.panes
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Files)
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Ids de los paneles `Files` DISTINTOS de `origin`, en orden de inserción.
+    /// Base de la regla de destino multi-panel (acciones «hacia otro panel»).
+    pub fn other_files_panes(&self, origin: PaneId) -> Vec<PaneId> {
+        self.panes
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Files && p.id != origin)
+            .map(|p| p.id)
+            .collect()
+    }
+
     /// Itera los paneles (orden de inserción).
     pub fn panes(&self) -> &[PaneNode] {
         &self.panes
@@ -295,6 +314,19 @@ mod tests {
         let mut w = Workspace::new();
         let t = w.add_pane(PanePurpose::Tree, PathBuf::new());
         assert!(w.pane(t).unwrap().files.is_none());
+    }
+
+    #[test]
+    fn other_files_panes_excluye_el_origen_y_los_no_files() {
+        let mut w = Workspace::new();
+        let a = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        let _tree = w.add_pane(PanePurpose::Tree, PathBuf::new());
+        let b = w.add_pane(PanePurpose::Files, PathBuf::from("C:/b"));
+        let c = w.add_pane(PanePurpose::Files, PathBuf::from("C:/c"));
+        // Desde a: los otros Files son b y c (el árbol no cuenta), en orden.
+        assert_eq!(w.other_files_panes(a), vec![b, c]);
+        // files_panes incluye a todos los Files.
+        assert_eq!(w.files_panes(), vec![a, b, c]);
     }
 
     #[test]
