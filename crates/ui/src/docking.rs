@@ -68,6 +68,28 @@ pub struct NaygoTabViewer<'a> {
     pub undo_clicks: &'a mut Vec<u64>,
     /// Epoch (s) de este frame, para el "hace cuánto" del historial.
     pub now_epoch: u64,
+    /// Favoritos como (etiqueta, ruta), en orden de usuario. Los pintan la
+    /// path-bar (☆/★), el panel Favoritos y la sección anclada del árbol.
+    pub favorites: &'a [(String, std::path::PathBuf)],
+    /// Carpetas recientes (ya podadas de rutas inexistentes por NaygoApp).
+    pub recent_dirs: &'a [std::path::PathBuf],
+    /// Navegaciones pedidas desde el panel Favoritos (diferidas a NaygoApp).
+    pub fav_navigate: &'a mut Vec<std::path::PathBuf>,
+    /// Favoritos a quitar (clic derecho en el panel Favoritos; diferido).
+    pub fav_remove: &'a mut Vec<std::path::PathBuf>,
+    /// Edición de la ruta de un panel (vive en NaygoApp, como `inline_rename`).
+    pub path_edit: &'a mut Option<crate::app::PathEdit>,
+    /// Acciones diferidas de la path-bar (copiar/favorito/ruta inválida).
+    pub pathbar_actions: &'a mut Vec<crate::pathbar::PathBarAction>,
+    /// Carpeta padre cuyos nombres tiene cargados el worker de autocompletado.
+    pub path_ac_parent: &'a str,
+    /// Nombres de subcarpetas de `path_ac_parent` (candidatos sin filtrar).
+    pub path_ac_names: &'a [String],
+    /// El panel en edición de ruta SÍ se pintó este frame. Si al final del frame
+    /// hay `path_edit` pero nadie lo pintó (tab oculto en un stack o cerrado),
+    /// `NaygoApp` descarta la edición — si no, el input global quedaría suspendido
+    /// apuntando a un panel invisible.
+    pub path_edit_seen: &'a mut bool,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -89,6 +111,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
             Some(PanePurpose::Tree) => self.i18n.t("pane.tree.title").to_string(),
             Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").to_string(),
             Some(PanePurpose::History) => self.i18n.t("pane.history.title").to_string(),
+            Some(PanePurpose::Favorites) => self.i18n.t("pane.favorites.title").to_string(),
             None => "—".to_string(),
         };
         // Resaltar el panel activo: título en color de acento + negrita.
@@ -124,6 +147,22 @@ impl NaygoTabViewer<'_> {
         match purpose {
             Some(PanePurpose::Files) => {
                 let mut local: Vec<crate::table_actions::TableAction> = Vec::new();
+                // ¿La carpeta actual de ESTE panel es favorita? (decide ☆ vs ★ en
+                // su path-bar). Comparación en memoria sobre la lista de favoritos.
+                let is_favorite = self
+                    .workspace
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| self.favorites.iter().any(|(_, fp)| fp == &f.current_dir))
+                    .unwrap_or(false);
+                let pathbar = crate::pathbar::PathBarParams {
+                    is_favorite,
+                    path_edit: &mut *self.path_edit,
+                    actions: &mut *self.pathbar_actions,
+                    ac_parent: self.path_ac_parent,
+                    ac_names: self.path_ac_names,
+                    recents: self.recent_dirs,
+                };
                 crate::panes::file_panel::show(
                     ui,
                     self.workspace,
@@ -139,9 +178,17 @@ impl NaygoTabViewer<'_> {
                     self.new_items_at_end,
                     self.size_partial,
                     self.inline_rename,
+                    pathbar,
                 );
                 for a in local {
                     self.table_actions.push((id, a));
+                }
+                // Marcar la edición de ruta como "pintada" DESPUÉS del show: cubre
+                // tanto la edición ya abierta como la que el clic en la barra abrió
+                // recién durante este mismo pintado. Si el panel la cerró (Esc),
+                // path_edit ya es None y la guarda final de NaygoApp no hace nada.
+                if self.path_edit.as_ref().is_some_and(|e| e.pane == id) {
+                    *self.path_edit_seen = true;
                 }
             }
             Some(PanePurpose::Tree) => {
@@ -155,6 +202,7 @@ impl NaygoTabViewer<'_> {
                         self.i18n,
                         self.theme,
                         self.disk_usage,
+                        self.favorites,
                     );
                     if revealed {
                         self.tree_revealed.insert(id);
@@ -174,6 +222,17 @@ impl NaygoTabViewer<'_> {
                     self.theme,
                     self.now_epoch,
                     self.undo_clicks,
+                );
+            }
+            Some(PanePurpose::Favorites) => {
+                crate::panes::favorites_panel::show(
+                    ui,
+                    self.favorites,
+                    self.recent_dirs,
+                    self.i18n,
+                    self.theme,
+                    self.fav_navigate,
+                    self.fav_remove,
                 );
             }
             Some(PanePurpose::Inspector) => {

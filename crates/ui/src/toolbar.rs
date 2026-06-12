@@ -192,6 +192,10 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             app.add_pane_of(naygo_core::workspace::PanePurpose::Inspector);
             ui.close();
         }
+        if ui.button(app.tr("pane.favorites.title")).clicked() {
+            app.add_pane_of(naygo_core::workspace::PanePurpose::Favorites);
+            ui.close();
+        }
     })
     .response
     .on_hover_text(app.tr("toolbar.add_other"));

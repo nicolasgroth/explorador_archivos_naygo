@@ -35,6 +35,8 @@ pub enum PanePurpose {
     Inspector,
     /// Historial de operaciones con deshacer (R2b).
     History,
+    /// Carpetas favoritas + recientes (fase path-bar+favoritos).
+    Favorites,
 }
 
 /// Un panel concreto del workspace. Solo los `Files` llevan `FilePaneState`.

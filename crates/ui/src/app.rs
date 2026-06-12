@@ -255,6 +255,13 @@ pub struct NaygoApp {
     listing_cache: naygo_core::listing_cache::ListingCache,
     /// Carpetas recientes globales (MRU persistente en recents.json).
     pub(crate) recent_dirs: naygo_core::recent_dirs::RecentDirs,
+    /// Carpetas favoritas (persistentes en favorites.json; orden = Ctrl+1..9).
+    pub(crate) favorites: naygo_core::favorites::Favorites,
+    /// Edición de la ruta de un panel (path-bar, Ctrl+L/F4). Suspende el input
+    /// global mientras existe (mismo trato que `inline_rename`).
+    pub(crate) path_edit: Option<PathEdit>,
+    /// Worker + debounce del autocompletado del editor de ruta.
+    path_ac: PathAutocomplete,
     /// Historial de deshacer de la sesión (más nuevo al final; tope 100).
     pub(crate) undo_history: Vec<naygo_core::ops::undo::UndoEntry>,
     /// Id incremental de las entradas del historial.
@@ -358,6 +365,41 @@ pub struct InlineRename {
     pub missing_frames: u8,
 }
 
+/// Estado de la edición de ruta de la path-bar (Ctrl+L / F4 o clic en la zona
+/// vacía). Vive en `NaygoApp` y se presta `&mut` al panel (como `InlineRename`).
+pub struct PathEdit {
+    pub pane: PaneId,
+    /// El texto en edición (arranca con la ruta actual completa).
+    pub text: String,
+    /// El TextEdit debe pedir el foco al pintarse (recién abierto).
+    pub focus_pending: bool,
+    /// Hay que pre-seleccionar TODO el texto antes de crear el widget.
+    pub select_pending: bool,
+}
+
+/// Autocompletado del editor de ruta: un worker corto lista las subcarpetas del
+/// padre del texto tecleado (la UI JAMÁS hace `read_dir`), con debounce de
+/// ~120 ms para no relistar en cada pulsación. Estado efímero (se descarta al
+/// cerrar la edición).
+#[derive(Default)]
+struct PathAutocomplete {
+    /// Carpeta padre que el texto actual necesita listada.
+    wanted_parent: Option<String>,
+    /// Instante del último cambio de `wanted_parent` (ancla del debounce).
+    since: Option<std::time::Instant>,
+    /// Carpeta cuyos nombres están cargados en `names`.
+    loaded_parent: Option<String>,
+    /// Nombres de subcarpetas de `loaded_parent` (orden alfabético, sin filtrar).
+    names: Vec<String>,
+    /// Canal del worker en vuelo (envía UNA vez y termina).
+    rx: Option<Receiver<(String, Vec<String>)>>,
+}
+
+/// Tope de nombres que el worker de autocompletado recolecta por carpeta (una
+/// carpeta con decenas de miles de subcarpetas no debe inflar la memoria; el
+/// popup igual muestra solo los primeros 12 que calcen).
+const PATH_AC_MAX_NAMES: usize = 1024;
+
 impl NaygoApp {
     pub fn new(cc: &CreationContext<'_>, initial_dir: Option<std::path::PathBuf>) -> Self {
         let config_dir = config::portable_dir();
@@ -446,6 +488,10 @@ impl NaygoApp {
             std::fs::read_to_string(naygo_core::recent_dirs::recents_path(&config_dir))
                 .map(|s| naygo_core::recent_dirs::RecentDirs::from_json(&s))
                 .unwrap_or_default();
+        // Favoritos persistidos (carga tolerante: corrupto/ausente → lista vacía).
+        let favorites = std::fs::read_to_string(naygo_core::favorites::favorites_path(&config_dir))
+            .map(|s| naygo_core::favorites::Favorites::from_json(&s))
+            .unwrap_or_default();
 
         let mut app = NaygoApp {
             workspace,
@@ -468,6 +514,9 @@ impl NaygoApp {
                 CACHE_MAX_TOTAL_ENTRIES,
             ),
             recent_dirs,
+            favorites,
+            path_edit: None,
+            path_ac: PathAutocomplete::default(),
             undo_history: Vec::new(),
             next_undo_id: 1,
             tray: None,
@@ -559,9 +608,20 @@ impl NaygoApp {
                 egui::Key::Delete,
                 egui::Key::F2,
                 egui::Key::F3,
+                egui::Key::F4,
                 egui::Key::F5,
                 egui::Key::F6,
                 egui::Key::Space,
+                egui::Key::Num0,
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
                 egui::Key::A,
                 egui::Key::B,
                 egui::Key::C,
@@ -768,6 +828,139 @@ impl NaygoApp {
         let path = naygo_core::recent_dirs::recents_path(&self.config_dir);
         if let Err(e) = std::fs::write(&path, self.recent_dirs.to_json()) {
             tracing::warn!("no se pudo guardar recents.json: {e}");
+        }
+    }
+
+    /// Persiste los favoritos tras un cambio (toggle/quitar). Escritura diminuta
+    /// de JSON de config, mismo patrón tolerado que `note_recent`.
+    fn save_favorites_now(&self) {
+        let path = naygo_core::favorites::favorites_path(&self.config_dir);
+        if let Err(e) = std::fs::write(&path, self.favorites.to_json()) {
+            tracing::warn!("no se pudo guardar favorites.json: {e}");
+        }
+    }
+
+    /// Abre la edición de ruta del panel `Files` activo (Ctrl+L / F4). Si el panel
+    /// activo no es `Files`, cae al primer `Files` (misma regla que `active_files`).
+    fn begin_edit_path(&mut self) {
+        let target = self
+            .workspace
+            .active_id()
+            .filter(|id| {
+                self.workspace
+                    .pane(*id)
+                    .map(|p| p.purpose == PanePurpose::Files)
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                self.workspace
+                    .panes()
+                    .iter()
+                    .find(|p| p.purpose == PanePurpose::Files)
+                    .map(|p| p.id)
+            });
+        let Some(pane) = target else {
+            return;
+        };
+        let Some(dir) = self
+            .workspace
+            .pane(pane)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return;
+        };
+        self.path_edit = Some(PathEdit {
+            pane,
+            text: dir.display().to_string(),
+            focus_pending: true,
+            select_pending: true,
+        });
+    }
+
+    /// Navega el panel activo al favorito `idx` (0-based, orden de la lista).
+    /// No-op si no existe ese favorito.
+    fn go_favorite(&mut self, idx: usize) {
+        if let Some(fav) = self.favorites.list().get(idx) {
+            let dir = fav.path.clone();
+            self.navigate_active_to(dir);
+        }
+    }
+
+    /// Motor del autocompletado del editor de ruta: detecta qué carpeta padre
+    /// necesita el texto actual, lanza el worker tras el debounce (~120 ms) y
+    /// drena su resultado. La UI nunca hace `read_dir`; este worker es la única
+    /// fuente de `path_ac.names`. Sin edición activa, el estado se descarta.
+    fn pump_path_autocomplete(&mut self, ctx: &egui::Context) {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(120);
+        let Some(edit) = &self.path_edit else {
+            // La edición se cerró: soltar nombres y worker (su resultado, si llega,
+            // se pierde con el canal — inofensivo).
+            if self.path_ac.wanted_parent.is_some() {
+                self.path_ac = PathAutocomplete::default();
+            }
+            return;
+        };
+        let (parent, _prefix) = naygo_core::path_segments::split_edit_buffer(&edit.text);
+        if self.path_ac.wanted_parent.as_deref() != Some(parent.as_str()) {
+            // El padre cambió (el usuario tecleó otro nivel): reiniciar el debounce.
+            self.path_ac.wanted_parent = Some(parent.clone());
+            self.path_ac.since = Some(std::time::Instant::now());
+        }
+        // Drenar el worker en vuelo. Un resultado de un padre que ya no interesa
+        // (el usuario siguió tecleando) se descarta; el relanzado de abajo pedirá
+        // el padre vigente.
+        if let Some(rx) = &self.path_ac.rx {
+            match rx.try_recv() {
+                Ok((listed, names)) => {
+                    self.path_ac.rx = None;
+                    if Some(listed.as_str()) == self.path_ac.wanted_parent.as_deref() {
+                        self.path_ac.loaded_parent = Some(listed);
+                        self.path_ac.names = names;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.path_ac.rx = None,
+            }
+        }
+        // Lanzar el worker cuando el debounce venció y el padre aún no está cargado.
+        let needs = !parent.is_empty()
+            && self.path_ac.loaded_parent.as_deref() != Some(parent.as_str())
+            && self.path_ac.rx.is_none();
+        if needs {
+            let elapsed_ok = self
+                .path_ac
+                .since
+                .map(|t| t.elapsed() >= DEBOUNCE)
+                .unwrap_or(true);
+            if elapsed_ok {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    // Solo subcarpetas; `file_type()` del DirEntry es barato en
+                    // Windows (viene con la enumeración, sin stat extra).
+                    let mut names: Vec<String> = Vec::new();
+                    if let Ok(rd) = std::fs::read_dir(&parent) {
+                        for e in rd.flatten() {
+                            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                names.push(e.file_name().to_string_lossy().into_owned());
+                            }
+                            if names.len() >= PATH_AC_MAX_NAMES {
+                                break;
+                            }
+                        }
+                    }
+                    names.sort_by_key(|n| n.to_lowercase());
+                    let _ = tx.send((parent, names));
+                });
+                self.path_ac.rx = Some(rx);
+            } else {
+                // Despertar la UI justo después del plazo (no hay input que lo haga).
+                ctx.request_repaint_after(DEBOUNCE);
+            }
+        }
+        // Mientras el worker corre, drenar pronto su resultado.
+        if self.path_ac.rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
     }
 
@@ -1722,6 +1915,22 @@ impl NaygoApp {
                     }
                 }
             }
+            Action::EditPath => self.begin_edit_path(),
+            Action::GoFavorite1
+            | Action::GoFavorite2
+            | Action::GoFavorite3
+            | Action::GoFavorite4
+            | Action::GoFavorite5
+            | Action::GoFavorite6
+            | Action::GoFavorite7
+            | Action::GoFavorite8
+            | Action::GoFavorite9 => {
+                // `favorite_index` mapea GoFavoriteN → N-1; si no hay favorito en
+                // esa posición, `go_favorite` es un no-op.
+                if let Some(idx) = action.favorite_index() {
+                    self.go_favorite(idx);
+                }
+            }
         }
     }
 
@@ -2592,6 +2801,7 @@ impl NaygoApp {
             || self.shortcut_capture.is_some()
             || self.inline_rename.is_some()
             || self.batch_rename.is_some()
+            || self.path_edit.is_some()
         {
             return;
         }
@@ -2611,8 +2821,19 @@ impl NaygoApp {
             egui::Key::Space,
             egui::Key::F2,
             egui::Key::F3,
+            egui::Key::F4,
             egui::Key::F5,
             egui::Key::F6,
+            egui::Key::Num0,
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
             egui::Key::A,
             egui::Key::B,
             egui::Key::C,
@@ -2796,6 +3017,9 @@ impl eframe::App for NaygoApp {
         if !capture_consumed {
             self.handle_input(ctx);
         }
+        // Autocompletado del editor de ruta (worker + debounce). Después del input:
+        // el texto recién tecleado de este frame ya está en `path_edit`.
+        self.pump_path_autocomplete(ctx);
         // Resumen de selección múltiple en la barra de estado. Se recomputa cada frame
         // desde la selección actual del panel activo (se actualiza solo al cambiar la
         // selección, sin importar dónde ocurrió el clic). Solo pisa el status cuando hay
@@ -3051,6 +3275,29 @@ impl eframe::App for NaygoApp {
         let mut native_menu_request: Option<(f32, f32)> = None;
         // Deshacer pedidos desde el panel Historial este frame (diferidos como pending).
         let mut undo_clicks: Vec<u64> = Vec::new();
+        // Favoritos/recientes para los paneles. Las recientes se podan de rutas
+        // inexistentes SOLO si hay un panel Favoritos que las vaya a mostrar
+        // (exists() de metadata local, el mismo trato que la validación del
+        // Historial; sin panel visible no se gasta nada).
+        if self
+            .workspace
+            .panes()
+            .iter()
+            .any(|p| p.purpose == PanePurpose::Favorites)
+        {
+            self.recent_dirs.remove_missing();
+        }
+        let fav_pairs: Vec<(String, PathBuf)> = self
+            .favorites
+            .list()
+            .iter()
+            .map(|f| (f.label.clone(), f.path.clone()))
+            .collect();
+        let recents_list: Vec<PathBuf> = self.recent_dirs.list().to_vec();
+        let mut fav_navigate: Vec<PathBuf> = Vec::new();
+        let mut fav_remove: Vec<PathBuf> = Vec::new();
+        let mut pathbar_actions: Vec<crate::pathbar::PathBarAction> = Vec::new();
+        let mut path_edit_seen = false;
         {
             let now_epoch = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3077,6 +3324,15 @@ impl eframe::App for NaygoApp {
                 disk_usage: &self.disk_usage,
                 new_items_at_end: self.settings.new_items_at_end,
                 size_partial: &self.size_partial,
+                favorites: &fav_pairs,
+                recent_dirs: &recents_list,
+                fav_navigate: &mut fav_navigate,
+                fav_remove: &mut fav_remove,
+                path_edit: &mut self.path_edit,
+                pathbar_actions: &mut pathbar_actions,
+                path_ac_parent: self.path_ac.loaded_parent.as_deref().unwrap_or(""),
+                path_ac_names: &self.path_ac.names,
+                path_edit_seen: &mut path_edit_seen,
             };
             let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
             // Ancho mínimo de cada tab del dock para que no se compriman hasta
@@ -3094,6 +3350,13 @@ impl eframe::App for NaygoApp {
         // vigilando una carpeta de un panel cerrado (consumo). Sin esto, el bucle de
         // repintado de 500 ms nunca se apagaría tras cerrar un panel.
         self.prune_closed_panes();
+        // Si hay edición de ruta pero su panel NO se pintó este frame (tab oculto
+        // en un stack, o cerrado), descartarla: el modo edición se cierra desde el
+        // pintado del propio panel, y sin pintado el input global quedaría
+        // suspendido para siempre.
+        if self.path_edit.is_some() && !path_edit_seen {
+            self.path_edit = None;
+        }
         // Petición de arrastre OLE hacia el SO (Naygo → Explorer). Se acumula aquí y se
         // procesa DESPUÉS del bucle `pending`, fuera del closure de egui: `DoDragDrop` corre
         // un bucle modal que toma el control del mouse. Mismo patrón que `native_menu`.
@@ -3133,6 +3396,33 @@ impl eframe::App for NaygoApp {
         // Deshacer pedidos desde el panel Historial (en el orden emitido).
         for uid in undo_clicks {
             self.undo_by_id(uid);
+        }
+
+        // Acciones diferidas de la path-bar (copiar/favorito/ruta inválida).
+        for a in pathbar_actions {
+            match a {
+                crate::pathbar::PathBarAction::Copied => {
+                    self.status = self.i18n.t("pathbar.copied").to_string();
+                }
+                crate::pathbar::PathBarAction::ToggleFavorite(path) => {
+                    self.favorites.toggle(&path);
+                    self.save_favorites_now();
+                }
+                crate::pathbar::PathBarAction::BadPath(text) => {
+                    self.status = self.i18n.t("pathbar.not_found").replace("{path}", &text);
+                }
+            }
+        }
+        // Navegaciones pedidas desde el panel Favoritos (favorito o reciente).
+        for path in fav_navigate {
+            self.navigate_active_to(path);
+        }
+        // Quitar favoritos (clic derecho en el panel) y persistir si cambió algo.
+        if !fav_remove.is_empty() {
+            for path in &fav_remove {
+                self.favorites.remove(path);
+            }
+            self.save_favorites_now();
         }
 
         // Arrastre OLE hacia el SO: FUERA del closure de egui (DoDragDrop bloquea con su

@@ -62,6 +62,7 @@ pub fn show(
     new_items_at_end: bool,
     size_partial: &std::collections::HashSet<std::path::PathBuf>,
     inline_rename: &mut Option<crate::app::InlineRename>,
+    pathbar: crate::pathbar::PathBarParams<'_>,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -114,9 +115,9 @@ pub fn show(
 
     let has_active_filters = !table.filters.is_empty();
 
-    ui.horizontal(|ui| {
-        ui.monospace(current_dir.display().to_string());
-    });
+    // Path-bar interactiva (breadcrumbs / edición con autocompletado). Sus widgets
+    // clicables viven FUERA de la tabla, así que no roban clics de las filas.
+    crate::pathbar::show(ui, id, &current_dir, pending, i18n, theme, pathbar);
     ui.separator();
 
     // Índice de la entry seleccionada se referencia respecto a la VISTA filtrada/

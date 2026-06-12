@@ -22,6 +22,7 @@ pub enum KeyCode {
     Delete,
     F2,
     F3,
+    F4,
     F5,
     F6,
     /// Barra espaciadora.
@@ -122,6 +123,18 @@ pub enum Action {
     ToggleSelect,
     /// Deshacer la última operación de archivos (R2).
     Undo,
+    /// Abrir la edición del path del panel activo (path-bar, Ctrl+L / F4).
+    EditPath,
+    /// Navegar el panel activo al favorito N (Ctrl+1..Ctrl+9).
+    GoFavorite1,
+    GoFavorite2,
+    GoFavorite3,
+    GoFavorite4,
+    GoFavorite5,
+    GoFavorite6,
+    GoFavorite7,
+    GoFavorite8,
+    GoFavorite9,
 }
 
 impl Action {
@@ -155,6 +168,16 @@ impl Action {
             ExtendDown,
             ToggleSelect,
             Undo,
+            EditPath,
+            GoFavorite1,
+            GoFavorite2,
+            GoFavorite3,
+            GoFavorite4,
+            GoFavorite5,
+            GoFavorite6,
+            GoFavorite7,
+            GoFavorite8,
+            GoFavorite9,
         ]
     }
 
@@ -188,6 +211,33 @@ impl Action {
             ExtendDown => "action.extend_down",
             Undo => "action.undo",
             ToggleSelect => "action.toggle_select",
+            EditPath => "action.edit_path",
+            GoFavorite1 => "action.go_favorite_1",
+            GoFavorite2 => "action.go_favorite_2",
+            GoFavorite3 => "action.go_favorite_3",
+            GoFavorite4 => "action.go_favorite_4",
+            GoFavorite5 => "action.go_favorite_5",
+            GoFavorite6 => "action.go_favorite_6",
+            GoFavorite7 => "action.go_favorite_7",
+            GoFavorite8 => "action.go_favorite_8",
+            GoFavorite9 => "action.go_favorite_9",
+        }
+    }
+
+    /// Si la acción es `GoFavoriteN`, su índice 0-based en la lista de favoritos.
+    pub fn favorite_index(self) -> Option<usize> {
+        use Action::*;
+        match self {
+            GoFavorite1 => Some(0),
+            GoFavorite2 => Some(1),
+            GoFavorite3 => Some(2),
+            GoFavorite4 => Some(3),
+            GoFavorite5 => Some(4),
+            GoFavorite6 => Some(5),
+            GoFavorite7 => Some(6),
+            GoFavorite8 => Some(7),
+            GoFavorite9 => Some(8),
+            _ => None,
         }
     }
 }
@@ -230,6 +280,18 @@ impl KeyMap {
             (ExtendDown, vec![Chord::shift(ArrowDown)]),
             (ToggleSelect, vec![Chord::plain(Space)]),
             (Undo, vec![Chord::ctrl(Char('z'))]),
+            // Path-bar: dos atajos (estilo navegador y estilo Explorer/Commander).
+            (EditPath, vec![Chord::ctrl(Char('l')), Chord::plain(F4)]),
+            // Favoritos: Ctrl+dígito salta al favorito N (orden del panel).
+            (GoFavorite1, vec![Chord::ctrl(Char('1'))]),
+            (GoFavorite2, vec![Chord::ctrl(Char('2'))]),
+            (GoFavorite3, vec![Chord::ctrl(Char('3'))]),
+            (GoFavorite4, vec![Chord::ctrl(Char('4'))]),
+            (GoFavorite5, vec![Chord::ctrl(Char('5'))]),
+            (GoFavorite6, vec![Chord::ctrl(Char('6'))]),
+            (GoFavorite7, vec![Chord::ctrl(Char('7'))]),
+            (GoFavorite8, vec![Chord::ctrl(Char('8'))]),
+            (GoFavorite9, vec![Chord::ctrl(Char('9'))]),
         ];
         KeyMap { bindings: b }
     }
@@ -349,13 +411,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_26_acciones_con_clave_i18n_unica() {
+    fn all_tiene_36_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 26);
+        assert_eq!(all.len(), 36);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 26, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 36, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -464,6 +526,53 @@ mod tests {
             km.action_for(&Chord::plain(KeyCode::Space)),
             Some(Action::ToggleSelect)
         );
+    }
+
+    #[test]
+    fn edit_path_tiene_ctrl_l_y_f4() {
+        let km = KeyMap::defaults();
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('l'))),
+            Some(Action::EditPath)
+        );
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F4)),
+            Some(Action::EditPath)
+        );
+        assert_eq!(km.chords_for(Action::EditPath).len(), 2);
+    }
+
+    #[test]
+    fn favoritos_ctrl_digito_y_sin_choques() {
+        let km = KeyMap::defaults();
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('1'))),
+            Some(Action::GoFavorite1)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('9'))),
+            Some(Action::GoFavorite9)
+        );
+        // Cada acción de favoritos tiene EXACTAMENTE un chord por defecto: si otro
+        // default se lo hubiese robado (choque), este conteo lo delataría.
+        for (i, a) in [
+            Action::GoFavorite1,
+            Action::GoFavorite2,
+            Action::GoFavorite3,
+            Action::GoFavorite4,
+            Action::GoFavorite5,
+            Action::GoFavorite6,
+            Action::GoFavorite7,
+            Action::GoFavorite8,
+            Action::GoFavorite9,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(km.chords_for(a).len(), 1, "GoFavorite{} sin chord", i + 1);
+            assert_eq!(a.favorite_index(), Some(i));
+        }
+        assert_eq!(Action::Copy.favorite_index(), None);
     }
 
     #[test]

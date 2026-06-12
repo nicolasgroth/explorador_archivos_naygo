@@ -23,6 +23,7 @@ const INDENT: f32 = 14.0;
 /// llamó a `scroll_to_me`) en este frame. `NaygoApp` usa esto para limpiar
 /// `reveal_to` SOLO cuando el objetivo ya se reveló, en vez de cada frame (lo que
 /// perdía el scroll a carpetas profundas cargadas en cascada).
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     tree: &DirTree,
@@ -31,6 +32,7 @@ pub fn show(
     i18n: &naygo_core::i18n::I18n,
     theme: &crate::theme_apply::ActiveTheme,
     disk_usage: &std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+    favorites: &[(String, std::path::PathBuf)],
 ) -> bool {
     if tree.is_empty() {
         ui.label(i18n.t("tree.empty"));
@@ -38,6 +40,15 @@ pub fn show(
     }
     egui::ScrollArea::both()
         .show(ui, |ui| {
+            // Favoritos anclados ARRIBA de las unidades: nodos hoja simples (sin
+            // triángulo ni hijos), clic = navegar como cualquier nodo del árbol.
+            // Si no hay favoritos, no se pinta nada extra (ni el separador).
+            if !favorites.is_empty() {
+                for (label, path) in favorites {
+                    show_favorite_row(ui, label, path, tree, actions, icons);
+                }
+                ui.separator();
+            }
             let mut revealed = false;
             for root in &tree.roots {
                 revealed |= show_node(ui, root, 0, tree, actions, icons, i18n, theme, disk_usage);
@@ -45,6 +56,36 @@ pub fn show(
             revealed
         })
         .inner
+}
+
+/// Pinta un favorito anclado: ícono de carpeta + nombre, resaltado si es la
+/// carpeta activa. El clic en ícono o nombre emite `TreeAction::Navigate` (mismo
+/// camino diferido que el resto del árbol; no muta nada al pintar).
+fn show_favorite_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    path: &std::path::Path,
+    tree: &DirTree,
+    actions: &mut Vec<TreeAction>,
+    icons: &IconProvider,
+) {
+    let is_active = tree.active_path.as_deref() == Some(path);
+    ui.horizontal(|ui| {
+        // Misma sangría que el hueco del triángulo de los nodos sin hijos.
+        ui.add_space(INDENT);
+        let tex = icons.texture(IconKey::Folder);
+        let img = ui.add(
+            egui::Image::new(tex)
+                .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
+                .sense(egui::Sense::click()),
+        );
+        let lbl = ui
+            .selectable_label(is_active, label)
+            .on_hover_text(path.display().to_string());
+        if img.union(lbl).clicked() {
+            actions.push(TreeAction::Navigate(path.to_path_buf()));
+        }
+    });
 }
 
 /// Pinta un nodo (y, si está expandido, sus hijos) recursivamente. Devuelve `true`

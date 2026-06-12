@@ -23,9 +23,22 @@ pub fn egui_key_to_code(key: egui::Key) -> Option<KeyCode> {
         egui::Key::Delete => KeyCode::Delete,
         egui::Key::F2 => KeyCode::F2,
         egui::Key::F3 => KeyCode::F3,
+        egui::Key::F4 => KeyCode::F4,
         egui::Key::F5 => KeyCode::F5,
         egui::Key::F6 => KeyCode::F6,
         egui::Key::Space => KeyCode::Space,
+        // Dígitos (fila superior y numpad: egui ya los unifica en Num*). Los usan
+        // los atajos de favoritos (Ctrl+1..9) y cualquier rebind del usuario.
+        egui::Key::Num0 => KeyCode::Char('0'),
+        egui::Key::Num1 => KeyCode::Char('1'),
+        egui::Key::Num2 => KeyCode::Char('2'),
+        egui::Key::Num3 => KeyCode::Char('3'),
+        egui::Key::Num4 => KeyCode::Char('4'),
+        egui::Key::Num5 => KeyCode::Char('5'),
+        egui::Key::Num6 => KeyCode::Char('6'),
+        egui::Key::Num7 => KeyCode::Char('7'),
+        egui::Key::Num8 => KeyCode::Char('8'),
+        egui::Key::Num9 => KeyCode::Char('9'),
         egui::Key::A => KeyCode::Char('a'),
         egui::Key::B => KeyCode::Char('b'),
         egui::Key::C => KeyCode::Char('c'),
@@ -80,6 +93,7 @@ pub fn chord_text(chord: &Chord) -> String {
         KeyCode::Delete => "Supr",
         KeyCode::F2 => "F2",
         KeyCode::F3 => "F3",
+        KeyCode::F4 => "F4",
         KeyCode::F5 => "F5",
         KeyCode::F6 => "F6",
         KeyCode::Space => "␣",
@@ -130,8 +144,12 @@ mod tests {
         assert_eq!(egui_key_to_code(egui::Key::F2), Some(KeyCode::F2));
         assert_eq!(egui_key_to_code(egui::Key::Delete), Some(KeyCode::Delete));
         assert_eq!(egui_key_to_code(egui::Key::Space), Some(KeyCode::Space));
+        // Dígitos: los usan los atajos de favoritos (Ctrl+1..9).
+        assert_eq!(egui_key_to_code(egui::Key::Num0), Some(KeyCode::Char('0')));
+        assert_eq!(egui_key_to_code(egui::Key::Num9), Some(KeyCode::Char('9')));
+        assert_eq!(egui_key_to_code(egui::Key::F4), Some(KeyCode::F4));
         // Una tecla que no mapeamos.
-        assert_eq!(egui_key_to_code(egui::Key::Num0), None);
+        assert_eq!(egui_key_to_code(egui::Key::F12), None);
     }
 
     #[test]
