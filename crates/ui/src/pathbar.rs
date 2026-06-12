@@ -115,37 +115,46 @@ fn breadcrumb_mode(
                 p.actions.push(PathBarAction::Copied);
             }
 
-            // El resto del ancho: breadcrumbs (izq→der) + zona vacía clicable.
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // Botones chicos (Button, no Label): la lección de los clics muertos
-                // aplica solo DENTRO de la tabla; aquí estamos fuera y un Button es
-                // la superficie de clic correcta (selectable_labels está apagado
-                // globalmente en theme_apply).
-                for (i, (label, dir)) in split_segments(current_dir).into_iter().enumerate() {
-                    if i > 0 {
-                        ui.label(egui::RichText::new("›").weak());
+            // El resto del ancho: breadcrumbs (izq→der) + zona vacía clicable. Se acota
+            // al ancho que QUEDA tras reservar los íconos de la derecha (📋, ☆/★), y se
+            // recorta (clip) si no cabe, para que esos íconos NUNCA se tapen con una ruta
+            // larga (antes compartían contenedor y los breadcrumbs los empujaban fuera).
+            let remaining = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(remaining, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_clip_rect(ui.max_rect());
+                    // Botones chicos (Button, no Label): la lección de los clics muertos
+                    // aplica solo DENTRO de la tabla; aquí estamos fuera y un Button es
+                    // la superficie de clic correcta (selectable_labels está apagado
+                    // globalmente en theme_apply).
+                    for (i, (label, dir)) in split_segments(current_dir).into_iter().enumerate() {
+                        if i > 0 {
+                            ui.label(egui::RichText::new("›").weak());
+                        }
+                        if ui.small_button(label).clicked() {
+                            pending.push(PaneRequest::Activate { id });
+                            pending.push(PaneRequest::NavigateTo { id, dir });
+                        }
                     }
-                    if ui.small_button(label).clicked() {
-                        pending.push(PaneRequest::Activate { id });
-                        pending.push(PaneRequest::NavigateTo { id, dir });
+                    // Zona vacía a la derecha de los segmentos: clic = pasar a edición
+                    // (como Explorer). Es un área con sense propio, no un widget visible.
+                    let w = ui.available_width().max(24.0);
+                    let (_, resp) = ui.allocate_exact_size(
+                        egui::vec2(w, ui.spacing().interact_size.y),
+                        egui::Sense::click(),
+                    );
+                    if resp.on_hover_text(i18n.t("pathbar.edit_hint")).clicked() {
+                        *p.path_edit = Some(crate::app::PathEdit {
+                            pane: id,
+                            text: current_dir.display().to_string(),
+                            focus_pending: true,
+                            select_pending: true,
+                        });
                     }
-                }
-                // Zona vacía a la derecha de los segmentos: clic = pasar a edición
-                // (como Explorer). Es un área con sense propio, no un widget visible.
-                let w = ui.available_width().max(24.0);
-                let (_, resp) = ui.allocate_exact_size(
-                    egui::vec2(w, ui.spacing().interact_size.y),
-                    egui::Sense::click(),
-                );
-                if resp.on_hover_text(i18n.t("pathbar.edit_hint")).clicked() {
-                    *p.path_edit = Some(crate::app::PathEdit {
-                        pane: id,
-                        text: current_dir.display().to_string(),
-                        focus_pending: true,
-                        select_pending: true,
-                    });
-                }
-            });
+                },
+            );
         });
     });
 }
