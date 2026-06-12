@@ -21,25 +21,25 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     super::group_sep(ui);
     super::group_label(ui, &app.tr("settings.ops.section"));
 
-    // Modo de ejecución.
+    // Acento del tema para los controles segmentados (pill).
+    let accent = app.active_theme.accent();
+
+    // Modo de ejecución (segmented control nuevo — GATE de Nicolás, tarea 6).
     let (l_mode, l_queue, l_parallel) = (
         app.tr("settings.ops.mode"),
         app.tr("settings.ops.mode.queue"),
         app.tr("settings.ops.mode.parallel"),
     );
     ui.label(l_mode);
-    ui.horizontal(|ui| {
-        ui.selectable_value(
-            &mut app.settings.ops_mode,
-            naygo_core::config::OpsMode::Queue,
-            l_queue,
-        );
-        ui.selectable_value(
-            &mut app.settings.ops_mode,
-            naygo_core::config::OpsMode::Parallel,
-            l_parallel,
-        );
-    });
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.ops_mode,
+        &[
+            (naygo_core::config::OpsMode::Queue, l_queue.as_str()),
+            (naygo_core::config::OpsMode::Parallel, l_parallel.as_str()),
+        ],
+        accent,
+    );
     ui.add_space(6.0);
 
     // Cómo se muestra el progreso.
@@ -50,23 +50,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.tr("settings.ops.display.always"),
     );
     ui.label(l_display);
-    ui.horizontal(|ui| {
-        ui.selectable_value(
-            &mut app.settings.ops_display,
-            naygo_core::config::OpsDisplay::Panel,
-            l_panel,
-        );
-        ui.selectable_value(
-            &mut app.settings.ops_display,
-            naygo_core::config::OpsDisplay::Modal,
-            l_modal,
-        );
-        ui.selectable_value(
-            &mut app.settings.ops_display,
-            naygo_core::config::OpsDisplay::AlwaysVisible,
-            l_always,
-        );
-    });
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.ops_display,
+        &[
+            (naygo_core::config::OpsDisplay::Panel, l_panel.as_str()),
+            (naygo_core::config::OpsDisplay::Modal, l_modal.as_str()),
+            (
+                naygo_core::config::OpsDisplay::AlwaysVisible,
+                l_always.as_str(),
+            ),
+        ],
+        accent,
+    );
     ui.add_space(6.0);
 
     // Checkboxes.
@@ -118,18 +114,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.tr("settings.paste.fmt_jpg"),
     );
     ui.label(l_fmt);
-    ui.horizontal(|ui| {
-        ui.selectable_value(
-            &mut app.settings.paste_image_fmt,
-            naygo_core::clipboard::ImageFmt::Png,
-            l_png,
-        );
-        ui.selectable_value(
-            &mut app.settings.paste_image_fmt,
-            naygo_core::clipboard::ImageFmt::Jpg,
-            l_jpg,
-        );
-    });
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.paste_image_fmt,
+        &[
+            (naygo_core::clipboard::ImageFmt::Png, l_png.as_str()),
+            (naygo_core::clipboard::ImageFmt::Jpg, l_jpg.as_str()),
+        ],
+        accent,
+    );
     ui.add_space(6.0);
 
     // Calidad JPG (solo aplica si el formato es JPG).
@@ -158,25 +151,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.tr("settings.watch.until_refresh"),
     );
     ui.label(l_dur);
-    ui.horizontal(|ui| {
-        ui.selectable_value(
-            &mut app.settings.highlight_duration,
-            HighlightDuration::UntilInteract,
-            l_until_interact,
-        );
-        // FadeSeconds lleva un valor; el selector fija 6s (si el usuario tenía otra N,
-        // se normaliza a 6 al elegir esta opción, aceptable para el selector simple).
-        ui.selectable_value(
-            &mut app.settings.highlight_duration,
-            HighlightDuration::FadeSeconds(6),
-            l_fade,
-        );
-        ui.selectable_value(
-            &mut app.settings.highlight_duration,
-            HighlightDuration::UntilRefresh,
-            l_until_refresh,
-        );
-    });
+    // FadeSeconds lleva un valor; el selector fija 6s (si el usuario tenía otra N,
+    // se normaliza a 6 al elegir esta opción, aceptable para el selector simple).
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.highlight_duration,
+        &[
+            (HighlightDuration::UntilInteract, l_until_interact.as_str()),
+            (HighlightDuration::FadeSeconds(6), l_fade.as_str()),
+            (HighlightDuration::UntilRefresh, l_until_refresh.as_str()),
+        ],
+        accent,
+    );
     ui.add_space(6.0);
 
     // Agrupar archivos nuevos al final de la vista.

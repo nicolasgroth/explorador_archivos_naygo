@@ -15,12 +15,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     }
     ui.add_space(8.0);
 
+    let accent = app.active_theme.accent();
+
     ui.label(app.tr("settings.bar_position"));
     let (l_top, l_side) = (app.tr("settings.bar.top"), app.tr("settings.bar.side"));
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut app.settings.bar_position, BarPosition::Top, l_top);
-        ui.selectable_value(&mut app.settings.bar_position, BarPosition::Side, l_side);
-    });
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.bar_position,
+        &[
+            (BarPosition::Top, l_top.as_str()),
+            (BarPosition::Side, l_side.as_str()),
+        ],
+        accent,
+    );
     ui.add_space(8.0);
 
     // Ancho de columnas: fijo (resizable a mano) vs automático (la tabla reparte por
@@ -30,18 +37,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         app.tr("settings.column_width.fixed"),
         app.tr("settings.column_width.auto"),
     );
-    ui.horizontal(|ui| {
-        ui.selectable_value(
-            &mut app.settings.column_width_mode,
-            ColumnWidthMode::Fixed,
-            l_fixed,
-        );
-        ui.selectable_value(
-            &mut app.settings.column_width_mode,
-            ColumnWidthMode::Auto,
-            l_auto,
-        );
-    });
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.column_width_mode,
+        &[
+            (ColumnWidthMode::Fixed, l_fixed.as_str()),
+            (ColumnWidthMode::Auto, l_auto.as_str()),
+        ],
+        accent,
+    );
     ui.add_space(8.0);
 
     // Guardar la tabla del panel activo (columnas visibles, orden y anchos) como plantilla

@@ -62,17 +62,23 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let lbl_color = app.tr("settings.toolbar.glyph_color");
     let lbl_use_theme = app.tr("settings.toolbar.use_theme_color");
     super::group_label(ui, &sec);
+    let accent = app.active_theme.accent();
     ui.horizontal(|ui| {
         ui.label(lbl_style);
-        ui.selectable_value(
+        crate::widgets::segmented(
+            ui,
             &mut app.settings.toolbar_icon_style,
-            naygo_core::config::ToolbarIconStyle::Glyphs,
-            lbl_glyphs,
-        );
-        ui.selectable_value(
-            &mut app.settings.toolbar_icon_style,
-            naygo_core::config::ToolbarIconStyle::Pack,
-            lbl_pack,
+            &[
+                (
+                    naygo_core::config::ToolbarIconStyle::Glyphs,
+                    lbl_glyphs.as_str(),
+                ),
+                (
+                    naygo_core::config::ToolbarIconStyle::Pack,
+                    lbl_pack.as_str(),
+                ),
+            ],
+            accent,
         );
     });
     ui.horizontal(|ui| {

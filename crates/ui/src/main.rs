@@ -35,6 +35,7 @@ mod toolbar;
 mod tray;
 mod tree_actions;
 mod typeahead;
+mod widgets;
 
 use app::NaygoApp;
 
