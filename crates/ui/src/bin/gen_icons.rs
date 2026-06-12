@@ -73,15 +73,28 @@ fn icon_specs() -> Vec<(&'static str, [u8; 4])> {
 }
 
 fn main() {
+    // No-destructivo por defecto: solo genera los PNG que FALTAN (placeholders para
+    // claves nuevas). Con `--force` regenera todos (peligroso: pisa íconos curados).
+    // Esto evita repetir la regresión del lote 2, donde un run completo aplastó los
+    // íconos reales con cuadrados de color.
+    let force = std::env::args().any(|a| a == "--force");
+    let mut created = 0usize;
     for set in ["flat", "fluent", "mono"] {
         let dir = Path::new("assets/icons").join(set);
         std::fs::create_dir_all(&dir).expect("crear dir");
         let mono = set == "mono";
         for (name, color) in icon_specs() {
             let path = dir.join(format!("{name}.png"));
+            if path.exists() && !force {
+                continue;
+            }
             make_icon(&path, color, mono);
+            created += 1;
         }
-        println!("generado set: {set}");
     }
-    println!("listo. {} íconos x 3 sets.", icon_specs().len());
+    if force {
+        println!("--force: regenerados TODOS los íconos (placeholders).");
+    } else {
+        println!("generados {created} íconos faltantes (los existentes se respetaron).");
+    }
 }
