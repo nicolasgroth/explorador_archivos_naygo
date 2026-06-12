@@ -171,8 +171,8 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     // Acciones multi-panel: intercambiar (⇄) y clonar la carpeta (⎘) hacia otro panel.
     // Swap solo tiene sentido con 2+ paneles Files; con uno solo se deshabilita.
     let files_count = app.workspace.files_panes().len();
-    btn!("⇄", ActionIcon::SwapPanes, &lbl_swap, files_count >= 2);
-    btn!("⎘", ActionIcon::ClonePath, &lbl_clone, true);
+    btn!("<>", ActionIcon::SwapPanes, &lbl_swap, files_count >= 2);
+    btn!("[]", ActionIcon::ClonePath, &lbl_clone, true);
     ui.separator();
     // Operaciones de archivo: mismos disparadores que el teclado / menú contextual.
     btn!("⧉", ActionIcon::Copy, &lbl_copy, true);
@@ -184,7 +184,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
 
     ui.separator();
     crate::templates_menu::layouts_button(ui, app);
-    btn!("➕", ActionIcon::AddPane, &lbl_add_pane, true);
+    btn!("+", ActionIcon::AddPane, &lbl_add_pane, true);
     // Menú de OTROS paneles (Historial/Árbol/Propiedades): ▾ chico junto al ➕.
     ui.menu_button("▾", |ui| {
         if ui.button(app.tr("pane.history.title")).clicked() {

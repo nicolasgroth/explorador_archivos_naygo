@@ -36,6 +36,84 @@ fn make_icon(path: &Path, fill: [u8; 4], mono: bool) {
     img.save(path).expect("guardar PNG");
 }
 
+/// Glifos dibujables para los íconos de acción nuevos (que no tienen arte propio).
+#[derive(Clone, Copy)]
+enum Glyph {
+    Plus,
+    Swap,
+    Clone,
+    NewWindow,
+}
+
+/// Dibuja un glifo simple (trazos) centrado sobre fondo transparente, para los íconos
+/// de acción nuevos que no tienen arte propio (swap, clone, add_pane, new_window). En
+/// el set mono usa gris claro (se tiñe en la UI).
+fn make_glyph(path: &Path, color: [u8; 4], mono: bool, glyph: Glyph) {
+    let mut img = RgbaImage::new(SIZE, SIZE);
+    let c = if mono { [200, 200, 200, 255] } else { color };
+    let put = |img: &mut RgbaImage, x: i32, y: i32| {
+        if x >= 0 && y >= 0 && (x as u32) < SIZE && (y as u32) < SIZE {
+            img.put_pixel(x as u32, y as u32, Rgba(c));
+        }
+    };
+    // Trazo grueso: pinta un cuadrado 2x2 por punto para que se vea a 32px.
+    let dot = |img: &mut RgbaImage, x: i32, y: i32| {
+        for dy in 0..2 {
+            for dx in 0..2 {
+                put(img, x + dx, y + dy);
+            }
+        }
+    };
+    let hline = |img: &mut RgbaImage, x0: i32, x1: i32, y: i32| {
+        for x in x0..=x1 {
+            dot(img, x, y);
+        }
+    };
+    let vline = |img: &mut RgbaImage, y0: i32, y1: i32, x: i32| {
+        for y in y0..=y1 {
+            dot(img, x, y);
+        }
+    };
+    match glyph {
+        Glyph::Plus => {
+            hline(&mut img, 8, 22, 15);
+            vline(&mut img, 8, 22, 15);
+        }
+        Glyph::Swap => {
+            // Dos flechas horizontales opuestas (arriba →, abajo ←).
+            hline(&mut img, 8, 22, 11);
+            dot(&mut img, 20, 9);
+            dot(&mut img, 22, 11);
+            dot(&mut img, 20, 13);
+            hline(&mut img, 8, 22, 20);
+            dot(&mut img, 10, 18);
+            dot(&mut img, 8, 20);
+            dot(&mut img, 10, 22);
+        }
+        Glyph::Clone => {
+            // Dos rectángulos solapados (copiar).
+            hline(&mut img, 8, 18, 9);
+            hline(&mut img, 8, 18, 19);
+            vline(&mut img, 9, 19, 8);
+            vline(&mut img, 9, 19, 18);
+            hline(&mut img, 13, 23, 13);
+            hline(&mut img, 13, 23, 23);
+            vline(&mut img, 13, 23, 13);
+            vline(&mut img, 13, 23, 23);
+        }
+        Glyph::NewWindow => {
+            // Ventana con un "+" en la esquina superior derecha.
+            hline(&mut img, 7, 21, 9);
+            hline(&mut img, 7, 21, 21);
+            vline(&mut img, 9, 21, 7);
+            vline(&mut img, 9, 21, 21);
+            hline(&mut img, 16, 24, 7);
+            vline(&mut img, 3, 11, 20);
+        }
+    }
+    img.save(path).expect("guardar PNG");
+}
+
 /// (nombre de archivo, color RGBA) por cada IconKey. El nombre debe coincidir con
 /// el que `assets.rs` espera (Tarea 4).
 fn icon_specs() -> Vec<(&'static str, [u8; 4])> {
@@ -92,6 +170,28 @@ fn main() {
             created += 1;
         }
     }
+    // Íconos de acción con glifo propio (reemplazan los placeholders cuadrados). Estos
+    // SÍ se regeneran siempre: son los que se veían como cuadritos en la toolbar.
+    for set in ["flat", "fluent", "mono"] {
+        let dir = Path::new("assets/icons").join(set);
+        let mono = set == "mono";
+        let color = [90, 120, 170, 255];
+        make_glyph(&dir.join("action_add_pane.png"), color, mono, Glyph::Plus);
+        make_glyph(&dir.join("action_swap_panes.png"), color, mono, Glyph::Swap);
+        make_glyph(
+            &dir.join("action_clone_path.png"),
+            color,
+            mono,
+            Glyph::Clone,
+        );
+        make_glyph(
+            &dir.join("action_new_window.png"),
+            color,
+            mono,
+            Glyph::NewWindow,
+        );
+    }
+
     if force {
         println!("--force: regenerados TODOS los íconos (placeholders).");
     } else {
