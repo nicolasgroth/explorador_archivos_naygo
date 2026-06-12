@@ -70,6 +70,18 @@ pub enum ColumnWidthMode {
     Auto,
 }
 
+/// Cuándo activar el modo de bajo consumo (menos repaints, sin animaciones): para
+/// equipos sin GPU dedicada. `Auto` lo decide la app según el renderer detectado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LowPowerMode {
+    /// Automático: ON si el render es por software (sin GPU), OFF si hay GPU.
+    Auto,
+    /// Siempre ON (fuerza bajo consumo aunque haya GPU).
+    Always,
+    /// Siempre OFF (todo activo: animaciones + framerate pleno).
+    Never,
+}
+
 /// Cuánto dura el resaltado de un archivo recién aparecido (watcher).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HighlightDuration {
@@ -188,6 +200,15 @@ pub struct Settings {
         skip_serializing_if = "String::is_empty"
     )]
     pub preview_text_exts_legacy: String,
+    /// Cuándo usar el modo de bajo consumo. `#[serde(default)]` retro-compat (settings
+    /// previos → Auto).
+    #[serde(default = "default_low_power_mode")]
+    pub low_power_mode: LowPowerMode,
+}
+
+/// Default de `low_power_mode`: Auto (lo decide la app según el renderer).
+fn default_low_power_mode() -> LowPowerMode {
+    LowPowerMode::Auto
 }
 
 /// Default de `preview_rules`: las reglas semilla (texto + imagen, habilitadas).
@@ -328,6 +349,7 @@ impl Default for Settings {
             default_table: None,
             preview_rules: default_preview_rules_cfg(),
             preview_text_exts_legacy: String::new(),
+            low_power_mode: LowPowerMode::Auto,
         }
     }
 }
@@ -586,9 +608,17 @@ mod tests {
                 },
             ],
             preview_text_exts_legacy: String::new(),
+            low_power_mode: LowPowerMode::Always,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_viejo_sin_low_power_cae_a_auto() {
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.low_power_mode, LowPowerMode::Auto);
     }
 
     #[test]
