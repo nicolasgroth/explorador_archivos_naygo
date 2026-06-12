@@ -1755,6 +1755,28 @@ impl NaygoApp {
         self.status.clear();
     }
 
+    /// Abre OTRA ventana de Naygo lanzando un nuevo proceso del propio ejecutable, sin
+    /// argumentos: arranca como un inicio normal y restaura el workspace persistido
+    /// (carpetas iniciales, layout). Cada ventana es un proceso independiente. Un fallo
+    /// se reporta discreto en la barra de estado (no crashea).
+    pub fn spawn_new_window(&mut self) {
+        match std::env::current_exe() {
+            Ok(exe) => match std::process::Command::new(exe).spawn() {
+                Ok(_) => {
+                    self.status = self.i18n.t("status.new_window").to_string();
+                }
+                Err(e) => {
+                    tracing::warn!("no se pudo abrir otra ventana: {e}");
+                    self.status = self.i18n.t("status.new_window_failed").to_string();
+                }
+            },
+            Err(e) => {
+                tracing::warn!("current_exe falló: {e}");
+                self.status = self.i18n.t("status.new_window_failed").to_string();
+            }
+        }
+    }
+
     /// Inserta `id` en el dock DIVIDIENDO el leaf enfocado al 50% (estilo Commander:
     /// los paneles nacen lado a lado, no apilados como pestaña). La orientación sigue la
     /// forma del leaf: si es más alto que ancho, divide abajo (split_below); si no, a la

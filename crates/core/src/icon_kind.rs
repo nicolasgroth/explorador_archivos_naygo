@@ -69,6 +69,8 @@ pub enum ActionIcon {
     SwapPanes,
     /// Clonar la carpeta del panel activo a otro panel.
     ClonePath,
+    /// Abrir otra ventana de Naygo (nuevo proceso).
+    NewWindow,
     Settings,
 }
 
@@ -78,7 +80,7 @@ impl ActionIcon {
         use ActionIcon::*;
         &[
             Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder, AddPane,
-            SwapPanes, ClonePath, Settings,
+            SwapPanes, ClonePath, NewWindow, Settings,
         ]
     }
 
@@ -99,6 +101,7 @@ impl ActionIcon {
             AddPane => "action_add_pane",
             SwapPanes => "action_swap_panes",
             ClonePath => "action_clone_path",
+            NewWindow => "action_new_window",
             Settings => "action_settings",
         }
     }
@@ -298,15 +301,15 @@ mod tests {
     }
 
     #[test]
-    fn action_icon_all_son_14_con_file_name_unico() {
+    fn action_icon_all_son_15_con_file_name_unico() {
         let all = ActionIcon::all();
-        assert_eq!(all.len(), 14);
+        assert_eq!(all.len(), 15);
         let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(
             names.len(),
-            14,
+            15,
             "cada acción tiene un nombre de archivo único"
         );
         assert!(all.iter().all(|a| a.file_name().starts_with("action_")));

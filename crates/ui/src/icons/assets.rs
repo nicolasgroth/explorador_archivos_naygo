@@ -75,6 +75,7 @@ macro_rules! set_table {
             ("action_add_pane", png!($set, "action_add_pane")),
             ("action_swap_panes", png!($set, "action_swap_panes")),
             ("action_clone_path", png!($set, "action_clone_path")),
+            ("action_new_window", png!($set, "action_new_window")),
             ("action_settings", png!($set, "action_settings")),
         ];
     };

@@ -45,6 +45,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     let lbl_swap = app.tr("toolbar.swap_panes");
     let lbl_clone = app.tr("toolbar.clone_path");
     let lbl_add_pane = app.tr("toolbar.add_pane");
+    let lbl_new_window = app.tr("toolbar.new_window");
     let lbl_copy = app.tr("op.copy");
     let lbl_cut = app.tr("op.cut");
     let lbl_paste = app.tr("op.paste");
@@ -211,6 +212,11 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
     .response
     .on_hover_text(app.tr("toolbar.add_other"));
 
+    // Abrir otra ventana de Naygo (nuevo proceso). Acción de ventana, separada de las
+    // de panel. Glifo ASCII "[+]" en modo Glifos (la fuente lo tiene seguro).
+    ui.separator();
+    btn!("[+]", ActionIcon::NewWindow, &lbl_new_window, true);
+
     if let Some(action) = clicked {
         match action {
             ActionIcon::Back => app.apply_action(Action::GoBack),
@@ -233,6 +239,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             ActionIcon::AddPane => app.add_files_pane(),
             ActionIcon::SwapPanes => app.swap_active_with_other(),
             ActionIcon::ClonePath => app.clone_active_to_other(),
+            ActionIcon::NewWindow => app.spawn_new_window(),
             ActionIcon::Settings => app.settings_open = true,
         }
     }
