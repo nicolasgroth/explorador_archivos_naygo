@@ -802,6 +802,13 @@ pub fn show(
                     id,
                     dir: entry.path.clone(),
                 });
+            } else {
+                // Archivo: doble clic = abrir con el programa por defecto del SO
+                // (pedido de Nicolás). Mismo camino que Enter: el doble clic ya fijó
+                // el foco en esta fila (su `clicked` corrió select_single), así que
+                // Action::Open sobre el panel activo abre exactamente este archivo.
+                pending.push(PaneRequest::Activate { id });
+                ops_actions.push(Action::Open);
             }
         }
     }
