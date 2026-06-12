@@ -96,6 +96,8 @@ pub struct NaygoTabViewer<'a> {
     /// Posición de vista a la que cada file panel debe hacer scroll este frame (foco
     /// movido por teclado). Lo consume el panel; `NaygoApp` lo limpia tras pintar.
     pub scroll_to_focus: &'a std::collections::HashMap<naygo_core::workspace::PaneId, usize>,
+    /// Modo de ancho de columnas (fijo vs automático), del setting global.
+    pub column_width_mode: naygo_core::config::ColumnWidthMode,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -188,6 +190,7 @@ impl NaygoTabViewer<'_> {
                     pathbar,
                     self.scroll_to_focus.get(&id).copied(),
                     &mut visible_rows_out,
+                    self.column_width_mode,
                 );
                 if let Some(rows) = visible_rows_out {
                     self.visible_rows.insert(id, rows);

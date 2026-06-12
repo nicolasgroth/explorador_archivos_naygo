@@ -69,6 +69,9 @@ pub fn show(
     // Salida: filas visibles del cuerpo medidas este frame (alto disponible / ROW_HEIGHT).
     // `NaygoApp` la guarda por panel para el tamaño de página de AvPag/RePag.
     visible_rows_out: &mut Option<usize>,
+    // Modo de ancho de columnas: en `Auto` la tabla reparte por contenido (no se persiste
+    // el resize manual); en `Fixed` se usan los anchos del `TableState` (resizable a mano).
+    width_mode: naygo_core::config::ColumnWidthMode,
 ) {
     let Some(pane) = workspace.pane(id) else {
         return;
@@ -232,17 +235,24 @@ pub fn show(
     if let Some(row_idx) = scroll_to_row_idx {
         builder = builder.scroll_to_row(row_idx, None);
     }
+    let auto_width = matches!(width_mode, naygo_core::config::ColumnWidthMode::Auto);
     for col in &visible_cols {
-        // Ancho inicial = el guardado en el modelo; rango = límites de core. `clip`
-        // permite encoger por debajo del contenido (si no, el texto largo impide
-        // achicar la columna).
-        builder = builder.column(
+        let column = if auto_width {
+            // Modo Auto: la tabla reparte el ancho según el contenido. NO resizable (el
+            // resize manual no aplica) y NO se emite SetColumnWidth (ver más abajo), para
+            // no pelear con egui_extras ni persistir anchos que el usuario no fijó.
+            Column::auto().at_least(MIN_COLUMN_WIDTH).clip(true)
+        } else {
+            // Modo Fijo: ancho inicial = el guardado en el modelo; rango = límites de core.
+            // `clip` permite encoger por debajo del contenido (si no, el texto largo impide
+            // achicar la columna).
             Column::initial(col.width)
                 .at_least(MIN_COLUMN_WIDTH)
                 .at_most(MAX_COLUMN_WIDTH)
                 .clip(true)
-                .resizable(true),
-        );
+                .resizable(true)
+        };
+        builder = builder.column(column);
     }
 
     builder
@@ -760,11 +770,15 @@ pub fn show(
 
     // Detectar resize: si el ancho medido de una columna difiere del guardado en el
     // modelo, el usuario arrastró el borde → persistir el nuevo ancho. El clamp lo
-    // hace `set_width` en core. El umbral evita re-emitir por jitter de float.
-    for (ci, col) in visible_cols.iter().enumerate() {
-        if let Some(w) = measured_widths[ci] {
-            if (w - col.width).abs() > WIDTH_CHANGE_EPS {
-                table_actions.push(TableAction::SetColumnWidth(col.kind, w));
+    // hace `set_width` en core. El umbral evita re-emitir por jitter de float. En modo
+    // Auto NO se emite: el ancho lo decide la tabla por contenido, no el modelo, y
+    // persistirlo crearía un bucle de realimentación con el reparto automático.
+    if !auto_width {
+        for (ci, col) in visible_cols.iter().enumerate() {
+            if let Some(w) = measured_widths[ci] {
+                if (w - col.width).abs() > WIDTH_CHANGE_EPS {
+                    table_actions.push(TableAction::SetColumnWidth(col.kind, w));
+                }
             }
         }
     }

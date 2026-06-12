@@ -61,6 +61,15 @@ pub enum OpsDisplay {
     AlwaysVisible,
 }
 
+/// Cómo se reparten los anchos de columna del file panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColumnWidthMode {
+    /// Anchos fijos del `TableState` (resizables a mano; default histórico).
+    Fixed,
+    /// La tabla reparte el ancho según el contenido (egui_extras `Column::auto`).
+    Auto,
+}
+
 /// Cuánto dura el resaltado de un archivo recién aparecido (watcher).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HighlightDuration {
@@ -157,6 +166,20 @@ pub struct Settings {
     /// listado real corre por detrás (stale-while-revalidate).
     #[serde(default = "default_cache_max_dirs")]
     pub cache_max_dirs: usize,
+    /// Modo de ancho de columnas de los file panels: fijo (resizable a mano) o
+    /// automático (la tabla reparte por contenido). `#[serde(default)]` retro-compat.
+    #[serde(default = "default_column_width_mode")]
+    pub column_width_mode: ColumnWidthMode,
+    /// Plantilla de tabla para los paneles NUEVOS: columnas visibles, orden y anchos
+    /// tomados del panel activo con «Usar el panel activo como predeterminado». `None`
+    /// (default) = los paneles nuevos nacen con `TableState::default()`.
+    #[serde(default)]
+    pub default_table: Option<crate::columns::TableState>,
+}
+
+/// Default de `column_width_mode` para `#[serde(default)]`: fijo (comportamiento previo).
+fn default_column_width_mode() -> ColumnWidthMode {
+    ColumnWidthMode::Fixed
 }
 
 /// Default de `cache_max_dirs` para `#[serde(default)]`.
@@ -283,6 +306,8 @@ impl Default for Settings {
             tray_enabled: true,
             close_to_tray: false,
             cache_max_dirs: 50,
+            column_width_mode: ColumnWidthMode::Fixed,
+            default_table: None,
         }
     }
 }
@@ -511,9 +536,26 @@ mod tests {
             tray_enabled: false,
             close_to_tray: true,
             cache_max_dirs: 12,
+            column_width_mode: ColumnWidthMode::Auto,
+            default_table: Some({
+                let mut t = crate::columns::TableState::default();
+                t.toggle_visible(crate::columns::ColumnKind::Created);
+                t.set_width(crate::columns::ColumnKind::Name, 333.0);
+                t
+            }),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_viejo_sin_columnas_cae_a_fijo_y_sin_plantilla() {
+        // Un settings.json previo sin los campos de columnas debe conservar el resto y
+        // que los nuevos caigan a su default (Fixed, None) por #[serde(default)].
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat","show_parent_entry":true,"language":"es","theme":"dark-blue"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.column_width_mode, ColumnWidthMode::Fixed);
+        assert!(s.default_table.is_none());
     }
 
     #[test]

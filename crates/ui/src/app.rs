@@ -1225,6 +1225,16 @@ impl NaygoApp {
             .map(|f| f.current_dir.clone())
             .unwrap_or_else(default_start_dir);
         let id = self.workspace.add_pane(PanePurpose::Files, dir.clone());
+        // Plantilla de tabla por defecto (si Nicolás guardó una con «Usar el panel activo
+        // como predeterminado»): el panel nuevo nace con esas columnas/orden/anchos. Los
+        // filtros NO se heredan (son del contenido del panel origen, no de la plantilla).
+        if let Some(tpl) = &self.settings.default_table {
+            if let Some(f) = self.workspace.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                let mut table = tpl.clone();
+                table.filters.clear();
+                f.table = table;
+            }
+        }
         self.insert_pane_split(id);
         self.start_listing(id, dir);
     }
@@ -3447,6 +3457,7 @@ impl eframe::App for NaygoApp {
                 path_edit_seen: &mut path_edit_seen,
                 visible_rows: &mut self.visible_rows,
                 scroll_to_focus: &self.scroll_to_focus,
+                column_width_mode: self.settings.column_width_mode,
             };
             let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
             // Ancho mínimo de cada tab del dock para que no se compriman hasta
