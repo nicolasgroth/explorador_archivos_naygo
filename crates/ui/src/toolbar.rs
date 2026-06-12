@@ -203,6 +203,10 @@ fn buttons(ui: &mut egui::Ui, app: &mut NaygoApp) {
             app.add_pane_of(naygo_core::workspace::PanePurpose::Favorites);
             ui.close();
         }
+        if ui.button(app.tr("pane.preview.title")).clicked() {
+            app.add_pane_of(naygo_core::workspace::PanePurpose::Preview);
+            ui.close();
+        }
     })
     .response
     .on_hover_text(app.tr("toolbar.add_other"));

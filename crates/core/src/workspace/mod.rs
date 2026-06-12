@@ -37,6 +37,8 @@ pub enum PanePurpose {
     History,
     /// Carpetas favoritas + recientes (fase path-bar+favoritos).
     Favorites,
+    /// Vista previa liviana del archivo enfocado del panel activo (texto/imagen).
+    Preview,
 }
 
 /// Un panel concreto del workspace. Solo los `Files` llevan `FilePaneState`.

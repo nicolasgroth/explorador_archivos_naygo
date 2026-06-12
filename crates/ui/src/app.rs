@@ -262,6 +262,9 @@ pub struct NaygoApp {
     pub(crate) path_edit: Option<PathEdit>,
     /// Worker + debounce del autocompletado del editor de ruta.
     path_ac: PathAutocomplete,
+    /// Estado del panel Preview (worker + debounce + resultado). Solo trabaja si hay un
+    /// panel Preview visible.
+    preview: PreviewState,
     /// Historial de deshacer de la sesión (más nuevo al final; tope 100).
     pub(crate) undo_history: Vec<naygo_core::ops::undo::UndoEntry>,
     /// Id incremental de las entradas del historial.
@@ -449,6 +452,69 @@ struct PathAutocomplete {
 /// popup igual muestra solo los primeros 12 que calcen).
 const PATH_AC_MAX_NAMES: usize = 1024;
 
+/// Lo que el worker de preview devuelve por su canal (datos crudos, sin textura: la
+/// textura se sube en el hilo de UI). Mantiene la regla de oro: la UI no hace I/O.
+enum PreviewPayload {
+    /// Texto truncado listo para pintar (+ si se truncó, para el aviso final).
+    Text { text: String, truncated: bool },
+    /// Imagen decodificada: RGBA premultiplicado y dimensiones (ya reescalada al tope).
+    Image {
+        rgba: Vec<u8>,
+        width: usize,
+        height: usize,
+    },
+    /// No previsualizable / muy grande / error de lectura: la UI muestra el mensaje i18n.
+    Message(&'static str),
+}
+
+/// El resultado del preview ya listo para PINTAR (la textura, si la hay, ya está subida).
+/// `pub(crate)` para que `panes::preview_panel` lo pinte.
+pub(crate) enum PreviewView {
+    /// Nada enfocado aún.
+    Empty,
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    Image(egui::TextureHandle),
+    Message(&'static str),
+}
+
+/// Estado del panel Preview: qué archivo se quiere mostrar, el worker en vuelo (con su
+/// token de cancelación) y el resultado ya pintado. Sigue el patrón de `PathAutocomplete`
+/// (debounce + worker + descarte de resultados de un path ya no enfocado). Efímero.
+struct PreviewState {
+    /// El path enfocado que se quiere previsualizar (None = nada enfocado).
+    wanted: Option<std::path::PathBuf>,
+    /// Ancla del debounce desde el último cambio de `wanted`.
+    since: Option<std::time::Instant>,
+    /// El path cuyo resultado está cargado en `view`.
+    loaded: Option<std::path::PathBuf>,
+    /// Resultado a pintar.
+    view: PreviewView,
+    /// Canal del worker en vuelo (envía UNA vez y termina).
+    rx: Option<Receiver<(std::path::PathBuf, PreviewPayload)>>,
+    /// Token para cancelar el worker en vuelo al cambiar el foco.
+    token: Option<CancellationToken>,
+}
+
+impl Default for PreviewState {
+    fn default() -> Self {
+        PreviewState {
+            wanted: None,
+            since: None,
+            loaded: None,
+            view: PreviewView::Empty,
+            rx: None,
+            token: None,
+        }
+    }
+}
+
+/// Debounce del preview al cambiar el foco (≈150 ms): mover rápido por una carpeta NO
+/// dispara una lectura por archivo.
+const PREVIEW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+
 impl NaygoApp {
     pub fn new(cc: &CreationContext<'_>, initial_dir: Option<std::path::PathBuf>) -> Self {
         let config_dir = config::portable_dir();
@@ -566,6 +632,7 @@ impl NaygoApp {
             favorites,
             path_edit: None,
             path_ac: PathAutocomplete::default(),
+            preview: PreviewState::default(),
             undo_history: Vec::new(),
             next_undo_id: 1,
             tray: None,
@@ -1014,6 +1081,123 @@ impl NaygoApp {
         // Mientras el worker corre, drenar pronto su resultado.
         if self.path_ac.rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+    }
+
+    /// Worker + debounce del panel Preview. SIEMPRE async: lee/decodifica en un hilo con
+    /// token de cancelación; al cambiar el foco cancela el job anterior. La navegación
+    /// JAMÁS se bloquea (requisito de Nicolás). Sin panel Preview visible, no hace nada.
+    fn pump_preview(&mut self, ctx: &egui::Context) {
+        // ¿Hay algún panel Preview? Si no, soltar todo (worker, textura) y salir barato.
+        let has_preview = self
+            .workspace
+            .panes()
+            .iter()
+            .any(|p| p.purpose == PanePurpose::Preview);
+        if !has_preview {
+            if self.preview.wanted.is_some() || self.preview.rx.is_some() {
+                if let Some(t) = &self.preview.token {
+                    t.cancel();
+                }
+                self.preview = PreviewState::default();
+            }
+            return;
+        }
+
+        // El archivo enfocado del panel activo (solo archivos; una carpeta enfocada o
+        // nada → sin preview). `focused_view_entry` ya respeta el filtro de la vista.
+        let focused_file: Option<std::path::PathBuf> = self
+            .workspace
+            .active_files()
+            .and_then(|f| f.focused_view_entry())
+            .filter(|e| !e.is_dir())
+            .map(|e| e.path.clone());
+
+        // ¿Cambió el objetivo? Reinicia el debounce y cancela el worker anterior.
+        if self.preview.wanted != focused_file {
+            self.preview.wanted = focused_file.clone();
+            self.preview.since = Some(std::time::Instant::now());
+            if let Some(t) = self.preview.token.take() {
+                t.cancel();
+            }
+            self.preview.rx = None;
+            // Si no hay nada enfocado, limpiar el resultado de inmediato.
+            if focused_file.is_none() {
+                self.preview.loaded = None;
+                self.preview.view = PreviewView::Empty;
+            }
+        }
+
+        // Drenar el worker en vuelo. Un resultado de un path que ya NO está enfocado se
+        // descarta (el usuario siguió moviéndose).
+        if let Some(rx) = &self.preview.rx {
+            match rx.try_recv() {
+                Ok((path, payload)) => {
+                    self.preview.rx = None;
+                    self.preview.token = None;
+                    if Some(&path) == self.preview.wanted.as_ref() {
+                        self.preview.loaded = Some(path);
+                        self.preview.view = self.build_preview_view(ctx, payload);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.preview.rx = None;
+                    self.preview.token = None;
+                }
+            }
+        }
+
+        // Lanzar el worker cuando el debounce venció y el path enfocado aún no está cargado.
+        let needs = match (&self.preview.wanted, &self.preview.loaded) {
+            (Some(w), loaded) => Some(w) != loaded.as_ref() && self.preview.rx.is_none(),
+            (None, _) => false,
+        };
+        if needs {
+            let elapsed_ok = self
+                .preview
+                .since
+                .map(|t| t.elapsed() >= PREVIEW_DEBOUNCE)
+                .unwrap_or(true);
+            if elapsed_ok {
+                let path = self.preview.wanted.clone().expect("needs implica wanted");
+                let text_exts =
+                    naygo_core::preview::parse_text_extensions(&self.settings.preview_text_exts);
+                let token = CancellationToken::new();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let worker_token = token.clone();
+                std::thread::spawn(move || {
+                    let payload = build_preview_payload(&path, &text_exts, &worker_token);
+                    // Si se canceló a mitad, igual mandamos: el pump descarta por path.
+                    let _ = tx.send((path, payload));
+                });
+                self.preview.token = Some(token);
+                self.preview.rx = Some(rx);
+            } else {
+                ctx.request_repaint_after(PREVIEW_DEBOUNCE);
+            }
+        }
+        // Mientras el worker corre, drenar pronto su resultado.
+        if self.preview.rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+    }
+
+    /// Convierte el payload crudo del worker en algo pintable: sube la textura de la
+    /// imagen al `ctx` (en el hilo de UI, como exige egui) o pasa el texto/mensaje tal cual.
+    fn build_preview_view(&self, ctx: &egui::Context, payload: PreviewPayload) -> PreviewView {
+        match payload {
+            PreviewPayload::Text { text, truncated } => PreviewView::Text { text, truncated },
+            PreviewPayload::Message(m) => PreviewView::Message(m),
+            PreviewPayload::Image {
+                rgba,
+                width,
+                height,
+            } => {
+                let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
+                let tex = ctx.load_texture("naygo_preview", image, egui::TextureOptions::LINEAR);
+                PreviewView::Image(tex)
+            }
         }
     }
 
@@ -3478,6 +3662,9 @@ impl eframe::App for NaygoApp {
         // Autocompletado del editor de ruta (worker + debounce). Después del input:
         // el texto recién tecleado de este frame ya está en `path_edit`.
         self.pump_path_autocomplete(ctx);
+        // Vista previa del archivo enfocado (worker + debounce; cancelable). Después del
+        // input para que tome el foco recién movido este frame.
+        self.pump_preview(ctx);
         // Resumen de selección múltiple en la barra de estado. Se recomputa cada frame
         // desde la selección actual del panel activo (se actualiza solo al cambiar la
         // selección, sin importar dónde ocurrió el clic). Solo pisa el status cuando hay
@@ -3795,6 +3982,7 @@ impl eframe::App for NaygoApp {
                 scroll_to_focus: &self.scroll_to_focus,
                 column_width_mode: self.settings.column_width_mode,
                 pane_rects: &mut self.pane_rects,
+                preview_view: &self.preview.view,
             };
             let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
             // Ancho mínimo de cada tab del dock para que no se compriman hasta
@@ -4071,6 +4259,90 @@ fn build_summary_report(summary: &OpSummary) -> String {
         }
     }
     out
+}
+
+/// Cuerpo del worker de preview (corre FUERA del hilo de UI): clasifica el archivo y
+/// lee/decodifica según su tipo, respetando topes de bytes y el token de cancelación. Una
+/// cancelación a mitad devuelve un mensaje neutro (el pump igual lo descarta por path).
+fn build_preview_payload(
+    path: &std::path::Path,
+    text_exts: &[String],
+    token: &CancellationToken,
+) -> PreviewPayload {
+    use naygo_core::preview::{self, PreviewKind};
+    match preview::classify(path, text_exts) {
+        PreviewKind::None => PreviewPayload::Message("preview.none"),
+        PreviewKind::Text => read_text_preview(path),
+        PreviewKind::Image => read_image_preview(path, token),
+    }
+}
+
+/// Lee las primeras líneas / bytes de un archivo de texto (lo que llegue primero) y las
+/// trunca. Lectura acotada: nunca carga el archivo entero.
+fn read_text_preview(path: &std::path::Path) -> PreviewPayload {
+    use naygo_core::preview::{truncate_text, TEXT_MAX_BYTES};
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return PreviewPayload::Message("preview.error");
+    };
+    // Leer a lo más TEXT_MAX_BYTES + 1 para saber si se cortó por bytes.
+    let mut buf = Vec::with_capacity(TEXT_MAX_BYTES.min(8192));
+    let mut chunk = [0u8; 8192];
+    let mut hit_cap = false;
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() >= TEXT_MAX_BYTES {
+                    buf.truncate(TEXT_MAX_BYTES);
+                    hit_cap = true;
+                    break;
+                }
+            }
+            Err(_) => return PreviewPayload::Message("preview.error"),
+        }
+    }
+    let t = truncate_text(&buf, hit_cap);
+    PreviewPayload::Text {
+        text: t.text,
+        truncated: t.truncated,
+    }
+}
+
+/// Decodifica una imagen liviana y la reescala al tope antes de devolver su RGBA. Respeta
+/// el tope de bytes del archivo y el token de cancelación. NO sube textura (eso es del UI).
+fn read_image_preview(path: &std::path::Path, token: &CancellationToken) -> PreviewPayload {
+    use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
+    // Tope de tamaño de archivo: una imagen enorme no se intenta decodificar.
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > IMAGE_MAX_BYTES => return PreviewPayload::Message("preview.too_big"),
+        Ok(_) => {}
+        Err(_) => return PreviewPayload::Message("preview.error"),
+    }
+    if token.is_cancelled() {
+        return PreviewPayload::Message("preview.none");
+    }
+    let Ok(img) = image::open(path) else {
+        return PreviewPayload::Message("preview.error");
+    };
+    if token.is_cancelled() {
+        return PreviewPayload::Message("preview.none");
+    }
+    // Reescalar si excede el lado máximo (no subir texturas gigantes). `thumbnail` conserva
+    // la proporción y es rápido.
+    let (w, h) = (img.width(), img.height());
+    let scaled = if w > IMAGE_MAX_SIDE || h > IMAGE_MAX_SIDE {
+        img.thumbnail(IMAGE_MAX_SIDE, IMAGE_MAX_SIDE)
+    } else {
+        img
+    };
+    let rgba = scaled.to_rgba8();
+    PreviewPayload::Image {
+        width: rgba.width() as usize,
+        height: rgba.height() as usize,
+        rgba: rgba.into_raw(),
+    }
 }
 
 fn default_start_dir() -> PathBuf {

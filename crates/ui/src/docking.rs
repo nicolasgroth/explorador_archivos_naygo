@@ -104,6 +104,9 @@ pub struct NaygoTabViewer<'a> {
     /// Rects en pantalla de cada file panel ESTE frame (salida). Los usa el overlay del
     /// selector de panel (multi-panel) para oscurecer/numerar cada candidato.
     pub pane_rects: &'a mut std::collections::HashMap<naygo_core::workspace::PaneId, egui::Rect>,
+    /// Resultado de la vista previa (lo calcula NaygoApp en un worker); el panel Preview
+    /// solo lo pinta.
+    pub preview_view: &'a crate::app::PreviewView,
 }
 
 impl egui_dock::TabViewer for NaygoTabViewer<'_> {
@@ -126,6 +129,7 @@ impl egui_dock::TabViewer for NaygoTabViewer<'_> {
             Some(PanePurpose::Inspector) => self.i18n.t("pane.inspector.title").to_string(),
             Some(PanePurpose::History) => self.i18n.t("pane.history.title").to_string(),
             Some(PanePurpose::Favorites) => self.i18n.t("pane.favorites.title").to_string(),
+            Some(PanePurpose::Preview) => self.i18n.t("pane.preview.title").to_string(),
             None => "—".to_string(),
         };
         // Resaltar el panel activo: título en color de acento + negrita.
@@ -263,6 +267,9 @@ impl NaygoTabViewer<'_> {
             }
             Some(PanePurpose::Inspector) => {
                 crate::panes::inspector_panel::show(ui, self.workspace, self.i18n)
+            }
+            Some(PanePurpose::Preview) => {
+                crate::panes::preview_panel::show(ui, self.preview_view, self.i18n)
             }
             None => {
                 ui.label(self.i18n.t("pane.unknown"));

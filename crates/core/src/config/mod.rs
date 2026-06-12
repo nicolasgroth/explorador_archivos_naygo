@@ -175,6 +175,15 @@ pub struct Settings {
     /// (default) = los paneles nuevos nacen con `TableState::default()`.
     #[serde(default)]
     pub default_table: Option<crate::columns::TableState>,
+    /// Extensiones de texto que el panel Preview previsualiza, como CSV (las imágenes son
+    /// fijas). Editable en Configuración → Previsualización. `#[serde(default)]` retro-compat.
+    #[serde(default = "default_preview_text_exts")]
+    pub preview_text_exts: String,
+}
+
+/// Default de `preview_text_exts`: la lista semilla de `core::preview`.
+fn default_preview_text_exts() -> String {
+    crate::preview::default_text_extensions_csv()
 }
 
 /// Default de `column_width_mode` para `#[serde(default)]`: fijo (comportamiento previo).
@@ -308,6 +317,7 @@ impl Default for Settings {
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
+            preview_text_exts: default_preview_text_exts(),
         }
     }
 }
@@ -543,6 +553,7 @@ mod tests {
                 t.set_width(crate::columns::ColumnKind::Name, 333.0);
                 t
             }),
+            preview_text_exts: "txt, md, rs".to_string(),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);

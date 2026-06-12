@@ -12,6 +12,7 @@ mod advanced;
 mod appearance;
 mod language;
 mod panes;
+mod preview;
 mod shortcuts;
 
 use crate::app::NaygoApp;
@@ -21,6 +22,7 @@ use crate::app::NaygoApp;
 pub enum SettingsSection {
     Appearance,
     Panes,
+    Preview,
     Shortcuts,
     Language,
     Advanced,
@@ -55,6 +57,7 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
                     "settings.appearance",
                 );
                 section_item(ui, app, SettingsSection::Panes, "▦", "settings.panes");
+                section_item(ui, app, SettingsSection::Preview, "👁", "settings.preview");
                 section_item(
                     ui,
                     app,
@@ -77,6 +80,7 @@ pub fn show_settings_viewport(app: &mut NaygoApp, ctx: &egui::Context) {
             egui::ScrollArea::vertical().show(ui, |ui| match app.settings_section {
                 SettingsSection::Appearance => appearance::show(ui, app),
                 SettingsSection::Panes => panes::show(ui, app),
+                SettingsSection::Preview => preview::show(ui, app),
                 SettingsSection::Shortcuts => shortcuts::show(ui, app),
                 SettingsSection::Language => language::show(ui, app),
                 SettingsSection::Advanced => advanced::show(ui, app),

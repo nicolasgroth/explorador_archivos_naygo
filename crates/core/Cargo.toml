@@ -9,7 +9,9 @@ license.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Decodificación de imágenes: PNG/JPEG (íconos) + BMP/GIF/WebP/ICO para la vista
+# previa liviana (todas puras-Rust, MIT/Apache, sin libs nativas).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp", "ico"] }
 # Buscar/reemplazar con regex en el batch-rename. MIT/Apache, sin features extra.
 regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 

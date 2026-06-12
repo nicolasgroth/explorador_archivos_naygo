@@ -25,6 +25,7 @@ pub mod listing;
 pub mod listing_cache;
 pub mod ops;
 pub mod path_segments;
+pub mod preview;
 pub mod recent_dirs;
 pub mod sizing;
 pub mod sort;
