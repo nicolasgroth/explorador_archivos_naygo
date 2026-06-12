@@ -221,6 +221,35 @@ pub fn show(ui: &mut egui::Ui, app: &mut NaygoApp) {
         }
     }
 
+    // Rendimiento: modo de bajo consumo (para equipos sin GPU dedicada).
+    super::group_sep(ui);
+    super::group_label(ui, &app.tr("settings.power.section"));
+    let (l_power, l_p_auto, l_p_always, l_p_never) = (
+        app.tr("settings.power.mode"),
+        app.tr("settings.power.auto"),
+        app.tr("settings.power.always"),
+        app.tr("settings.power.never"),
+    );
+    ui.label(l_power);
+    crate::widgets::segmented(
+        ui,
+        &mut app.settings.low_power_mode,
+        &[
+            (naygo_core::config::LowPowerMode::Auto, l_p_auto.as_str()),
+            (
+                naygo_core::config::LowPowerMode::Always,
+                l_p_always.as_str(),
+            ),
+            (naygo_core::config::LowPowerMode::Never, l_p_never.as_str()),
+        ],
+        accent,
+    );
+    ui.label(
+        egui::RichText::new(app.tr("settings.power.hint"))
+            .weak()
+            .small(),
+    );
+
     // Restaurar valores de fábrica: confirmación en dos pasos (el primer clic arma el
     // botón de confirmar por 4 s; el segundo ejecuta). El reset real lo procesa
     // `NaygoApp::logic` (patrón de acciones diferidas).
