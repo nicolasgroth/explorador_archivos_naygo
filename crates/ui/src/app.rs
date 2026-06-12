@@ -1225,8 +1225,36 @@ impl NaygoApp {
             .map(|f| f.current_dir.clone())
             .unwrap_or_else(default_start_dir);
         let id = self.workspace.add_pane(PanePurpose::Files, dir.clone());
-        self.dock_state.main_surface_mut().push_to_focused_leaf(id);
+        self.insert_pane_split(id);
         self.start_listing(id, dir);
+    }
+
+    /// Inserta `id` en el dock DIVIDIENDO el leaf enfocado al 50% (estilo Commander:
+    /// los paneles nacen lado a lado, no apilados como pestaña). La orientación sigue la
+    /// forma del leaf: si es más alto que ancho, divide abajo (split_below); si no, a la
+    /// derecha. Sin leaf enfocado (p. ej. primer arranque) cae al comportamiento previo
+    /// de apilar en el leaf enfocado. Tras dividir, enfoca el nuevo leaf.
+    fn insert_pane_split(&mut self, id: PaneId) {
+        let surface = self.dock_state.main_surface_mut();
+        let Some(node) = surface.focused_leaf() else {
+            // Sin leaf enfocado: no hay dónde dividir; apilar como fallback.
+            surface.push_to_focused_leaf(id);
+            return;
+        };
+        // Decidir orientación por la forma del leaf enfocado (su rect ya fue medido en un
+        // frame previo; si aún no, `None` → derecha por defecto, que el plan acepta para v1).
+        let split_below = surface[node]
+            .rect()
+            .map(|r| r.height() > r.width())
+            .unwrap_or(false);
+        let [_old, new] = if split_below {
+            surface.split_below(node, 0.5, vec![id])
+        } else {
+            surface.split_right(node, 0.5, vec![id])
+        };
+        // El panel nuevo pasa a ser el leaf enfocado del dock (coherente con que también
+        // lo marcamos activo en el workspace al crearlo).
+        surface.set_focused_node(new);
     }
 
     /// Aplica una plantilla: recompone el workspace, reconstruye el dock, registra
@@ -2469,10 +2497,10 @@ impl NaygoApp {
         }
     }
 
-    /// Agrega un panel genérico (Historial/Árbol/Propiedades) al leaf enfocado.
+    /// Agrega un panel genérico (Historial/Árbol/Propiedades) DIVIDIENDO el leaf enfocado.
     pub fn add_pane_of(&mut self, purpose: PanePurpose) {
         let id = self.workspace.add_pane(purpose, PathBuf::new());
-        self.dock_state.main_surface_mut().push_to_focused_leaf(id);
+        self.insert_pane_split(id);
     }
 
     /// F2 / Renombrar: con UN ítem abre el rename INLINE (R1, la celda Nombre se
