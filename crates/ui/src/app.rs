@@ -365,6 +365,11 @@ pub struct NaygoApp {
     /// la UI duerme en reposo y los watchers la despiertan por evento con `request_repaint`,
     /// en vez de un latido de polling constante (clave para el bajo consumo en VMs sin GPU).
     egui_ctx: egui::Context,
+    /// `true` si eframe está renderizando por software (sin GPU real), detectado al
+    /// arrancar leyendo `GL_RENDERER`. Decide el modo de bajo consumo en `Auto`.
+    software_render: bool,
+    /// Mostrar el diálogo de bienvenida (solo el primer arranque). Se baja al elegir.
+    show_welcome: bool,
 }
 
 /// Escritura de un archivo pegado en curso (worker + canal de resultado).
@@ -553,6 +558,24 @@ impl NaygoApp {
             config::save_settings(&config_dir, &settings);
         }
 
+        // Detectar render por software (VM/equipo sin GPU): eframe usa wgpu por defecto.
+        // El adapter dice su `device_type`: `Cpu` = rasterizador por software. Como red de
+        // seguridad, también miramos el NOMBRE (WARP/llvmpipe a veces reportan otro tipo).
+        // Sin render state wgpu (caso raro) asumimos GPU (false).
+        let software_render = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|rs| {
+                let info = rs.adapter.get_info();
+                tracing::info!(
+                    adapter = %info.name, device_type = ?info.device_type,
+                    "adapter wgpu detectado"
+                );
+                info.device_type == eframe::wgpu::DeviceType::Cpu
+                    || naygo_core::render_hint::is_software_renderer(&info.name)
+            })
+            .unwrap_or(false);
+
         let (workspace, workspace_recovered) = load_or_default_workspace(&config_dir, &home);
         let dock_state = crate::dock_translate::to_dock_state(&workspace.layout);
         // Aviso de recuperación (config corrupta respaldada) en la barra de estado.
@@ -694,6 +717,8 @@ impl NaygoApp {
             hwnd,
             native_menu_request: None,
             egui_ctx: cc.egui_ctx.clone(),
+            software_render,
+            show_welcome: !settings_exists,
         };
         app.start_all_listings();
 
@@ -3316,6 +3341,16 @@ impl NaygoApp {
         self.schedule_scroll_to_active_focus();
     }
 
+    /// ¿El modo de bajo consumo está activo? `Always`/`Never` mandan; `Auto` sigue al
+    /// renderer detectado (ON si es por software).
+    fn low_power_active(&self) -> bool {
+        match self.settings.low_power_mode {
+            naygo_core::config::LowPowerMode::Always => true,
+            naygo_core::config::LowPowerMode::Never => false,
+            naygo_core::config::LowPowerMode::Auto => self.software_render,
+        }
+    }
+
     /// Filas visibles del panel activo (tamaño de página de AvPag/RePag): el valor medido
     /// el frame anterior, o 20 como fallback razonable mientras no hay dato.
     fn active_page_rows(&self) -> usize {
@@ -3680,6 +3715,19 @@ impl eframe::App for NaygoApp {
             ctx.request_repaint();
             return;
         }
+        // Modo de bajo consumo: apagar las animaciones de egui (los fades de hover/
+        // selección disparan ráfagas de repaints por interacción). Idempotente y barato:
+        // solo setea un campo del estilo. El hover a 30fps (más abajo) aplica a todos.
+        let anim = if self.low_power_active() {
+            0.0
+        } else {
+            0.083_333_336
+        };
+        ctx.global_style_mut(|s| {
+            if s.animation_time != anim {
+                s.animation_time = anim;
+            }
+        });
         self.pump_all();
         self.pump_tree();
         self.pump_ops();
@@ -3735,7 +3783,9 @@ impl eframe::App for NaygoApp {
         let pointer_moving =
             ctx.input(|i| i.pointer.is_moving() && i.pointer.interact_pos().is_some());
         if pointer_moving {
-            ctx.request_repaint();
+            // ~30fps en vez de 60: la fila bajo el cursor se resalta con fluidez a la mitad
+            // del costo (imperceptible, beneficia con y sin GPU).
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
 
         // Espejar el setting "nuevos al final" en cada panel: una sola definición de
@@ -4256,6 +4306,21 @@ impl eframe::App for NaygoApp {
             let ctx = ui.ctx().clone();
             self.process_resume_dialog(&ctx);
             ui.ctx().request_repaint();
+        }
+
+        // Bienvenida del primer arranque: elegir el modo de consumo. Una vez elegido, se
+        // baja el flag y se persiste (el watcher de settings ya guarda al cambiar, pero lo
+        // forzamos para que quede aunque la app se cierre antes del próximo guardado).
+        if self.show_welcome {
+            let ctx2 = ui.ctx().clone();
+            if let Some(mode) = crate::welcome::show(&ctx2, &self.i18n, &self.active_theme) {
+                self.settings.low_power_mode = mode;
+                self.show_welcome = false;
+                config::save_settings(&self.config_dir, &self.settings);
+                self.last_saved_settings = self.settings.clone();
+            } else {
+                ui.ctx().request_repaint();
+            }
         }
     }
 
