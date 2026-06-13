@@ -1,12 +1,51 @@
-// Naygo — ventana principal (Slint). Copyright (c) 2026 Nicolás Groth / ISGroth. MIT.
+// Naygo — ventana principal (Slint, Fase 1). Copyright (c) 2026 N. Groth / ISGroth. MIT.
 import { RowData } from "types.slint";
+import { PathBar } from "path-bar.slint";
+import { FilePanel } from "file-panel.slint";
 
 export component AppWindow inherits Window {
     title: "Naygo";
     preferred-width: 1000px;
     preferred-height: 640px;
-    // RowData se usa en la ListView en la Tarea 4; aquí se importa para que
-    // slint::include_modules!() lo exponga a Rust.
+
+    in property <string> current-path;
     in property <[RowData]> rows;
-    Text { text: "Naygo (Slint) — Fase 1"; }
+    in property <length> panel-scroll-y;
+    callback go-up();
+    callback row-clicked(int);
+    callback row-double-clicked(int);
+    callback sort-by(string);
+    callback key(string, bool, bool, bool);
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        PathBar {
+            path: root.current-path;
+            go-up => {
+                root.go-up();
+            }
+        }
+        panel := FilePanel {
+            rows: root.rows;
+            scroll-y: root.panel-scroll-y;
+            row-clicked(i) => {
+                root.row-clicked(i);
+            }
+            row-double-clicked(i) => {
+                root.row-double-clicked(i);
+            }
+            sort-by(col) => {
+                root.sort-by(col);
+            }
+            key(t, c, s, a) => {
+                root.key(t, c, s, a);
+            }
+        }
+    }
+
+    // Pedir el foco del panel al iniciar (el teclado va al FocusScope).
+    init => {
+        panel.focus();
+    }
 }
