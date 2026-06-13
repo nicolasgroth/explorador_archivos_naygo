@@ -93,24 +93,37 @@ impl Controller {
         }
     }
 
-    /// Doble clic: carpeta navega; archivo abre con la app por defecto. Devuelve la
-    /// carpeta a la que navegar (para que el caller arranque el listado), si aplica.
-    pub fn on_row_double_clicked(&mut self, pos: usize) -> Option<std::path::PathBuf> {
+    /// Doble clic: carpeta navega (y ARRANCA su listado); archivo abre con la app por
+    /// defecto. Devuelve `true` si se navegó (para que el caller encienda el timer del
+    /// listado). El listado se arranca aquí mismo —junto al cambio de carpeta— para que
+    /// `current_dir` y el `Listing` activo NUNCA se desincronicen.
+    pub fn on_row_double_clicked(&mut self, pos: usize) -> bool {
         let view = self.pane.view_indices();
-        let real = *view.get(pos)?;
-        let e = self.pane.entries.get(real)?.clone();
+        let Some(&real) = view.get(pos) else {
+            return false;
+        };
+        let Some(e) = self.pane.entries.get(real).cloned() else {
+            return false;
+        };
         if e.kind == EntryKind::Directory {
             self.pane.navigate_to(e.path.clone());
-            Some(e.path)
+            self.start_listing(e.path);
+            true
         } else {
             let _ = naygo_platform::open::open_default(&e.path);
-            None
+            false
         }
     }
 
-    /// Subir al padre. Devuelve la carpeta a listar, si hay padre.
-    pub fn on_go_up(&mut self) -> Option<std::path::PathBuf> {
-        self.pane.go_up()
+    /// Subir al padre (y ARRANCA su listado). Devuelve `true` si se movió.
+    pub fn on_go_up(&mut self) -> bool {
+        match self.pane.go_up() {
+            Some(dir) => {
+                self.start_listing(dir);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Clic en encabezado: ordenar por esa columna (alterna asc/desc si ya era esa).
@@ -132,108 +145,63 @@ impl Controller {
         naygo_core::sort::sort_entries(&mut self.pane.entries, &spec);
     }
 
-    /// Tecla: resuelve via keymap y aplica la accion navegable de Fase 1. Devuelve la
-    /// carpeta a listar si la accion navegó (GoUp/Activate sobre carpeta).
-    pub fn on_key(
-        &mut self,
-        text: &str,
-        ctrl: bool,
-        shift: bool,
-        alt: bool,
-    ) -> Option<std::path::PathBuf> {
+    /// Tecla: resuelve via keymap y aplica la accion navegable de Fase 1. Devuelve `true`
+    /// si la accion NAVEGÓ (GoUp/Activate sobre carpeta) y arrancó un listado, para que el
+    /// caller encienda el timer.
+    pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         // Recordar los modificadores para el Ctrl/Shift+clic.
         self.ctrl_down = ctrl;
         self.shift_down = shift;
 
         let Some(chord) = crate::keys::chord_from(text, ctrl, shift, alt) else {
-            return self.typeahead(text);
+            self.typeahead(text);
+            return false;
         };
         let Some(action) = self.keymap.action_for(&chord) else {
-            return self.typeahead(text);
+            self.typeahead(text);
+            return false;
         };
         self.typeahead.clear();
         match action {
-            Action::MoveUp => {
-                self.pane.move_focus_extend(-1, false);
-                None
-            }
-            Action::MoveDown => {
-                self.pane.move_focus_extend(1, false);
-                None
-            }
-            Action::ExtendUp => {
-                self.pane.move_focus_extend(-1, true);
-                None
-            }
-            Action::ExtendDown => {
-                self.pane.move_focus_extend(1, true);
-                None
-            }
-            Action::FocusPageUp => {
-                self.pane.focus_page(-1, PAGE_ROWS, false);
-                None
-            }
-            Action::FocusPageDown => {
-                self.pane.focus_page(1, PAGE_ROWS, false);
-                None
-            }
-            Action::ExtendPageUp => {
-                self.pane.focus_page(-1, PAGE_ROWS, true);
-                None
-            }
-            Action::ExtendPageDown => {
-                self.pane.focus_page(1, PAGE_ROWS, true);
-                None
-            }
-            Action::FocusHome => {
-                self.pane.focus_home(false);
-                None
-            }
-            Action::FocusEnd => {
-                self.pane.focus_end(false);
-                None
-            }
-            Action::ExtendHome => {
-                self.pane.focus_home(true);
-                None
-            }
-            Action::ExtendEnd => {
-                self.pane.focus_end(true);
-                None
-            }
-            Action::FocusUpKeep => {
-                self.pane.move_focus_keep(-1);
-                None
-            }
-            Action::FocusDownKeep => {
-                self.pane.move_focus_keep(1);
-                None
-            }
+            Action::MoveUp => self.pane.move_focus_extend(-1, false),
+            Action::MoveDown => self.pane.move_focus_extend(1, false),
+            Action::ExtendUp => self.pane.move_focus_extend(-1, true),
+            Action::ExtendDown => self.pane.move_focus_extend(1, true),
+            Action::FocusPageUp => self.pane.focus_page(-1, PAGE_ROWS, false),
+            Action::FocusPageDown => self.pane.focus_page(1, PAGE_ROWS, false),
+            Action::ExtendPageUp => self.pane.focus_page(-1, PAGE_ROWS, true),
+            Action::ExtendPageDown => self.pane.focus_page(1, PAGE_ROWS, true),
+            Action::FocusHome => self.pane.focus_home(false),
+            Action::FocusEnd => self.pane.focus_end(false),
+            Action::ExtendHome => self.pane.focus_home(true),
+            Action::ExtendEnd => self.pane.focus_end(true),
+            Action::FocusUpKeep => self.pane.move_focus_keep(-1),
+            Action::FocusDownKeep => self.pane.move_focus_keep(1),
             Action::ToggleSelect | Action::ToggleFocused => {
                 if let Some(p) = self.pane.focused {
                     self.pane.select_toggle(p);
                 }
-                None
             }
-            Action::SelectAll => {
-                self.pane.select_all();
-                None
-            }
-            Action::GoUp => self.on_go_up(),
+            Action::SelectAll => self.pane.select_all(),
+            Action::GoUp => return self.on_go_up(),
             Action::Activate => {
-                let pos = self.pane.focused?;
-                self.on_row_double_clicked(pos)
+                if let Some(pos) = self.pane.focused {
+                    return self.on_row_double_clicked(pos);
+                }
             }
             // Resto de acciones (Copy/Cut/Paste/Delete/Rename/…): NO-OP en F1; se conectan
             // en F3. No se pierden del keymap, solo aún no tienen efecto.
-            _ => None,
+            _ => {}
         }
+        false
     }
 
     /// Salto por tipeo: primer item de la vista cuyo nombre empieza con lo tecleado
     /// (case-insensitive). El buffer se limpia ante una accion del keymap.
-    fn typeahead(&mut self, text: &str) -> Option<std::path::PathBuf> {
-        let ch = text.chars().next().filter(|c| !c.is_control())?;
+    fn typeahead(&mut self, text: &str) {
+        let Some(ch) = text.chars().next().filter(|c| !c.is_control()) else {
+            return;
+        };
         self.typeahead.push(ch.to_ascii_lowercase());
         let view = self.pane.view_indices();
         let needle = self.typeahead.clone();
@@ -245,7 +213,6 @@ impl Controller {
                 }
             }
         }
-        None
     }
 
     /// Offset de scroll (px) para que la fila enfocada quede visible. El caller lo aplica a
@@ -256,5 +223,77 @@ impl Controller {
             Some(p) => -(p as f32) * ROW_HEIGHT,
             None => 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drena el listado en curso hasta que termina (con timeout duro), simulando los ticks
+    /// del Timer. Devuelve true si terminó.
+    fn drain_until_done(c: &mut Controller) -> bool {
+        for _ in 0..2000 {
+            if c.pump_listing() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// REGRESIÓN: al navegar a otra carpeta, el listado de ESA carpeta debe arrancar y
+    /// poblar la vista (el bug era que navigate_to limpiaba entries pero nadie relanzaba
+    /// el listado → quedaba vacío). Usa un tempdir con un archivo conocido.
+    #[test]
+    fn navegar_a_carpeta_repuebla_la_vista() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Subcarpeta "sub" con un archivo dentro.
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("dentro.txt"), b"hola").unwrap();
+
+        // Arrancar el controller en el tempdir y completar su listado inicial.
+        let mut c = Controller::new(tmp.path().to_path_buf());
+        assert!(drain_until_done(&mut c), "el listado inicial debe terminar");
+        // La vista del tempdir contiene "sub".
+        let pos_sub = c
+            .pane
+            .view_indices()
+            .iter()
+            .position(|&real| c.pane.entries[real].name == "sub")
+            .expect("'sub' debe aparecer en el tempdir");
+
+        // Doble clic en "sub" → debe navegar Y arrancar el listado de sub.
+        assert!(
+            c.on_row_double_clicked(pos_sub),
+            "doble clic en carpeta navega"
+        );
+        assert!(c.listing.is_some(), "navegar arranca un listado nuevo");
+        assert!(drain_until_done(&mut c), "el listado de sub debe terminar");
+
+        // La vista AHORA refleja el contenido de sub (no quedó vacía: ESE era el bug).
+        let rows = c.rows();
+        assert!(
+            rows.iter().any(|r| r.name == "dentro.txt"),
+            "tras navegar, la vista muestra el contenido de la carpeta (no vacía)"
+        );
+    }
+
+    /// Subir al padre también repuebla la vista.
+    #[test]
+    fn subir_al_padre_repuebla_la_vista() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(tmp.path().join("raiz.txt"), b"x").unwrap();
+
+        let mut c = Controller::new(sub.clone());
+        assert!(drain_until_done(&mut c));
+        assert!(c.on_go_up(), "hay padre, debe subir");
+        assert!(drain_until_done(&mut c));
+        let rows = c.rows();
+        assert!(rows.iter().any(|r| r.name == "raiz.txt"));
+        assert!(rows.iter().any(|r| r.name == "sub"));
     }
 }

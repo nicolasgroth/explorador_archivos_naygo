@@ -3614,6 +3614,7 @@ dependencies = [
  "naygo-platform",
  "slint",
  "slint-build",
+ "tempfile",
 ]
 
 [[package]]

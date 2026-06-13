@@ -73,11 +73,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh.clone();
         let start_timer = start_timer.clone();
         ui.on_row_double_clicked(move |i| {
-            if ctrl
-                .borrow_mut()
-                .on_row_double_clicked(i as usize)
-                .is_some()
-            {
+            if ctrl.borrow_mut().on_row_double_clicked(i as usize) {
                 start_timer();
             }
             refresh();
@@ -96,7 +92,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh.clone();
         let start_timer = start_timer.clone();
         ui.on_go_up(move || {
-            if ctrl.borrow_mut().on_go_up().is_some() {
+            if ctrl.borrow_mut().on_go_up() {
                 start_timer();
             }
             refresh();
@@ -115,7 +111,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh.clone();
         let start_timer = start_timer.clone();
         ui.on_key(move |text, c, s, a| {
-            if ctrl.borrow_mut().on_key(text.as_str(), c, s, a).is_some() {
+            if ctrl.borrow_mut().on_key(text.as_str(), c, s, a) {
                 start_timer();
             }
             refresh();
