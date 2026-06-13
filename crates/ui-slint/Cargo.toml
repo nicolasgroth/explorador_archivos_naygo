@@ -1,0 +1,25 @@
+# Naygo — capa UI en Slint (render por software, sin GPU). Convive con naygo-ui (egui)
+# durante la migracion. Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+[package]
+name = "naygo-ui-slint"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "naygo-slint"
+path = "src/main.rs"
+
+[dependencies]
+naygo-core = { path = "../core" }
+naygo-platform = { path = "../platform" }
+slint = { version = "1.16", default-features = false, features = [
+    "compat-1-2",
+    "std",
+    "backend-winit",
+    "renderer-software",
+] }
+
+[build-dependencies]
+slint-build = "1.16"
