@@ -5,6 +5,7 @@
 // transitoriamente; la Tarea 5 conecta todo y deja el crate sin código muerto.
 #![allow(dead_code)]
 mod bridge;
+mod keys;
 
 slint::include_modules!();
 
