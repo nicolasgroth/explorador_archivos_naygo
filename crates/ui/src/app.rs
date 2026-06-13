@@ -3762,6 +3762,11 @@ impl eframe::App for NaygoApp {
         if !self.any_op_active() {
             self.update_selection_status();
         }
+        // Mientras un worker está activo (listar, listar árbol, operación, pegar, discos,
+        // tamaños), la UI debe repintar para mostrar el progreso/streaming. Pero NO a
+        // 60fps a tope: eso satura un núcleo bajo render por software (VM sin GPU) durante
+        // todo el listado de una carpeta grande. ~30fps muestra el streaming igual de fluido
+        // a la mitad del costo (mismo criterio que el hover).
         if self.any_listing_active()
             || self.any_tree_listing_active()
             || self.any_op_active()
@@ -3769,7 +3774,7 @@ impl eframe::App for NaygoApp {
             || self.disk_rx.is_some()
             || !self.size_jobs.is_empty()
         {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
         // Los watchers de carpeta y el de dispositivos DESPIERTAN la UI por evento (su
         // worker llama `request_repaint` vía el waker). Por eso NO hay latido de polling
