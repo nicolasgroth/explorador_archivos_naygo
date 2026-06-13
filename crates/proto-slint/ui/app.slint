@@ -1,0 +1,92 @@
+// Naygo — PROTOTIPO Slint: UI mínima de medición (lista de archivos navegable).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+
+import { ListView } from "std-widgets.slint";
+
+// Una fila de la lista (espejo de lo que el lado Rust empuja desde naygo-core).
+export struct RowData {
+    name: string,
+    ext: string,
+    is-dir: bool,
+}
+
+export component AppWindow inherits Window {
+    title: "Naygo (proto Slint)";
+    preferred-width: 900px;
+    preferred-height: 600px;
+
+    // Estado expuesto a Rust.
+    in property <string> current-path: "";
+    in property <[RowData]> rows;
+    // Doble clic en una fila: Rust navega (si es carpeta).
+    callback row-activated(int);
+    callback go-up();
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+
+        // Barra de ruta + botón subir.
+        HorizontalLayout {
+            spacing: 6px;
+            height: 28px;
+            Rectangle {
+                width: 36px;
+                background: touch-up.pressed ? #2a4a7a : (touch-up.has-hover ? #234 : #1b2838);
+                border-radius: 4px;
+                Text { text: "↑"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                touch-up := TouchArea { clicked => { root.go-up(); } }
+            }
+            Rectangle {
+                background: #1b2838;
+                border-radius: 4px;
+                Text {
+                    text: root.current-path;
+                    color: #cdd;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    x: 8px;
+                }
+            }
+        }
+
+        // Encabezado de columnas (estático; el resize real lo evaluamos luego).
+        HorizontalLayout {
+            height: 22px;
+            padding-left: 8px;
+            Text { text: "Nombre"; color: #9ab; font-weight: 700; width: 60%; }
+            Text { text: "Extensión"; color: #9ab; font-weight: 700; }
+        }
+
+        // Lista VIRTUALIZADA: ListView solo materializa las filas visibles, clave para
+        // carpetas grandes. Cada fila resalta al pasar el mouse (hover) — el caso que
+        // disparaba el consumo en egui; aquí medimos si el modo retenido lo evita.
+        ListView {
+            for row[i] in root.rows: Rectangle {
+                height: 22px;
+                background: row-touch.has-hover ? #1f3350 : transparent;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    spacing: 4px;
+                    Text {
+                        text: (row.is-dir ? "📁 " : "") + row.name;
+                        color: row.is-dir ? #ffd479 : #dde;
+                        vertical-alignment: center;
+                        width: 60%;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.ext;
+                        color: #9ab;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                row-touch := TouchArea {
+                    // Doble clic navega; clic simple solo resalta (lo maneja el hover).
+                    double-clicked => { root.row-activated(i); }
+                }
+            }
+        }
+    }
+}

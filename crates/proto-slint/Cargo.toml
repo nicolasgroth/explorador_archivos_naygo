@@ -1,0 +1,30 @@
+# Naygo — PROTOTIPO de medición: UI mínima en Slint con renderizador por SOFTWARE.
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+#
+# NO es parte del producto: es un experimento para medir el consumo de CPU de Slint
+# (modo retenido + software renderer) en una VM sin GPU, antes de decidir reescribir
+# la capa ui. Usa el motor real (naygo-core) para listar carpetas.
+[package]
+name = "naygo-proto-slint"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "naygo-proto-slint"
+path = "src/main.rs"
+
+[dependencies]
+naygo-core = { path = "../core" }
+# Renderizador por software (sin GPU) + backend winit. `renderer-software` es la clave
+# para el caso "sin tarjeta gráfica"; `backend-winit` da la ventana en Windows.
+slint = { version = "1.16", default-features = false, features = [
+    "compat-1-2",
+    "std",
+    "backend-winit",
+    "renderer-software",
+] }
+
+[build-dependencies]
+slint-build = "1.16"

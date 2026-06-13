@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/platform", "crates/ui"]
+members = ["crates/core", "crates/platform", "crates/ui", "crates/proto-slint"]
 
 [workspace.package]
 version = "0.1.0"
