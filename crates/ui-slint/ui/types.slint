@@ -8,3 +8,25 @@ export struct RowData {
     selected: bool,
     focused: bool,
 }
+
+// Un panel colocado: su id + rect (px) + filas + ruta + si es el activo.
+export struct PaneVm {
+    id: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    path: string,
+    rows: [RowData],
+    active: bool,
+}
+
+// Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
+export struct SplitVm {
+    index: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    horizontal: bool,
+}

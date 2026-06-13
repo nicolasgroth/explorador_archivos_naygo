@@ -1,5 +1,5 @@
-// Naygo — ventana principal (Slint, Fase 1). Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData } from "types.slint";
+// Naygo — ventana principal (Slint, Fase 2a: multi-panel). Copyright (c) 2026 N. Groth / ISGroth. MIT.
+import { RowData, PaneVm, SplitVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 
@@ -8,44 +8,87 @@ export component AppWindow inherits Window {
     preferred-width: 1000px;
     preferred-height: 640px;
 
-    in property <string> current-path;
-    in property <[RowData]> rows;
-    in property <length> panel-scroll-y;
+    in property <string> active-path;
+    in property <[PaneVm]> panes;
+    in property <[SplitVm]> splits;
     callback go-up();
-    callback row-clicked(int);
-    callback row-double-clicked(int);
-    callback sort-by(string);
+    callback add-pane();
+    callback row-clicked(int, int);
+    callback row-double-clicked(int, int);
+    callback sort-by(int, string);
+    callback activate(int);
     callback key(string, bool, bool, bool);
+    callback split-drag(int, length, length);
+
+    // Alto de la barra superior (path-bar + botones). El área de contenido es el resto.
+    property <length> top-bar-h: 34px;
+    // Área de contenido que Rust usa para repartir los paneles (sin padding global aquí:
+    // el contenido empieza en 0,0 dentro de `content`).
+    out property <length> content-w: content.width;
+    out property <length> content-h: content.height;
 
     VerticalLayout {
-        padding: 6px;
-        spacing: 4px;
-        PathBar {
-            path: root.current-path;
-            go-up => {
-                root.go-up();
+        padding: 0px;
+        // Barra superior: path del panel activo + subir + agregar panel.
+        Rectangle {
+            height: root.top-bar-h;
+            background: #141d2b;
+            HorizontalLayout {
+                padding: 4px;
+                spacing: 6px;
+                Rectangle {
+                    width: 30px;
+                    background: up-touch.has-hover ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "↑"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    up-touch := TouchArea { clicked => { root.go-up(); } }
+                }
+                Rectangle {
+                    width: 30px;
+                    background: add-touch.has-hover ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "+"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    add-touch := TouchArea { clicked => { root.add-pane(); } }
+                }
+                Rectangle {
+                    background: #1b2838;
+                    border-radius: 4px;
+                    Text { text: root.active-path; color: #cdd; vertical-alignment: center; x: 8px; }
+                }
             }
         }
-        panel := FilePanel {
-            rows: root.rows;
-            scroll-y: root.panel-scroll-y;
-            row-clicked(i) => {
-                root.row-clicked(i);
+        // Zona de contenido: paneles posicionados absolutamente + barras de splitter.
+        content := Rectangle {
+            background: #0e1622;
+            // Paneles (posición/tamaño calculados en Rust).
+            for p in root.panes: FilePanel {
+                x: p.x;
+                y: p.y;
+                width: p.w;
+                height: p.h;
+                pane-id: p.id;
+                active: p.active;
+                rows: p.rows;
+                row-clicked(id, pos) => { root.row-clicked(id, pos); }
+                row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                sort-by(id, col) => { root.sort-by(id, col); }
+                activate(id) => { root.activate(id); }
+                key(t, c, s, a) => { root.key(t, c, s, a); }
             }
-            row-double-clicked(i) => {
-                root.row-double-clicked(i);
-            }
-            sort-by(col) => {
-                root.sort-by(col);
-            }
-            key(t, c, s, a) => {
-                root.key(t, c, s, a);
+            // Barras de splitter arrastrables.
+            for s in root.splits: Rectangle {
+                x: s.x;
+                y: s.y;
+                width: s.w;
+                height: s.h;
+                background: sp-touch.has-hover || sp-touch.pressed ? #4f8ae0 : #2a3a52;
+                sp-touch := TouchArea {
+                    mouse-cursor: s.horizontal ? ew-resize : ns-resize;
+                    moved => {
+                        root.split-drag(s.index, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+                    }
+                }
             }
         }
-    }
-
-    // Pedir el foco del panel al iniciar (el teclado va al FocusScope).
-    init => {
-        panel.focus();
     }
 }
