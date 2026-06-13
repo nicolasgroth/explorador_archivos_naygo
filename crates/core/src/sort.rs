@@ -13,7 +13,7 @@ pub fn sort_entries(entries: &mut [Entry], spec: &SortSpec) {
 }
 
 /// Comparador de dos entries bajo un `SortSpec`. Público para que la VISTA por
-/// índices (`view_indices_ordered`) ordene igual que `sort_entries`: UNA sola
+/// índices (`compute_view_indices`) ordene igual que `sort_entries`: UNA sola
 /// definición del orden para UI, foco y teclado.
 pub fn cmp_entries(a: &Entry, b: &Entry, spec: &SortSpec) -> std::cmp::Ordering {
     {

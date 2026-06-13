@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 /// Estado de un panel de archivos. Lo serializable se persiste; `entries` no
 /// (se re-lista al abrir) y `history` tampoco (arranca limpio cada sesión).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FilePaneState {
     pub current_dir: PathBuf,
     pub entries: Vec<Entry>,
@@ -37,6 +37,43 @@ pub struct FilePaneState {
     /// persiste (vive en settings.json); existe para que `view_indices` agrupe IGUAL
     /// que el render y los índices nunca se desalineen.
     pub group_new_at_end: bool,
+    /// Caché de los índices de vista (filtrados+ordenados). Recompute PEREZOSO bajo
+    /// `&self` vía `RefCell`; se invalida comparando una firma O(1) de los inputs. NO se
+    /// clona (cada panel reconstruye el suyo) ni se persiste. Efímero de presentación.
+    view_cache: std::cell::RefCell<Option<ViewCache>>,
+    /// Contador de recomputes de la vista (solo para tests; mide aciertos del caché).
+    #[cfg(test)]
+    view_recomputes: std::cell::Cell<u32>,
+}
+
+/// Caché de la vista: la firma de los inputs con que se calculó + los índices resultantes.
+#[derive(Debug)]
+struct ViewCache {
+    signature: u64,
+    indices: Vec<usize>,
+}
+
+impl Clone for FilePaneState {
+    fn clone(&self) -> Self {
+        FilePaneState {
+            current_dir: self.current_dir.clone(),
+            entries: self.entries.clone(),
+            sort: self.sort,
+            view: self.view,
+            focused: self.focused,
+            selected: self.selected.clone(),
+            anchor: self.anchor,
+            history: self.history.clone(),
+            show_dirs: self.show_dirs,
+            table: self.table.clone(),
+            highlighted: self.highlighted.clone(),
+            group_new_at_end: self.group_new_at_end,
+            // El caché NO se arrastra: el clon lo reconstruye a demanda.
+            view_cache: std::cell::RefCell::new(None),
+            #[cfg(test)]
+            view_recomputes: std::cell::Cell::new(0),
+        }
+    }
 }
 
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
@@ -73,6 +110,9 @@ impl FilePaneState {
             table: TableState::default(),
             highlighted: std::collections::HashSet::new(),
             group_new_at_end: false,
+            view_cache: std::cell::RefCell::new(None),
+            #[cfg(test)]
+            view_recomputes: std::cell::Cell::new(0),
         }
     }
 
@@ -86,18 +126,62 @@ impl FilePaneState {
         self.highlighted.clear();
     }
 
-    /// Las entries VISIBLES: las que pasan los filtros activos de la tabla, en el
-    /// orden actual de `entries` (que `pump_one` mantiene ordenado por `sort`).
-    /// Es el ÚNICO espacio de índices que usan foco/selección/teclado/activación.
-    pub fn view_indices(&self) -> Vec<usize> {
-        self.view_indices_ordered(self.group_new_at_end)
+    /// Firma O(1) de los inputs que determinan la vista. Si no cambia entre llamadas, el
+    /// caché es válido. Captura: nº de entries, sort, filtros (su hash), agrupar-al-final,
+    /// y nº de resaltadas (solo afecta el orden si `group_new_at_end`). No itera entries.
+    fn view_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.entries.len().hash(&mut h);
+        // SortSpec deriva Hash: cubre key, ascending y dirs_first.
+        self.sort.hash(&mut h);
+        // Filtros: el BTreeMap es ordenado, así que el recorrido (y el hash) es estable.
+        for (k, v) in &self.table.filters {
+            k.hash(&mut h);
+            v.hash(&mut h);
+        }
+        self.group_new_at_end.hash(&mut h);
+        // El conjunto de resaltadas solo cambia el orden si se agrupan al final.
+        if self.group_new_at_end {
+            self.highlighted.len().hash(&mut h);
+        }
+        h.finish()
     }
 
-    /// Índices de la vista: filtrada Y ORDENADA por el `sort` del panel (UNA sola
-    /// definición del orden — la misma que pinta la UI; foco/selección/teclado y
-    /// render no pueden desalinearse). Si `new_items_at_end`, las filas resaltadas
+    /// Las entries VISIBLES (índices en `entries`): filtradas y ordenadas. CACHEADO: si la
+    /// firma de los inputs no cambió desde el último cálculo, devuelve el caché (clon del
+    /// Vec, barato). Antes se recalculaba en CADA llamada (cada frame desde el panel), lo
+    /// que en carpetas grandes saturaba la CPU bajo render por software. Es el único
+    /// espacio de índices que usan foco/selección/teclado/activación/render.
+    pub fn view_indices(&self) -> Vec<usize> {
+        let sig = self.view_signature();
+        // ¿Caché válido? (misma firma). Si sí, servirlo.
+        if let Some(c) = self.view_cache.borrow().as_ref() {
+            if c.signature == sig {
+                return c.indices.clone();
+            }
+        }
+        // Recalcular, guardar y devolver.
+        let indices = self.compute_view_indices(self.group_new_at_end);
+        #[cfg(test)]
+        self.view_recomputes.set(self.view_recomputes.get() + 1);
+        *self.view_cache.borrow_mut() = Some(ViewCache {
+            signature: sig,
+            indices: indices.clone(),
+        });
+        indices
+    }
+
+    /// Acceso de TEST al contador de recomputes (cuántas veces se recalculó la vista).
+    #[cfg(test)]
+    pub fn view_recomputes_for_test(&self) -> u32 {
+        self.view_recomputes.get()
+    }
+
+    /// Cálculo CRUDO de los índices de vista (filtrar → ordenar → agrupar-al-final).
+    /// No cachea; lo invoca `view_indices`. Si `new_items_at_end`, las filas resaltadas
     /// van al final de forma ESTABLE (conservando su orden relativo).
-    pub fn view_indices_ordered(&self, new_items_at_end: bool) -> Vec<usize> {
+    fn compute_view_indices(&self, new_items_at_end: bool) -> Vec<usize> {
         let mut idx: Vec<usize> = if self.table.filters.is_empty() {
             (0..self.entries.len()).collect()
         } else {
@@ -530,8 +614,8 @@ mod tests {
         s.highlighted.insert(p("D:/x/b"));
         // Sin flag: orden natural.
         assert_eq!(s.view_indices(), vec![0, 1, 2]);
-        // Con flag: b (idx 1) al final, estable.
-        assert_eq!(s.view_indices_ordered(true), vec![0, 2, 1]);
+        // Con flag: b (idx 1) al final, estable. (Cálculo crudo, sin pasar por el caché.)
+        assert_eq!(s.compute_view_indices(true), vec![0, 2, 1]);
     }
 
     #[test]
@@ -549,6 +633,83 @@ mod tests {
         };
         s.entries = vec![mk("a"), mk("b")];
         assert_eq!(s.view_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn view_cache_reusa_y_se_invalida() {
+        let mut p = pane_n(50);
+        // 1ª llamada: calcula. 2ª sin mutar: mismo resultado y NO recalcula.
+        let a = p.view_indices();
+        assert_eq!(a.len(), 50);
+        assert_eq!(p.view_recomputes_for_test(), 1, "una sola vez");
+        let _b = p.view_indices();
+        assert_eq!(
+            p.view_recomputes_for_test(),
+            1,
+            "2ª llamada sirve del caché"
+        );
+
+        // Cambiar el sort invalida (la firma incluye el sort).
+        p.sort = crate::fs_model::SortSpec {
+            key: crate::fs_model::SortKey::Name,
+            ascending: false,
+            dirs_first: true,
+        };
+        let _c = p.view_indices();
+        assert_eq!(
+            p.view_recomputes_for_test(),
+            2,
+            "el cambio de sort recalcula"
+        );
+
+        // Agregar una entry (cambia el len) invalida.
+        p.entries.push(crate::fs_model::Entry {
+            name: "zzz.txt".into(),
+            path: std::path::PathBuf::from("C:/zzz.txt"),
+            kind: crate::fs_model::EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+        });
+        let d = p.view_indices();
+        assert_eq!(d.len(), 51);
+        assert_eq!(p.view_recomputes_for_test(), 3, "agregar entry recalcula");
+    }
+
+    #[test]
+    fn view_cache_invalida_por_filtro_y_group_flag() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        let mut p = pane_n(10);
+        let _ = p.view_indices();
+        let base = p.view_recomputes_for_test();
+        // Cambiar un filtro invalida.
+        p.table.set_filter(
+            ColumnKind::Name,
+            ColumnFilter::Text {
+                contains: "f1".into(),
+                case_sensitive: false,
+            },
+        );
+        let _ = p.view_indices();
+        assert_eq!(p.view_recomputes_for_test(), base + 1);
+        // Toggle group_new_at_end invalida.
+        p.group_new_at_end = !p.group_new_at_end;
+        let _ = p.view_indices();
+        assert_eq!(p.view_recomputes_for_test(), base + 2);
+    }
+
+    #[test]
+    fn clone_no_arrastra_cache_viejo() {
+        let p = pane_n(5);
+        let _ = p.view_indices(); // llena el caché del original
+        let mut c = p.clone();
+        // Mutar el clon y pedir su vista: debe reflejar SU estado, no el caché del original.
+        c.entries.clear();
+        assert_eq!(c.view_indices().len(), 0);
+        // El original sigue intacto.
+        assert_eq!(p.view_indices().len(), 5);
     }
 
     fn pane_n(n: usize) -> FilePaneState {

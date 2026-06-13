@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 /// Filtro de una columna, según su tipo de dato.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColumnFilter {
     /// Nombre contiene una subcadena.
     Text {

@@ -50,7 +50,7 @@ pub enum ViewMode {
 }
 
 /// Clave por la que se ordena un panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SortKey {
     Name,
     Extension,
@@ -61,7 +61,7 @@ pub enum SortKey {
 }
 
 /// Especificación de ordenamiento: por qué clave y en qué dirección.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SortSpec {
     pub key: SortKey,
     pub ascending: bool,
