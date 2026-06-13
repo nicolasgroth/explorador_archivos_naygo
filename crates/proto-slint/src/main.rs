@@ -21,9 +21,9 @@ slint::include_modules!();
 /// Lista una carpeta de forma SÍNCRONA usando el motor real (naygo-core): drena el
 /// worker hasta Done/Error. Para el prototipo basta bloquear (el producto ya hace esto
 /// async); aquí sólo nos importa medir el RENDER, no la concurrencia.
-fn list_dir(dir: &PathBuf) -> Vec<Entry> {
+fn list_dir(dir: &std::path::Path) -> Vec<Entry> {
     let token = CancellationToken::new();
-    let (rx, _handle) = spawn_listing(dir.clone(), token);
+    let (rx, _handle) = spawn_listing(dir.to_path_buf(), token);
     let mut entries = Vec::new();
     while let Ok(msg) = rx.recv() {
         match msg {
@@ -35,7 +35,8 @@ fn list_dir(dir: &PathBuf) -> Vec<Entry> {
     entries.sort_by(|a, b| {
         let da = a.kind == EntryKind::Directory;
         let db = b.kind == EntryKind::Directory;
-        db.cmp(&da).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        db.cmp(&da)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     entries
 }

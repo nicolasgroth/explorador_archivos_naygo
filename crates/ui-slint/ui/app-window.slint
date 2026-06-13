@@ -1,7 +1,12 @@
 // Naygo — ventana principal (Slint). Copyright (c) 2026 Nicolás Groth / ISGroth. MIT.
+import { RowData } from "types.slint";
+
 export component AppWindow inherits Window {
     title: "Naygo";
     preferred-width: 1000px;
     preferred-height: 640px;
+    // RowData se usa en la ListView en la Tarea 4; aquí se importa para que
+    // slint::include_modules!() lo exponga a Rust.
+    in property <[RowData]> rows;
     Text { text: "Naygo (Slint) — Fase 1"; }
 }
