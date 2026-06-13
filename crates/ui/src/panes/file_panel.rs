@@ -91,32 +91,27 @@ pub fn show(
     let sort = f.sort; // SortSpec es Copy; se lee antes de los closures
     let current_dir = f.current_dir.clone();
     let table = f.table.clone();
-    let all_entries: Vec<Entry> = f.entries.clone();
     let highlighted: std::collections::HashSet<std::path::PathBuf> = f.highlighted.clone();
 
-    // Conteo de extensiones sobre TODAS las entries actuales (no las filtradas):
-    // así el menú de filtro de tipo muestra todas las opciones disponibles.
-    let ext_counts = naygo_core::filter::extension_counts(&all_entries);
+    // Conteo de extensiones sobre TODAS las entries actuales (no las filtradas): lo usa
+    // el menú de filtro de tipo. O(n) sin allocar por entry; sobre `f.entries` directo.
+    let ext_counts = naygo_core::filter::extension_counts(&f.entries);
 
-    // Pipeline en memoria: filtrar (solo si hay filtros) → ordenar. No muta el
-    // estado del panel.
-    let mut view: Vec<Entry> = if table.filters.is_empty() {
-        all_entries.clone()
-    } else {
-        all_entries
-            .iter()
-            .filter(|e| naygo_core::filter::matches(e, &table.filters))
-            .cloned()
-            .collect()
-    };
-    naygo_core::sort::sort_entries(&mut view, &sort);
-
-    // Modo "al final": agrupar las entries resaltadas (nuevas) al final, estable.
-    // `sort_by_key` con bool es estable → primero las no resaltadas (false), luego las
-    // resaltadas (true), sin alterar el orden relativo dentro de cada grupo.
-    if new_items_at_end && !highlighted.is_empty() {
-        view.sort_by_key(|e| highlighted.contains(&e.path));
-    }
+    // Índices de la vista (filtrados+ordenados+agrupados) YA cacheados por core: NO se
+    // recalcula ni se reordena por frame (era la causa del consumo alto en carpetas
+    // grandes bajo render por software). `group_new_at_end` ya lo aplicó core.
+    let view_idx = f.view_indices();
+    // `view` que el resto de `show` consume por valor (el closure de `body.rows` corre con
+    // `&mut workspace` prestado): se materializa clonando SOLO las entries visibles, en su
+    // orden final, una vez por frame pintado (egui_extras virtualiza las filas). `i` sigue
+    // siendo "posición en la vista", consistente con foco/selección/teclado (mismo origen).
+    let view: Vec<Entry> = view_idx
+        .iter()
+        .filter_map(|&real| f.entries.get(real).cloned())
+        .collect();
+    // El orden/filtro/agrupado ya vino hecho de core; aquí no se reordena. `sort` y
+    // `new_items_at_end` se mantienen para el encabezado/indicadores de columna.
+    let _ = new_items_at_end;
 
     // ¿Mostrar la fila ".."? Solo si la opción está activa y hay carpeta padre.
     let parent = if show_parent_entry {
