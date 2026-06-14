@@ -469,6 +469,60 @@ impl WorkspaceCtrl {
         self.ws.layout.tab_groups()
     }
 
+    /// El rect de la zona de drop bajo el punto `(px, py)` (para resaltarla durante el
+    /// arrastre). `None` si el punto no cae sobre un panel o sobre el propio arrastrado.
+    pub fn drop_preview(&self, dragged: PaneId, px: f32, py: f32, area: Rect) -> Option<Rect> {
+        use naygo_core::workspace::layout::{drop_hit, drop_zones};
+        let panes = self.pane_rects(area);
+        let (target, zone) = drop_hit(&panes, px, py)?;
+        if target == dragged {
+            return None;
+        }
+        let target_rect = panes.iter().find(|(id, _)| *id == target).map(|(_, r)| *r)?;
+        drop_zones(target_rect)
+            .into_iter()
+            .find(|(z, _)| *z == zone)
+            .map(|(_, r)| r)
+    }
+
+    /// Reacomoda por arrastre: suelta el panel `dragged` en el punto `(px, py)` del área
+    /// `area`. Según la zona del panel destino: centro → apila como pestaña; borde →
+    /// divide (el arrastrado queda en ese lado). No-op si se suelta sobre sí mismo o fuera
+    /// de todo panel. Devuelve true si reacomodó.
+    pub fn perform_drop(&mut self, dragged: PaneId, px: f32, py: f32, area: Rect) -> bool {
+        use naygo_core::workspace::layout::{drop_hit, DropZone};
+        let panes = self.pane_rects(area);
+        let Some((target, zone)) = drop_hit(&panes, px, py) else {
+            return false;
+        };
+        if target == dragged {
+            return false;
+        }
+        match zone {
+            DropZone::Center => {
+                self.stack_into(dragged, target);
+            }
+            DropZone::Left | DropZone::Right | DropZone::Top | DropZone::Bottom => {
+                let dir = match zone {
+                    DropZone::Left | DropZone::Right => SplitDir::Horizontal,
+                    _ => SplitDir::Vertical,
+                };
+                // Sacar el arrastrado de su lugar y dividir el destino con él.
+                self.ws.layout.remove_leaf(dragged);
+                self.ws.layout.split_leaf(target, dir, dragged);
+                // Para Left/Top el arrastrado debe quedar PRIMERO: split_leaf lo pone
+                // segundo, así que para esos casos intercambiamos las fracciones via swap
+                // del orden (el split nuevo arranca 50/50, simétrico, así que basta con
+                // dejar al arrastrado del lado correcto: reordenamos si es Left/Top).
+                if matches!(zone, DropZone::Left | DropZone::Top) {
+                    self.ws.layout.swap_split_children(target, dragged);
+                }
+                self.ws.set_active(dragged);
+            }
+        }
+        true
+    }
+
 
     /// El usuario eligió el panel número `n` (1..9) del selector. Aplica la acción y cierra
     /// el selector. Devuelve true si arrancó listado. No-op si `n` está fuera de rango.
@@ -1209,6 +1263,65 @@ mod tests {
         assert!(c.tab_groups().is_empty());
         assert!(c.ws.pane(b).is_none(), "el panel cerrado ya no existe");
         assert!(c.ws.pane(a).is_some(), "el otro sigue");
+    }
+
+    /// Soltar un panel en el CENTRO de otro los apila como pestañas.
+    #[test]
+    fn drop_en_el_centro_apila() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        // Layout: [a | b] en 800x600. Soltar a en el centro de b.
+        let ar = area();
+        let rects = c.pane_rects(ar);
+        let b_rect = rects.iter().find(|(id, _)| *id == b).unwrap().1;
+        let (cx, cy) = (b_rect.x + b_rect.w / 2.0, b_rect.y + b_rect.h / 2.0);
+        assert!(c.perform_drop(a, cx, cy, ar));
+        // Quedan agrupados.
+        let groups = c.tab_groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0.len(), 2);
+    }
+
+    /// Soltar un panel sobre sí mismo no hace nada.
+    #[test]
+    fn drop_sobre_si_mismo_es_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        let ar = area();
+        let r = c.pane_rects(ar)[0].1;
+        assert!(!c.perform_drop(a, r.x + r.w / 2.0, r.y + r.h / 2.0, ar));
+        assert!(c.tab_groups().is_empty());
+    }
+
+    /// Soltar en un borde divide; el panel arrastrado queda en el lado correspondiente.
+    #[test]
+    fn drop_en_borde_divide() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        // Apilar primero a+b para tener un grupo, luego sacar 'a' soltándolo en un borde.
+        c.stack_into(a, b);
+        assert_eq!(c.tab_groups().len(), 1);
+        let ar = area();
+        let rects = c.pane_rects(ar);
+        // El grupo ocupa todo; soltar 'a' en el borde derecho lo separa en un split.
+        let r = rects[0].1;
+        let (px, py) = (r.x + r.w - 5.0, r.y + r.h / 2.0);
+        assert!(c.perform_drop(a, px, py, ar));
+        // Ya no hay grupo (a salió); hay dos paneles en un split.
+        assert!(c.tab_groups().is_empty());
+        assert_eq!(c.pane_rects(ar).len(), 2);
     }
 
     /// Esc (vía pick_cancel) cierra el selector sin actuar.

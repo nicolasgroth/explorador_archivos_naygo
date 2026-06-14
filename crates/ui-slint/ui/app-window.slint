@@ -95,6 +95,14 @@ export component AppWindow inherits Window {
     // Pestañas (grupos):
     callback tab-select(int);            // activar la pestaña (PaneId)
     callback tab-close(int);             // cerrar la pestaña (PaneId)
+    // Reacomodo por arrastre (drag-to-rearrange):
+    callback pane-drag-move(int, length, length); // (PaneId, x, y) en coords de contenido
+    callback pane-drag-drop(int, length, length); // soltar: recompone el layout
+    // Vista previa de la zona de drop activa (rect en coords de contenido; w/h 0 = oculta).
+    in property <length> drop-x;
+    in property <length> drop-y;
+    in property <length> drop-w;
+    in property <length> drop-h;
     // Selector numérico de panel destino (overlay 1..9):
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elegí el panel número N (clic)
@@ -195,6 +203,29 @@ export component AppWindow inherits Window {
                     select(id) => { root.tab-select(id); }
                     close(id) => { root.tab-close(id); }
                 }
+                // Grip de arrastre (esquina superior derecha): arrastra el panel para
+                // reacomodarlo (soltar en el centro de otro → pestaña; en un borde → split).
+                grip := Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    x: parent.width - self.width - 2px;
+                    y: 2px;
+                    background: grip-touch.has-hover || grip-touch.pressed ? #4f8ae0 : #1b2838aa;
+                    border-radius: 3px;
+                    Text { text: "⠿"; color: #cdd; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    grip-touch := TouchArea {
+                        moved => {
+                            // Coords absolutas en el área de contenido = origen del panel +
+                            // posición del grip dentro del panel + posición del puntero en el grip.
+                            root.pane-drag-move(p.id, p.x + grip.x + self.mouse-x, p.y + grip.y + self.mouse-y);
+                        }
+                        pointer-event(ev) => {
+                            if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.up) {
+                                root.pane-drag-drop(p.id, p.x + grip.x + self.mouse-x, p.y + grip.y + self.mouse-y);
+                            }
+                        }
+                    }
+                }
                 // Contenido del panel, debajo de la barra de pestañas (o todo el alto).
                 pane-content := Rectangle {
                     x: 0;
@@ -268,6 +299,17 @@ export component AppWindow inherits Window {
                         root.split-drag(s.index, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
                     }
                 }
+            }
+            // Vista previa de la zona de drop durante un arrastre (resaltado translúcido).
+            if root.drop-w > 0 && root.drop-h > 0: Rectangle {
+                x: root.drop-x;
+                y: root.drop-y;
+                width: root.drop-w;
+                height: root.drop-h;
+                background: #4f8ae055;
+                border-width: 2px;
+                border-color: #4f8ae0;
+                border-radius: 4px;
             }
         }
     }

@@ -70,6 +70,114 @@ pub struct SplitHandle {
     pub dir: SplitDir,
 }
 
+/// Una zona de drop al reacomodar por arrastre: dónde, sobre qué panel, cae lo arrastrado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropZone {
+    /// Apilar como pestaña en el panel destino (centro).
+    Center,
+    /// Dividir: el panel arrastrado queda a la izquierda/derecha/arriba/abajo del destino.
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Las cinco zonas de drop de un panel (centro + 4 bordes), con su rect, dado el rect del
+/// panel. El centro ocupa la franja media; los bordes, una banda de `BORDE` de ancho.
+pub fn drop_zones(pane: Rect) -> Vec<(DropZone, Rect)> {
+    // Banda de borde: 28% del lado (acotada) para que sea fácil de apuntar sin GPU.
+    let bw = (pane.w * 0.28).min(pane.w / 2.0);
+    let bh = (pane.h * 0.28).min(pane.h / 2.0);
+    vec![
+        (
+            DropZone::Left,
+            Rect {
+                x: pane.x,
+                y: pane.y,
+                w: bw,
+                h: pane.h,
+            },
+        ),
+        (
+            DropZone::Right,
+            Rect {
+                x: pane.x + pane.w - bw,
+                y: pane.y,
+                w: bw,
+                h: pane.h,
+            },
+        ),
+        (
+            DropZone::Top,
+            Rect {
+                x: pane.x,
+                y: pane.y,
+                w: pane.w,
+                h: bh,
+            },
+        ),
+        (
+            DropZone::Bottom,
+            Rect {
+                x: pane.x,
+                y: pane.y + pane.h - bh,
+                w: pane.w,
+                h: bh,
+            },
+        ),
+        // El centro va al final: tiene prioridad al hacer hit-test desde adentro.
+        (
+            DropZone::Center,
+            Rect {
+                x: pane.x + bw,
+                y: pane.y + bh,
+                w: (pane.w - 2.0 * bw).max(0.0),
+                h: (pane.h - 2.0 * bh).max(0.0),
+            },
+        ),
+    ]
+}
+
+/// Resuelve sobre qué panel y zona cae el punto `(px, py)`, dados los rects de los paneles.
+/// Devuelve (PaneId destino, zona). Prioriza el CENTRO si el punto cae en él; si no, el
+/// borde correspondiente. `None` si el punto no está sobre ningún panel.
+pub fn drop_hit(panes: &[(PaneId, Rect)], px: f32, py: f32) -> Option<(PaneId, DropZone)> {
+    for (id, r) in panes {
+        if px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h {
+            continue;
+        }
+        // Distancia a cada borde; el menor define la zona, salvo que esté en el centro.
+        let zones = drop_zones(*r);
+        // El centro es la última; si el punto cae en su rect, gana.
+        if let Some((_, center)) = zones.iter().find(|(z, _)| *z == DropZone::Center) {
+            if px >= center.x
+                && px < center.x + center.w
+                && py >= center.y
+                && py < center.y + center.h
+            {
+                return Some((*id, DropZone::Center));
+            }
+        }
+        // Si no, el borde más cercano.
+        let dl = px - r.x;
+        let dr = (r.x + r.w) - px;
+        let dt = py - r.y;
+        let db = (r.y + r.h) - py;
+        let min = dl.min(dr).min(dt).min(db);
+        let zone = if min == dl {
+            DropZone::Left
+        } else if min == dr {
+            DropZone::Right
+        } else if min == dt {
+            DropZone::Top
+        } else {
+            DropZone::Bottom
+        };
+        return Some((*id, zone));
+    }
+    None
+}
+
 impl SerializableDockLayout {
     /// Disposición vacía (sin paneles).
     pub fn empty() -> Self {
@@ -179,6 +287,44 @@ impl SerializableDockLayout {
             collect_groups(root, &mut out);
         }
         out
+    }
+
+    /// Intercambia los dos hijos del split cuyo primer subárbol contiene a `a` y el segundo
+    /// a `b` (o viceversa). Sirve para colocar un panel recién dividido del lado opuesto
+    /// (drop a la izquierda/arriba). No-op si no hay un split que separe a `a` de `b`.
+    pub fn swap_split_children(&mut self, a: PaneId, b: PaneId) {
+        if let Some(root) = self.root.as_mut() {
+            swap_children_in(root, a, b);
+        }
+    }
+}
+
+/// Busca el split que separa `a` de `b` (uno en cada subárbol) e intercambia sus hijos.
+fn swap_children_in(node: &mut DockNode, a: PaneId, b: PaneId) -> bool {
+    if let DockNode::Split { first, second, .. } = node {
+        let fa = subtree_contains(first, a);
+        let fb = subtree_contains(first, b);
+        let sa = subtree_contains(second, a);
+        let sb = subtree_contains(second, b);
+        // Este es el split que los separa (a en uno, b en el otro).
+        if (fa && sb) || (fb && sa) {
+            std::mem::swap(first, second);
+            return true;
+        }
+        // Si no, bajar al subárbol que contenga ambos.
+        return swap_children_in(first, a, b) || swap_children_in(second, a, b);
+    }
+    false
+}
+
+/// `true` si el subárbol `node` contiene la hoja/miembro `id`.
+fn subtree_contains(node: &DockNode, id: PaneId) -> bool {
+    match node {
+        DockNode::Leaf(leaf) => *leaf == id,
+        DockNode::Tabs { members, .. } => members.contains(&id),
+        DockNode::Split { first, second, .. } => {
+            subtree_contains(first, id) || subtree_contains(second, id)
+        }
     }
 }
 
@@ -747,6 +893,55 @@ mod tests {
         } else {
             panic!("la raíz debe ser un split");
         }
+    }
+
+    #[test]
+    fn drop_hit_centro_y_bordes() {
+        let panes = vec![(
+            PaneId(1),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
+        )];
+        // Centro (50,50) → Center.
+        assert_eq!(drop_hit(&panes, 50.0, 50.0), Some((PaneId(1), DropZone::Center)));
+        // Cerca del borde izquierdo (5,50) → Left.
+        assert_eq!(drop_hit(&panes, 5.0, 50.0), Some((PaneId(1), DropZone::Left)));
+        // Cerca del borde superior (50,5) → Top.
+        assert_eq!(drop_hit(&panes, 50.0, 5.0), Some((PaneId(1), DropZone::Top)));
+        // Cerca del borde derecho (95,50) → Right.
+        assert_eq!(drop_hit(&panes, 95.0, 50.0), Some((PaneId(1), DropZone::Right)));
+        // Fuera de todo panel → None.
+        assert_eq!(drop_hit(&panes, 200.0, 200.0), None);
+    }
+
+    #[test]
+    fn drop_hit_elige_el_panel_correcto() {
+        let panes = vec![
+            (
+                PaneId(1),
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+            (
+                PaneId(2),
+                Rect {
+                    x: 100.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            ),
+        ];
+        // Punto en el segundo panel, al centro.
+        assert_eq!(drop_hit(&panes, 150.0, 50.0), Some((PaneId(2), DropZone::Center)));
     }
 
     #[test]

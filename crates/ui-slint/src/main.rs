@@ -613,6 +613,49 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        // Durante el arrastre: resaltar la zona de drop bajo el puntero.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let area_of = area_of.clone();
+        ui.on_pane_drag_move(move |id, x, y| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let area = area_of();
+            let preview = ctrl
+                .borrow()
+                .drop_preview(PaneId(id as u64), x, y, area);
+            match preview {
+                Some(r) => {
+                    ui.set_drop_x(r.x);
+                    ui.set_drop_y(r.y);
+                    ui.set_drop_w(r.w);
+                    ui.set_drop_h(r.h);
+                }
+                None => {
+                    ui.set_drop_w(0.0);
+                    ui.set_drop_h(0.0);
+                }
+            }
+        });
+    }
+    {
+        // Al soltar: recomponer el layout y limpiar el resaltado.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let sync_layout = sync_layout.clone();
+        let area_of = area_of.clone();
+        ui.on_pane_drag_drop(move |id, x, y| {
+            let area = area_of();
+            ctrl.borrow_mut().perform_drop(PaneId(id as u64), x, y, area);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_drop_w(0.0);
+                ui.set_drop_h(0.0);
+            }
+            sync_layout();
+        });
+    }
+    {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
