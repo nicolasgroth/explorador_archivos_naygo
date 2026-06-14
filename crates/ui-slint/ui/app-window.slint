@@ -19,6 +19,9 @@ export component AppWindow inherits Window {
     callback activate(int);
     callback key(string, bool, bool, bool);
     callback split-drag(int, length, length);
+    // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
+    // Rust reparta los paneles aun en reposo (con el timer apagado).
+    callback content-resized();
 
     // Alto de la barra superior (path-bar + botones). El área de contenido es el resto.
     property <length> top-bar-h: 34px;
@@ -26,6 +29,9 @@ export component AppWindow inherits Window {
     // el contenido empieza en 0,0 dentro de `content`).
     out property <length> content-w: content.width;
     out property <length> content-h: content.height;
+    // Avisa a Rust cuando cambia el tamaño del área de contenido (resize de ventana).
+    changed content-w => { root.content-resized(); }
+    changed content-h => { root.content-resized(); }
 
     VerticalLayout {
         padding: 0px;
