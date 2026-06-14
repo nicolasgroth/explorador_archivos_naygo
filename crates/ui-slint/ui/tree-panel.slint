@@ -42,9 +42,11 @@ export component TreePanel inherits Rectangle {
                     Rectangle {
                         width: 16px;
                         Text {
-                            text: n.has-children ? (n.expanded ? "▼" : "▶") : "";
+                            // El renderizador por software no dibuja flechas/triángulos
+                            // Unicode: usamos +/− (colapsado/expandido) que sí se ven.
+                            text: n.has-children ? (n.expanded ? "−" : "+") : "";
                             color: #9ab;
-                            font-size: 10px;
+                            font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -53,7 +55,7 @@ export component TreePanel inherits Rectangle {
                         }
                     }
                     Text {
-                        text: (n.is-drive ? "💾 " : "📁 ") + n.name + (n.loading ? "  …" : (n.error ? "  ⚠" : ""));
+                        text: (n.is-drive ? "💾 " : "📁 ") + n.name + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
                         color: n.is-drive ? #cde : (n.error ? #d99 : #dde);
                         vertical-alignment: center;
                         horizontal-stretch: 1;

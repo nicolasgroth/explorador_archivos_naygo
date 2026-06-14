@@ -31,10 +31,10 @@ export component FavoritesPanel inherits Rectangle {
                 horizontal-stretch: 1;
             }
             Rectangle {
-                width: 20px;
-                background: pin-touch.has-hover ? #2a4a7a : transparent;
+                width: 52px;
+                background: pin-touch.has-hover ? #2a4a7a : #1b2838;
                 border-radius: 3px;
-                Text { text: "☆"; color: #ffd479; horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: "Anclar"; color: #ffd479; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
         }
@@ -51,7 +51,7 @@ export component FavoritesPanel inherits Rectangle {
                 padding-left: 6px;
                 spacing: 4px;
                 Text {
-                    text: "★ " + f.label;
+                    text: f.label;
                     color: #ffd479;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
@@ -61,7 +61,7 @@ export component FavoritesPanel inherits Rectangle {
                     width: 18px;
                     background: rm-touch.has-hover ? #5a2630 : transparent;
                     border-radius: 3px;
-                    Text { text: "×"; color: #c99; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "x"; color: #c99; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                     rm-touch := TouchArea {
                         clicked => { root.remove(f.path); }
                     }

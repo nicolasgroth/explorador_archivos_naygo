@@ -79,6 +79,10 @@ pub struct WorkspaceCtrl {
     /// Última área de contenido conocida (la setea la UI en cada layout) para resolver
     /// destinos por orden visual desde gestos que no traen el área (p. ej. teclado).
     pub last_area: Rect,
+    /// Último clic (panel, posición de vista, instante) para detectar el doble-clic en Rust
+    /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
+    /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
+    pub last_click: Option<(PaneId, usize, std::time::Instant)>,
     pub typeahead: String,
     pub ctrl_down: bool,
     pub shift_down: bool,
@@ -109,6 +113,7 @@ impl WorkspaceCtrl {
                 w: 0.0,
                 h: 0.0,
             },
+            last_click: None,
             typeahead: String::new(),
             ctrl_down: false,
             shift_down: false,
@@ -199,6 +204,21 @@ impl WorkspaceCtrl {
     /// El propósito (tipo) del panel `id`, si existe.
     pub fn purpose_of(&self, id: PaneId) -> Option<PanePurpose> {
         self.ws.pane(id).map(|p| p.purpose)
+    }
+
+    /// Texto de la barra de estado: carpeta activa + recuento de ítems y de selección.
+    pub fn status_line(&self) -> String {
+        let Some(f) = self.ws.active_files() else {
+            return String::new();
+        };
+        let total = f.view_indices().len();
+        let sel = f.selected.len();
+        let dir = f.current_dir.display();
+        if sel > 0 {
+            format!("{dir}   —   {total} elementos, {sel} seleccionados")
+        } else {
+            format!("{dir}   —   {total} elementos")
+        }
     }
 
     /// Etiqueta corta del panel `id` para su pestaña: el nombre de la carpeta (Files) o el
@@ -730,7 +750,21 @@ impl WorkspaceCtrl {
 
     // --- Gestos sobre el panel ACTIVO (reusan la logica de F1) ---
 
-    pub fn on_row_clicked(&mut self, id: PaneId, pos: usize) {
+    /// Clic en una fila. Selecciona (respetando Ctrl/Shift) y DETECTA el doble-clic en Rust:
+    /// si este clic cae en el mismo panel+fila que el anterior dentro de la ventana de
+    /// tiempo, lo trata como doble-clic (navega/abre) y devuelve true. Esto no depende del
+    /// `double-clicked` de Slint, que bajo el renderizador por software puede no dispararse.
+    pub fn on_row_clicked(&mut self, id: PaneId, pos: usize, now: std::time::Instant) -> bool {
+        const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+        let is_double = matches!(
+            self.last_click,
+            Some((lid, lpos, t)) if lid == id && lpos == pos && now.duration_since(t) <= DOUBLE_CLICK
+        );
+        if is_double {
+            self.last_click = None; // un triple clic no encadena dos navegaciones
+            return self.on_row_double_clicked(id, pos);
+        }
+        self.last_click = Some((id, pos, now));
         self.ws.set_active(id);
         let (ctrl, shift) = (self.ctrl_down, self.shift_down);
         if let Some(f) = self.ws.active_files_mut() {
@@ -742,6 +776,7 @@ impl WorkspaceCtrl {
                 f.select_single(pos);
             }
         }
+        false
     }
 
     /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
@@ -994,6 +1029,41 @@ mod tests {
             rows.iter().any(|r| r.name == "dentro.txt"),
             "la vista refleja la carpeta nueva (no vacía)"
         );
+    }
+
+    /// El doble-clic detectado en Rust (dos on_row_clicked rápidos en la misma fila) navega;
+    /// dos clics LENTOS no.
+    #[test]
+    fn doble_clic_en_rust_navega() {
+        use std::time::{Duration, Instant};
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("dentro.txt"), b"x").unwrap();
+
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.active_id().unwrap();
+        let pos = active_pos_of(&c, "sub").expect("'sub' visible");
+
+        // Una sola línea de tiempo sintética (mezclar Instant::now() con offsets daría
+        // instantes incoherentes). Base + offsets crecientes.
+        let base = Instant::now();
+        // Dos clics LENTOS (separados > 400 ms) NO navegan: solo seleccionan.
+        assert!(!c.on_row_clicked(id, pos, base));
+        assert!(!c.on_row_clicked(id, pos, base + Duration::from_millis(600)));
+        assert_eq!(c.path_of(id), tmp.path().display().to_string());
+
+        // Dos clics RÁPIDOS (dentro de 400 ms) SÍ navegan. Siguen la misma línea de tiempo.
+        let t1 = base + Duration::from_secs(2);
+        assert!(!c.on_row_clicked(id, pos, t1), "1er clic: selecciona");
+        assert!(
+            c.on_row_clicked(id, pos, t1 + Duration::from_millis(150)),
+            "2do clic rápido: doble-clic → navega"
+        );
+        assert!(drain(&mut c));
+        let rows = c.rows_of(c.active_id().unwrap());
+        assert!(rows.iter().any(|r| r.name == "dentro.txt"));
     }
 
     /// Agregar un panel divide el layout y deja DOS paneles Files; el nuevo queda activo.

@@ -216,6 +216,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(id) = active {
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
             }
+            ui.set_status(SharedString::from(c.status_line().as_str()));
         }
     };
 
@@ -290,6 +291,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
                             active: Some(*id) == active,
                             purpose,
+                            title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
                             rows: ModelRc::from(pm.rows.clone()),
                             tree_rows: ModelRc::from(pm.tree.clone()),
                             favs: ModelRc::from(pm.favs.clone()),
@@ -390,27 +392,27 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
+        let sync_layout = sync_layout.clone();
         ui.on_row_clicked(move |id, pos| {
-            ctrl.borrow_mut()
-                .on_row_clicked(PaneId(id as u64), pos as usize);
-            // Cambiar el foco puede disparar un preview nuevo.
+            // El doble-clic se detecta en Rust (no en Slint): on_row_clicked devuelve true
+            // si este clic completó un doble-clic, en cuyo caso navegó/abrió.
+            let navigated = ctrl
+                .borrow_mut()
+                .on_row_clicked(PaneId(id as u64), pos as usize, std::time::Instant::now());
+            // Cambiar el foco/navegar puede disparar un preview o cambiar el layout.
             start_timer();
-            sync_rows();
+            if navigated {
+                sync_layout();
+            } else {
+                sync_rows();
+            }
         });
     }
     {
-        let ctrl = ctrl.clone();
-        let sync_layout = sync_layout.clone();
-        let start_timer = start_timer.clone();
-        ui.on_row_double_clicked(move |id, pos| {
-            if ctrl
-                .borrow_mut()
-                .on_row_double_clicked(PaneId(id as u64), pos as usize)
-            {
-                start_timer();
-            }
-            sync_layout();
-        });
+        // El doble-clic lo maneja la detección en Rust dentro de on_row_clicked (Slint
+        // siempre emite `clicked` en cada release). El `double-clicked` de Slint se ignora
+        // para no navegar dos veces si el backend además lo dispara.
+        ui.on_row_double_clicked(move |_id, _pos| {});
     }
     {
         let ctrl = ctrl.clone();

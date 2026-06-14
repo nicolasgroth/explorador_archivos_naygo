@@ -125,15 +125,19 @@ export component FilePanel inherits FocusScope {
                         }
                     }
                     row-touch := TouchArea {
+                        // El foco de teclado se toma en `pointer-event` (al PRESIONAR), no
+                        // en `clicked`: llamar focus() dentro de `clicked` reinicia el
+                        // rastreo de clics de Slint y se pierde el doble-clic.
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) {
+                                root.focus();
+                                root.activate(root.pane-id);
+                            }
+                        }
                         clicked => {
-                            // Tomar el foco de teclado del FocusScope para que las teclas
-                            // (Enter, flechas, Backspace…) lleguen a este panel.
-                            root.focus();
-                            root.activate(root.pane-id);
                             root.row-clicked(root.pane-id, i);
                         }
                         double-clicked => {
-                            root.focus();
                             root.row-double-clicked(root.pane-id, i);
                         }
                     }

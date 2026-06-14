@@ -37,11 +37,52 @@ component TabBar inherits Rectangle {
                     width: 16px;
                     background: x-touch.has-hover ? #5a2630 : transparent;
                     border-radius: 3px;
-                    Text { text: "×"; color: #c99; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "x"; color: #c99; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                     x-touch := TouchArea { clicked => { root.close(t.id); } }
                 }
             }
             tab-touch := TouchArea { clicked => { root.select(t.id); } }
+        }
+    }
+}
+
+// Botón de la barra de herramientas: etiqueta de texto (el renderizador por software no
+// dibuja glifos Unicode raros, así que usamos texto legible) + tooltip al pasar el mouse.
+component ToolBtn inherits Rectangle {
+    in property <string> label;
+    in property <string> tip;
+    in property <length> btn-width: 34px;
+    in property <bool> highlight: false;
+    callback clicked();
+    width: root.btn-width;
+    background: (touch.has-hover || root.highlight) ? #2a4a7a : #1b2838;
+    border-radius: 4px;
+    Text {
+        text: root.label;
+        color: white;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    // Tooltip flotante: aparece bajo el botón al pasar el mouse.
+    if touch.has-hover && root.tip != "": Rectangle {
+        x: 0;
+        y: parent.height + 3px;
+        width: tip-text.preferred-width + 12px;
+        height: 22px;
+        background: #0b1320;
+        border-color: #2a4a7a;
+        border-width: 1px;
+        border-radius: 4px;
+        tip-text := Text {
+            text: root.tip;
+            color: #dde;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }
@@ -107,6 +148,8 @@ export component AppWindow inherits Window {
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elegí el panel número N (clic)
     callback pick-cancel();              // cancelar (clic fuera)
+    // Texto de la barra de estado (carpeta activa + recuento de ítems/selección).
+    in property <string> status;
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -132,48 +175,41 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding: 4px;
                 spacing: 6px;
-                Rectangle {
-                    width: 30px;
-                    background: up-touch.has-hover ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "↑"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    up-touch := TouchArea { clicked => { root.go-up(); } }
+                ToolBtn {
+                    label: "Subir";
+                    tip: "Subir un nivel (Backspace)";
+                    btn-width: 46px;
+                    clicked => { root.go-up(); }
                 }
-                Rectangle {
-                    width: 30px;
-                    background: add-touch.has-hover ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "+"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    add-touch := TouchArea { clicked => { root.add-pane(); } }
+                ToolBtn {
+                    label: "+";
+                    tip: "Dividir: nuevo panel de archivos";
+                    clicked => { root.add-pane(); }
                 }
-                Rectangle {
-                    width: 30px;
-                    background: (menu-touch.has-hover || root.add-menu-open) ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "▾"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    menu-touch := TouchArea { clicked => { root.add-menu-open = !root.add-menu-open; } }
+                ToolBtn {
+                    label: "Panel";
+                    tip: "Agregar panel especial…";
+                    btn-width: 50px;
+                    highlight: root.add-menu-open;
+                    clicked => { root.add-menu-open = !root.add-menu-open; }
                 }
-                // Acciones multi-panel: intercambiar ⇄ y clonar ⧉ la carpeta del activo.
-                Rectangle {
-                    width: 30px;
-                    background: swap-touch.has-hover ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "⇄"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    swap-touch := TouchArea { clicked => { root.swap-panes(); } }
+                ToolBtn {
+                    label: "Swap";
+                    tip: "Intercambiar las carpetas de dos paneles";
+                    btn-width: 50px;
+                    clicked => { root.swap-panes(); }
                 }
-                Rectangle {
-                    width: 30px;
-                    background: clone-touch.has-hover ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "⧉"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    clone-touch := TouchArea { clicked => { root.clone-pane(); } }
+                ToolBtn {
+                    label: "Clonar";
+                    tip: "Abrir esta carpeta en otro panel";
+                    btn-width: 54px;
+                    clicked => { root.clone-pane(); }
                 }
-                Rectangle {
-                    width: 30px;
-                    background: stack-touch.has-hover ? #2a4a7a : #1b2838;
-                    border-radius: 4px;
-                    Text { text: "⊞"; color: white; horizontal-alignment: center; vertical-alignment: center; }
-                    stack-touch := TouchArea { clicked => { root.stack-pane(); } }
+                ToolBtn {
+                    label: "Tabs";
+                    tip: "Apilar este panel como pestaña sobre otro";
+                    btn-width: 50px;
+                    clicked => { root.stack-pane(); }
                 }
                 Rectangle {
                     background: #1b2838;
@@ -193,40 +229,58 @@ export component AppWindow inherits Window {
                 y: p.y;
                 width: p.w;
                 height: p.h;
-                // Si el panel es la pestaña activa de un grupo, reserva una barra arriba.
-                property <length> bar-h: p.tabs.length > 0 ? 24px : 0px;
+                // Todo panel lleva una barra de título de 24px arriba: muestra su nombre y
+                // sirve de ASA para arrastrarlo y reacomodar el layout. Si el panel es la
+                // pestaña activa de un grupo, en su lugar va la barra de pestañas.
+                property <length> bar-h: 24px;
                 if p.tabs.length > 0: TabBar {
                     x: 0;
                     y: 0;
                     width: 100%;
+                    height: parent.bar-h;
                     tabs: p.tabs;
                     select(id) => { root.tab-select(id); }
                     close(id) => { root.tab-close(id); }
                 }
-                // Grip de arrastre (esquina superior derecha): arrastra el panel para
-                // reacomodarlo (soltar en el centro de otro → pestaña; en un borde → split).
-                grip := Rectangle {
-                    width: 18px;
-                    height: 18px;
-                    x: parent.width - self.width - 2px;
-                    y: 2px;
-                    background: grip-touch.has-hover || grip-touch.pressed ? #4f8ae0 : #1b2838aa;
-                    border-radius: 3px;
-                    Text { text: "⠿"; color: #cdd; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                    grip-touch := TouchArea {
+                if p.tabs.length == 0: title-bar := Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: 100%;
+                    height: parent.bar-h;
+                    background: p.active ? #1c2c44 : #16243a;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: p.title;
+                            color: p.active ? white : #9ab;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "mover";
+                            color: title-touch.pressed ? #4f8ae0 : #678;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    title-touch := TouchArea {
+                        mouse-cursor: move;
                         moved => {
-                            // Coords absolutas en el área de contenido = origen del panel +
-                            // posición del grip dentro del panel + posición del puntero en el grip.
-                            root.pane-drag-move(p.id, p.x + grip.x + self.mouse-x, p.y + grip.y + self.mouse-y);
+                            root.pane-drag-move(p.id, p.x + self.mouse-x, p.y + self.mouse-y);
                         }
                         pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) { root.activate(p.id); }
                             if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.up) {
-                                root.pane-drag-drop(p.id, p.x + grip.x + self.mouse-x, p.y + grip.y + self.mouse-y);
+                                root.pane-drag-drop(p.id, p.x + self.mouse-x, p.y + self.mouse-y);
                             }
                         }
                     }
                 }
-                // Contenido del panel, debajo de la barra de pestañas (o todo el alto).
+                // Contenido del panel, debajo de la barra (título o pestañas).
                 pane-content := Rectangle {
                     x: 0;
                     y: parent.bar-h;
@@ -310,6 +364,18 @@ export component AppWindow inherits Window {
                 border-width: 2px;
                 border-color: #4f8ae0;
                 border-radius: 4px;
+            }
+        }
+        // Barra de estado: carpeta activa + recuento de ítems y selección.
+        Rectangle {
+            height: 22px;
+            background: #141d2b;
+            Text {
+                text: root.status;
+                color: #9ab;
+                font-size: 11px;
+                vertical-alignment: center;
+                x: 8px;
             }
         }
     }
