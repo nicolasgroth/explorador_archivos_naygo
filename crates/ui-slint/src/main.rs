@@ -61,8 +61,11 @@ struct Models {
     picks: Rc<VecModel<PickVm>>,
     /// Modelos de lista estables por panel (se actualizan in situ, no se recrean).
     per_pane: HashMap<PaneId, PaneModels>,
-    /// IDs de panel en el orden actual del modelo `panes`.
+    /// IDs de panel VISIBLES en el orden actual del modelo `panes`.
     pane_ids: Vec<PaneId>,
+    /// Grupos de pestañas con los que se construyó la estructura (para detectar cambios de
+    /// agrupación que no alteran los ids visibles, p. ej. activar otra pestaña).
+    groups: Vec<(Vec<PaneId>, usize)>,
     /// Área con la que se construyó la estructura actual (para detectar resize).
     area: Rect,
 }
@@ -75,6 +78,7 @@ impl Models {
             picks: Rc::new(VecModel::default()),
             per_pane: HashMap::new(),
             pane_ids: Vec::new(),
+            groups: Vec::new(),
             area: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -227,21 +231,55 @@ fn main() -> Result<(), slint::PlatformError> {
             ctrl.borrow_mut().set_area(area);
             let pane_rects = ctrl.borrow().pane_rects(area);
             let split_handles = ctrl.borrow().split_handles(area);
-            let new_ids: Vec<PaneId> = pane_rects.iter().map(|(id, _)| *id).collect();
+            // Grupos de pestañas: solo se PINTA la pestaña activa de cada grupo (todas
+            // comparten rect). Los miembros ocultos se filtran; al activo se le adjunta la
+            // lista de pestañas para que pinte la barra.
+            let groups = ctrl.borrow().tab_groups();
+            let grouped: std::collections::HashSet<PaneId> =
+                groups.iter().flat_map(|(m, _)| m.iter().copied()).collect();
+            let active_members: std::collections::HashSet<PaneId> = groups
+                .iter()
+                .filter_map(|(m, a)| m.get(*a).copied())
+                .collect();
+            // Rects visibles: panel no agrupado, o la pestaña activa de su grupo.
+            let visible: Vec<(PaneId, Rect)> = pane_rects
+                .iter()
+                .filter(|(id, _)| !grouped.contains(id) || active_members.contains(id))
+                .copied()
+                .collect();
+            let new_ids: Vec<PaneId> = visible.iter().map(|(id, _)| *id).collect();
+            // Todos los ids del layout (visibles + ocultos) para conservar sus modelos.
+            let all_ids: Vec<PaneId> = pane_rects.iter().map(|(id, _)| *id).collect();
 
             let mut m = models.borrow_mut();
-            let structure_changed = new_ids != m.pane_ids || !rects_equal(area, m.area);
+            // La estructura cambió si cambió la lista visible, el área, o algún grupo
+            // (apilar/activar pestaña no cambia los ids visibles pero sí las barras).
+            let structure_changed =
+                new_ids != m.pane_ids || !rects_equal(area, m.area) || groups != m.groups;
 
             if structure_changed {
                 let active = ctrl.borrow().active_id();
-                let panes: Vec<PaneVm> = pane_rects
+                let panes: Vec<PaneVm> = visible
                     .iter()
                     .map(|(id, r)| {
-                        let purpose = ctrl
-                            .borrow()
-                            .purpose_of(*id)
-                            .map(purpose_to_int)
-                            .unwrap_or(0);
+                        let c = ctrl.borrow();
+                        let purpose = c.purpose_of(*id).map(purpose_to_int).unwrap_or(0);
+                        // Si este id es la pestaña activa de un grupo, armar su barra.
+                        let tabs: Vec<TabVm> = groups
+                            .iter()
+                            .find(|(mem, a)| mem.get(*a) == Some(id))
+                            .map(|(mem, a)| {
+                                mem.iter()
+                                    .enumerate()
+                                    .map(|(i, mid)| TabVm {
+                                        id: mid.0 as i32,
+                                        label: SharedString::from(c.pane_label(*mid).as_str()),
+                                        active: i == *a,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        drop(c);
                         let pm = m.models_for(*id);
                         PaneVm {
                             id: id.0 as i32,
@@ -259,6 +297,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             hist_rows: ModelRc::from(pm.hist.clone()),
                             inspector: InspectorVm::default(),
                             preview: PreviewVm::default(),
+                            tabs: ModelRc::from(Rc::new(VecModel::from(tabs))),
                         }
                     })
                     .collect();
@@ -278,8 +317,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     .collect();
                 m.splits.set_vec(splits);
 
-                m.per_pane.retain(|id, _| new_ids.contains(id));
+                m.per_pane.retain(|id, _| all_ids.contains(id));
                 m.pane_ids = new_ids;
+                m.groups = groups;
                 m.area = area;
             }
 
@@ -534,6 +574,41 @@ fn main() -> Result<(), slint::PlatformError> {
             if acted {
                 start_timer();
             }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let area_of = area_of.clone();
+        ui.on_stack_pane(move || {
+            let area = area_of();
+            {
+                let mut c = ctrl.borrow_mut();
+                let Some(origin) = c.active_id() else {
+                    return;
+                };
+                c.request_action(workspace_ctrl::PaneAction::Stack, origin, area);
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tab_select(move |id| {
+            ctrl.borrow_mut().set_active_tab(PaneId(id as u64));
+            // Cambiar de pestaña puede disparar el preview del nuevo foco.
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_tab_close(move |id| {
+            ctrl.borrow_mut().close_tab(PaneId(id as u64));
             sync_layout();
         });
     }

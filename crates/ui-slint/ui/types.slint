@@ -60,6 +60,13 @@ export struct PreviewVm {
     message: string,
 }
 
+// Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.
+export struct TabVm {
+    id: int,
+    label: string,
+    active: bool,
+}
+
 // Un candidato del selector de panel destino (overlay 1..9): su rect + el número a pintar.
 export struct PickVm {
     x: length,
@@ -98,4 +105,7 @@ export struct PaneVm {
     hist-rows: [HistRow],     // History
     inspector: InspectorVm,   // Inspector
     preview: PreviewVm,       // Preview
+    // Si este panel es la pestaña ACTIVA de un grupo, `tabs` lista las pestañas del grupo
+    // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
+    tabs: [TabVm],
 }

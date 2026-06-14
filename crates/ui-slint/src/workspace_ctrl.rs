@@ -42,6 +42,8 @@ pub enum PaneAction {
     Swap,
     /// Clonar la carpeta del origen en el destino.
     Clone,
+    /// Apilar el origen como pestaña sobre el destino (agruparlos).
+    Stack,
 }
 
 /// Estado del selector numérico de panel destino (overlay 1..9).
@@ -197,6 +199,31 @@ impl WorkspaceCtrl {
     /// El propósito (tipo) del panel `id`, si existe.
     pub fn purpose_of(&self, id: PaneId) -> Option<PanePurpose> {
         self.ws.pane(id).map(|p| p.purpose)
+    }
+
+    /// Etiqueta corta del panel `id` para su pestaña: el nombre de la carpeta (Files) o el
+    /// nombre del tipo (paneles especiales).
+    pub fn pane_label(&self, id: PaneId) -> String {
+        let Some(p) = self.ws.pane(id) else {
+            return String::new();
+        };
+        match p.purpose {
+            PanePurpose::Files => p
+                .files
+                .as_ref()
+                .map(|f| {
+                    f.current_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| f.current_dir.display().to_string())
+                })
+                .unwrap_or_default(),
+            PanePurpose::Tree => "Árbol".to_string(),
+            PanePurpose::Inspector => "Propiedades".to_string(),
+            PanePurpose::History => "Historial".to_string(),
+            PanePurpose::Favorites => "Favoritos".to_string(),
+            PanePurpose::Preview => "Vista previa".to_string(),
+        }
     }
 
     pub fn set_active(&mut self, id: PaneId) {
@@ -374,8 +401,8 @@ impl WorkspaceCtrl {
                 false
             }
             PaneTarget::NeedsSplit => {
-                if matches!(action, PaneAction::Swap) {
-                    // Swap con un solo panel no tiene sentido: no-op.
+                if matches!(action, PaneAction::Swap | PaneAction::Stack) {
+                    // Swap/apilar con un solo panel no tiene sentido: no-op.
                     return false;
                 }
                 if let Some(dest) = self.split_for_target() {
@@ -402,8 +429,46 @@ impl WorkspaceCtrl {
                 self.clone_into(origin, dest);
                 true
             }
+            PaneAction::Stack => {
+                self.stack_into(origin, dest);
+                false
+            }
         }
     }
+
+    /// Apila el panel `origin` como pestaña sobre el grupo/hoja de `dest` (los agrupa). El
+    /// origen pasa a compartir el rect del destino y queda como pestaña activa.
+    pub fn stack_into(&mut self, origin: PaneId, dest: PaneId) {
+        if origin == dest {
+            return;
+        }
+        // Sacar el origen de su posición actual en el layout y apilarlo sobre el destino.
+        self.ws.layout.remove_leaf(origin);
+        self.ws.layout.stack_onto(dest, origin);
+        self.ws.set_active(origin);
+    }
+
+    /// Cambia la pestaña activa de un grupo al miembro `member` y lo deja activo.
+    pub fn set_active_tab(&mut self, member: PaneId) {
+        self.ws.layout.set_active_tab(member);
+        self.ws.set_active(member);
+    }
+
+    /// Cierra la pestaña `member`: la quita del layout y del workspace. Si era la única del
+    /// grupo, el grupo desaparece (su rect lo absorbe el hermano del split).
+    pub fn close_tab(&mut self, member: PaneId) {
+        self.ws.layout.remove_leaf(member);
+        self.ws.remove_pane(member);
+        self.listings.remove(&member);
+        self.trees.remove(&member);
+    }
+
+    /// Los grupos de pestañas actuales: (miembros, índice activo). Para que la UI pinte las
+    /// barras de pestañas y sepa cuál panel mostrar de cada grupo.
+    pub fn tab_groups(&self) -> Vec<(Vec<PaneId>, usize)> {
+        self.ws.layout.tab_groups()
+    }
+
 
     /// El usuario eligió el panel número `n` (1..9) del selector. Aplica la acción y cierra
     /// el selector. Devuelve true si arrancó listado. No-op si `n` está fuera de rango.
@@ -1086,6 +1151,64 @@ mod tests {
         assert!(drain(&mut c));
         assert!(c.pending_pick.is_none(), "el selector se cerró");
         assert_eq!(c.path_of(candidates[0]), c.path_of(origin));
+    }
+
+    /// Apilar el origen sobre otro panel los agrupa en pestañas; el origen queda activo.
+    #[test]
+    fn apilar_crea_un_grupo_de_pestanas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        // Apilar b sobre a: quedan en un grupo de 2.
+        c.stack_into(b, a);
+        let groups = c.tab_groups();
+        assert_eq!(groups.len(), 1);
+        let (members, active) = &groups[0];
+        assert_eq!(members.len(), 2);
+        assert!(members.contains(&a) && members.contains(&b));
+        // El miembro activo es el apilado (b).
+        assert_eq!(members[*active], b);
+    }
+
+    /// set_active_tab cambia la pestaña visible del grupo.
+    #[test]
+    fn cambiar_pestana_activa() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        c.stack_into(b, a);
+        // Activar a: pasa a ser la pestaña visible.
+        c.set_active_tab(a);
+        let (members, active) = c.tab_groups()[0].clone();
+        assert_eq!(members[active], a);
+        assert_eq!(c.active_id(), Some(a));
+    }
+
+    /// Cerrar una pestaña la quita; con una sola restante el grupo se colapsa a hoja.
+    #[test]
+    fn cerrar_pestana_colapsa_el_grupo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        c.stack_into(b, a);
+        assert_eq!(c.tab_groups().len(), 1);
+        // Cerrar b: queda solo a, el grupo desaparece.
+        c.close_tab(b);
+        assert!(c.tab_groups().is_empty());
+        assert!(c.ws.pane(b).is_none(), "el panel cerrado ya no existe");
+        assert!(c.ws.pane(a).is_some(), "el otro sigue");
     }
 
     /// Esc (vía pick_cancel) cierra el selector sin actuar.

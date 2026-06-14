@@ -1,6 +1,6 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -8,6 +8,43 @@ import { InspectorPanel } from "inspector-panel.slint";
 import { HistoryPanel } from "history-panel.slint";
 import { FavoritesPanel } from "favorites-panel.slint";
 import { PreviewPanel } from "preview-panel.slint";
+
+// Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
+// con su × para cerrarla. Clic en una pestaña la activa.
+component TabBar inherits Rectangle {
+    in property <[TabVm]> tabs;
+    callback select(int);
+    callback close(int);
+    height: 24px;
+    background: #0b1320;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for t in root.tabs: Rectangle {
+            background: t.active ? #2a4a7a : (tab-touch.has-hover ? #1f3350 : #16243a);
+            border-radius: 4px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 4px;
+                spacing: 4px;
+                Text {
+                    text: t.label;
+                    color: t.active ? white : #9ab;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 16px;
+                    background: x-touch.has-hover ? #5a2630 : transparent;
+                    border-radius: 3px;
+                    Text { text: "×"; color: #c99; horizontal-alignment: center; vertical-alignment: center; }
+                    x-touch := TouchArea { clicked => { root.close(t.id); } }
+                }
+            }
+            tab-touch := TouchArea { clicked => { root.select(t.id); } }
+        }
+    }
+}
 
 // Un ítem del menú desplegable ▾.
 component MenuItem inherits Rectangle {
@@ -54,6 +91,10 @@ export component AppWindow inherits Window {
     // Acciones multi-panel (toolbar):
     callback swap-panes();               // intercambiar el activo con el otro panel
     callback clone-pane();               // clonar la carpeta del activo en otro panel
+    callback stack-pane();               // apilar el activo como pestaña sobre otro panel
+    // Pestañas (grupos):
+    callback tab-select(int);            // activar la pestaña (PaneId)
+    callback tab-close(int);             // cerrar la pestaña (PaneId)
     // Selector numérico de panel destino (overlay 1..9):
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elegí el panel número N (clic)
@@ -120,6 +161,13 @@ export component AppWindow inherits Window {
                     clone-touch := TouchArea { clicked => { root.clone-pane(); } }
                 }
                 Rectangle {
+                    width: 30px;
+                    background: stack-touch.has-hover ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "⊞"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    stack-touch := TouchArea { clicked => { root.stack-pane(); } }
+                }
+                Rectangle {
                     background: #1b2838;
                     border-radius: 4px;
                     Text { text: root.active-path; color: #cdd; vertical-alignment: center; x: 8px; }
@@ -137,57 +185,74 @@ export component AppWindow inherits Window {
                 y: p.y;
                 width: p.w;
                 height: p.h;
-                if p.purpose == 0: FilePanel {
+                // Si el panel es la pestaña activa de un grupo, reserva una barra arriba.
+                property <length> bar-h: p.tabs.length > 0 ? 24px : 0px;
+                if p.tabs.length > 0: TabBar {
+                    x: 0;
+                    y: 0;
                     width: 100%;
-                    height: 100%;
-                    pane-id: p.id;
-                    active: p.active;
-                    rows: p.rows;
-                    row-clicked(id, pos) => { root.row-clicked(id, pos); }
-                    row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
-                    sort-by(id, col) => { root.sort-by(id, col); }
-                    activate(id) => { root.activate(id); }
-                    key(t, c, s, a) => { root.key(t, c, s, a); }
+                    tabs: p.tabs;
+                    select(id) => { root.tab-select(id); }
+                    close(id) => { root.tab-close(id); }
                 }
-                if p.purpose == 1: TreePanel {
+                // Contenido del panel, debajo de la barra de pestañas (o todo el alto).
+                pane-content := Rectangle {
+                    x: 0;
+                    y: parent.bar-h;
                     width: 100%;
-                    height: 100%;
-                    active: p.active;
-                    rows: p.tree-rows;
-                    toggle(path) => { root.tree-toggle(p.id, path); }
-                    navigate(path) => { root.tree-navigate(path); }
-                    focus-pane() => { root.activate(p.id); }
-                }
-                if p.purpose == 2: InspectorPanel {
-                    width: 100%;
-                    height: 100%;
-                    active: p.active;
-                    info: p.inspector;
-                }
-                if p.purpose == 3: HistoryPanel {
-                    width: 100%;
-                    height: 100%;
-                    active: p.active;
-                    rows: p.hist-rows;
-                    undo(id) => { root.undo-entry(id); }
-                    focus-pane() => { root.activate(p.id); }
-                }
-                if p.purpose == 4: FavoritesPanel {
-                    width: 100%;
-                    height: 100%;
-                    active: p.active;
-                    favs: p.favs;
-                    recents: p.recents;
-                    navigate(path) => { root.nav-navigate(path); }
-                    remove(path) => { root.fav-remove(path); }
-                    pin-current() => { root.fav-pin-current(); }
-                    focus-pane() => { root.activate(p.id); }
-                }
-                if p.purpose == 5: PreviewPanel {
-                    width: 100%;
-                    height: 100%;
-                    active: p.active;
-                    view: p.preview;
+                    height: parent.height - parent.bar-h;
+                    if p.purpose == 0: FilePanel {
+                        width: 100%;
+                        height: 100%;
+                        pane-id: p.id;
+                        active: p.active;
+                        rows: p.rows;
+                        row-clicked(id, pos) => { root.row-clicked(id, pos); }
+                        row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                        sort-by(id, col) => { root.sort-by(id, col); }
+                        activate(id) => { root.activate(id); }
+                        key(t, c, s, a) => { root.key(t, c, s, a); }
+                    }
+                    if p.purpose == 1: TreePanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        rows: p.tree-rows;
+                        toggle(path) => { root.tree-toggle(p.id, path); }
+                        navigate(path) => { root.tree-navigate(path); }
+                        focus-pane() => { root.activate(p.id); }
+                    }
+                    if p.purpose == 2: InspectorPanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        info: p.inspector;
+                    }
+                    if p.purpose == 3: HistoryPanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        rows: p.hist-rows;
+                        undo(id) => { root.undo-entry(id); }
+                        focus-pane() => { root.activate(p.id); }
+                    }
+                    if p.purpose == 4: FavoritesPanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        favs: p.favs;
+                        recents: p.recents;
+                        navigate(path) => { root.nav-navigate(path); }
+                        remove(path) => { root.fav-remove(path); }
+                        pin-current() => { root.fav-pin-current(); }
+                        focus-pane() => { root.activate(p.id); }
+                    }
+                    if p.purpose == 5: PreviewPanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        view: p.preview;
+                    }
                 }
             }
             // Barras de splitter arrastrables.
