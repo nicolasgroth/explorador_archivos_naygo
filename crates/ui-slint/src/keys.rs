@@ -23,6 +23,12 @@ fn special(k: slint::platform::Key) -> char {
     s.chars().next().unwrap_or('\0')
 }
 
+/// El char que Slint usa para la tecla Escape (para detectarla sin pasar por el keymap,
+/// p. ej. cancelar el selector de panel).
+pub fn escape_char() -> char {
+    special(slint::platform::Key::Escape)
+}
+
 /// Mapea el texto de la tecla a un `KeyCode`. Compara contra los chars de las teclas
 /// especiales de Slint y, si no, toma el primer carácter como letra/dígito.
 fn keycode_from(text: &str) -> Option<KeyCode> {

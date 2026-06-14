@@ -1,0 +1,84 @@
+// Naygo — panel Árbol (Fase 2b): árbol de carpetas aplanado con sangría.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// El árbol se calcula en Rust (lazy, worker solo-directorios) y llega APLANADO a una
+// lista: cada fila trae su `depth` (sangría = depth*14px), si está expandida y si tiene
+// hijos (chevron ▶/▼). Clic en el chevron expande/colapsa; clic en el nombre navega el
+// panel Files activo. Las raíces (unidades) muestran una barrita de uso de disco.
+import { ListView } from "std-widgets.slint";
+import { TreeRow } from "types.slint";
+
+export component TreePanel inherits Rectangle {
+    in property <bool> active;
+    in property <[TreeRow]> rows;
+    callback toggle(string);    // expandir/colapsar la rama (por ruta)
+    callback navigate(string);  // navegar el Files activo a esa carpeta
+    callback focus-pane();
+
+    background: #0e1622;
+    border-width: root.active ? 1.5px : 0px;
+    border-color: #4f8ae0;
+
+    VerticalLayout {
+        padding: 4px;
+        Text {
+            text: "Carpetas";
+            color: #9ab;
+            font-weight: 700;
+            height: 20px;
+            vertical-alignment: center;
+            x: 4px;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for n[i] in root.rows: Rectangle {
+                height: 22px;
+                background: n.active ? #2a4a7a : (node-touch.has-hover ? #1f3350 : transparent);
+                border-radius: 3px;
+                HorizontalLayout {
+                    padding-left: 2px + n.depth * 14px;
+                    spacing: 2px;
+                    // Chevron (o hueco si no tiene hijos).
+                    Rectangle {
+                        width: 16px;
+                        Text {
+                            text: n.has-children ? (n.expanded ? "▼" : "▶") : "";
+                            color: #9ab;
+                            font-size: 10px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        chev-touch := TouchArea {
+                            clicked => { root.focus-pane(); root.toggle(n.path); }
+                        }
+                    }
+                    Text {
+                        text: (n.is-drive ? "💾 " : "📁 ") + n.name + (n.loading ? "  …" : (n.error ? "  ⚠" : ""));
+                        color: n.is-drive ? #cde : (n.error ? #d99 : #dde);
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    // Barrita de uso de disco (solo raíces con dato).
+                    if n.disk-percent >= 0: Rectangle {
+                        width: 42px;
+                        height: 8px;
+                        y: (parent.height - self.height) / 2;
+                        background: #1b2838;
+                        border-radius: 4px;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * (n.disk-percent / 100);
+                            height: parent.height;
+                            background: n.disk-percent > 90 ? #d4574e : (n.disk-percent > 75 ? #d4a24e : #4f8ae0);
+                            border-radius: 4px;
+                        }
+                    }
+                }
+                node-touch := TouchArea {
+                    clicked => { root.focus-pane(); root.navigate(n.path); }
+                }
+            }
+        }
+    }
+}

@@ -32,6 +32,11 @@ fn build_into(tree: &mut Tree<PaneId>, at: NodeIndex, node: &DockNode) {
         DockNode::Leaf(_id) => {
             // El nodo `at` ya tiene esta hoja; nada que hacer.
         }
+        DockNode::Tabs { .. } => {
+            // Los grupos de pestañas son una feature de la capa Slint. En la capa egui
+            // (que se retira en F6) se degrada al miembro activo: el nodo `at` ya quedó
+            // sembrado con ese id por `first_leaf_id`, así que no hay nada más que insertar.
+        }
         DockNode::Split {
             dir,
             fraction,
@@ -59,6 +64,10 @@ fn build_into(tree: &mut Tree<PaneId>, at: NodeIndex, node: &DockNode) {
 fn first_leaf_id(node: &DockNode) -> PaneId {
     match node {
         DockNode::Leaf(id) => *id,
+        // Un grupo se degrada a su pestaña activa en la capa egui (ver build_into).
+        DockNode::Tabs { members, active } => {
+            members.get(*active).copied().unwrap_or(members[0])
+        }
         DockNode::Split { first, .. } => first_leaf_id(first),
     }
 }

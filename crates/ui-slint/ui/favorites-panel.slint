@@ -1,0 +1,103 @@
+// Naygo — panel Favoritos (Fase 2b): favoritos anclados + carpetas recientes.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Clic en una fila navega el panel Files activo; el botón × quita un favorito.
+import { ListView } from "std-widgets.slint";
+import { NavRow } from "types.slint";
+
+export component FavoritesPanel inherits Rectangle {
+    in property <bool> active;
+    in property <[NavRow]> favs;
+    in property <[NavRow]> recents;
+    callback navigate(string);   // ruta a la que ir
+    callback remove(string);     // quitar favorito por ruta
+    callback pin-current();      // anclar la carpeta del panel activo como favorita
+    callback focus-pane();       // marcar este panel como activo al interactuar
+
+    background: #0e1622;
+    border-width: root.active ? 1.5px : 0px;
+    border-color: #4f8ae0;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            height: 20px;
+            Text {
+                text: "Favoritos";
+                color: #9ab;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Rectangle {
+                width: 20px;
+                background: pin-touch.has-hover ? #2a4a7a : transparent;
+                border-radius: 3px;
+                Text { text: "☆"; color: #ffd479; horizontal-alignment: center; vertical-alignment: center; }
+                pin-touch := TouchArea { clicked => { root.pin-current(); } }
+            }
+        }
+        if root.favs.length == 0: Text {
+            text: "Sin favoritos (Ctrl+D)";
+            color: #678;
+            height: 18px;
+        }
+        for f[i] in root.favs: Rectangle {
+            height: 22px;
+            background: fav-touch.has-hover ? #1f3350 : transparent;
+            border-radius: 3px;
+            HorizontalLayout {
+                padding-left: 6px;
+                spacing: 4px;
+                Text {
+                    text: "★ " + f.label;
+                    color: #ffd479;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 18px;
+                    background: rm-touch.has-hover ? #5a2630 : transparent;
+                    border-radius: 3px;
+                    Text { text: "×"; color: #c99; horizontal-alignment: center; vertical-alignment: center; }
+                    rm-touch := TouchArea {
+                        clicked => { root.remove(f.path); }
+                    }
+                }
+            }
+            fav-touch := TouchArea {
+                clicked => { root.focus-pane(); root.navigate(f.path); }
+            }
+        }
+
+        Text {
+            text: "Recientes";
+            color: #9ab;
+            font-weight: 700;
+            height: 20px;
+            vertical-alignment: center;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in root.recents: Rectangle {
+                height: 22px;
+                background: rec-touch.has-hover ? #1f3350 : transparent;
+                border-radius: 3px;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    Text {
+                        text: r.label;
+                        color: #cdd;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                rec-touch := TouchArea {
+                    clicked => { root.focus-pane(); root.navigate(r.path); }
+                }
+            }
+        }
+    }
+}

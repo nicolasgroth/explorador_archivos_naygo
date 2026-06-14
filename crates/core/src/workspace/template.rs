@@ -46,6 +46,8 @@ pub struct LayoutTemplate {
 pub enum LayoutShape {
     /// Hoja: el panel `panes[idx]`.
     Leaf(usize),
+    /// Grupo de pestañas: los paneles `panes[idx]` apilados, `active` (en 0) es el visible.
+    Tabs { members: Vec<usize>, active: usize },
     Split {
         dir: SplitDir,
         fraction: f32,

@@ -1,4 +1,5 @@
 // Naygo — tipos compartidos UI<->Rust (Slint). Copyright (c) 2026 N. Groth / ISGroth. MIT.
+// Las structs se declaran ANTES de quien las usa (PaneVm las referencia todas).
 export struct RowData {
     name: string,
     ext: string,
@@ -7,4 +8,104 @@ export struct RowData {
     is-dir: bool,
     selected: bool,
     focused: bool,
+}
+
+// Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
+export struct NavRow {
+    label: string,
+    path: string,
+}
+
+// Fila del historial de deshacer.
+export struct HistRow {
+    id: int,
+    label: string,
+    when: string,
+    count: int,
+    undoable: bool,
+    reason: string,
+}
+
+// Fila del árbol aplanado: sangría por `depth`, estado de carga/expansión, disco (-1 = n/a).
+export struct TreeRow {
+    depth: int,
+    name: string,
+    path: string,
+    expanded: bool,
+    has-children: bool,
+    is-drive: bool,
+    active: bool,
+    loading: bool,
+    error: bool,
+    disk-percent: int,
+}
+
+// Datos del inspector (propiedades del ítem enfocado del panel activo).
+export struct InspectorVm {
+    present: bool,
+    name: string,
+    kind: string,
+    path: string,
+    size: string,
+    modified: string,
+    created: string,
+}
+
+// Vista de preview: modo 0=vacío 1=texto 2=imagen 3=mensaje.
+export struct PreviewVm {
+    mode: int,
+    text: string,
+    truncated: bool,
+    image: image,
+    message: string,
+}
+
+// Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.
+export struct TabVm {
+    id: int,
+    label: string,
+    active: bool,
+}
+
+// Un candidato del selector de panel destino (overlay 1..9): su rect + el número a pintar.
+export struct PickVm {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    number: int,
+}
+
+// Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
+export struct SplitVm {
+    index: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    horizontal: bool,
+}
+
+// Un panel colocado. El tipo (espejo de PanePurpose de core) elige qué datos usar:
+// 0=Files 1=Tree 2=Inspector 3=History 4=Favorites 5=Preview.
+export struct PaneVm {
+    id: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    path: string,
+    active: bool,
+    purpose: int,
+    // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
+    rows: [RowData],          // Files
+    tree-rows: [TreeRow],     // Tree
+    favs: [NavRow],           // Favorites (sección favoritos)
+    recents: [NavRow],        // Favorites (sección recientes)
+    hist-rows: [HistRow],     // History
+    inspector: InspectorVm,   // Inspector
+    preview: PreviewVm,       // Preview
+    // Si este panel es la pestaña ACTIVA de un grupo, `tabs` lista las pestañas del grupo
+    // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
+    tabs: [TabVm],
 }

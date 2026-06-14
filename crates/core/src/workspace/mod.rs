@@ -225,6 +225,20 @@ impl Workspace {
                     let id = ids.get(*i).copied().or_else(|| ids.first().copied())?;
                     Some(DockNode::Leaf(id))
                 }
+                LayoutShape::Tabs { members, active } => {
+                    // Traducir índices → PaneIds, ignorando los fuera de rango. Un grupo con
+                    // 0 miembros válidos desaparece; con 1 se colapsa a hoja.
+                    let resolved: Vec<PaneId> =
+                        members.iter().filter_map(|i| ids.get(*i).copied()).collect();
+                    match resolved.len() {
+                        0 => None,
+                        1 => Some(DockNode::Leaf(resolved[0])),
+                        n => Some(DockNode::Tabs {
+                            members: resolved,
+                            active: (*active).min(n - 1),
+                        }),
+                    }
+                }
                 LayoutShape::Split {
                     dir,
                     fraction,
