@@ -42,6 +42,14 @@ export component FilePanel inherits FocusScope {
         accept
     }
 
+    // Cuando este panel pasa a ser el activo, tomar el foco de teclado para que las teclas
+    // lleguen sin necesidad de un clic previo (p. ej. tras Tab o al arrancar).
+    changed active => {
+        if (root.active) {
+            root.focus();
+        }
+    }
+
     // Borde de acento si es el panel activo.
     Rectangle {
         border-width: root.active ? 1.5px : 0px;
@@ -118,10 +126,14 @@ export component FilePanel inherits FocusScope {
                     }
                     row-touch := TouchArea {
                         clicked => {
+                            // Tomar el foco de teclado del FocusScope para que las teclas
+                            // (Enter, flechas, Backspace…) lleguen a este panel.
+                            root.focus();
                             root.activate(root.pane-id);
                             root.row-clicked(root.pane-id, i);
                         }
                         double-clicked => {
+                            root.focus();
                             root.row-double-clicked(root.pane-id, i);
                         }
                     }
