@@ -18,11 +18,16 @@ pub enum SplitDir {
     Vertical,
 }
 
-/// Un nodo del árbol de disposición: o una hoja (un panel) o un split de dos.
+/// Un nodo del árbol de disposición: una hoja (un panel), un grupo de pestañas
+/// (varios paneles apilados en el mismo rect) o un split de dos.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DockNode {
     /// Una hoja: el panel con este id ocupa el espacio.
     Leaf(PaneId),
+    /// Un grupo de pestañas: varios paneles comparten el MISMO rect; `active` es el índice
+    /// (en `0`) de la pestaña visible. Invariante: `members` no vacío y `active < len`.
+    /// Un grupo que queda con un solo miembro se colapsa a `Leaf` (ver `remove_in`).
+    Tabs { members: Vec<PaneId>, active: usize },
     /// Un split: `fraction` es la proporción [0,1] que toma el primer hijo.
     Split {
         dir: SplitDir,
@@ -122,7 +127,8 @@ impl SerializableDockLayout {
                         SplitStep::Second => second,
                     };
                 }
-                DockNode::Leaf(_) => return,
+                // Una hoja o un grupo de pestañas no tiene sub-splits que recorrer.
+                DockNode::Leaf(_) | DockNode::Tabs { .. } => return,
             }
         }
         if let DockNode::Split { fraction: fr, .. } = node {
@@ -139,11 +145,40 @@ impl SerializableDockLayout {
     }
 
     /// Quita la hoja `id` y colapsa el split que la contenía (el hermano sube a su lugar).
-    /// Si era la única hoja, el layout queda vacío.
+    /// Si era la única hoja, el layout queda vacío. Si `id` era miembro de un grupo de
+    /// pestañas, se quita del grupo (que se colapsa a hoja si queda uno solo).
     pub fn remove_leaf(&mut self, id: PaneId) {
         if let Some(node) = self.root.take() {
             self.root = remove_in(node, id);
         }
+    }
+
+    /// Apila `new_id` como una pestaña más en el nodo que contiene a `onto`: si `onto` es
+    /// una `Leaf`, se convierte en un `Tabs` de dos; si ya es un `Tabs`, se agrega al final.
+    /// La pestaña recién agregada queda activa. No-op si `onto` no está en el layout.
+    pub fn stack_onto(&mut self, onto: PaneId, new_id: PaneId) {
+        if let Some(root) = self.root.as_mut() {
+            stack_in(root, onto, new_id);
+        }
+    }
+
+    /// Marca la pestaña `member` como activa dentro de su grupo. No-op si `member` no
+    /// pertenece a ningún grupo de pestañas.
+    pub fn set_active_tab(&mut self, member: PaneId) {
+        if let Some(root) = self.root.as_mut() {
+            activate_in(root, member);
+        }
+    }
+
+    /// Devuelve, para cada grupo de pestañas del layout, sus miembros y el índice activo.
+    /// Las hojas simples no aparecen (no son grupos). Útil para que la UI pinte las barras
+    /// de pestañas sabiendo qué paneles se apilan en un mismo rect y cuál se ve.
+    pub fn tab_groups(&self) -> Vec<(Vec<PaneId>, usize)> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            collect_groups(root, &mut out);
+        }
+        out
     }
 }
 
@@ -151,6 +186,13 @@ impl SerializableDockLayout {
 fn place(node: &DockNode, area: Rect, out: &mut Vec<(PaneId, Rect)>) {
     match node {
         DockNode::Leaf(id) => out.push((*id, area)),
+        // Las pestañas comparten el mismo rect (apiladas): cada miembro recibe `area`. La
+        // UI muestra solo la activa y pinta la barra de pestañas; el resto queda detrás.
+        DockNode::Tabs { members, .. } => {
+            for id in members {
+                out.push((*id, area));
+            }
+        }
         DockNode::Split {
             dir,
             fraction,
@@ -264,6 +306,18 @@ fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
             };
         }
         DockNode::Leaf(_) => {}
+        // Si `leaf` es uno de los miembros del grupo, el grupo entero se divide: el grupo
+        // queda en el primer lado y el panel nuevo en el segundo.
+        DockNode::Tabs { members, .. } if members.contains(&leaf) => {
+            let group = node.clone();
+            *node = DockNode::Split {
+                dir,
+                fraction: 0.5,
+                first: Box::new(group),
+                second: Box::new(DockNode::Leaf(new_id)),
+            };
+        }
+        DockNode::Tabs { .. } => {}
         DockNode::Split { first, second, .. } => {
             split_in(first, leaf, dir, new_id);
             split_in(second, leaf, dir, new_id);
@@ -280,6 +334,21 @@ fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
                 None
             } else {
                 Some(DockNode::Leaf(leaf))
+            }
+        }
+        // Quitar un miembro del grupo: si quedan ≥2 sigue siendo Tabs (ajustando `active`);
+        // si queda 1 se colapsa a Leaf; si queda 0 desaparece.
+        DockNode::Tabs { mut members, mut active } => {
+            members.retain(|m| *m != id);
+            match members.len() {
+                0 => None,
+                1 => Some(DockNode::Leaf(members[0])),
+                n => {
+                    if active >= n {
+                        active = n - 1;
+                    }
+                    Some(DockNode::Tabs { members, active })
+                }
             }
         }
         DockNode::Split {
@@ -307,9 +376,60 @@ fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
 fn collect(node: &DockNode, out: &mut Vec<PaneId>) {
     match node {
         DockNode::Leaf(id) => out.push(*id),
+        DockNode::Tabs { members, .. } => out.extend_from_slice(members),
         DockNode::Split { first, second, .. } => {
             collect(first, out);
             collect(second, out);
+        }
+    }
+}
+
+/// Apila `new_id` en el nodo que contiene a `onto` (hoja → grupo de 2; grupo → +1 al final).
+fn stack_in(node: &mut DockNode, onto: PaneId, new_id: PaneId) {
+    match node {
+        DockNode::Leaf(id) if *id == onto => {
+            *node = DockNode::Tabs {
+                members: vec![*id, new_id],
+                active: 1,
+            };
+        }
+        DockNode::Leaf(_) => {}
+        DockNode::Tabs { members, active } if members.contains(&onto) => {
+            members.push(new_id);
+            *active = members.len() - 1;
+        }
+        DockNode::Tabs { .. } => {}
+        DockNode::Split { first, second, .. } => {
+            stack_in(first, onto, new_id);
+            stack_in(second, onto, new_id);
+        }
+    }
+}
+
+/// Marca `member` como pestaña activa de su grupo (si pertenece a alguno).
+fn activate_in(node: &mut DockNode, member: PaneId) {
+    match node {
+        DockNode::Leaf(_) => {}
+        DockNode::Tabs { members, active } => {
+            if let Some(pos) = members.iter().position(|m| *m == member) {
+                *active = pos;
+            }
+        }
+        DockNode::Split { first, second, .. } => {
+            activate_in(first, member);
+            activate_in(second, member);
+        }
+    }
+}
+
+/// Acumula (miembros, activo) de cada grupo de pestañas del árbol.
+fn collect_groups(node: &DockNode, out: &mut Vec<(Vec<PaneId>, usize)>) {
+    match node {
+        DockNode::Leaf(_) => {}
+        DockNode::Tabs { members, active } => out.push((members.clone(), *active)),
+        DockNode::Split { first, second, .. } => {
+            collect_groups(first, out);
+            collect_groups(second, out);
         }
     }
 }
@@ -508,5 +628,137 @@ mod tests {
         let mut l = SerializableDockLayout::single(PaneId(1));
         l.remove_leaf(PaneId(1));
         assert_eq!(l.root, None);
+    }
+
+    #[test]
+    fn stack_onto_convierte_hoja_en_grupo() {
+        let mut l = SerializableDockLayout::single(PaneId(1));
+        l.stack_onto(PaneId(1), PaneId(2));
+        assert_eq!(
+            l.root,
+            Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 1,
+            })
+        );
+        // Apilar otra más: se agrega al final y queda activa.
+        l.stack_onto(PaneId(2), PaneId(3));
+        assert_eq!(
+            l.root,
+            Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2), PaneId(3)],
+                active: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn pane_ids_incluye_todos_los_miembros_del_grupo() {
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(5), PaneId(6), PaneId(7)],
+                active: 0,
+            }),
+        };
+        assert_eq!(l.pane_ids(), vec![PaneId(5), PaneId(6), PaneId(7)]);
+    }
+
+    #[test]
+    fn pane_rects_de_un_grupo_da_el_mismo_rect_a_todos() {
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 0,
+            }),
+        };
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let rects = l.pane_rects(area);
+        assert_eq!(rects.len(), 2);
+        assert!(rect_eq(rects[0].1, 0.0, 0.0, 800.0, 600.0));
+        assert!(rect_eq(rects[1].1, 0.0, 0.0, 800.0, 600.0));
+    }
+
+    #[test]
+    fn set_active_tab_cambia_la_pestana_visible() {
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2), PaneId(3)],
+                active: 0,
+            }),
+        };
+        l.set_active_tab(PaneId(3));
+        assert_eq!(l.tab_groups(), vec![(vec![PaneId(1), PaneId(2), PaneId(3)], 2)]);
+    }
+
+    #[test]
+    fn remove_de_grupo_colapsa_a_hoja_cuando_queda_uno() {
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 1,
+            }),
+        };
+        l.remove_leaf(PaneId(2));
+        assert_eq!(l.root, Some(DockNode::Leaf(PaneId(1))));
+    }
+
+    #[test]
+    fn remove_de_grupo_ajusta_el_activo_fuera_de_rango() {
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2), PaneId(3)],
+                active: 2,
+            }),
+        };
+        l.remove_leaf(PaneId(3));
+        assert_eq!(
+            l.root,
+            Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn split_leaf_dentro_de_un_grupo_divide_el_grupo() {
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 0,
+            }),
+        };
+        l.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(9));
+        // El grupo entero queda en el primer lado; el panel nuevo en el segundo.
+        if let Some(DockNode::Split { first, second, .. }) = &l.root {
+            assert_eq!(
+                **first,
+                DockNode::Tabs {
+                    members: vec![PaneId(1), PaneId(2)],
+                    active: 0,
+                }
+            );
+            assert_eq!(**second, DockNode::Leaf(PaneId(9)));
+        } else {
+            panic!("la raíz debe ser un split");
+        }
+    }
+
+    #[test]
+    fn round_trip_serde_con_grupo() {
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2)],
+                active: 1,
+            }),
+        };
+        let json = serde_json::to_string(&l).unwrap();
+        let back: SerializableDockLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(l, back);
     }
 }

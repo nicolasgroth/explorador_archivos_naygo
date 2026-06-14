@@ -4534,6 +4534,13 @@ fn remap_layout(
     fn go(node: &DockNode, remap: &HashMap<PaneId, PaneId>) -> DockNode {
         match node {
             DockNode::Leaf(id) => DockNode::Leaf(*remap.get(id).unwrap_or(id)),
+            DockNode::Tabs { members, active } => DockNode::Tabs {
+                members: members
+                    .iter()
+                    .map(|id| *remap.get(id).unwrap_or(id))
+                    .collect(),
+                active: *active,
+            },
             DockNode::Split {
                 dir,
                 fraction,
@@ -4563,6 +4570,13 @@ fn layout_to_shape(
     fn go(node: &DockNode, index_of: &std::collections::HashMap<PaneId, usize>) -> LayoutShape {
         match node {
             DockNode::Leaf(id) => LayoutShape::Leaf(*index_of.get(id).unwrap_or(&0)),
+            DockNode::Tabs { members, active } => LayoutShape::Tabs {
+                members: members
+                    .iter()
+                    .map(|id| *index_of.get(id).unwrap_or(&0))
+                    .collect(),
+                active: *active,
+            },
             DockNode::Split {
                 dir,
                 fraction,
