@@ -1,0 +1,74 @@
+// Naygo — panel Historial (Fase 2b): operaciones deshacibles.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// En 2b la lista llega vacía (aún no hay operaciones de archivo: son F3). La UI queda
+// lista: cada entrada muestra su etiqueta y un botón "Deshacer" habilitado solo si la
+// operación AÚN aplica (validado en Rust); si no, el motivo va de tooltip.
+import { ListView } from "std-widgets.slint";
+import { HistRow } from "types.slint";
+
+export component HistoryPanel inherits Rectangle {
+    in property <bool> active;
+    in property <[HistRow]> rows;
+    callback undo(int);   // id de la entrada a deshacer
+    callback focus-pane();
+
+    background: #0e1622;
+    border-width: root.active ? 1.5px : 0px;
+    border-color: #4f8ae0;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        Text {
+            text: "Historial";
+            color: #9ab;
+            font-weight: 700;
+            height: 20px;
+            vertical-alignment: center;
+        }
+        if root.rows.length == 0: Text {
+            text: "Sin operaciones todavía";
+            color: #678;
+            height: 18px;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for e[i] in root.rows: Rectangle {
+                height: 30px;
+                background: row-touch.has-hover ? #16243a : transparent;
+                border-radius: 3px;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 4px;
+                    spacing: 6px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Text {
+                            text: e.label;
+                            color: #dde;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: 74px;
+                        background: e.undoable ? (undo-touch.has-hover ? #2a4a7a : #1b2838) : #141d2b;
+                        border-radius: 4px;
+                        Text {
+                            text: "Deshacer";
+                            color: e.undoable ? white : #566;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        undo-touch := TouchArea {
+                            enabled: e.undoable;
+                            clicked => { root.focus-pane(); root.undo(e.id); }
+                        }
+                    }
+                }
+                row-touch := TouchArea { }
+            }
+        }
+    }
+}

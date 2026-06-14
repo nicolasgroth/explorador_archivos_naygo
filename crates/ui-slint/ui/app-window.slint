@@ -1,7 +1,31 @@
-// Naygo — ventana principal (Slint, Fase 2a: multi-panel). Copyright (c) 2026 N. Groth / ISGroth. MIT.
+// Naygo — ventana principal (Slint, Fase 2b: multi-panel + paneles especiales).
+// Copyright (c) 2026 N. Groth / ISGroth. MIT.
 import { RowData, PaneVm, SplitVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
+import { TreePanel } from "tree-panel.slint";
+import { InspectorPanel } from "inspector-panel.slint";
+import { HistoryPanel } from "history-panel.slint";
+import { FavoritesPanel } from "favorites-panel.slint";
+import { PreviewPanel } from "preview-panel.slint";
+
+// Un ítem del menú desplegable ▾.
+component MenuItem inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 26px;
+    background: mi-touch.has-hover ? #2a4a7a : transparent;
+    border-radius: 4px;
+    Text {
+        text: root.label;
+        color: #dde;
+        vertical-alignment: center;
+        x: 8px;
+    }
+    mi-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
 
 export component AppWindow inherits Window {
     title: "Naygo";
@@ -13,12 +37,22 @@ export component AppWindow inherits Window {
     in property <[SplitVm]> splits;
     callback go-up();
     callback add-pane();
+    callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
     callback sort-by(int, string);
     callback activate(int);
     callback key(string, bool, bool, bool);
     callback split-drag(int, length, length);
+    // Paneles especiales:
+    callback tree-toggle(int, string);   // (pane-id, ruta) expandir/colapsar rama
+    callback tree-navigate(string);      // navegar el Files activo a esa carpeta
+    callback nav-navigate(string);       // favorito/reciente → navegar Files activo
+    callback fav-remove(string);         // quitar favorito por ruta
+    callback fav-pin-current();          // anclar la carpeta del Files activo
+    callback undo-entry(int);            // deshacer la entrada del historial
+    // Estado del menú ▾ (desplegable de "agregar panel").
+    property <bool> add-menu-open: false;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
     // Rust reparta los paneles aun en reposo (con el timer apagado).
     callback content-resized();
@@ -57,6 +91,13 @@ export component AppWindow inherits Window {
                     add-touch := TouchArea { clicked => { root.add-pane(); } }
                 }
                 Rectangle {
+                    width: 30px;
+                    background: (menu-touch.has-hover || root.add-menu-open) ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "▾"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    menu-touch := TouchArea { clicked => { root.add-menu-open = !root.add-menu-open; } }
+                }
+                Rectangle {
                     background: #1b2838;
                     border-radius: 4px;
                     Text { text: root.active-path; color: #cdd; vertical-alignment: center; x: 8px; }
@@ -66,20 +107,66 @@ export component AppWindow inherits Window {
         // Zona de contenido: paneles posicionados absolutamente + barras de splitter.
         content := Rectangle {
             background: #0e1622;
-            // Paneles (posición/tamaño calculados en Rust).
-            for p in root.panes: FilePanel {
+            // Paneles (posición/tamaño calculados en Rust). El componente concreto se
+            // elige por `p.purpose`: 0=Files 1=Tree 2=Inspector 3=History 4=Favorites
+            // 5=Preview. Cada `if` instancia su componente en el mismo rect del panel.
+            for p in root.panes: Rectangle {
                 x: p.x;
                 y: p.y;
                 width: p.w;
                 height: p.h;
-                pane-id: p.id;
-                active: p.active;
-                rows: p.rows;
-                row-clicked(id, pos) => { root.row-clicked(id, pos); }
-                row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
-                sort-by(id, col) => { root.sort-by(id, col); }
-                activate(id) => { root.activate(id); }
-                key(t, c, s, a) => { root.key(t, c, s, a); }
+                if p.purpose == 0: FilePanel {
+                    width: 100%;
+                    height: 100%;
+                    pane-id: p.id;
+                    active: p.active;
+                    rows: p.rows;
+                    row-clicked(id, pos) => { root.row-clicked(id, pos); }
+                    row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                    sort-by(id, col) => { root.sort-by(id, col); }
+                    activate(id) => { root.activate(id); }
+                    key(t, c, s, a) => { root.key(t, c, s, a); }
+                }
+                if p.purpose == 1: TreePanel {
+                    width: 100%;
+                    height: 100%;
+                    active: p.active;
+                    rows: p.tree-rows;
+                    toggle(path) => { root.tree-toggle(p.id, path); }
+                    navigate(path) => { root.tree-navigate(path); }
+                    focus-pane() => { root.activate(p.id); }
+                }
+                if p.purpose == 2: InspectorPanel {
+                    width: 100%;
+                    height: 100%;
+                    active: p.active;
+                    info: p.inspector;
+                }
+                if p.purpose == 3: HistoryPanel {
+                    width: 100%;
+                    height: 100%;
+                    active: p.active;
+                    rows: p.hist-rows;
+                    undo(id) => { root.undo-entry(id); }
+                    focus-pane() => { root.activate(p.id); }
+                }
+                if p.purpose == 4: FavoritesPanel {
+                    width: 100%;
+                    height: 100%;
+                    active: p.active;
+                    favs: p.favs;
+                    recents: p.recents;
+                    navigate(path) => { root.nav-navigate(path); }
+                    remove(path) => { root.fav-remove(path); }
+                    pin-current() => { root.fav-pin-current(); }
+                    focus-pane() => { root.activate(p.id); }
+                }
+                if p.purpose == 5: PreviewPanel {
+                    width: 100%;
+                    height: 100%;
+                    active: p.active;
+                    view: p.preview;
+                }
             }
             // Barras de splitter arrastrables.
             for s in root.splits: Rectangle {
@@ -95,6 +182,32 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota
+    // sobre todo. Un velo invisible cierra el menú al hacer clic fuera.
+    if root.add-menu-open: TouchArea {
+        clicked => { root.add-menu-open = false; }
+    }
+    if root.add-menu-open: Rectangle {
+        x: 70px;
+        y: root.top-bar-h + 2px;
+        width: 160px;
+        height: menu-items.preferred-height + 8px;
+        background: #1b2838;
+        border-color: #2a4a7a;
+        border-width: 1px;
+        border-radius: 6px;
+        menu-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            MenuItem { label: "Panel de archivos"; clicked => { root.add-pane-of(0); root.add-menu-open = false; } }
+            MenuItem { label: "Árbol de carpetas"; clicked => { root.add-pane-of(1); root.add-menu-open = false; } }
+            MenuItem { label: "Propiedades"; clicked => { root.add-pane-of(2); root.add-menu-open = false; } }
+            MenuItem { label: "Historial"; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
+            MenuItem { label: "Favoritos"; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
+            MenuItem { label: "Vista previa"; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
         }
     }
 }

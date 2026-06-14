@@ -8,7 +8,7 @@
 
 use naygo_core::cancel::CancellationToken;
 use naygo_core::fs_model::Entry;
-use naygo_core::listing::{spawn_listing, ListingMsg};
+use naygo_core::listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
 use std::sync::mpsc::Receiver;
 
 /// Estado de un listado en curso (worker + canal + token de cancelacion).
@@ -22,6 +22,14 @@ impl Listing {
     pub fn start(dir: std::path::PathBuf) -> Listing {
         let token = CancellationToken::new();
         let (rx, _handle) = spawn_listing(dir, token.clone());
+        Listing { rx, token }
+    }
+
+    /// Lanza un listado SOLO de directorios (para expandir una rama del árbol): el worker
+    /// omite archivos y emite únicamente subcarpetas.
+    pub fn start_dirs_only(dir: std::path::PathBuf) -> Listing {
+        let token = CancellationToken::new();
+        let (rx, _handle) = spawn_listing_filtered(dir, token.clone(), ListingFilter::DirsOnly);
         Listing { rx, token }
     }
 

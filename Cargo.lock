@@ -3610,6 +3610,7 @@ dependencies = [
 name = "naygo-ui-slint"
 version = "0.1.0"
 dependencies = [
+ "image",
  "naygo-core",
  "naygo-platform",
  "slint",

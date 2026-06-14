@@ -1,30 +1,30 @@
-// Naygo — arranque de la capa UI en Slint (Fase 2a: multi-panel).
+// Naygo — arranque de la capa UI en Slint (Fase 2b: multi-panel + paneles especiales).
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 //
 // Para forzar el renderizador por software (caso VM sin GPU):
 //   $env:SLINT_BACKEND="winit-software"; cargo run -p naygo-ui-slint
 //
 // MODELOS ESTABLES (clave del rendimiento y de la corrección):
-// Slint es modo retenido: un `for p in root.panes` recrea un FilePanel por cada
-// ELEMENTO del modelo. Si se reemplaza el VecModel entero en cada refresco (como hacía
-// la primera versión de la Fase 2a), Slint destruye y recrea cada FilePanel + su ListView
-// en cada tick (30 ms) y en cada interacción → se pierde el scroll y se corta el gesto de
-// doble clic. Por eso aquí mantenemos modelos ESTABLES y los mutamos in situ:
-//   - `panes_model`: un VecModel<PaneVm> que solo se reestructura cuando cambia la LISTA de
-//     paneles o el ÁREA (agregar/quitar panel, redimensionar la ventana o un split).
-//   - `rows_models`: un VecModel<RowData> ESTABLE por panel; su contenido se actualiza con
-//     `set_vec` (mismo VecModel) → el ListView conserva su estado de scroll.
-//   - `splits_model`: idem para las barras de splitter.
-// `sync_rows` (barato, corre en cada tick) solo toca el contenido de filas + flags
-// activo/path. `sync_layout` (estructural) reconcilia la lista de paneles y splitters.
+// Slint es modo retenido: un `for p in root.panes` recrea un panel por cada ELEMENTO del
+// modelo. Si se reemplaza el VecModel entero en cada refresco, Slint destruye y recrea cada
+// panel + sus ListView en cada tick → se pierde el scroll y se cortan los gestos. Por eso
+// mantenemos modelos ESTABLES y los mutamos in situ:
+//   - `panes`: un VecModel<PaneVm> que solo se reestructura cuando cambia la LISTA de
+//     paneles o el ÁREA (agregar/quitar panel, resize).
+//   - Por panel, según su tipo, un VecModel ESTABLE de filas (Files/Tree/Favoritos/
+//     Recientes/Historial) que se actualiza con `set_vec` (mismo VecModel) → los ListView
+//     conservan su scroll. Inspector/Preview son structs sueltas en el PaneVm.
+// `sync_rows` (barato, en cada tick) actualiza el contenido. `sync_layout` (estructural)
+// reconcilia la lista de paneles y splitters.
 mod bridge;
 mod keys;
 mod listing;
+mod preview;
 mod workspace_ctrl;
 
 use naygo_core::workspace::layout::{Rect, SplitDir};
-use naygo_core::workspace::PaneId;
-use slint::{Model, ModelRc, SharedString, TimerMode, VecModel};
+use naygo_core::workspace::{PaneId, PanePurpose};
+use slint::{Model, ModelRc, SharedPixelBuffer, SharedString, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -32,15 +32,36 @@ use workspace_ctrl::WorkspaceCtrl;
 
 slint::include_modules!();
 
+/// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
+struct PaneModels {
+    rows: Rc<VecModel<RowData>>,
+    tree: Rc<VecModel<TreeRow>>,
+    favs: Rc<VecModel<NavRow>>,
+    recents: Rc<VecModel<NavRow>>,
+    hist: Rc<VecModel<HistRow>>,
+}
+
+impl PaneModels {
+    fn new() -> PaneModels {
+        PaneModels {
+            rows: Rc::new(VecModel::default()),
+            tree: Rc::new(VecModel::default()),
+            favs: Rc::new(VecModel::default()),
+            recents: Rc::new(VecModel::default()),
+            hist: Rc::new(VecModel::default()),
+        }
+    }
+}
+
 /// Modelos estables que persisten entre refrescos (ver nota de cabecera).
 struct Models {
     panes: Rc<VecModel<PaneVm>>,
     splits: Rc<VecModel<SplitVm>>,
-    /// Un VecModel de filas ESTABLE por panel (se actualiza in situ, no se recrea).
-    rows: HashMap<PaneId, Rc<VecModel<RowData>>>,
-    /// IDs de panel en el orden actual del modelo `panes` (para detectar cambios de lista).
+    /// Modelos de lista estables por panel (se actualizan in situ, no se recrean).
+    per_pane: HashMap<PaneId, PaneModels>,
+    /// IDs de panel en el orden actual del modelo `panes`.
     pane_ids: Vec<PaneId>,
-    /// Área con la que se construyó la estructura actual (para detectar resize/splits).
+    /// Área con la que se construyó la estructura actual (para detectar resize).
     area: Rect,
 }
 
@@ -49,7 +70,7 @@ impl Models {
         Models {
             panes: Rc::new(VecModel::default()),
             splits: Rc::new(VecModel::default()),
-            rows: HashMap::new(),
+            per_pane: HashMap::new(),
             pane_ids: Vec::new(),
             area: Rect {
                 x: 0.0,
@@ -60,12 +81,8 @@ impl Models {
         }
     }
 
-    /// Devuelve (o crea) el VecModel de filas estable del panel `id`.
-    fn rows_for(&mut self, id: PaneId) -> Rc<VecModel<RowData>> {
-        self.rows
-            .entry(id)
-            .or_insert_with(|| Rc::new(VecModel::default()))
-            .clone()
+    fn models_for(&mut self, id: PaneId) -> &PaneModels {
+        self.per_pane.entry(id).or_insert_with(PaneModels::new)
     }
 }
 
@@ -76,6 +93,17 @@ fn rects_equal(a: Rect, b: Rect) -> bool {
         && (a.h - b.h).abs() < 0.5
 }
 
+fn purpose_to_int(p: PanePurpose) -> i32 {
+    match p {
+        PanePurpose::Files => 0,
+        PanePurpose::Tree => 1,
+        PanePurpose::Inspector => 2,
+        PanePurpose::History => 3,
+        PanePurpose::Favorites => 4,
+        PanePurpose::Preview => 5,
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     let start = std::env::var_os("USERPROFILE")
@@ -84,7 +112,6 @@ fn main() -> Result<(), slint::PlatformError> {
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
     let models = Rc::new(RefCell::new(Models::new()));
 
-    // Enlaza los modelos estables a la ventana una sola vez.
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
     ui.set_splits(ModelRc::from(models.borrow().splits.clone()));
 
@@ -108,9 +135,8 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     };
 
-    // Actualiza SOLO el contenido (filas + activo + path) sin tocar la estructura. Barato:
-    // corre en cada tick del timer. Mantiene los mismos VecModel → el ListView conserva su
-    // scroll y los gestos no se interrumpen.
+    // Actualiza SOLO el contenido (filas + structs + flags) sin tocar la estructura. Barato:
+    // corre en cada tick. Mantiene los mismos VecModel → los ListView conservan su scroll.
     let sync_rows = {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
@@ -121,19 +147,60 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let c = ctrl.borrow();
             let active = c.active_id();
+            // Datos compartidos (no dependen del panel concreto): favoritos, recientes,
+            // historial, inspector, preview se derivan del estado global / panel activo.
+            let favs: Vec<NavRow> = c.favorite_rows().into_iter().map(to_nav_row).collect();
+            let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
+            let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
+            let inspector = to_inspector_vm(c.inspector_info());
+
             let mut m = models.borrow_mut();
             for (i, &id) in m.pane_ids.clone().iter().enumerate() {
-                // Actualiza filas in situ (mismo VecModel).
-                let rows: Vec<RowData> = c.rows_of(id).into_iter().map(to_row_data).collect();
-                let rows_model = m.rows_for(id);
-                rows_model.set_vec(rows);
-                // Actualiza flags del PaneVm sin recrear el elemento (preserva el FilePanel).
+                let purpose = c.purpose_of(id);
+                // Actualiza los modelos de lista que apliquen al tipo, in situ.
+                match purpose {
+                    Some(PanePurpose::Files) => {
+                        let rows: Vec<RowData> =
+                            c.rows_of(id).into_iter().map(to_row_data).collect();
+                        m.models_for(id).rows.set_vec(rows);
+                    }
+                    Some(PanePurpose::Tree) => {
+                        let rows: Vec<TreeRow> =
+                            c.tree_rows(id).into_iter().map(to_tree_row).collect();
+                        m.models_for(id).tree.set_vec(rows);
+                    }
+                    Some(PanePurpose::Favorites) => {
+                        m.models_for(id).favs.set_vec(favs.clone());
+                        m.models_for(id).recents.set_vec(recents.clone());
+                    }
+                    Some(PanePurpose::History) => {
+                        m.models_for(id).hist.set_vec(hist.clone());
+                    }
+                    _ => {}
+                }
+                // Actualiza los campos del PaneVm sin recrear el elemento.
                 if let Some(mut pv) = m.panes.row_data(i) {
                     let is_active = Some(id) == active;
                     let path = SharedString::from(c.path_of(id).as_str());
-                    if pv.active != is_active || pv.path != path {
+                    let mut changed = false;
+                    if pv.active != is_active {
                         pv.active = is_active;
+                        changed = true;
+                    }
+                    if pv.path != path {
                         pv.path = path;
+                        changed = true;
+                    }
+                    // Inspector/Preview son structs sueltas: se setean según el tipo.
+                    if purpose == Some(PanePurpose::Inspector) {
+                        pv.inspector = inspector.clone();
+                        changed = true;
+                    }
+                    if purpose == Some(PanePurpose::Preview) {
+                        pv.preview = current_preview_vm(&c);
+                        changed = true;
+                    }
+                    if changed {
                         m.panes.set_row_data(i, pv);
                     }
                 }
@@ -144,9 +211,8 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     };
 
-    // Reconcilia la ESTRUCTURA (lista de paneles + splitters) con el estado del core. Solo
-    // reconstruye cuando cambia la lista de IDs o el área (agregar/quitar panel, resize,
-    // arrastre de split). Tras reestructurar, sincroniza las filas.
+    // Reconcilia la ESTRUCTURA (paneles + splitters) con el estado del core. Solo
+    // reconstruye cuando cambia la lista de IDs o el área. Tras reestructurar, sincroniza.
     let sync_layout: Rc<dyn Fn()> = {
         let ctrl = ctrl.clone();
         let models = models.clone();
@@ -162,14 +228,16 @@ fn main() -> Result<(), slint::PlatformError> {
             let structure_changed = new_ids != m.pane_ids || !rects_equal(area, m.area);
 
             if structure_changed {
-                // Reconstruye el modelo de paneles, reutilizando los VecModel de filas
-                // estables existentes (los recién creados arrancan vacíos y se llenan en
-                // sync_rows). Limpia los modelos de filas de paneles que ya no existen.
                 let active = ctrl.borrow().active_id();
                 let panes: Vec<PaneVm> = pane_rects
                     .iter()
                     .map(|(id, r)| {
-                        let rows_model = m.rows_for(*id);
+                        let purpose = ctrl
+                            .borrow()
+                            .purpose_of(*id)
+                            .map(purpose_to_int)
+                            .unwrap_or(0);
+                        let pm = m.models_for(*id);
                         PaneVm {
                             id: id.0 as i32,
                             x: r.x,
@@ -177,8 +245,15 @@ fn main() -> Result<(), slint::PlatformError> {
                             w: r.w,
                             h: r.h,
                             path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
-                            rows: ModelRc::from(rows_model),
                             active: Some(*id) == active,
+                            purpose,
+                            rows: ModelRc::from(pm.rows.clone()),
+                            tree_rows: ModelRc::from(pm.tree.clone()),
+                            favs: ModelRc::from(pm.favs.clone()),
+                            recents: ModelRc::from(pm.recents.clone()),
+                            hist_rows: ModelRc::from(pm.hist.clone()),
+                            inspector: InspectorVm::default(),
+                            preview: PreviewVm::default(),
                         }
                     })
                     .collect();
@@ -198,7 +273,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .collect();
                 m.splits.set_vec(splits);
 
-                m.rows.retain(|id, _| new_ids.contains(id));
+                m.per_pane.retain(|id, _| new_ids.contains(id));
                 m.pane_ids = new_ids;
                 m.area = area;
             }
@@ -207,8 +282,8 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
 
-    // Timer que drena los listados activos; se apaga cuando todos terminan. Cada tick solo
-    // sincroniza filas (barato); la estructura no cambia mientras se listan archivos.
+    // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
+    // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     let timer = Rc::new(slint::Timer::default());
     let start_timer: Rc<dyn Fn()> = {
         let ctrl = ctrl.clone();
@@ -222,9 +297,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
                 move || {
-                    let all_done = ctrl.borrow_mut().pump_listings();
+                    let now = std::time::Instant::now();
+                    let files_done = ctrl.borrow_mut().pump_listings();
+                    let tree_done = ctrl.borrow_mut().pump_tree();
+                    let preview_busy = ctrl.borrow_mut().drive_preview(now);
+                    let preview_ready = ctrl.borrow_mut().preview.poll().is_some();
+                    let _ = preview_ready;
                     sync_rows();
-                    if all_done {
+                    if files_done && tree_done && !preview_busy {
                         timer2.stop();
                     }
                 },
@@ -236,9 +316,12 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_row_clicked(move |id, pos| {
             ctrl.borrow_mut()
                 .on_row_clicked(PaneId(id as u64), pos as usize);
+            // Cambiar el foco puede disparar un preview nuevo.
+            start_timer();
             sync_rows();
         });
     }
@@ -253,7 +336,6 @@ fn main() -> Result<(), slint::PlatformError> {
             {
                 start_timer();
             }
-            // Navegar cambia el path (estructura del PaneVm) → reconcilia.
             sync_layout();
         });
     }
@@ -268,8 +350,10 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_activate(move |id| {
             ctrl.borrow_mut().set_active(PaneId(id as u64));
+            start_timer();
             sync_rows();
         });
     }
@@ -281,7 +365,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if ctrl.borrow_mut().on_key(text.as_str(), c, s, a) {
                 start_timer();
             }
-            // Una tecla puede navegar (cambia path) o cambiar el panel activo → reconcilia.
+            start_timer();
             sync_layout();
         });
     }
@@ -309,6 +393,79 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_add_pane_of(move |purpose| {
+            ctrl.borrow_mut().add_pane_of(int_to_purpose(purpose));
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tree_toggle(move |id, path| {
+            ctrl.borrow_mut()
+                .tree_toggle(PaneId(id as u64), std::path::PathBuf::from(path.as_str()));
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tree_navigate(move |path| {
+            if ctrl
+                .borrow_mut()
+                .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_nav_navigate(move |path| {
+            if ctrl
+                .borrow_mut()
+                .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_remove(move |path| {
+            ctrl.borrow_mut()
+                .remove_favorite(std::path::Path::new(path.as_str()));
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_pin_current(move || {
+            ctrl.borrow_mut().toggle_favorite_active();
+            sync_rows();
+        });
+    }
+    {
+        // El historial aún no tiene operaciones (F3); el callback queda cableado.
+        let sync_rows = sync_rows.clone();
+        ui.on_undo_entry(move |_id| {
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
         let area_of = area_of.clone();
         ui.on_split_drag(move |index, dx, dy| {
             let area = area_of();
@@ -316,8 +473,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 let mut c = ctrl.borrow_mut();
                 let handles = c.split_handles(area);
                 if let Some(h) = handles.get(index as usize) {
-                    // Nueva fracción ≈ (centro de la barra + delta) / dimensión del área.
-                    // Para un split a un nivel es exacto; en anidados es una aproximación.
                     let (pos, total) = if matches!(h.dir, SplitDir::Horizontal) {
                         (h.rect.x + h.rect.w / 2.0 + dx, area.w.max(1.0))
                     } else {
@@ -327,13 +482,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     c.set_fraction(&path, pos / total);
                 }
             }
-            // El arrastre cambia los rects → reconcilia geometría.
             sync_layout();
         });
     }
-
-    // Reflow cuando cambia el tamaño del área de contenido (resize de ventana). Sin esto, un
-    // resize en reposo (timer apagado) no repartiría los paneles.
     {
         let sync_layout = sync_layout.clone();
         ui.on_content_resized(move || sync_layout());
@@ -341,6 +492,60 @@ fn main() -> Result<(), slint::PlatformError> {
 
     sync_layout();
     ui.run()
+}
+
+fn int_to_purpose(p: i32) -> PanePurpose {
+    match p {
+        1 => PanePurpose::Tree,
+        2 => PanePurpose::Inspector,
+        3 => PanePurpose::History,
+        4 => PanePurpose::Favorites,
+        5 => PanePurpose::Preview,
+        _ => PanePurpose::Files,
+    }
+}
+
+/// El `PreviewVm` actual a partir del último resultado guardado en el controlador. El
+/// resultado vivo se entrega por `poll()` en el timer y se cachea en el ctrl; aquí lo
+/// reconstruimos para pintarlo. (Mantener la última vista evita parpadeo entre ticks.)
+fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
+    match c.preview.last_view() {
+        Some(preview::ViewCache::Text { text, truncated }) => PreviewVm {
+            mode: 1,
+            text: SharedString::from(text.as_str()),
+            truncated: *truncated,
+            image: slint::Image::default(),
+            message: SharedString::new(),
+        },
+        Some(preview::ViewCache::Image {
+            rgba,
+            width,
+            height,
+        }) => {
+            let buf = SharedPixelBuffer::clone_from_slice(rgba, *width, *height);
+            PreviewVm {
+                mode: 2,
+                text: SharedString::new(),
+                truncated: false,
+                image: slint::Image::from_rgba8(buf),
+                message: SharedString::new(),
+            }
+        }
+        Some(preview::ViewCache::Message(m)) => PreviewVm {
+            mode: 3,
+            text: SharedString::new(),
+            truncated: false,
+            image: slint::Image::default(),
+            message: SharedString::from(m.as_str()),
+        },
+        None => PreviewVm {
+            mode: 0,
+            text: SharedString::new(),
+            truncated: false,
+            image: slint::Image::default(),
+            message: SharedString::new(),
+        },
+    }
 }
 
 fn to_row_data(r: bridge::PlainRow) -> RowData {
@@ -352,5 +557,50 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         is_dir: r.is_dir,
         selected: r.selected,
         focused: r.focused,
+    }
+}
+
+fn to_nav_row(r: bridge::NavRow) -> NavRow {
+    NavRow {
+        label: SharedString::from(r.label.as_str()),
+        path: SharedString::from(r.path.as_str()),
+    }
+}
+
+fn to_hist_row(r: bridge::HistRow) -> HistRow {
+    HistRow {
+        id: r.id as i32,
+        label: SharedString::from(r.label.as_str()),
+        when: SharedString::from(r.when.as_str()),
+        count: r.count,
+        undoable: r.undoable,
+        reason: SharedString::from(r.reason.as_str()),
+    }
+}
+
+fn to_tree_row(r: bridge::TreeRow) -> TreeRow {
+    TreeRow {
+        depth: r.depth,
+        name: SharedString::from(r.name.as_str()),
+        path: SharedString::from(r.path.as_str()),
+        expanded: r.expanded,
+        has_children: r.has_children,
+        is_drive: r.is_drive,
+        active: r.active,
+        loading: r.loading,
+        error: r.error,
+        disk_percent: r.disk_percent,
+    }
+}
+
+fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
+    InspectorVm {
+        present: i.present,
+        name: SharedString::from(i.name.as_str()),
+        kind: SharedString::from(i.kind.as_str()),
+        path: SharedString::from(i.path.as_str()),
+        size: SharedString::from(i.size.as_str()),
+        modified: SharedString::from(i.modified.as_str()),
+        created: SharedString::from(i.created.as_str()),
     }
 }
