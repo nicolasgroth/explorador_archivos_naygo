@@ -1,6 +1,6 @@
-// Naygo — ventana principal (Slint, Fase 2b: multi-panel + paneles especiales).
+// Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -51,6 +51,13 @@ export component AppWindow inherits Window {
     callback fav-remove(string);         // quitar favorito por ruta
     callback fav-pin-current();          // anclar la carpeta del Files activo
     callback undo-entry(int);            // deshacer la entrada del historial
+    // Acciones multi-panel (toolbar):
+    callback swap-panes();               // intercambiar el activo con el otro panel
+    callback clone-pane();               // clonar la carpeta del activo en otro panel
+    // Selector numérico de panel destino (overlay 1..9):
+    in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
+    callback pick-resolve(int);          // elegí el panel número N (clic)
+    callback pick-cancel();              // cancelar (clic fuera)
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -96,6 +103,21 @@ export component AppWindow inherits Window {
                     border-radius: 4px;
                     Text { text: "▾"; color: white; horizontal-alignment: center; vertical-alignment: center; }
                     menu-touch := TouchArea { clicked => { root.add-menu-open = !root.add-menu-open; } }
+                }
+                // Acciones multi-panel: intercambiar ⇄ y clonar ⧉ la carpeta del activo.
+                Rectangle {
+                    width: 30px;
+                    background: swap-touch.has-hover ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "⇄"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    swap-touch := TouchArea { clicked => { root.swap-panes(); } }
+                }
+                Rectangle {
+                    width: 30px;
+                    background: clone-touch.has-hover ? #2a4a7a : #1b2838;
+                    border-radius: 4px;
+                    Text { text: "⧉"; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    clone-touch := TouchArea { clicked => { root.clone-pane(); } }
                 }
                 Rectangle {
                     background: #1b2838;
@@ -208,6 +230,34 @@ export component AppWindow inherits Window {
             MenuItem { label: "Historial"; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
             MenuItem { label: "Favoritos"; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
             MenuItem { label: "Vista previa"; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+        }
+    }
+
+    // Selector de panel destino (overlay 1..9): oscurece cada candidato y pinta su número.
+    // Clic sobre un candidato lo elige; clic fuera (velo) cancela. Los rects llegan en
+    // coordenadas del área de contenido → se desplazan por la altura de la barra superior.
+    if root.picks.length > 0: TouchArea {
+        clicked => { root.pick-cancel(); }
+    }
+    for p in root.picks: Rectangle {
+        x: p.x;
+        y: root.top-bar-h + p.y;
+        width: p.w;
+        height: p.h;
+        background: #000000cc;
+        border-width: 2px;
+        border-color: #4f8ae0;
+        border-radius: 4px;
+        Text {
+            text: p.number;
+            color: white;
+            font-size: 48px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        pick-touch := TouchArea {
+            clicked => { root.pick-resolve(p.number); }
         }
     }
 }

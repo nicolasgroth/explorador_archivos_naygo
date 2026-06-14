@@ -22,6 +22,37 @@ use std::path::{Path, PathBuf};
 
 const PAGE_ROWS: usize = 20;
 
+/// Destino resuelto de una acción «hacia otro panel».
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneTarget {
+    /// Hay exactamente un candidato: se actúa directo.
+    Direct(PaneId),
+    /// Hay varios: la UI muestra el selector 1..9 (orden visual).
+    Pick(Vec<PaneId>),
+    /// No hay otro panel Files: primero hay que dividir el actual.
+    NeedsSplit,
+}
+
+/// Una acción multi-panel pendiente de elegir destino (cuando hay 3+ paneles).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneAction {
+    /// Abrir `dir` (subcarpeta) en el panel destino.
+    OpenDir(PathBuf),
+    /// Intercambiar el origen con el destino.
+    Swap,
+    /// Clonar la carpeta del origen en el destino.
+    Clone,
+}
+
+/// Estado del selector numérico de panel destino (overlay 1..9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PanePick {
+    pub action: PaneAction,
+    pub origin: PaneId,
+    /// Candidatos en orden visual; la posición 0 es el número "1".
+    pub candidates: Vec<PaneId>,
+}
+
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
     pub keymap: KeyMap,
@@ -41,6 +72,11 @@ pub struct WorkspaceCtrl {
     pub undo_history: Vec<UndoEntry>,
     /// Estado del preview (debounce + worker + último resultado).
     pub preview: crate::preview::PreviewState,
+    /// Selector de panel destino en curso (overlay 1..9), si lo hay.
+    pub pending_pick: Option<PanePick>,
+    /// Última área de contenido conocida (la setea la UI en cada layout) para resolver
+    /// destinos por orden visual desde gestos que no traen el área (p. ej. teclado).
+    pub last_area: Rect,
     pub typeahead: String,
     pub ctrl_down: bool,
     pub shift_down: bool,
@@ -64,6 +100,13 @@ impl WorkspaceCtrl {
             recents: RecentDirs::new(),
             undo_history: Vec::new(),
             preview: crate::preview::PreviewState::new(),
+            pending_pick: None,
+            last_area: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
             typeahead: String::new(),
             ctrl_down: false,
             shift_down: false,
@@ -112,6 +155,12 @@ impl WorkspaceCtrl {
     /// Rects de los paneles (id, rect) dado el área de contenido.
     pub fn pane_rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         self.ws.layout.pane_rects(area)
+    }
+
+    /// Recuerda el área de contenido actual (la UI la setea en cada layout) para resolver
+    /// destinos por orden visual desde gestos sin área (teclado).
+    pub fn set_area(&mut self, area: Rect) {
+        self.last_area = area;
     }
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
@@ -206,6 +255,172 @@ impl WorkspaceCtrl {
         // mantener el foco en el Files mejora el flujo (el usuario sigue navegando). Pero
         // por simplicidad y consistencia con add_pane_split, lo dejamos activo.
         self.ws.set_active(new_id);
+    }
+
+    // --- Acciones multi-panel (abrir en otro / swap / clonar) + selector 1..9 ---
+
+    /// Candidatos destino (paneles Files distintos de `origin`) en ORDEN VISUAL
+    /// (izquierda→derecha, arriba→abajo) según los rects del layout en `area`.
+    pub fn target_candidates(&self, origin: PaneId, area: Rect) -> Vec<PaneId> {
+        let others: std::collections::HashSet<PaneId> =
+            self.ws.other_files_panes(origin).into_iter().collect();
+        let mut with_rect: Vec<(PaneId, Rect)> = self
+            .pane_rects(area)
+            .into_iter()
+            .filter(|(id, _)| others.contains(id))
+            .collect();
+        // Orden visual: por fila (y) y luego por columna (x), con tolerancia.
+        with_rect.sort_by(|(_, a), (_, b)| {
+            if (a.y - b.y).abs() > 8.0 {
+                a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+        with_rect.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Resuelve el destino de una acción «hacia otro panel» desde `origin`:
+    /// 0 candidatos → NeedsSplit; 1 → Direct; 2+ → Pick (a numerar 1..9).
+    pub fn resolve_target(&self, origin: PaneId, area: Rect) -> PaneTarget {
+        let cands = self.target_candidates(origin, area);
+        match cands.len() {
+            0 => PaneTarget::NeedsSplit,
+            1 => PaneTarget::Direct(cands[0]),
+            _ => PaneTarget::Pick(cands),
+        }
+    }
+
+    /// Abre la carpeta `dir` en el panel `dest` (sin tocar el origen) y arranca su listado.
+    pub fn open_in_pane(&mut self, dest: PaneId, dir: PathBuf) {
+        if let Some(f) = self.ws.pane_mut(dest).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dir.clone());
+        }
+        self.recents.push(dir.clone());
+        self.start_listing(dest, dir);
+    }
+
+    /// Intercambia las carpetas del panel `a` y el panel `b` (swap ⇄). Ambos navegan
+    /// (queda en sus historiales) y se re-listan. No-op si alguno no es Files.
+    pub fn swap_panes(&mut self, a: PaneId, b: PaneId) {
+        let dir_a = self
+            .ws
+            .pane(a)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone());
+        let dir_b = self
+            .ws
+            .pane(b)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone());
+        let (Some(dir_a), Some(dir_b)) = (dir_a, dir_b) else {
+            return;
+        };
+        if let Some(f) = self.ws.pane_mut(a).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dir_b.clone());
+        }
+        if let Some(f) = self.ws.pane_mut(b).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dir_a.clone());
+        }
+        self.start_listing(a, dir_b);
+        self.start_listing(b, dir_a);
+    }
+
+    /// Clona en `dest` la carpeta del panel `origin` (dest navega a donde está origin).
+    pub fn clone_into(&mut self, origin: PaneId, dest: PaneId) {
+        let Some(dir) = self
+            .ws
+            .pane(origin)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return;
+        };
+        self.open_in_pane(dest, dir);
+    }
+
+    /// Crea un segundo panel Files (split del activo) y devuelve su id, para usarlo como
+    /// destino cuando solo hay un panel. Mantiene el foco en el origen.
+    pub fn split_for_target(&mut self) -> Option<PaneId> {
+        let origin = self.ws.active_id()?;
+        let dir = self
+            .ws
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("C:/"));
+        let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
+        self.ws
+            .layout
+            .split_leaf(origin, SplitDir::Horizontal, new_id);
+        self.start_listing(new_id, dir);
+        // El foco se queda en el origen (estás explorando desde ahí).
+        self.ws.set_active(origin);
+        Some(new_id)
+    }
+
+    /// Punto de entrada de una acción multi-panel. Resuelve el destino: si es directo,
+    /// actúa; si hay varios, deja un `pending_pick` para que la UI muestre el selector;
+    /// si no hay otro panel, divide y usa el nuevo (para OpenDir/Clone; Swap necesita 2).
+    /// Devuelve true si arrancó algún listado (para reactivar el timer).
+    pub fn request_action(&mut self, action: PaneAction, origin: PaneId, area: Rect) -> bool {
+        match self.resolve_target(origin, area) {
+            PaneTarget::Direct(dest) => self.apply_action(action, origin, dest),
+            PaneTarget::Pick(candidates) => {
+                self.pending_pick = Some(PanePick {
+                    action,
+                    origin,
+                    candidates,
+                });
+                false
+            }
+            PaneTarget::NeedsSplit => {
+                if matches!(action, PaneAction::Swap) {
+                    // Swap con un solo panel no tiene sentido: no-op.
+                    return false;
+                }
+                if let Some(dest) = self.split_for_target() {
+                    self.apply_action(action, origin, dest)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Aplica una acción ya resuelta a un destino concreto. Devuelve true si arrancó listado.
+    fn apply_action(&mut self, action: PaneAction, origin: PaneId, dest: PaneId) -> bool {
+        match action {
+            PaneAction::OpenDir(dir) => {
+                self.open_in_pane(dest, dir);
+                true
+            }
+            PaneAction::Swap => {
+                self.swap_panes(origin, dest);
+                true
+            }
+            PaneAction::Clone => {
+                self.clone_into(origin, dest);
+                true
+            }
+        }
+    }
+
+    /// El usuario eligió el panel número `n` (1..9) del selector. Aplica la acción y cierra
+    /// el selector. Devuelve true si arrancó listado. No-op si `n` está fuera de rango.
+    pub fn pick_resolve(&mut self, n: usize) -> bool {
+        let Some(pick) = self.pending_pick.take() else {
+            return false;
+        };
+        let Some(&dest) = pick.candidates.get(n.wrapping_sub(1)) else {
+            // Índice inválido: cancela el selector sin actuar.
+            return false;
+        };
+        self.apply_action(pick.action, pick.origin, dest)
+    }
+
+    /// Cancela el selector de panel (Esc).
+    pub fn pick_cancel(&mut self) {
+        self.pending_pick = None;
     }
 
     // --- Lectura para los paneles especiales (consumen los bridges puros) ---
@@ -410,7 +625,9 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre.
+    /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
+    /// Ctrl presionado y una CARPETA, la abre en OTRO panel (el origen no navega): resuelve
+    /// el destino usando el último área conocida (directo / selector 1..9 / dividir).
     pub fn on_row_double_clicked(&mut self, id: PaneId, pos: usize) -> bool {
         self.ws.set_active(id);
         let target = {
@@ -425,6 +642,10 @@ impl WorkspaceCtrl {
         };
         let Some(e) = target else { return false };
         if e.kind == EntryKind::Directory {
+            // Ctrl+doble-clic en carpeta → abrir en otro panel (el origen no navega).
+            if self.ctrl_down {
+                return self.request_action(PaneAction::OpenDir(e.path), id, self.last_area);
+            }
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(e.path.clone());
             }
@@ -480,6 +701,19 @@ impl WorkspaceCtrl {
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         self.ctrl_down = ctrl;
         self.shift_down = shift;
+        // Si el selector de panel está activo, el teclado lo controla: 1..9 elige, Esc
+        // cancela; cualquier otra tecla se ignora (input suspendido como en un modal).
+        if self.pending_pick.is_some() {
+            if let Some(d) = text.chars().next().and_then(|c| c.to_digit(10)) {
+                if d >= 1 {
+                    return self.pick_resolve(d as usize);
+                }
+            }
+            if text.starts_with(crate::keys::escape_char()) {
+                self.pick_cancel();
+            }
+            return false;
+        }
         let Some(chord) = crate::keys::chord_from(text, ctrl, shift, alt) else {
             self.typeahead(text);
             return false;
@@ -771,5 +1005,103 @@ mod tests {
             .map(|n| n.expanded)
             .unwrap();
         assert!(!node_expanded, "la raíz quedó colapsada");
+    }
+
+    fn area() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        }
+    }
+
+    /// resolve_target: 1 panel → NeedsSplit; 2 → Direct(el otro); 3+ → Pick.
+    #[test]
+    fn resolve_target_segun_cantidad_de_paneles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        // Un solo panel → hay que dividir.
+        assert_eq!(c.resolve_target(a, area()), PaneTarget::NeedsSplit);
+        // Dos paneles → destino directo (el otro).
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        assert_eq!(c.resolve_target(b, area()), PaneTarget::Direct(a));
+        // Tres paneles → selector (Pick con 2 candidatos).
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let third = c.active_id().unwrap();
+        match c.resolve_target(third, area()) {
+            PaneTarget::Pick(cands) => assert_eq!(cands.len(), 2),
+            other => panic!("esperaba Pick, fue {other:?}"),
+        }
+    }
+
+    /// Swap intercambia las carpetas de dos paneles.
+    #[test]
+    fn swap_intercambia_carpetas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("otra");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let a = c.active_id().unwrap();
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let b = c.active_id().unwrap();
+        // Mandar b a la subcarpeta.
+        c.open_in_pane(b, sub.clone());
+        assert!(drain(&mut c));
+        let dir_a_antes = c.path_of(a);
+        let dir_b_antes = c.path_of(b);
+        c.swap_panes(a, b);
+        assert_eq!(c.path_of(a), dir_b_antes);
+        assert_eq!(c.path_of(b), dir_a_antes);
+    }
+
+    /// Con 3+ paneles, una acción deja un pending_pick; elegir el número lo aplica.
+    #[test]
+    fn selector_pendiente_y_resolucion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("dest");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let origin = c.active_id().unwrap();
+        // Clonar desde el origen: 3 paneles → queda pendiente el selector con 2 candidatos.
+        let acted = c.request_action(PaneAction::Clone, origin, area());
+        assert!(!acted, "no actúa de inmediato: espera la elección");
+        assert!(c.pending_pick.is_some());
+        let candidates = c.pending_pick.as_ref().unwrap().candidates.clone();
+        assert_eq!(candidates.len(), 2);
+        // Elegir el panel 1: clona la carpeta del origen ahí.
+        assert!(c.pick_resolve(1));
+        assert!(drain(&mut c));
+        assert!(c.pending_pick.is_none(), "el selector se cerró");
+        assert_eq!(c.path_of(candidates[0]), c.path_of(origin));
+    }
+
+    /// Esc (vía pick_cancel) cierra el selector sin actuar.
+    #[test]
+    fn cancelar_selector() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let origin = c.active_id().unwrap();
+        c.request_action(PaneAction::Clone, origin, area());
+        assert!(c.pending_pick.is_some());
+        c.pick_cancel();
+        assert!(c.pending_pick.is_none());
     }
 }

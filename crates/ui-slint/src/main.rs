@@ -57,6 +57,8 @@ impl PaneModels {
 struct Models {
     panes: Rc<VecModel<PaneVm>>,
     splits: Rc<VecModel<SplitVm>>,
+    /// Candidatos del selector de panel destino (vacío = sin selector).
+    picks: Rc<VecModel<PickVm>>,
     /// Modelos de lista estables por panel (se actualizan in situ, no se recrean).
     per_pane: HashMap<PaneId, PaneModels>,
     /// IDs de panel en el orden actual del modelo `panes`.
@@ -70,6 +72,7 @@ impl Models {
         Models {
             panes: Rc::new(VecModel::default()),
             splits: Rc::new(VecModel::default()),
+            picks: Rc::new(VecModel::default()),
             per_pane: HashMap::new(),
             pane_ids: Vec::new(),
             area: Rect {
@@ -114,6 +117,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
     ui.set_splits(ModelRc::from(models.borrow().splits.clone()));
+    ui.set_picks(ModelRc::from(models.borrow().picks.clone()));
 
     let area_of = {
         let ui_weak = ui.as_weak();
@@ -220,6 +224,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         Rc::new(move || {
             let area = area_of();
+            ctrl.borrow_mut().set_area(area);
             let pane_rects = ctrl.borrow().pane_rects(area);
             let split_handles = ctrl.borrow().split_handles(area);
             let new_ids: Vec<PaneId> = pane_rects.iter().map(|(id, _)| *id).collect();
@@ -277,6 +282,34 @@ fn main() -> Result<(), slint::PlatformError> {
                 m.pane_ids = new_ids;
                 m.area = area;
             }
+
+            // Selector de panel destino: rect de cada candidato (orden visual) + su número.
+            // Se reconstruye siempre (puede aparecer/desaparecer sin cambio de estructura).
+            let picks: Vec<PickVm> = {
+                let c = ctrl.borrow();
+                match &c.pending_pick {
+                    Some(pick) => {
+                        let rects: std::collections::HashMap<PaneId, Rect> =
+                            c.pane_rects(area).into_iter().collect();
+                        pick.candidates
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, id)| {
+                                rects.get(id).map(|r| PickVm {
+                                    x: r.x,
+                                    y: r.y,
+                                    w: r.w,
+                                    h: r.h,
+                                    number: (i + 1) as i32,
+                                })
+                            })
+                            .collect()
+                    }
+                    None => Vec::new(),
+                }
+            };
+            m.picks.set_vec(picks);
+
             drop(m);
             sync_rows();
         })
@@ -461,6 +494,66 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_undo_entry(move |_id| {
             sync_rows();
+        });
+    }
+    // --- Acciones multi-panel (swap / clonar) + selector de destino ---
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_swap_panes(move || {
+            let area = area_of();
+            let acted = {
+                let mut c = ctrl.borrow_mut();
+                let Some(origin) = c.active_id() else {
+                    return;
+                };
+                c.request_action(workspace_ctrl::PaneAction::Swap, origin, area)
+            };
+            if acted {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_clone_pane(move || {
+            let area = area_of();
+            let acted = {
+                let mut c = ctrl.borrow_mut();
+                let Some(origin) = c.active_id() else {
+                    return;
+                };
+                c.request_action(workspace_ctrl::PaneAction::Clone, origin, area)
+            };
+            if acted {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_pick_resolve(move |n| {
+            if ctrl.borrow_mut().pick_resolve(n as usize) {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_pick_cancel(move || {
+            ctrl.borrow_mut().pick_cancel();
+            sync_layout();
         });
     }
     {

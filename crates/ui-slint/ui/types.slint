@@ -60,6 +60,15 @@ export struct PreviewVm {
     message: string,
 }
 
+// Un candidato del selector de panel destino (overlay 1..9): su rect + el número a pintar.
+export struct PickVm {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    number: int,
+}
+
 // Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
 export struct SplitVm {
     index: int,
