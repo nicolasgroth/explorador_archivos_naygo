@@ -965,6 +965,33 @@ impl WorkspaceCtrl {
         false
     }
 
+    /// Recibe rutas externas soltadas (drag&drop OLE, Fase 5D) sobre el panel `dest`: copia
+    /// (o mueve si `move_`) a su carpeta, reusando el engine de operaciones de F3 (con sus
+    /// diálogos de conflicto, panel de progreso y cancelación). No-op si el panel no es Files o
+    /// no hay rutas. Devuelve true si arrancó la operación.
+    pub fn drop_external(
+        &mut self,
+        dest: PaneId,
+        sources: Vec<std::path::PathBuf>,
+        move_: bool,
+    ) -> bool {
+        if sources.is_empty() {
+            return false;
+        }
+        let Some(dir) = self
+            .ws
+            .pane(dest)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return false;
+        };
+        let label = if move_ { "Mover" } else { "Copiar" };
+        let req = naygo_core::ops::transfer(move_, sources, dir);
+        self.ops.start_op(req, label.to_string(), true);
+        true
+    }
+
     /// Eliminar la selección: abre el modal de confirmación.
     pub fn op_delete(&mut self, permanent: bool) {
         let paths = self.selected_paths();

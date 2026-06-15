@@ -434,6 +434,15 @@ fn main() -> Result<(), slint::PlatformError> {
             .unwrap_or_else(|| std::path::PathBuf::from("C:/")),
     );
 
+    // Drag&drop OLE — RECIBIR (Fase 5D): canal de archivos soltados sobre la ventana. El
+    // registro del IDropTarget se hace en el primer tick (cuando el HWND ya es válido) y el
+    // guard vive toda la sesión. Por simplicidad el drop va al panel ACTIVO (fallback del
+    // diseño: no se mapea el punto de drop a un panel concreto).
+    let (drop_tx, drop_rx) = std::sync::mpsc::channel::<naygo_platform::drop_target::DropPayload>();
+    let drop_rx = Rc::new(drop_rx);
+    let drop_guard: Rc<RefCell<Option<naygo_platform::drop_target::DropTargetGuard>>> =
+        Rc::new(RefCell::new(None));
+
     // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
     // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     let timer = Rc::new(slint::Timer::default());
@@ -444,6 +453,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let devices = devices.clone();
         let home = home.clone();
         let waker = waker.clone();
+        let ui_weak = ui.as_weak();
+        let drop_tx = drop_tx.clone();
+        let drop_rx = drop_rx.clone();
+        let drop_guard = drop_guard.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -451,11 +464,37 @@ fn main() -> Result<(), slint::PlatformError> {
             let waker = waker.clone();
             let devices = devices.clone();
             let home = home.clone();
+            let ui_weak = ui_weak.clone();
+            let drop_tx = drop_tx.clone();
+            let drop_rx = drop_rx.clone();
+            let drop_guard = drop_guard.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
                 move || {
                     let now = std::time::Instant::now();
+                    // Registrar el destino de drop OLE una sola vez, cuando el HWND ya es válido
+                    // (primer tick con la ventana realizada). El guard vive toda la sesión.
+                    if drop_guard.borrow().is_none() {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            if let Some(hwnd) = naygo_hwnd(&ui) {
+                                let g = naygo_platform::drop_target::register(
+                                    hwnd,
+                                    drop_tx.clone(),
+                                    waker.clone(),
+                                );
+                                *drop_guard.borrow_mut() = Some(g);
+                            }
+                        }
+                    }
+                    // Drag&drop OLE — RECIBIR (F5D): archivos soltados sobre la ventana → copiar
+                    // (o mover si Shift) a la carpeta del panel activo (fallback del diseño).
+                    while let Ok(payload) = drop_rx.try_recv() {
+                        if let Some(active) = ctrl.borrow().active_id() {
+                            ctrl.borrow_mut()
+                                .drop_external(active, payload.paths, payload.move_);
+                        }
+                    }
                     // Watcher de dispositivos (F5B): si cambiaron las unidades (USB), reubicar
                     // los paneles cuya carpeta desapareció y re-listarlos.
                     if devices.drives_changed() {

@@ -125,6 +125,23 @@ pub(crate) mod windows_impl {
         }
         let hdrop = HDROP(handle.0);
 
+        let paths = extract_hdrop_paths(hdrop);
+        if paths.is_empty() {
+            return None;
+        }
+
+        let cut = read_preferred_drop_effect().unwrap_or(false);
+        Some(ClipboardContent::Files { paths, cut })
+    }
+
+    /// Extrae la lista de rutas de un `HDROP` (estructura DROPFILES) usando `DragQueryFileW`.
+    /// Es la lógica compartida entre el portapapeles (CF_HDROP del clipboard) y el destino
+    /// de drop OLE (`drop_target`), que recibe un HDROP equivalente desde el `IDataObject`.
+    /// No libera el HDROP: la propiedad/liberación es del llamador (clipboard → no se libera;
+    /// drop OLE → `ReleaseStgMedium` sobre el STGMEDIUM).
+    ///
+    /// SAFETY: `hdrop` debe apuntar a un bloque DROPFILES válido mientras dure la llamada.
+    pub(crate) unsafe fn extract_hdrop_paths(hdrop: HDROP) -> Vec<PathBuf> {
         // 0xFFFFFFFF → número de archivos.
         let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, None);
         let mut paths = Vec::with_capacity(count as usize);
@@ -143,13 +160,7 @@ pub(crate) mod windows_impl {
             buf.truncate(written as usize);
             paths.push(PathBuf::from(String::from_utf16_lossy(&buf)));
         }
-
-        if paths.is_empty() {
-            return None;
-        }
-
-        let cut = read_preferred_drop_effect().unwrap_or(false);
-        Some(ClipboardContent::Files { paths, cut })
+        paths
     }
 
     /// Lee "Preferred DropEffect" → `true` si es MOVE (cortar).
