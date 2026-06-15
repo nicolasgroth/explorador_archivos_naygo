@@ -540,6 +540,23 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_add_pane_dir(move |dir| {
+            // 0=derecha 1=abajo 2=izquierda 3=arriba.
+            let (split, first) = match dir {
+                1 => (SplitDir::Vertical, false),
+                2 => (SplitDir::Horizontal, true),
+                3 => (SplitDir::Vertical, true),
+                _ => (SplitDir::Horizontal, false),
+            };
+            ctrl.borrow_mut().add_pane_split_dir(split, first);
+            start_timer();
+            sync_layout();
+        });
+    }
 
     // --- Ventana de configuración (Fase 4) ---
     // Reconstruye el SettingsVm + filas de atajos desde ConfigCtrl y los vuelca a la UI.
@@ -1157,11 +1174,12 @@ fn main() -> Result<(), slint::PlatformError> {
             let area = area_of();
             let preview = ctrl.borrow().drop_preview(PaneId(id as u64), x, y, area);
             match preview {
-                Some(r) => {
+                Some((r, is_tab)) => {
                     ui.set_drop_x(r.x);
                     ui.set_drop_y(r.y);
                     ui.set_drop_w(r.w);
                     ui.set_drop_h(r.h);
+                    ui.set_drop_is_tab(is_tab);
                 }
                 None => {
                     ui.set_drop_w(0.0);

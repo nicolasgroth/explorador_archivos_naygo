@@ -422,5 +422,10 @@
   "slint.cfg.export_lang": "Export language",
   "slint.cfg.export_theme": "Export theme",
   "slint.cfg.export_config": "Export settings",
-  "slint.cfg.import": "Import pack…"
+  "slint.cfg.import": "Import pack…",
+  "slint.split.right": "Split right",
+  "slint.split.down": "Split down",
+  "slint.split.left": "Split left",
+  "slint.split.up": "Split up",
+  "slint.drop.as_tab": "tab"
 }

@@ -77,9 +77,15 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_preview_title(c.t("pane.preview.title").into());
     tr.set_preview_select(c.t("slint.preview.select").into());
     tr.set_preview_truncated(c.t("slint.preview.truncated").into());
+    // Menú de dirección del botón "+".
+    tr.set_split_right(c.t("slint.split.right").into());
+    tr.set_split_down(c.t("slint.split.down").into());
+    tr.set_split_left(c.t("slint.split.left").into());
+    tr.set_split_up(c.t("slint.split.up").into());
     // Otros.
     tr.set_fav_pin(c.t("slint.fav.pin").into());
     tr.set_drag_move(c.t("slint.drag.move").into());
+    tr.set_drop_as_tab(c.t("slint.drop.as_tab").into());
     // Ventana de configuración.
     tr.set_cfg_title(c.t("settings.title").into());
     tr.set_cfg_close(c.t("slint.cfg.close").into());

@@ -397,9 +397,16 @@ impl WorkspaceCtrl {
         self.ws.set_active(id);
     }
 
-    /// Agrega un panel Files DIVIDIENDO el leaf activo (horizontal). Lo deja activo y
-    /// arranca su listado en la misma carpeta que el activo (o el home).
+    /// Agrega un panel Files dividiendo el leaf activo lado a lado (horizontal, el nuevo a la
+    /// derecha). Atajo de la dirección por defecto.
     pub fn add_pane_split(&mut self) {
+        self.add_pane_split_dir(SplitDir::Horizontal, false);
+    }
+
+    /// Agrega un panel Files dividiendo el leaf activo en la dirección dada. `first=true` pone
+    /// el panel NUEVO antes (a la izquierda / arriba); `false`, después (derecha / abajo). Lo
+    /// deja activo y arranca su listado en la misma carpeta que el activo (o el home).
+    pub fn add_pane_split_dir(&mut self, dir_split: SplitDir, first: bool) {
         let dir = self
             .ws
             .active_files()
@@ -408,9 +415,11 @@ impl WorkspaceCtrl {
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
         if let Some(active) = active {
-            self.ws
-                .layout
-                .split_leaf(active, SplitDir::Horizontal, new_id);
+            self.ws.layout.split_leaf(active, dir_split, new_id);
+            if first {
+                // split_leaf pone el nuevo como `second`; si se pidió antes, intercambiar.
+                self.ws.layout.swap_split_children(active, new_id);
+            }
         }
         self.ws.set_active(new_id);
         self.start_listing(new_id, dir);
@@ -637,9 +646,16 @@ impl WorkspaceCtrl {
     }
 
     /// El rect de la zona de drop bajo el punto `(px, py)` (para resaltarla durante el
-    /// arrastre). `None` si el punto no cae sobre un panel o sobre el propio arrastrado.
-    pub fn drop_preview(&self, dragged: PaneId, px: f32, py: f32, area: Rect) -> Option<Rect> {
-        use naygo_core::workspace::layout::{drop_hit, drop_zones};
+    /// arrastre) y si esa zona es el CENTRO (apilar como pestaña, que la UI pinta distinto).
+    /// `None` si el punto no cae sobre un panel o sobre el propio arrastrado.
+    pub fn drop_preview(
+        &self,
+        dragged: PaneId,
+        px: f32,
+        py: f32,
+        area: Rect,
+    ) -> Option<(Rect, bool)> {
+        use naygo_core::workspace::layout::{drop_hit, drop_zones, DropZone};
         let panes = self.pane_rects(area);
         let (target, zone) = drop_hit(&panes, px, py)?;
         if target == dragged {
@@ -649,10 +665,11 @@ impl WorkspaceCtrl {
             .iter()
             .find(|(id, _)| *id == target)
             .map(|(_, r)| *r)?;
+        let is_center = zone == DropZone::Center;
         drop_zones(target_rect)
             .into_iter()
             .find(|(z, _)| *z == zone)
-            .map(|(_, r)| r)
+            .map(|(_, r)| (r, is_center))
     }
 
     /// Reacomoda por arrastre: suelta el panel `dragged` en el punto `(px, py)` del área

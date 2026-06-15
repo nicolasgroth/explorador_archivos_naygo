@@ -126,6 +126,8 @@ export component AppWindow inherits Window {
     in property <[SplitVm]> splits;
     callback go-up();
     callback add-pane();
+    callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
+                                      // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
@@ -155,6 +157,9 @@ export component AppWindow inherits Window {
     in property <length> drop-y;
     in property <length> drop-w;
     in property <length> drop-h;
+    // La zona es el CENTRO (apilar como pestaña): la UI lo pinta como una pestaña, no como
+    // un relleno de borde, para que se entienda que va a agrupar en tabs.
+    in property <bool> drop-is-tab;
     // Selector numérico de panel destino (overlay 1..9):
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elegí el panel número N (clic)
@@ -190,6 +195,8 @@ export component AppWindow inherits Window {
     callback ctx-dismiss();
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
+    // Estado del menú del botón "+" (elegir dirección de la división).
+    property <bool> dir-menu-open: false;
 
     // --- Ventana de configuración (Fase 4) ---
     in-out property <bool> config-open: false;
@@ -249,7 +256,8 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: "+";
                     tip: Tr.toolbar-add-tip;
-                    clicked => { root.add-pane(); }
+                    highlight: root.dir-menu-open;
+                    clicked => { root.dir-menu-open = !root.dir-menu-open; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-panel;
@@ -436,6 +444,27 @@ export component AppWindow inherits Window {
                 border-width: 2px;
                 border-color: Theme.accent;
                 border-radius: 4px;
+                // Si la zona es el centro (apilar como pestaña), dibujar una "pestaña" arriba a
+                // la izquierda con su etiqueta, para que se entienda que va a AGRUPAR en tabs
+                // (no dividir). El borde discontinuo del relleno lo distingue de un split.
+                if root.drop-is-tab: Rectangle {
+                    x: 8px;
+                    y: 6px;
+                    width: tab-label.preferred-width + 18px;
+                    height: 22px;
+                    background: Theme.selection-bg;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.accent;
+                    tab-label := Text {
+                        text: "+ " + Tr.drop-as-tab;
+                        color: white;
+                        font-size: 12px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
         // Panel de progreso de operaciones (sobre la barra de estado; oculto si no hay ops).
@@ -545,6 +574,30 @@ export component AppWindow inherits Window {
             MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+        }
+    }
+
+    // Menú del botón "+": elegir la dirección de la división (derecha/abajo/izquierda/arriba).
+    // Velo invisible cierra al hacer clic fuera.
+    if root.dir-menu-open: TouchArea {
+        clicked => { root.dir-menu-open = false; }
+    }
+    if root.dir-menu-open: Rectangle {
+        x: 54px;
+        y: root.top-bar-h + 2px;
+        width: 170px;
+        height: dir-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        dir-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            MenuItem { label: Tr.split-right; clicked => { root.add-pane-dir(0); root.dir-menu-open = false; } }
+            MenuItem { label: Tr.split-down; clicked => { root.add-pane-dir(1); root.dir-menu-open = false; } }
+            MenuItem { label: Tr.split-left; clicked => { root.add-pane-dir(2); root.dir-menu-open = false; } }
+            MenuItem { label: Tr.split-up; clicked => { root.add-pane-dir(3); root.dir-menu-open = false; } }
         }
     }
 
