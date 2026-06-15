@@ -1,0 +1,199 @@
+// Naygo — diálogos modales de operaciones de archivo (Fase 3).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Un único componente `OpDialogs` que pinta el modal ACTIVO según `vm.kind`
+// (0=ninguno). Overlay con velo (clic fuera cancela). Las decisiones salen por callbacks
+// al controlador. Sin glifos Unicode raros (el render por software no los dibuja): solo
+// texto. Los modales: confirmar borrado, conflicto por-ítem, pedir nombre, pegar preview.
+import { OpDialogVm } from "types.slint";
+
+// Botón de diálogo reutilizable (texto legible + hover).
+component DlgBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: txt.preferred-width + 24px;
+    height: 28px;
+    border-radius: 4px;
+    background: !root.enabled
+        ? #141d2b
+        : (touch.has-hover
+            ? (root.danger ? #6a2a30 : #2a4a7a)
+            : (root.danger ? #4a2026 : (root.primary ? #224066 : #1b2838)));
+    txt := Text {
+        text: root.label;
+        color: root.enabled ? white : #566;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component OpDialogs inherits Rectangle {
+    in property <OpDialogVm> vm;
+    // Confirmar borrado:
+    callback delete-confirm();
+    callback delete-cancel();
+    // Conflicto: action 0=sobrescribir 1=saltar 2=renombrar; all=aplicar a todos.
+    callback conflict-decide(int, bool);
+    // Pedir nombre:
+    callback name-changed(string);   // para revalidar mientras se escribe
+    callback name-confirm();
+    callback name-cancel();
+    // Pegar preview:
+    callback paste-confirm();
+    callback paste-cancel();
+
+    // Solo visible si hay un modal activo.
+    visible: root.vm.kind > 0;
+    // Velo: cubre todo y captura clics fuera de la tarjeta (cancela según el tipo).
+    background: #000000aa;
+    veil := TouchArea {
+        clicked => {
+            if (root.vm.kind == 1) { root.delete-cancel(); }
+            if (root.vm.kind == 2) { root.conflict-decide(1, false); } // fuera = saltar
+            if (root.vm.kind == 3) { root.name-cancel(); }
+            if (root.vm.kind == 4) { root.paste-cancel(); }
+        }
+    }
+
+    // Tarjeta centrada.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: card.preferred-height + 32px;
+        background: #1b2838;
+        border-color: #2a4a7a;
+        border-width: 1px;
+        border-radius: 8px;
+        // Captura los clics dentro de la tarjeta (no propaga al velo).
+        TouchArea {}
+        card := VerticalLayout {
+            padding: 16px;
+            spacing: 14px;
+
+            // --- 1: Confirmar borrado ---
+            if root.vm.kind == 1: VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: root.vm.del-permanent
+                        ? "¿Eliminar permanentemente " + root.vm.del-count + " elemento(s)?"
+                        : "¿Enviar " + root.vm.del-count + " elemento(s) a la papelera?";
+                    color: white;
+                    wrap: word-wrap;
+                }
+                if root.vm.del-permanent: Text {
+                    text: "Esta acción no se puede deshacer.";
+                    color: #e08a8a;
+                    font-size: 12px;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    DlgBtn { label: "Cancelar"; clicked => { root.delete-cancel(); } }
+                    DlgBtn { label: "Eliminar"; danger: true; clicked => { root.delete-confirm(); } }
+                }
+            }
+
+            // --- 2: Conflicto por-ítem ---
+            if root.vm.kind == 2: VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: "Ya existe «" + root.vm.conflict-name + "». ¿Qué hacer?";
+                    color: white;
+                    wrap: word-wrap;
+                }
+                apply-all-row := HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle {
+                        width: 16px; height: 16px;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: #4f8ae0;
+                        background: all-touch.has-hover ? #224066 : (apply-all-row.checked ? #4f8ae0 : transparent);
+                        Text { text: apply-all-row.checked ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        all-touch := TouchArea { clicked => { apply-all-row.checked = !apply-all-row.checked; } }
+                    }
+                    Text { text: "Aplicar a todos los conflictos"; color: #cdd; vertical-alignment: center; }
+                    property <bool> checked: false;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    DlgBtn { label: "Saltar"; clicked => { root.conflict-decide(1, apply-all-row.checked); } }
+                    DlgBtn { label: "Renombrar"; clicked => { root.conflict-decide(2, apply-all-row.checked); } }
+                    DlgBtn { label: "Sobrescribir"; danger: true; clicked => { root.conflict-decide(0, apply-all-row.checked); } }
+                }
+            }
+
+            // --- 3: Pedir nombre ---
+            if root.vm.kind == 3: VerticalLayout {
+                spacing: 12px;
+                Text { text: root.vm.name-title; color: white; }
+                Rectangle {
+                    height: 30px;
+                    background: #0e1622;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: name-input.has-focus ? #4f8ae0 : #2a3a52;
+                    name-input := TextInput {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        color: white;
+                        vertical-alignment: center;
+                        text: root.vm.name-value;
+                        edited => { root.name-changed(self.text); }
+                        accepted => { if (root.vm.name-valid) { root.name-confirm(); } }
+                    }
+                }
+                if !root.vm.name-valid: Text {
+                    text: "Nombre no válido.";
+                    color: #e08a8a;
+                    font-size: 12px;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    DlgBtn { label: "Cancelar"; clicked => { root.name-cancel(); } }
+                    DlgBtn { label: "Aceptar"; primary: true; enabled: root.vm.name-valid; clicked => { root.name-confirm(); } }
+                }
+            }
+
+            // --- 4: Pegar preview (texto/imagen) ---
+            if root.vm.kind == 4: VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: root.vm.paste-is-image ? "Pegar imagen como:" : "Pegar texto como:";
+                    color: white;
+                }
+                Text { text: root.vm.paste-name; color: #cdd; }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    DlgBtn { label: "Cancelar"; clicked => { root.paste-cancel(); } }
+                    DlgBtn { label: "Crear"; primary: true; clicked => { root.paste-confirm(); } }
+                }
+            }
+        }
+    }
+
+    // Enfocar el TextInput al abrir el modal de nombre (para escribir directo).
+    forward-focus: name-focus-scope;
+    name-focus-scope := FocusScope {
+        // Vacío: solo para que Enter/Esc lleguen; el TextInput maneja su propio foco.
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                if (root.vm.kind == 1) { root.delete-cancel(); }
+                if (root.vm.kind == 3) { root.name-cancel(); }
+                if (root.vm.kind == 4) { root.paste-cancel(); }
+            }
+            accept
+        }
+    }
+}

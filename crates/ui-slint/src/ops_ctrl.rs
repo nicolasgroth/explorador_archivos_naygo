@@ -6,9 +6,8 @@
 // El motor de core corre en su hilo; `pump_ops` drena el progreso desde el slint::Timer.
 // Espeja el patrón del NaygoApp de egui, pero aislado del resto del controlador.
 //
-// NOTA (F3 en construcción): algunos campos/métodos (los modales, resolve_conflict,
-// cancel_op, el journal/Resume) los consumen las tareas siguientes del plan (diálogos,
-// panel de progreso, journal). El allow se retira al cerrar F3.
+// NOTA (F3 en construcción): el journal (Resume, journal_id, config_dir) lo consume la
+// tarea de journal. El allow se retira al cerrar F3.
 #![allow(dead_code)]
 
 use naygo_core::cancel::CancellationToken;
@@ -344,6 +343,155 @@ impl OpsCtrl {
         self.active_ops
             .retain(|o| o.rx.is_some() || !o.started || o.pending.is_some());
     }
+
+    // --- Datos para la UI (modal activo + filas de progreso) ---
+
+    /// Datos planos del modal activo para Slint. `kind`: 0=ninguno 1=borrado 2=conflicto
+    /// 3=nombre 4=pegar. (Resume=5 lo agrega la fase de journal.)
+    pub fn dialog_vm(&self) -> OpDialogVmData {
+        match &self.pending_dialog {
+            Some(OpDialog::ConfirmDelete { sources, permanent }) => OpDialogVmData {
+                kind: 1,
+                del_count: sources.len() as i32,
+                del_permanent: *permanent,
+                ..Default::default()
+            },
+            Some(OpDialog::Conflict { prompt, .. }) => OpDialogVmData {
+                kind: 2,
+                conflict_name: prompt
+                    .existing
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            Some(OpDialog::NameInput { purpose, buf, .. }) => OpDialogVmData {
+                kind: 3,
+                name_title: match purpose {
+                    NamePurpose::NewFile => "Nuevo archivo".to_string(),
+                    NamePurpose::NewDir => "Nueva carpeta".to_string(),
+                    NamePurpose::Rename(_) => "Renombrar".to_string(),
+                },
+                name_value: buf.clone(),
+                name_valid: naygo_core::ops::names::is_valid_name(buf),
+                ..Default::default()
+            },
+            _ => OpDialogVmData::default(),
+        }
+    }
+
+    /// Filas del panel de progreso (una por op activa o terminada con resumen).
+    pub fn op_rows(&self) -> Vec<OpRowData> {
+        self.active_ops
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let running = o.rx.is_some();
+                let percent = match &o.progress {
+                    Some(p) if p.bytes_total > 0 => {
+                        (p.bytes_done as f32 / p.bytes_total as f32) * 100.0
+                    }
+                    _ if o.summary.is_some() => 100.0,
+                    _ => 0.0,
+                };
+                let status = if !o.started {
+                    "en cola".to_string()
+                } else if let Some(s) = &o.summary {
+                    format!(
+                        "hecho: {} copiados, {} saltados, {} fallidos",
+                        s.count_done(),
+                        s.count_skipped(),
+                        s.count_failed()
+                    )
+                } else if o.awaiting_conflict.is_some() {
+                    "esperando decisión…".to_string()
+                } else {
+                    "en curso…".to_string()
+                };
+                OpRowData {
+                    index: i as i32,
+                    label: o.label.clone(),
+                    percent,
+                    status,
+                    running,
+                }
+            })
+            .collect()
+    }
+
+    // --- Aplicar decisiones de los modales ---
+
+    /// Actualiza el texto del campo de nombre mientras el usuario escribe (revalida).
+    pub fn name_changed(&mut self, value: String) {
+        if let Some(OpDialog::NameInput { buf, .. }) = &mut self.pending_dialog {
+            *buf = value;
+        }
+    }
+
+    /// Confirma el modal de nombre: crea archivo/carpeta o renombra. Devuelve true si
+    /// arrancó una op (para reactivar el timer).
+    pub fn name_confirm(&mut self) -> bool {
+        let Some(OpDialog::NameInput { purpose, dir, buf }) = self.pending_dialog.take() else {
+            return false;
+        };
+        if !naygo_core::ops::names::is_valid_name(&buf) {
+            // Reabrir el modal con el valor inválido (no debería pasar: el botón se inhabilita).
+            self.pending_dialog = Some(OpDialog::NameInput { purpose, dir, buf });
+            return false;
+        }
+        let (req, label) = match purpose {
+            NamePurpose::NewFile => (naygo_core::ops::create(dir, buf, false), "Nuevo archivo"),
+            NamePurpose::NewDir => (naygo_core::ops::create(dir, buf, true), "Nueva carpeta"),
+            NamePurpose::Rename(source) => (naygo_core::ops::rename(source, buf), "Renombrar"),
+        };
+        self.start_op(req, label.to_string(), true);
+        true
+    }
+
+    /// Cancela el modal activo (botón Cancelar o Esc).
+    pub fn dialog_cancel(&mut self) {
+        self.pending_dialog = None;
+    }
+
+    /// Confirma el borrado pendiente: lanza la op. Devuelve true si arrancó algo.
+    pub fn delete_confirm(&mut self) -> bool {
+        let Some(OpDialog::ConfirmDelete { sources, permanent }) = self.pending_dialog.take()
+        else {
+            return false;
+        };
+        let req = naygo_core::ops::delete(sources, !permanent);
+        let label = if permanent {
+            "Eliminar permanente"
+        } else {
+            "Enviar a papelera"
+        };
+        self.start_op(req, label.to_string(), true);
+        true
+    }
+}
+
+/// Datos planos del modal activo (espejo de `OpDialogVm` de Slint).
+#[derive(Clone, Debug, Default)]
+pub struct OpDialogVmData {
+    pub kind: i32,
+    pub del_count: i32,
+    pub del_permanent: bool,
+    pub conflict_name: String,
+    pub name_title: String,
+    pub name_value: String,
+    pub name_valid: bool,
+    pub paste_name: String,
+    pub paste_is_image: bool,
+}
+
+/// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
+#[derive(Clone, Debug)]
+pub struct OpRowData {
+    pub index: i32,
+    pub label: String,
+    pub percent: f32,
+    pub status: String,
+    pub running: bool,
 }
 
 /// Segundos desde la época Unix (para el timestamp del UndoEntry).

@@ -1,0 +1,68 @@
+// Naygo — panel de progreso de operaciones (Fase 3).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Overlay inferior (sobre la barra de estado): una fila por operación con etiqueta, barra
+// de progreso, estado y botón cancelar. Visible solo si hay operaciones. Sin glifos raros.
+import { ListView } from "std-widgets.slint";
+import { OpRowVm } from "types.slint";
+
+export component OpsPanel inherits Rectangle {
+    in property <[OpRowVm]> rows;
+    callback cancel(int);   // índice de la op a cancelar
+
+    visible: root.rows.length > 0;
+    height: root.rows.length > 0 ? min(rows.length * 30px + 8px, 140px) : 0px;
+    background: #10192a;
+    border-color: #2a3a52;
+    border-width: 1px;
+
+    ListView {
+        for r in root.rows: Rectangle {
+            height: 30px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: 8px;
+                // Etiqueta + barra de progreso apiladas.
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: r.label + "   —   " + r.status;
+                        color: #cdd;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    // Barra de progreso (track + relleno proporcional).
+                    Rectangle {
+                        height: 6px;
+                        background: #1b2838;
+                        border-radius: 3px;
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width * (r.percent / 100);
+                            height: parent.height;
+                            background: r.running ? #4f8ae0 : #3a6a3a;
+                            border-radius: 3px;
+                        }
+                    }
+                }
+                // Cancelar (solo si está corriendo).
+                Rectangle {
+                    width: 22px;
+                    y: (parent.height - self.height) / 2;
+                    height: 22px;
+                    background: x-touch.has-hover ? #5a2630 : transparent;
+                    border-radius: 3px;
+                    visible: r.running;
+                    Text { text: "x"; color: #c99; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    x-touch := TouchArea { clicked => { root.cancel(r.index); } }
+                }
+            }
+        }
+    }
+}

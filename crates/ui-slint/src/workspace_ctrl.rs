@@ -747,6 +747,25 @@ impl WorkspaceCtrl {
         });
     }
 
+    /// Deshace la entrada del historial con `id` (botón "Deshacer" del panel Historial).
+    /// Valida, re-emite el inverso y la marca deshecha. Devuelve true si arrancó algo.
+    pub fn undo_entry(&mut self, id: u64) -> bool {
+        let Some(idx) = self.ops.undo_history.iter().position(|e| e.id == id) else {
+            return false;
+        };
+        if self.ops.undo_history[idx].undone
+            || naygo_core::ops::undo::validate(&self.ops.undo_history[idx].actions).is_err()
+        {
+            return false;
+        }
+        let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
+        self.ops.undo_history[idx].undone = true;
+        for req in reqs {
+            self.ops.start_op(req, "Deshacer".to_string(), false);
+        }
+        true
+    }
+
     /// Deshace la última entrada deshacible del historial. Devuelve true si arrancó algo.
     pub fn op_undo_last(&mut self) -> bool {
         // Buscar la última entrada no-deshecha y deshacible.

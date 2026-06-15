@@ -222,6 +222,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
             }
             ui.set_status(SharedString::from(c.status_line().as_str()));
+            // Operaciones de archivo (F3): modal activo + filas de progreso.
+            ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
+            let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
+            ui.set_op_rows(ModelRc::from(Rc::new(VecModel::from(op_rows))));
         }
     };
 
@@ -539,9 +543,111 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        // El historial aún no tiene operaciones (F3); el callback queda cableado.
+        // Botón "Deshacer" del panel Historial: deshace la entrada por id.
+        let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_undo_entry(move |_id| {
+        let start_timer = start_timer.clone();
+        ui.on_undo_entry(move |id| {
+            if ctrl.borrow_mut().undo_entry(id as u64) {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    // --- Diálogos modales y panel de progreso de operaciones (F3) ---
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_delete_confirm(move || {
+            if ctrl.borrow_mut().ops.delete_confirm() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_delete_cancel(move || {
+            ctrl.borrow_mut().ops.dialog_cancel();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_conflict_decide(move |action, apply_all| {
+            use naygo_core::ops::ConflictAction;
+            let act = match action {
+                0 => ConflictAction::Overwrite,
+                2 => ConflictAction::Rename,
+                _ => ConflictAction::Skip,
+            };
+            // El op_index del conflicto activo lo guarda el pending_dialog.
+            let idx = {
+                let c = ctrl.borrow();
+                if let Some(ops_ctrl::OpDialog::Conflict { op_index, .. }) = &c.ops.pending_dialog {
+                    Some(*op_index)
+                } else {
+                    None
+                }
+            };
+            if let Some(idx) = idx {
+                ctrl.borrow_mut().ops.resolve_conflict(idx, act, apply_all);
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        ui.on_name_changed(move |v| {
+            ctrl.borrow_mut().ops.name_changed(v.to_string());
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_name_confirm(move || {
+            if ctrl.borrow_mut().ops.name_confirm() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_name_cancel(move || {
+            ctrl.borrow_mut().ops.dialog_cancel();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_paste_confirm(move || {
+            // El pegado de texto/imagen se cablea con el journal/encode; por ahora cierra.
+            ctrl.borrow_mut().ops.dialog_cancel();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_paste_cancel(move || {
+            ctrl.borrow_mut().ops.dialog_cancel();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_op_cancel(move |idx| {
+            ctrl.borrow_mut().ops.cancel_op(idx as usize);
             sync_rows();
         });
     }
@@ -778,6 +884,30 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         selected: r.selected,
         focused: r.focused,
         cut: r.cut,
+    }
+}
+
+fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
+    OpDialogVm {
+        kind: d.kind,
+        del_count: d.del_count,
+        del_permanent: d.del_permanent,
+        conflict_name: SharedString::from(d.conflict_name.as_str()),
+        name_title: SharedString::from(d.name_title.as_str()),
+        name_value: SharedString::from(d.name_value.as_str()),
+        name_valid: d.name_valid,
+        paste_name: SharedString::from(d.paste_name.as_str()),
+        paste_is_image: d.paste_is_image,
+    }
+}
+
+fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
+    OpRowVm {
+        index: r.index,
+        label: SharedString::from(r.label.as_str()),
+        percent: r.percent,
+        status: SharedString::from(r.status.as_str()),
+        running: r.running,
     }
 }
 

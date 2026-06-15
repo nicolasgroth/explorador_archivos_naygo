@@ -1,6 +1,6 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm, TabVm } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -8,6 +8,8 @@ import { InspectorPanel } from "inspector-panel.slint";
 import { HistoryPanel } from "history-panel.slint";
 import { FavoritesPanel } from "favorites-panel.slint";
 import { PreviewPanel } from "preview-panel.slint";
+import { OpDialogs } from "op-dialogs.slint";
+import { OpsPanel } from "ops-panel.slint";
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.
@@ -150,6 +152,18 @@ export component AppWindow inherits Window {
     callback pick-cancel();              // cancelar (clic fuera)
     // Texto de la barra de estado (carpeta activa + recuento de ítems/selección).
     in property <string> status;
+    // Operaciones de archivo (Fase 3): modal activo + filas de progreso.
+    in property <OpDialogVm> op-dialog;
+    in property <[OpRowVm]> op-rows;
+    callback delete-confirm();
+    callback delete-cancel();
+    callback conflict-decide(int, bool);   // (action, apply-all)
+    callback name-changed(string);
+    callback name-confirm();
+    callback name-cancel();
+    callback paste-confirm();
+    callback paste-cancel();
+    callback op-cancel(int);
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -366,6 +380,11 @@ export component AppWindow inherits Window {
                 border-radius: 4px;
             }
         }
+        // Panel de progreso de operaciones (sobre la barra de estado; oculto si no hay ops).
+        OpsPanel {
+            rows: root.op-rows;
+            cancel(idx) => { root.op-cancel(idx); }
+        }
         // Barra de estado: carpeta activa + recuento de ítems y selección.
         Rectangle {
             height: 22px;
@@ -378,6 +397,21 @@ export component AppWindow inherits Window {
                 x: 8px;
             }
         }
+    }
+
+    // Modales de operaciones (overlay sobre toda la ventana; visible solo si hay uno).
+    OpDialogs {
+        width: 100%;
+        height: 100%;
+        vm: root.op-dialog;
+        delete-confirm() => { root.delete-confirm(); }
+        delete-cancel() => { root.delete-cancel(); }
+        conflict-decide(a, all) => { root.conflict-decide(a, all); }
+        name-changed(v) => { root.name-changed(v); }
+        name-confirm() => { root.name-confirm(); }
+        name-cancel() => { root.name-cancel(); }
+        paste-confirm() => { root.paste-confirm(); }
+        paste-cancel() => { root.paste-cancel(); }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota

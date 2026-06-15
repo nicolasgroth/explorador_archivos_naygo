@@ -17,6 +17,35 @@ export struct NavRow {
     path: string,
 }
 
+// --- Operaciones de archivo (Fase 3) ---
+
+// Estado del modal de operaciones activo. `kind`: 0=ninguno 1=confirmar-borrado
+// 2=conflicto 3=pedir-nombre 4=pegar-preview 5=retomar.
+export struct OpDialogVm {
+    kind: int,
+    // Confirmar borrado:
+    del-count: int,
+    del-permanent: bool,
+    // Conflicto (por-ítem):
+    conflict-name: string,
+    // Pedir nombre (nuevo/renombrar):
+    name-title: string,
+    name-value: string,
+    name-valid: bool,
+    // Pegar preview (texto/imagen):
+    paste-name: string,
+    paste-is-image: bool,
+}
+
+// Fila del panel de progreso: una operación en curso/terminada.
+export struct OpRowVm {
+    index: int,
+    label: string,
+    percent: float,    // 0..100
+    status: string,    // "en cola" / "copiando…" / "hecho: N" / "cancelada"
+    running: bool,
+}
+
 // Fila del historial de deshacer.
 export struct HistRow {
     id: int,
