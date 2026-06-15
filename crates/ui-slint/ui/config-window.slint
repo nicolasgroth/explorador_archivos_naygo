@@ -64,6 +64,7 @@ export component ConfigWindow inherits Rectangle {
     callback set-icon-only(bool);
     callback set-bar-position(int);
     callback set-size-no-subdirs(bool);
+    callback set-autostart(bool);
     callback set-paste-confirm(bool);
     callback set-paste-text-name(string);
     callback set-paste-text-ext(string);
@@ -183,6 +184,10 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-size-no-subdirs;
                                     CheckBox { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-autostart;
+                                    CheckBox { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
                                 }
                             }
 

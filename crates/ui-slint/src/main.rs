@@ -30,6 +30,7 @@ mod ops_ctrl;
 mod packs;
 mod preview;
 mod theme_apply;
+mod tray;
 mod watch;
 mod workspace_ctrl;
 
@@ -443,6 +444,24 @@ fn main() -> Result<(), slint::PlatformError> {
     let drop_guard: Rc<RefCell<Option<naygo_platform::drop_target::DropTargetGuard>>> =
         Rc::new(RefCell::new(None));
 
+    // Tray (Fase 5E): ícono en bandeja con menú Abrir/Salir, solo si el ajuste lo pide. Vive
+    // toda la sesión. `tray_active` lo lee el handler de cierre para decidir si oculta a la
+    // bandeja o sale de verdad.
+    let tray: Rc<Option<tray::Tray>> = Rc::new(if ctrl.borrow().config.settings.tray_enabled {
+        let t = {
+            let c = ctrl.borrow();
+            tray::create(
+                &c.config.t("slint.tray.open"),
+                &c.config.t("slint.tray.exit"),
+                waker.clone(),
+            )
+        };
+        t
+    } else {
+        None
+    });
+    let tray_active = tray.is_some();
+
     // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
     // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     let timer = Rc::new(slint::Timer::default());
@@ -457,6 +476,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let drop_tx = drop_tx.clone();
         let drop_rx = drop_rx.clone();
         let drop_guard = drop_guard.clone();
+        let tray = tray.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -468,6 +488,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let drop_tx = drop_tx.clone();
             let drop_rx = drop_rx.clone();
             let drop_guard = drop_guard.clone();
+            let tray = tray.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
@@ -493,6 +514,24 @@ fn main() -> Result<(), slint::PlatformError> {
                         if let Some(active) = ctrl.borrow().active_id() {
                             ctrl.borrow_mut()
                                 .drop_external(active, payload.paths, payload.move_);
+                        }
+                    }
+                    // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y
+                    // elevar la ventana; Salir = terminar el bucle de verdad.
+                    if let Some(t) = tray.as_ref() {
+                        while let Ok(msg) = t.rx.try_recv() {
+                            match msg {
+                                tray::TrayMsg::Open => {
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        let _ = ui.show();
+                                        ui.window().set_minimized(false);
+                                    }
+                                }
+                                tray::TrayMsg::Exit => {
+                                    ctrl.borrow().save_session();
+                                    let _ = slint::quit_event_loop();
+                                }
+                            }
                         }
                     }
                     // Watcher de dispositivos (F5B): si cambiaron las unidades (USB), reubicar
@@ -737,6 +776,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_cfg_set_icon_only, bool, set_icon_only);
     cfg_setter!(on_cfg_set_bar_position, i32, set_bar_position);
     cfg_setter!(on_cfg_set_size_no_subdirs, bool, set_size_no_subdirs);
+    cfg_setter!(on_cfg_set_autostart, bool, set_autostart);
     cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -1380,13 +1420,19 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_content_resized(move || sync_layout());
     }
 
-    // Al cerrar la ventana: persistir la sesión (paneles + carpetas) para restaurarla en el
-    // próximo arranque. Devolvemos HideWindow; Slint, con quit-on-last-window-closed (default),
-    // termina el loop al ocultarse la última ventana. El guardado corre antes de ese retorno.
+    // Al cerrar la ventana (Fase 5E, arregla la deuda de F4): persistir la sesión y luego SALIR
+    // DE VERDAD (quit_event_loop), salvo que el usuario haya pedido "cerrar a bandeja" y el tray
+    // esté activo, en cuyo caso se oculta a la bandeja y la app sigue viva a propósito.
     {
         let ctrl = ctrl.clone();
         ui.window().on_close_requested(move || {
             ctrl.borrow().save_session();
+            let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
+            if tray::should_quit_on_close(close_to_tray, tray_active) {
+                let _ = slint::quit_event_loop();
+            }
+            // En ambos casos HideWindow: al salir, el loop ya está marcado para terminar; al ir
+            // a bandeja, la ventana se oculta y el proceso sigue.
             slint::CloseRequestResponse::HideWindow
         });
     }
@@ -1451,6 +1497,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         confirm_trash: s.confirm_trash,
         show_op_summary: s.show_op_summary,
         size_no_subdirs: s.size_no_subdirs,
+        autostart: s.autostart,
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),

@@ -101,6 +101,7 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_bar_top(c.t("settings.bar.top").into());
     tr.set_cfg_bar_side(c.t("settings.bar.side").into());
     tr.set_cfg_size_no_subdirs(c.t("slint.cfg.size_no_subdirs").into());
+    tr.set_cfg_autostart(c.t("slint.cfg.autostart").into());
     tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
     tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());

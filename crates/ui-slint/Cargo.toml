@@ -28,6 +28,8 @@ serde_json = "1"
 # Import/export de packs (idiomas/temas/config) como .zip + selector de archivo nativo.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rfd = "0.15"
+# Ícono en la bandeja del sistema (mismo crate que usaba la capa egui).
+tray-icon = "0.24.1"
 # Decodificación de imágenes para el panel Preview (mismas familias que la capa egui).
 image = { version = "0.25", default-features = false, features = [
     "png",

@@ -212,6 +212,7 @@ export component AppWindow inherits Window {
     callback cfg-set-icon-only(bool);
     callback cfg-set-bar-position(int);
     callback cfg-set-size-no-subdirs(bool);
+    callback cfg-set-autostart(bool);
     callback cfg-set-paste-confirm(bool);
     callback cfg-set-paste-text-name(string);
     callback cfg-set-paste-text-ext(string);
@@ -540,6 +541,7 @@ export component AppWindow inherits Window {
         set-icon-only(v) => { root.cfg-set-icon-only(v); }
         set-bar-position(p) => { root.cfg-set-bar-position(p); }
         set-size-no-subdirs(v) => { root.cfg-set-size-no-subdirs(v); }
+        set-autostart(v) => { root.cfg-set-autostart(v); }
         set-paste-confirm(v) => { root.cfg-set-paste-confirm(v); }
         set-paste-text-name(n) => { root.cfg-set-paste-text-name(n); }
         set-paste-text-ext(e) => { root.cfg-set-paste-text-ext(e); }

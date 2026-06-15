@@ -173,6 +173,9 @@ pub struct Settings {
     /// `false`): residente = memoria ocupada, que sea decisión del usuario.
     #[serde(default)]
     pub close_to_tray: bool,
+    /// Iniciar Naygo con Windows (entrada Run del registro). `#[serde(default)]` retro-compat.
+    #[serde(default)]
+    pub autostart: bool,
     /// Caché de carpetas visitadas: nº máximo de carpetas recordadas en memoria
     /// (0 = desactivado). Volver a una carpeta cacheada pinta al instante y el
     /// listado real corre por detrás (stale-while-revalidate).
@@ -344,6 +347,7 @@ impl Default for Settings {
             size_no_subdirs: false,
             tray_enabled: true,
             close_to_tray: false,
+            autostart: false,
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
@@ -587,6 +591,7 @@ mod tests {
             size_no_subdirs: true,
             tray_enabled: false,
             close_to_tray: true,
+            autostart: false,
             cache_max_dirs: 12,
             column_width_mode: ColumnWidthMode::Auto,
             default_table: Some({

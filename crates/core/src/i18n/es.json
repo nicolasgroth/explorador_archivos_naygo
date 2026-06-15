@@ -427,5 +427,8 @@
   "slint.split.down": "Dividir abajo",
   "slint.split.left": "Dividir a la izquierda",
   "slint.split.up": "Dividir arriba",
-  "slint.drop.as_tab": "pestaña"
+  "slint.drop.as_tab": "pestaña",
+  "slint.cfg.autostart": "Iniciar con Windows",
+  "slint.tray.open": "Abrir",
+  "slint.tray.exit": "Salir"
 }

@@ -427,5 +427,8 @@
   "slint.split.down": "Split down",
   "slint.split.left": "Split left",
   "slint.split.up": "Split up",
-  "slint.drop.as_tab": "tab"
+  "slint.drop.as_tab": "tab",
+  "slint.cfg.autostart": "Start with Windows",
+  "slint.tray.open": "Open",
+  "slint.tray.exit": "Exit"
 }

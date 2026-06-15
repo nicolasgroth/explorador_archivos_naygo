@@ -3679,6 +3679,7 @@ dependencies = [
  "slint",
  "slint-build",
  "tempfile",
+ "tray-icon",
  "zip",
 ]
 

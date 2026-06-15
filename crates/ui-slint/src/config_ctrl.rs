@@ -149,6 +149,15 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Iniciar Naygo con Windows: escribe/borra la entrada Run del registro y persiste el
+    /// ajuste. Si el registro falla (permiso), no cambia el ajuste (queda como estaba).
+    pub fn set_autostart(&mut self, on: bool) {
+        if naygo_platform::autostart::set_enabled(on).is_ok() {
+            self.settings.autostart = on;
+            self.save();
+        }
+    }
+
     /// Plantilla de nombre para texto pegado.
     pub fn set_paste_text_name(&mut self, name: String) {
         self.settings.paste_text_name = name;
