@@ -29,6 +29,7 @@ mod ops_ctrl;
 mod packs;
 mod preview;
 mod theme_apply;
+mod watch;
 mod workspace_ctrl;
 
 use naygo_core::workspace::layout::{Rect, SplitDir};
@@ -171,6 +172,8 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let c = ctrl.borrow();
             let active = c.active_id();
+            let hl_secs = c.highlight_secs();
+            let hl_now = std::time::Instant::now();
             // Datos compartidos (no dependen del panel concreto): favoritos, recientes,
             // historial, inspector, preview se derivan del estado global / panel activo.
             let favs: Vec<NavRow> = c.favorite_rows().into_iter().map(to_nav_row).collect();
@@ -184,8 +187,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Actualiza los modelos de lista que apliquen al tipo, in situ.
                 match purpose {
                     Some(PanePurpose::Files) => {
-                        let rows: Vec<RowData> =
-                            c.rows_of(id).into_iter().map(to_row_data).collect();
+                        let rows: Vec<RowData> = c
+                            .rows_of(id, hl_secs, hl_now)
+                            .into_iter()
+                            .map(to_row_data)
+                            .collect();
                         m.models_for(id).rows.set_vec(rows);
                     }
                     Some(PanePurpose::Tree) => {
@@ -403,6 +409,21 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
 
+    // Waker para los watchers (carpeta/dispositivos): desde su hilo, encolan en el event loop
+    // de Slint una llamada a `wake()` de la ventana (re-arranca el timer si dormía).
+    // `slint::Weak` es Send; el closure del event loop corre en el hilo de UI.
+    let waker: naygo_platform::dir_watch::Waker = {
+        let ui_weak = ui.as_weak();
+        std::sync::Arc::new(move || {
+            let ui_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_wake();
+                }
+            });
+        })
+    };
+
     // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
     // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     let timer = Rc::new(slint::Timer::default());
@@ -410,15 +431,20 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let timer = timer.clone();
+        let waker = waker.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
             let timer2 = timer.clone();
+            let waker = waker.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
                 move || {
                     let now = std::time::Instant::now();
+                    // Asegurar que cada panel Files vigile su carpeta actual (barato si nada
+                    // cambió). Arranca/re-arranca watchers tras navegar/agregar/cerrar paneles.
+                    ctrl.borrow_mut().reconcile_watchers(waker.clone());
                     let files_done = ctrl.borrow_mut().pump_listings();
                     let tree_done = ctrl.borrow_mut().pump_tree();
                     let preview_busy = ctrl.borrow_mut().drive_preview(now);
@@ -426,11 +452,25 @@ fn main() -> Result<(), slint::PlatformError> {
                     let _ = preview_ready;
                     // Drenar el progreso de las operaciones de archivo (F3).
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
+                    // Watcher de carpeta (F5A): aplicar los cambios detectados a cada panel y
+                    // marcar como nuevos los archivos recién aparecidos (para resaltarlos).
+                    let batches = ctrl.borrow_mut().watchers.drain();
+                    for (pane, events) in batches {
+                        let nuevas = ctrl.borrow_mut().apply_watch_events(PaneId(pane), &events);
+                        ctrl.borrow_mut().watchers.mark_fresh(pane, nuevas, now);
+                    }
+                    // Limpiar los resaltados vencidos y saber si queda alguno (para seguir
+                    // pintando hasta que se apaguen).
+                    let hl_secs = ctrl.borrow().highlight_secs();
+                    ctrl.borrow_mut().watchers.prune(hl_secs, now);
+                    let fresh_pending = ctrl.borrow().watchers.any_fresh(hl_secs, now);
                     sync_rows();
                     // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato
                     // si no cambió. Antes de parar el timer, así el último cambio se guarda.
                     ctrl.borrow_mut().maybe_persist_session();
-                    if files_done && tree_done && !preview_busy && ops_done {
+                    // El watcher corre en su propio hilo y despierta la UI con el waker; el
+                    // timer puede dormir cuando no hay trabajo NI resaltados pendientes.
+                    if files_done && tree_done && !preview_busy && ops_done && !fresh_pending {
                         timer2.stop();
                     }
                 },
@@ -438,6 +478,13 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     start_timer();
+
+    // `wake`: re-arranca el timer cuando un worker (watcher) despierta la UI. Corre en el hilo
+    // de UI (lo dispara invoke_from_event_loop), así que puede tocar el `start_timer` (Rc).
+    {
+        let start_timer = start_timer.clone();
+        ui.on_wake(move || start_timer());
+    }
 
     {
         let ctrl = ctrl.clone();
@@ -1397,6 +1444,7 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         selected: r.selected,
         focused: r.focused,
         cut: r.cut,
+        highlight: r.highlight,
     }
 }
 

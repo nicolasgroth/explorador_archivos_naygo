@@ -227,6 +227,9 @@ export component AppWindow inherits Window {
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
     // Rust reparta los paneles aun en reposo (con el timer apagado).
     callback content-resized();
+    // Despertar el bucle de la UI desde un hilo worker (watcher de carpeta/dispositivos): el
+    // waker lo invoca vía invoke_from_event_loop para re-arrancar el timer si estaba dormido.
+    callback wake();
 
     // Alto de la barra superior (path-bar + botones). El área de contenido es el resto.
     property <length> top-bar-h: 34px;

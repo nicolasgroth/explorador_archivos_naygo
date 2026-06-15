@@ -98,6 +98,9 @@ pub struct WorkspaceCtrl {
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
     /// con el render por software de Slint puede no dispararse). Ver `maybe_persist_session`.
     pub last_saved_fingerprint: Option<String>,
+    /// Watchers de carpeta por panel (Fase 5A): refrescan el panel sin re-listar y resaltan los
+    /// archivos recién aparecidos. La UI los arranca al navegar (tiene el waker de Slint).
+    pub watchers: crate::watch::Watchers,
 }
 
 /// Estado del menú contextual abierto.
@@ -146,6 +149,7 @@ impl WorkspaceCtrl {
             shift_down: false,
             context_menu: None,
             last_saved_fingerprint: None,
+            watchers: crate::watch::Watchers::new(),
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -270,6 +274,55 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Asegura que cada panel Files tenga un watcher sobre su carpeta actual: arranca uno si
+    /// falta o si la carpeta cambió, y quita los watchers de paneles que ya no existen. La UI lo
+    /// llama en el tick (tiene el `waker` de Slint). Es barato cuando nada cambió.
+    pub fn reconcile_watchers(&mut self, waker: naygo_platform::dir_watch::Waker) {
+        // Paneles Files actuales y su carpeta.
+        let files: Vec<(PaneId, std::path::PathBuf)> = self
+            .ws
+            .panes()
+            .iter()
+            .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.current_dir.clone())))
+            .collect();
+        let vivos: std::collections::HashSet<u64> = files.iter().map(|(id, _)| id.0).collect();
+        // Quitar watchers de paneles que ya no existen.
+        for pane in self.watchers.watched_panes() {
+            if !vivos.contains(&pane) {
+                self.watchers.unwatch(pane);
+            }
+        }
+        // Arrancar/re-arrancar el watcher de cada panel cuya carpeta cambió.
+        for (id, dir) in files {
+            let needs = self.watchers.current_dir(id.0) != Some(dir.as_path());
+            if needs {
+                self.watchers.watch(id.0, dir, waker.clone());
+            }
+        }
+    }
+
+    /// Aplica un lote de eventos del watcher al panel `pane`: muta sus entries SIN re-listar,
+    /// re-ordena, y devuelve las rutas NUEVAS (para resaltar). No-op si el panel no es Files.
+    pub fn apply_watch_events(
+        &mut self,
+        pane: PaneId,
+        events: &[naygo_core::listing::DirEvent],
+    ) -> Vec<std::path::PathBuf> {
+        let Some(f) = self.ws.pane_mut(pane).and_then(|p| p.files.as_mut()) else {
+            return Vec::new();
+        };
+        // `read_entry` debe devolver `Option<Entry>`: leemos metadata (puede fallar si la ruta
+        // ya desapareció) y armamos el Entry.
+        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, events, &|p| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
+        });
+        let spec = f.sort;
+        naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        nuevas
+    }
+
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
     pub fn start_listing(&mut self, id: PaneId, dir: std::path::PathBuf) {
         if let Some(l) = self.listings.get(&id) {
@@ -327,10 +380,29 @@ impl WorkspaceCtrl {
         self.ws.layout.set_fraction(path, fraction);
     }
 
-    /// Filas a pintar del panel `id` (marca las cortadas para atenuarlas).
-    pub fn rows_of(&self, id: PaneId) -> Vec<PlainRow> {
+    /// Segundos que dura el resaltado de archivos nuevos, según el ajuste. `FadeSeconds(n)`→n;
+    /// `UntilInteract`/`UntilRefresh` se aproximan con un tope generoso (el resaltado es una
+    /// pista transitoria; modelar "hasta interactuar" exactamente no aporta y complica).
+    pub fn highlight_secs(&self) -> u64 {
+        use naygo_core::config::HighlightDuration::*;
+        match self.config.settings.highlight_duration {
+            FadeSeconds(n) => n as u64,
+            UntilInteract | UntilRefresh => 8,
+        }
+    }
+
+    /// Filas a pintar del panel `id` (marca las cortadas para atenuarlas y las recién
+    /// aparecidas para resaltarlas durante `highlight_secs` segundos).
+    pub fn rows_of(
+        &self,
+        id: PaneId,
+        highlight_secs: u64,
+        now: std::time::Instant,
+    ) -> Vec<PlainRow> {
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
-            Some(f) => rows_from_view(f, &|p| self.ops.is_cut(p)),
+            Some(f) => rows_from_view(f, &|p| self.ops.is_cut(p), &|p| {
+                self.watchers.is_fresh_ro(id.0, p, highlight_secs, now)
+            }),
             None => Vec::new(),
         }
     }
@@ -1461,6 +1533,26 @@ mod tests {
         );
     }
 
+    /// F5A: un evento del watcher (Created) agrega la entrada al panel sin re-listar y la
+    /// reporta como nueva (para resaltarla).
+    #[test]
+    fn watch_events_agregan_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("viejo.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.active_id().unwrap();
+        let nuevo = tmp.path().join("nuevo.txt");
+        std::fs::write(&nuevo, b"y").unwrap();
+        let nuevas =
+            c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(nuevo.clone())]);
+        assert_eq!(nuevas, vec![nuevo.clone()]);
+        assert!(c
+            .rows_of(id, 8, std::time::Instant::now())
+            .iter()
+            .any(|r| r.name == "nuevo.txt"));
+    }
+
     /// REGRESIÓN (heredada de F1): navegar a una carpeta repuebla la vista del panel
     /// activo (el listado de la carpeta nueva se arranca al navegar).
     #[test]
@@ -1476,7 +1568,7 @@ mod tests {
         let pos = active_pos_of(&c, "sub").expect("'sub' visible");
         assert!(c.on_row_double_clicked(id, pos), "doble clic navega");
         assert!(drain(&mut c), "listado de sub termina");
-        let rows = c.rows_of(c.active_id().unwrap());
+        let rows = c.rows_of(c.active_id().unwrap(), 8, std::time::Instant::now());
         assert!(
             rows.iter().any(|r| r.name == "dentro.txt"),
             "la vista refleja la carpeta nueva (no vacía)"
@@ -1514,7 +1606,7 @@ mod tests {
             "2do clic rápido: doble-clic → navega"
         );
         assert!(drain(&mut c));
-        let rows = c.rows_of(c.active_id().unwrap());
+        let rows = c.rows_of(c.active_id().unwrap(), 8, std::time::Instant::now());
         assert!(rows.iter().any(|r| r.name == "dentro.txt"));
     }
 

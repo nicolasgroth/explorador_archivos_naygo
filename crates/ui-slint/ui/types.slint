@@ -9,6 +9,8 @@ export struct RowData {
     selected: bool,
     focused: bool,
     cut: bool,
+    // Apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
+    highlight: bool,
 }
 
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.

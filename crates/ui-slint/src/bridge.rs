@@ -20,13 +20,19 @@ pub struct PlainRow {
     pub focused: bool,
     /// El ítem está marcado como "cortado" (Ctrl+X): se pinta atenuado hasta pegar.
     pub cut: bool,
+    /// El ítem apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
+    pub highlight: bool,
 }
 
 /// Construye las filas a pintar desde el estado del panel: usa los índices de vista
 /// CACHEADOS del core (filtrados+ordenados), y marca selección/foco por POSICIÓN DE
 /// VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las entries
 /// completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
-pub fn rows_from_view(f: &FilePaneState, is_cut: &dyn Fn(&std::path::Path) -> bool) -> Vec<PlainRow> {
+pub fn rows_from_view(
+    f: &FilePaneState,
+    is_cut: &dyn Fn(&std::path::Path) -> bool,
+    is_fresh: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<PlainRow> {
     let view = f.view_indices();
     view.iter()
         .enumerate()
@@ -51,6 +57,7 @@ pub fn rows_from_view(f: &FilePaneState, is_cut: &dyn Fn(&std::path::Path) -> bo
                 selected: f.selected.contains(&pos),
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
+                highlight: is_fresh(&e.path),
             })
         })
         .collect()
@@ -281,7 +288,7 @@ mod tests {
         f.entries = vec![mk("a.txt", false, Some(1024)), mk("dir", true, None)];
         // Ordenado por core: dirs_first → "dir" primero, "a.txt" después.
         f.select_single(0); // selecciona la 1ª de la vista
-        let rows = rows_from_view(&f, &|_| false);
+        let rows = rows_from_view(&f, &|_| false, &|_| false);
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
         assert!(rows
@@ -296,14 +303,14 @@ mod tests {
     fn cut_marca_la_fila() {
         let mut f = FilePaneState::new(PathBuf::from("C:/x"));
         f.entries = vec![mk("a.txt", false, Some(1))];
-        let rows = rows_from_view(&f, &|p| p.ends_with("a.txt"));
+        let rows = rows_from_view(&f, &|p| p.ends_with("a.txt"), &|_| false);
         assert!(rows[0].cut, "la fila cortada se marca");
     }
 
     #[test]
     fn vista_vacia_da_modelo_vacio() {
         let f = FilePaneState::new(PathBuf::from("C:/x"));
-        assert!(rows_from_view(&f, &|_| false).is_empty());
+        assert!(rows_from_view(&f, &|_| false, &|_| false).is_empty());
     }
 
     #[test]
