@@ -222,10 +222,20 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
             }
             ui.set_status(SharedString::from(c.status_line().as_str()));
-            // Operaciones de archivo (F3): modal activo + filas de progreso.
+            // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
             let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
             ui.set_op_rows(ModelRc::from(Rc::new(VecModel::from(op_rows))));
+            let resume_rows: Vec<ResumeRowVm> = c
+                .ops
+                .resume_rows()
+                .into_iter()
+                .map(|(id, label)| ResumeRowVm {
+                    id: SharedString::from(id.as_str()),
+                    label: SharedString::from(label.as_str()),
+                })
+                .collect();
+            ui.set_resume_rows(ModelRc::from(Rc::new(VecModel::from(resume_rows))));
         }
     };
 
@@ -651,6 +661,24 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_resume_decide(move |id, action| {
+            let id = id.to_string();
+            let mut c = ctrl.borrow_mut();
+            if action == 0 {
+                if c.ops.resume(&id) {
+                    drop(c);
+                    start_timer();
+                }
+            } else {
+                c.ops.discard(&id);
+            }
+            sync_rows();
+        });
+    }
     // --- Acciones multi-panel (swap / clonar) + selector de destino ---
     {
         let ctrl = ctrl.clone();
@@ -816,6 +844,8 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_content_resized(move || sync_layout());
     }
 
+    // Al arrancar: si hay operaciones interrumpidas (journal), ofrecer retomarlas.
+    ctrl.borrow_mut().ops.scan_resume();
     sync_layout();
     ui.run()
 }

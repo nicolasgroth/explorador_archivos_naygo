@@ -37,6 +37,12 @@ export struct OpDialogVm {
     paste-is-image: bool,
 }
 
+// Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
+export struct ResumeRowVm {
+    id: string,
+    label: string,
+}
+
 // Fila del panel de progreso: una operación en curso/terminada.
 export struct OpRowVm {
     index: int,

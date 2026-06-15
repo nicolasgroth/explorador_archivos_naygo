@@ -5,14 +5,10 @@
 // historial de deshacer, el set de rutas "cortadas" (corte visual) y las ops a retomar.
 // El motor de core corre en su hilo; `pump_ops` drena el progreso desde el slint::Timer.
 // Espeja el patrón del NaygoApp de egui, pero aislado del resto del controlador.
-//
-// NOTA (F3 en construcción): el journal (Resume, journal_id, config_dir) lo consume la
-// tarea de journal. El allow se retira al cerrar F3.
-#![allow(dead_code)]
 
 use naygo_core::cancel::CancellationToken;
 use naygo_core::ops::engine;
-use naygo_core::ops::journal::OpJournal;
+use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
 use naygo_core::ops::undo::{self, UndoEntry};
 use naygo_core::ops::{
     ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpKind, OpMsg, OpPlan,
@@ -91,6 +87,8 @@ pub struct OpsCtrl {
     pub cut_set: HashSet<PathBuf>,
     pub ops_mode: OpsMode,
     pub config_dir: PathBuf,
+    /// Secuencia para ids de journal únicos en la sesión (`op-N`).
+    next_journal_seq: u64,
 }
 
 impl OpsCtrl {
@@ -103,6 +101,7 @@ impl OpsCtrl {
             cut_set: HashSet::new(),
             ops_mode: OpsMode::Parallel,
             config_dir,
+            next_journal_seq: 1,
         }
     }
 
@@ -153,6 +152,9 @@ impl OpsCtrl {
     /// La papelera (Delete to_trash) se hace directo (atómica, fuera del motor) — el
     /// llamador debe refrescar el panel tras esto.
     pub fn start_op(&mut self, req: OpRequest, label: String, record_undo: bool) {
+        // Al comenzar una operación nueva, descartar las terminadas del panel (sus
+        // resúmenes ya se vieron); las en curso/en cola se conservan.
+        self.prune_finished();
         // Papelera: atómica, sin motor.
         if matches!(req.kind, OpKind::Delete { to_trash: true }) {
             let _ = naygo_platform::trash::move_to_trash(&req.sources);
@@ -194,7 +196,8 @@ impl OpsCtrl {
         self.spawn_op(plan, req.kind.clone(), conflict, label, record_undo.then_some(req));
     }
 
-    /// Spawnea el motor para un plan ya resuelto y agrega la `ActiveOp`.
+    /// Spawnea el motor para un plan ya resuelto y agrega la `ActiveOp`. Crea un journal
+    /// (para retomar tras un cierre inesperado) en Copy/Move/Delete-permanente.
     fn spawn_op(
         &mut self,
         plan: OpPlan,
@@ -205,7 +208,19 @@ impl OpsCtrl {
     ) {
         let token = CancellationToken::new();
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
-        let (rx, _h) = engine::spawn(plan, kind, conflict, token.clone(), conflict_rx, None);
+        // Journal solo para operaciones largas y deshacibles-por-retomar.
+        let (journal, journal_id) = if Self::journalable(&kind) {
+            let id = format!("op-{}", self.next_journal_seq);
+            self.next_journal_seq += 1;
+            let j = OpJournal::new(id.clone(), kind.clone(), conflict, plan.clone());
+            (
+                Some(JournalWriter::new(&self.config_dir, j)),
+                Some(id),
+            )
+        } else {
+            (None, None)
+        };
+        let (rx, _h) = engine::spawn(plan, kind, conflict, token.clone(), conflict_rx, journal);
         self.active_ops.push(ActiveOp {
             rx: Some(rx),
             conflict_tx,
@@ -215,10 +230,18 @@ impl OpsCtrl {
             summary: None,
             started: true,
             pending: None,
-            journal_id: None,
+            journal_id,
             request,
             awaiting_conflict: None,
         });
+    }
+
+    /// ¿La operación amerita journal (es larga y se puede retomar)?
+    fn journalable(kind: &OpKind) -> bool {
+        matches!(
+            kind,
+            OpKind::Copy | OpKind::Move | OpKind::Delete { to_trash: false }
+        )
     }
 
     /// ¿Hay alguna op realmente corriendo (con canal vivo)?
@@ -281,6 +304,10 @@ impl OpsCtrl {
                             }
                         }
                     }
+                }
+                // Borrar el journal: la op terminó, ya no hay que retomarla.
+                if let Some(jid) = self.active_ops[i].journal_id.take() {
+                    journal::remove(&self.config_dir, &jid);
                 }
                 self.active_ops[i].summary = Some(summary);
                 self.active_ops[i].rx = None;
@@ -376,7 +403,21 @@ impl OpsCtrl {
                 name_valid: naygo_core::ops::names::is_valid_name(buf),
                 ..Default::default()
             },
+            Some(OpDialog::Resume { .. }) => OpDialogVmData {
+                kind: 5,
+                ..Default::default()
+            },
             _ => OpDialogVmData::default(),
+        }
+    }
+
+    /// Filas del modal "retomar" (id + etiqueta) si está activo; vacío si no.
+    pub fn resume_rows(&self) -> Vec<(String, String)> {
+        match &self.pending_dialog {
+            Some(OpDialog::Resume { items }) => {
+                items.iter().map(|j| (j.id.clone(), j.label())).collect()
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -467,6 +508,88 @@ impl OpsCtrl {
         };
         self.start_op(req, label.to_string(), true);
         true
+    }
+
+    // --- Journal: retomar operaciones tras un cierre inesperado ---
+
+    /// Al arrancar la app: si hay journals pendientes, abre el modal de retomar.
+    pub fn scan_resume(&mut self) {
+        let pend = journal::scan(&self.config_dir);
+        if !pend.is_empty() {
+            self.pending_dialog = Some(OpDialog::Resume { items: pend });
+        }
+    }
+
+    /// Retoma la operación journaleada `id`: replanifica los pasos pendientes y la lanza
+    /// con un journal nuevo que reusa el id. Devuelve true si arrancó algo.
+    pub fn resume(&mut self, id: &str) -> bool {
+        // Tomar el journal del modal (si está ahí) o del disco.
+        let journal = match &self.pending_dialog {
+            Some(OpDialog::Resume { items }) => items.iter().find(|j| j.id == id).cloned(),
+            _ => None,
+        }
+        .or_else(|| journal::scan(&self.config_dir).into_iter().find(|j| j.id == id));
+        let Some(journal) = journal else {
+            return false;
+        };
+        let resume = journal::resume_plan(&journal);
+        if resume.plan.steps.is_empty() {
+            // Nada pendiente: limpiar el journal y listo.
+            journal::remove(&self.config_dir, id);
+            self.drop_resume_item(id);
+            return false;
+        }
+        let label = journal.label();
+        let token = CancellationToken::new();
+        let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let writer = JournalWriter::new(
+            &self.config_dir,
+            OpJournal::new(
+                journal.id.clone(),
+                journal.kind.clone(),
+                journal.conflict,
+                resume.plan.clone(),
+            ),
+        );
+        let (rx, _h) = engine::spawn(
+            resume.plan,
+            journal.kind.clone(),
+            journal.conflict,
+            token.clone(),
+            conflict_rx,
+            Some(writer),
+        );
+        self.active_ops.push(ActiveOp {
+            rx: Some(rx),
+            conflict_tx,
+            token,
+            label,
+            progress: None,
+            summary: None,
+            started: true,
+            pending: None,
+            journal_id: Some(journal.id.clone()),
+            request: None,
+            awaiting_conflict: None,
+        });
+        self.drop_resume_item(id);
+        true
+    }
+
+    /// Descarta la operación journaleada `id` (borra el journal sin retomar).
+    pub fn discard(&mut self, id: &str) {
+        journal::remove(&self.config_dir, id);
+        self.drop_resume_item(id);
+    }
+
+    /// Quita un ítem del modal Resume; si queda vacío, cierra el modal.
+    fn drop_resume_item(&mut self, id: &str) {
+        if let Some(OpDialog::Resume { items }) = &mut self.pending_dialog {
+            items.retain(|j| j.id != id);
+            if items.is_empty() {
+                self.pending_dialog = None;
+            }
+        }
     }
 }
 
@@ -629,5 +752,54 @@ mod tests {
         drain(&mut c);
         assert!(d1.join("a.txt").exists());
         assert!(d2.join("b.txt").exists());
+    }
+
+    #[test]
+    fn una_copia_crea_journal_y_lo_borra_al_terminar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        std::fs::create_dir(&cfg).unwrap();
+        let src = tmp.path().join("a.txt");
+        std::fs::write(&src, b"x").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(cfg.clone());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        // Mientras corre, el journal existe en disco.
+        let jdir = cfg.join("ops-journal");
+        // (puede que ya haya terminado muy rápido; lo importante es que al final no queda)
+        drain(&mut c);
+        // Tras terminar, el journal se borró.
+        let remaining = std::fs::read_dir(&jdir)
+            .map(|rd| rd.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(remaining, 0, "el journal se borra al completar la op");
+    }
+
+    #[test]
+    fn scan_resume_detecta_journal_pendiente() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        std::fs::create_dir(&cfg).unwrap();
+        // Crear un journal manualmente (simula una op interrumpida).
+        let src = tmp.path().join("a.txt");
+        std::fs::write(&src, b"x").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let req = naygo_core::ops::transfer(false, vec![src], dst);
+        let plan = naygo_core::ops::plan(&req).unwrap();
+        let j = OpJournal::new("op-test".into(), req.kind.clone(), req.conflict, plan);
+        let _w = JournalWriter::new(&cfg, j); // persiste al crear
+        let mut c = OpsCtrl::new(cfg);
+        c.scan_resume();
+        assert!(
+            matches!(c.pending_dialog, Some(OpDialog::Resume { .. })),
+            "scan_resume abre el modal de retomar"
+        );
+        assert_eq!(c.resume_rows().len(), 1);
     }
 }

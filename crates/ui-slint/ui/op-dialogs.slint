@@ -5,7 +5,7 @@
 // (0=ninguno). Overlay con velo (clic fuera cancela). Las decisiones salen por callbacks
 // al controlador. Sin glifos Unicode raros (el render por software no los dibuja): solo
 // texto. Los modales: confirmar borrado, conflicto por-ítem, pedir nombre, pegar preview.
-import { OpDialogVm } from "types.slint";
+import { OpDialogVm, ResumeRowVm } from "types.slint";
 
 // Botón de diálogo reutilizable (texto legible + hover).
 component DlgBtn inherits Rectangle {
@@ -36,6 +36,7 @@ component DlgBtn inherits Rectangle {
 
 export component OpDialogs inherits Rectangle {
     in property <OpDialogVm> vm;
+    in property <[ResumeRowVm]> resume-rows;
     // Confirmar borrado:
     callback delete-confirm();
     callback delete-cancel();
@@ -48,6 +49,8 @@ export component OpDialogs inherits Rectangle {
     // Pegar preview:
     callback paste-confirm();
     callback paste-cancel();
+    // Retomar: decide por id; action 0=retomar 1=descartar.
+    callback resume-decide(string, int);
 
     // Solo visible si hay un modal activo.
     visible: root.vm.kind > 0;
@@ -178,6 +181,28 @@ export component OpDialogs inherits Rectangle {
                     spacing: 8px;
                     DlgBtn { label: "Cancelar"; clicked => { root.paste-cancel(); } }
                     DlgBtn { label: "Crear"; primary: true; clicked => { root.paste-confirm(); } }
+                }
+            }
+
+            // --- 5: Retomar operaciones interrumpidas ---
+            if root.vm.kind == 5: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: "Hay operaciones que no terminaron. ¿Retomarlas?";
+                    color: white;
+                    wrap: word-wrap;
+                }
+                for r in root.resume-rows: HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: r.label;
+                        color: #cdd;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    DlgBtn { label: "Retomar"; primary: true; clicked => { root.resume-decide(r.id, 0); } }
+                    DlgBtn { label: "Descartar"; clicked => { root.resume-decide(r.id, 1); } }
                 }
             }
         }

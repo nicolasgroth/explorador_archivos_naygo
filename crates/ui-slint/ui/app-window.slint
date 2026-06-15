@@ -1,6 +1,6 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -155,6 +155,8 @@ export component AppWindow inherits Window {
     // Operaciones de archivo (Fase 3): modal activo + filas de progreso.
     in property <OpDialogVm> op-dialog;
     in property <[OpRowVm]> op-rows;
+    in property <[ResumeRowVm]> resume-rows;
+    callback resume-decide(string, int);
     callback delete-confirm();
     callback delete-cancel();
     callback conflict-decide(int, bool);   // (action, apply-all)
@@ -404,6 +406,8 @@ export component AppWindow inherits Window {
         width: 100%;
         height: 100%;
         vm: root.op-dialog;
+        resume-rows: root.resume-rows;
+        resume-decide(id, a) => { root.resume-decide(id, a); }
         delete-confirm() => { root.delete-confirm(); }
         delete-cancel() => { root.delete-cancel(); }
         conflict-decide(a, all) => { root.conflict-decide(a, all); }
