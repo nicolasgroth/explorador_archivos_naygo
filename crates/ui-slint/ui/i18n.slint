@@ -1,0 +1,26 @@
+// Naygo — textos de la UI (i18n). El global `Tr` expone una propiedad por cada texto visible.
+// Rust las rellena según el idioma activo (ver i18n_keys.rs). El valor por defecto de cada
+// propiedad es el texto en español, así que si Rust no setea nada la UI igual se ve en ES.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+export global Tr {
+    // Barra de herramientas.
+    in property <string> toolbar-up: "Subir";
+    in property <string> toolbar-up-tip: "Subir un nivel (Backspace)";
+    in property <string> toolbar-add-tip: "Dividir: nuevo panel de archivos";
+    in property <string> toolbar-panel: "Panel";
+    in property <string> toolbar-panel-tip: "Agregar panel especial…";
+    in property <string> toolbar-swap: "Swap";
+    in property <string> toolbar-swap-tip: "Intercambiar las carpetas de dos paneles";
+    in property <string> toolbar-clone: "Clonar";
+    in property <string> toolbar-clone-tip: "Abrir esta carpeta en otro panel";
+    in property <string> toolbar-tabs: "Tabs";
+    in property <string> toolbar-tabs-tip: "Apilar este panel como pestaña sobre otro";
+
+    // Menú desplegable "agregar panel" (▾).
+    in property <string> add-files: "Panel de archivos";
+    in property <string> add-tree: "Árbol de carpetas";
+    in property <string> add-inspector: "Propiedades";
+    in property <string> add-history: "Historial";
+    in property <string> add-favorites: "Favoritos";
+    in property <string> add-preview: "Vista previa";
+}

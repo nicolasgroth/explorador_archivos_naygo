@@ -11,6 +11,9 @@ import { PreviewPanel } from "preview-panel.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
+import { Tr } from "i18n.slint";
+// Reexportar el global para que Slint genere su binding accesible desde Rust (i18n_keys).
+export { Tr }
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.
@@ -206,38 +209,38 @@ export component AppWindow inherits Window {
                 padding: 4px;
                 spacing: 6px;
                 ToolBtn {
-                    label: "Subir";
-                    tip: "Subir un nivel (Backspace)";
+                    label: Tr.toolbar-up;
+                    tip: Tr.toolbar-up-tip;
                     btn-width: 46px;
                     clicked => { root.go-up(); }
                 }
                 ToolBtn {
                     label: "+";
-                    tip: "Dividir: nuevo panel de archivos";
+                    tip: Tr.toolbar-add-tip;
                     clicked => { root.add-pane(); }
                 }
                 ToolBtn {
-                    label: "Panel";
-                    tip: "Agregar panel especial…";
+                    label: Tr.toolbar-panel;
+                    tip: Tr.toolbar-panel-tip;
                     btn-width: 50px;
                     highlight: root.add-menu-open;
                     clicked => { root.add-menu-open = !root.add-menu-open; }
                 }
                 ToolBtn {
-                    label: "Swap";
-                    tip: "Intercambiar las carpetas de dos paneles";
+                    label: Tr.toolbar-swap;
+                    tip: Tr.toolbar-swap-tip;
                     btn-width: 50px;
                     clicked => { root.swap-panes(); }
                 }
                 ToolBtn {
-                    label: "Clonar";
-                    tip: "Abrir esta carpeta en otro panel";
+                    label: Tr.toolbar-clone;
+                    tip: Tr.toolbar-clone-tip;
                     btn-width: 54px;
                     clicked => { root.clone-pane(); }
                 }
                 ToolBtn {
-                    label: "Tabs";
-                    tip: "Apilar este panel como pestaña sobre otro";
+                    label: Tr.toolbar-tabs;
+                    tip: Tr.toolbar-tabs-tip;
                     btn-width: 50px;
                     clicked => { root.stack-pane(); }
                 }
@@ -467,12 +470,12 @@ export component AppWindow inherits Window {
         menu-items := VerticalLayout {
             padding: 4px;
             spacing: 1px;
-            MenuItem { label: "Panel de archivos"; clicked => { root.add-pane-of(0); root.add-menu-open = false; } }
-            MenuItem { label: "Árbol de carpetas"; clicked => { root.add-pane-of(1); root.add-menu-open = false; } }
-            MenuItem { label: "Propiedades"; clicked => { root.add-pane-of(2); root.add-menu-open = false; } }
-            MenuItem { label: "Historial"; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
-            MenuItem { label: "Favoritos"; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
-            MenuItem { label: "Vista previa"; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-files; clicked => { root.add-pane-of(0); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-tree; clicked => { root.add-pane-of(1); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-inspector; clicked => { root.add-pane-of(2); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
         }
     }
 

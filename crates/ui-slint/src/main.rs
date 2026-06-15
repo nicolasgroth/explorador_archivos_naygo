@@ -22,6 +22,7 @@
 // reconcilia la lista de paneles y splitters.
 mod bridge;
 mod config_ctrl;
+mod i18n_keys;
 mod keys;
 mod listing;
 mod ops_ctrl;
@@ -126,6 +127,8 @@ fn main() -> Result<(), slint::PlatformError> {
     // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada; si no, se
     // conserva el panel único del arranque por defecto.
     ctrl.borrow_mut().load_session();
+    // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
+    i18n_keys::apply(&ui, &ctrl.borrow().config);
     let models = Rc::new(RefCell::new(Models::new()));
 
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
