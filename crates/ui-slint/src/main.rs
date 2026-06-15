@@ -23,6 +23,7 @@
 mod bridge;
 mod keys;
 mod listing;
+mod ops_ctrl;
 mod preview;
 mod workspace_ctrl;
 
@@ -382,8 +383,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     let preview_busy = ctrl.borrow_mut().drive_preview(now);
                     let preview_ready = ctrl.borrow_mut().preview.poll().is_some();
                     let _ = preview_ready;
+                    // Drenar el progreso de las operaciones de archivo (F3).
+                    let ops_done = ctrl.borrow_mut().ops.pump_ops();
                     sync_rows();
-                    if files_done && tree_done && !preview_busy {
+                    if files_done && tree_done && !preview_busy && ops_done {
                         timer2.stop();
                     }
                 },

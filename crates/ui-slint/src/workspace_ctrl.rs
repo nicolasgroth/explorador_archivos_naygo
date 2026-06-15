@@ -10,7 +10,6 @@ use crate::listing::Listing;
 use naygo_core::favorites::Favorites;
 use naygo_core::fs_model::{EntryKind, SortKey};
 use naygo_core::keymap::{Action, KeyMap};
-use naygo_core::ops::undo::UndoEntry;
 use naygo_core::recent_dirs::RecentDirs;
 use naygo_core::tree::DirTree;
 use naygo_core::workspace::layout::{
@@ -69,9 +68,9 @@ pub struct WorkspaceCtrl {
     pub favorites: Favorites,
     /// Carpetas recientes (global): se empuja al navegar.
     pub recents: RecentDirs,
-    /// Historial de deshacer (sesión). Se llenará de verdad cuando existan operaciones
-    /// (F3); en 2b el panel se pinta vacío con su UI lista.
-    pub undo_history: Vec<UndoEntry>,
+    /// Controlador de operaciones de archivo (F3): ops en curso, modales, deshacer,
+    /// clipboard interno con corte visual. Posee el historial de deshacer.
+    pub ops: crate::ops_ctrl::OpsCtrl,
     /// Estado del preview (debounce + worker + último resultado).
     pub preview: crate::preview::PreviewState,
     /// Selector de panel destino en curso (overlay 1..9), si lo hay.
@@ -104,7 +103,7 @@ impl WorkspaceCtrl {
             tree_listings: HashMap::new(),
             favorites: Favorites::new(),
             recents: RecentDirs::new(),
-            undo_history: Vec::new(),
+            ops: crate::ops_ctrl::OpsCtrl::new(naygo_core::config::portable_dir()),
             preview: crate::preview::PreviewState::new(),
             pending_pick: None,
             last_area: Rect {
@@ -582,7 +581,7 @@ impl WorkspaceCtrl {
 
     /// Filas del historial de deshacer (validadas contra el disco).
     pub fn history_rows(&self) -> Vec<HistRow> {
-        history_rows(&self.undo_history)
+        history_rows(&self.ops.undo_history)
     }
 
     /// Filas del árbol del panel `id` (aplanadas con sangría). Vacío si el panel no tiene
@@ -637,6 +636,134 @@ impl WorkspaceCtrl {
             }
         }
         self.ws.files_panes().first().copied()
+    }
+
+    /// Carpeta del panel Files activo (destino de pegar/nuevo). None si no hay Files.
+    pub fn active_dir(&self) -> Option<PathBuf> {
+        self.ws.active_files().map(|f| f.current_dir.clone())
+    }
+
+    /// Rutas reales de los ítems SELECCIONADOS del panel Files activo (o, si no hay
+    /// selección, el ítem enfocado). Vacío si no hay nada. Para las operaciones de archivo.
+    pub fn selected_paths(&self) -> Vec<PathBuf> {
+        let Some(f) = self.ws.active_files() else {
+            return Vec::new();
+        };
+        let view = f.view_indices();
+        let mut out: Vec<PathBuf> = f
+            .selected
+            .iter()
+            .filter_map(|&pos| view.get(pos).and_then(|&real| f.entries.get(real)))
+            .map(|e| e.path.clone())
+            .collect();
+        if out.is_empty() {
+            if let Some(e) = f.focused_view_entry() {
+                out.push(e.path.clone());
+            }
+        }
+        out
+    }
+
+    // --- Gestos de operaciones de archivo (delegan en OpsCtrl) ---
+
+    /// Copiar la selección al portapapeles (limpia el corte).
+    pub fn op_copy(&mut self) {
+        let paths = self.selected_paths();
+        if !paths.is_empty() {
+            self.ops.set_copy(&paths);
+        }
+    }
+
+    /// Cortar la selección (marca corte visual).
+    pub fn op_cut(&mut self) {
+        let paths = self.selected_paths();
+        if !paths.is_empty() {
+            self.ops.set_cut(&paths);
+        }
+    }
+
+    /// Pegar en la carpeta activa los archivos del portapapeles. Devuelve true si arrancó
+    /// una operación (para reactivar el timer). El pegado de texto/imagen se cablea con el
+    /// modal PastePreview (fase de diálogos); aquí solo archivos.
+    pub fn op_paste(&mut self) -> bool {
+        let Some(dir) = self.active_dir() else {
+            return false;
+        };
+        let content = naygo_platform::clipboard::read();
+        if let naygo_core::clipboard::ClipboardContent::Files { paths, cut } = content {
+            if paths.is_empty() {
+                return false;
+            }
+            let label = if cut { "Mover" } else { "Copiar" };
+            let req = naygo_core::ops::transfer(cut, paths, dir);
+            self.ops.start_op(req, label.to_string(), true);
+            self.ops.clear_cut();
+            return true;
+        }
+        false
+    }
+
+    /// Eliminar la selección: abre el modal de confirmación.
+    pub fn op_delete(&mut self, permanent: bool) {
+        let paths = self.selected_paths();
+        if !paths.is_empty() {
+            self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+                sources: paths,
+                permanent,
+            });
+        }
+    }
+
+    /// Nuevo archivo/carpeta en la carpeta activa: abre el modal de nombre.
+    pub fn op_new(&mut self, is_dir: bool) {
+        let Some(dir) = self.active_dir() else {
+            return;
+        };
+        let purpose = if is_dir {
+            crate::ops_ctrl::NamePurpose::NewDir
+        } else {
+            crate::ops_ctrl::NamePurpose::NewFile
+        };
+        self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
+            purpose,
+            dir,
+            buf: String::new(),
+        });
+    }
+
+    /// Renombrar el ítem enfocado: abre el modal de nombre con el nombre actual.
+    pub fn op_rename(&mut self) {
+        let Some(f) = self.ws.active_files() else {
+            return;
+        };
+        let Some(e) = f.focused_view_entry() else {
+            return;
+        };
+        let dir = f.current_dir.clone();
+        self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
+            purpose: crate::ops_ctrl::NamePurpose::Rename(e.path.clone()),
+            dir,
+            buf: e.name.clone(),
+        });
+    }
+
+    /// Deshace la última entrada deshacible del historial. Devuelve true si arrancó algo.
+    pub fn op_undo_last(&mut self) -> bool {
+        // Buscar la última entrada no-deshecha y deshacible.
+        let idx = self
+            .ops
+            .undo_history
+            .iter()
+            .rposition(|e| !e.undone && naygo_core::ops::undo::validate(&e.actions).is_ok());
+        let Some(idx) = idx else {
+            return false;
+        };
+        let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
+        self.ops.undo_history[idx].undone = true;
+        for req in reqs {
+            self.ops.start_op(req, "Deshacer".to_string(), false);
+        }
+        true
     }
 
     /// Resalta `dir` en todos los árboles (cuando cambia la carpeta del Files activo).
@@ -927,6 +1054,16 @@ impl WorkspaceCtrl {
             Action::GoFavorite7 => return self.go_favorite(6),
             Action::GoFavorite8 => return self.go_favorite(7),
             Action::GoFavorite9 => return self.go_favorite(8),
+            // --- Operaciones de archivo (F3) ---
+            Action::Copy => self.op_copy(),
+            Action::Cut => self.op_cut(),
+            Action::Paste => return self.op_paste(),
+            Action::Delete => self.op_delete(false),
+            Action::DeletePermanent => self.op_delete(true),
+            Action::NewFile => self.op_new(false),
+            Action::NewDir => self.op_new(true),
+            Action::Rename => self.op_rename(),
+            Action::Undo => return self.op_undo_last(),
             _ => {}
         }
         false
