@@ -26,6 +26,7 @@ mod i18n_keys;
 mod keys;
 mod listing;
 mod ops_ctrl;
+mod packs;
 mod preview;
 mod theme_apply;
 mod workspace_ctrl;
@@ -681,6 +682,93 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    // Import/Export de packs (.zip) — Fase 4E. Selector de archivo nativo (rfd); el resultado
+    // se informa con un MessageDialog (errores) sin bloquear el resto de la UI.
+    {
+        let ctrl = ctrl.clone();
+        ui.on_cfg_export_language(move || {
+            let c = ctrl.borrow();
+            let code = c.config.settings.language.as_str().to_string();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Pack Naygo (.zip)", &["zip"])
+                .set_file_name(format!("naygo-idioma-{code}.zip"))
+                .save_file()
+            {
+                report(packs::export_lang(&c.config.config_dir, &code, &path));
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        ui.on_cfg_export_theme(move || {
+            let c = ctrl.borrow();
+            let id = c.config.settings.theme.as_str().to_string();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Pack Naygo (.zip)", &["zip"])
+                .set_file_name(format!("naygo-tema-{id}.zip"))
+                .save_file()
+            {
+                report(packs::export_theme(&c.config.config_dir, &id, &path));
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        ui.on_cfg_export_config(move || {
+            let c = ctrl.borrow();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Pack Naygo (.zip)", &["zip"])
+                .set_file_name("naygo-config.zip")
+                .save_file()
+            {
+                report(packs::export_config(&c.config.config_dir, &path));
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_cfg_import_pack(move || {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Pack Naygo (.zip)", &["zip"])
+                .pick_file()
+            else {
+                return;
+            };
+            // Importar y, según el tipo, recargar el catálogo correspondiente.
+            let config_dir = ctrl.borrow().config.config_dir.clone();
+            match packs::import_zip(&config_dir, &path) {
+                Ok(kind) => {
+                    {
+                        let mut cb = ctrl.borrow_mut();
+                        let lang = cb.config.settings.language.clone();
+                        let theme = cb.config.settings.theme.clone();
+                        match kind {
+                            packs::ImportKind::Lang(_) => {
+                                cb.config.i18n = naygo_core::i18n::I18n::load(&config_dir, &lang);
+                            }
+                            packs::ImportKind::Theme(_) => {
+                                cb.config.themes =
+                                    naygo_core::theme::ThemeCatalog::load(&config_dir, &theme);
+                            }
+                            packs::ImportKind::Config => {
+                                let fresh = config_ctrl::ConfigCtrl::new(config_dir.clone());
+                                cb.config = fresh;
+                            }
+                        }
+                    }
+                    // Reaplicar textos y colores por si cambió el catálogo activo.
+                    if let Some(ui) = ui_weak.upgrade() {
+                        i18n_keys::apply(&ui, &ctrl.borrow().config);
+                        theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+                    }
+                    refresh();
+                }
+                Err(e) => report(Err::<(), String>(e)),
+            }
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
@@ -1170,6 +1258,17 @@ fn int_to_purpose(p: i32) -> PanePurpose {
         4 => PanePurpose::Favorites,
         5 => PanePurpose::Preview,
         _ => PanePurpose::Files,
+    }
+}
+
+/// Muestra un diálogo de error si el resultado de un import/export falló; silencioso si OK.
+fn report<T>(r: Result<T, String>) {
+    if let Err(e) = r {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Naygo")
+            .set_description(e)
+            .show();
     }
 }
 
