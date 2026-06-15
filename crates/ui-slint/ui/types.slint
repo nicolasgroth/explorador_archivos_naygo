@@ -37,6 +37,14 @@ export struct OpDialogVm {
     paste-is-image: bool,
 }
 
+// Estado del menú contextual (clic derecho). Posición en coords de la ventana.
+export struct ContextMenuVm {
+    active: bool,
+    x: length,
+    y: length,
+    has-native: bool,
+}
+
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
 export struct ResumeRowVm {
     id: string,

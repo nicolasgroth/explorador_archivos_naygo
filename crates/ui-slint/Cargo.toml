@@ -19,7 +19,10 @@ slint = { version = "1.16", default-features = false, features = [
     "std",
     "backend-winit",
     "renderer-software",
+    # Acceso al handle nativo de la ventana (HWND) para el menú contextual del Shell.
+    "raw-window-handle-06",
 ] }
+raw-window-handle = "0.6"
 # Decodificación de imágenes para el panel Preview (mismas familias que la capa egui).
 image = { version = "0.25", default-features = false, features = [
     "png",

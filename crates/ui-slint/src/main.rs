@@ -236,6 +236,22 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .collect();
             ui.set_resume_rows(ModelRc::from(Rc::new(VecModel::from(resume_rows))));
+            // Menú contextual: posición + si hay menú nativo disponible (hay HWND).
+            let ctx = match &c.context_menu {
+                Some(cm) => ContextMenuVm {
+                    active: true,
+                    x: cm.x,
+                    y: cm.y,
+                    has_native: naygo_hwnd(&ui).is_some(),
+                },
+                None => ContextMenuVm {
+                    active: false,
+                    x: 0.0,
+                    y: 0.0,
+                    has_native: false,
+                },
+            };
+            ui.set_ctx_menu(ctx);
         }
     };
 
@@ -679,6 +695,124 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // --- Menú contextual (clic derecho): acciones propias + nativo ---
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_row_context(move |_id, _pos, x, y| {
+            ctrl.borrow_mut().open_context_menu(x, y);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_dismiss(move || {
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_open(move || {
+            ctrl.borrow_mut().ctx_open();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_open_with(move || {
+            ctrl.borrow_mut().ctx_open_with();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_copy(move || {
+            ctrl.borrow_mut().op_copy();
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_cut(move || {
+            ctrl.borrow_mut().op_cut();
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_paste(move || {
+            if ctrl.borrow_mut().op_paste() {
+                start_timer();
+            }
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_rename(move || {
+            ctrl.borrow_mut().op_rename();
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_delete(move || {
+            ctrl.borrow_mut().op_delete(false);
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_copy_path(move || {
+            ctrl.borrow_mut().ctx_copy_path();
+            sync_rows();
+        });
+    }
+    {
+        // "Más opciones de Windows…": invoca el menú nativo del Shell con el HWND de winit.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_native(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let (targets, x, y) = {
+                let c = ctrl.borrow();
+                match &c.context_menu {
+                    Some(cm) => (cm.targets.clone(), cm.x, cm.y),
+                    None => return,
+                }
+            };
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+            if let Some(hwnd) = naygo_hwnd(&ui) {
+                // Coords de pantalla = posición de la ventana + posición del clic en la ventana.
+                let pos = ui.window().position();
+                let sx = pos.x + x as i32;
+                let sy = pos.y + y as i32;
+                let _ = naygo_platform::context_menu::show_native_context_menu(
+                    hwnd, &targets, sx, sy,
+                );
+            }
+        });
+    }
     // --- Acciones multi-panel (swap / clonar) + selector de destino ---
     {
         let ctrl = ctrl.clone();
@@ -858,6 +992,18 @@ fn int_to_purpose(p: i32) -> PanePurpose {
         4 => PanePurpose::Favorites,
         5 => PanePurpose::Preview,
         _ => PanePurpose::Files,
+    }
+}
+
+/// El HWND de la ventana de Naygo (backend winit), para el menú contextual del Shell.
+/// `None` si no se puede obtener (otro backend) — entonces se oculta "Más opciones de
+/// Windows…". Usa raw-window-handle vía el feature `raw-window-handle-06` de slint.
+fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = ui.window().window_handle();
+    match handle.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
+        _ => None,
     }
 }
 

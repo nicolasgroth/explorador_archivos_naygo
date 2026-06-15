@@ -32,6 +32,7 @@ export component FilePanel inherits FocusScope {
     in property <length> scroll-y;
     callback row-clicked(int, int);          // (pane-id, pos)
     callback row-double-clicked(int, int);
+    callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
     callback sort-by(int, string);           // (pane-id, columna)
     callback activate(int);                  // (pane-id) al interactuar
     callback key(string, bool, bool, bool);
@@ -143,6 +144,16 @@ export component FilePanel inherits FocusScope {
                                 self.pressed-here = false;
                                 root.activate(root.pane-id);
                                 root.row-clicked(root.pane-id, i);
+                            }
+                            // Clic derecho: seleccionar la fila y abrir el menú contextual en
+                            // coords de la ventana (absolute-position del TouchArea + puntero).
+                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                                root.activate(root.pane-id);
+                                root.row-clicked(root.pane-id, i);
+                                root.row-context(
+                                    root.pane-id, i,
+                                    row-touch.absolute-position.x + row-touch.mouse-x,
+                                    row-touch.absolute-position.y + row-touch.mouse-y);
                             }
                             if (ev.kind == PointerEventKind.cancel) {
                                 self.pressed-here = false;

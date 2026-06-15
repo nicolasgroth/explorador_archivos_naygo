@@ -1,6 +1,6 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -10,6 +10,7 @@ import { FavoritesPanel } from "favorites-panel.slint";
 import { PreviewPanel } from "preview-panel.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { OpsPanel } from "ops-panel.slint";
+import { ContextMenu } from "context-menu.slint";
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.
@@ -166,6 +167,19 @@ export component AppWindow inherits Window {
     callback paste-confirm();
     callback paste-cancel();
     callback op-cancel(int);
+    // Menú contextual (clic derecho).
+    callback row-context(int, int, length, length);  // (pane-id, pos, x, y)
+    in property <ContextMenuVm> ctx-menu;
+    callback ctx-open();
+    callback ctx-open-with();
+    callback ctx-copy();
+    callback ctx-cut();
+    callback ctx-paste();
+    callback ctx-rename();
+    callback ctx-delete();
+    callback ctx-copy-path();
+    callback ctx-native();
+    callback ctx-dismiss();
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -310,6 +324,7 @@ export component AppWindow inherits Window {
                         rows: p.rows;
                         row-clicked(id, pos) => { root.row-clicked(id, pos); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                        row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         sort-by(id, col) => { root.sort-by(id, col); }
                         activate(id) => { root.activate(id); }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
@@ -416,6 +431,23 @@ export component AppWindow inherits Window {
         name-cancel() => { root.name-cancel(); }
         paste-confirm() => { root.paste-confirm(); }
         paste-cancel() => { root.paste-cancel(); }
+    }
+
+    // Menú contextual (clic derecho): acciones propias + nativo de Windows.
+    ContextMenu {
+        width: 100%;
+        height: 100%;
+        vm: root.ctx-menu;
+        open() => { root.ctx-open(); }
+        open-with() => { root.ctx-open-with(); }
+        copy() => { root.ctx-copy(); }
+        cut() => { root.ctx-cut(); }
+        paste() => { root.ctx-paste(); }
+        rename() => { root.ctx-rename(); }
+        delete() => { root.ctx-delete(); }
+        copy-path() => { root.ctx-copy-path(); }
+        native() => { root.ctx-native(); }
+        dismiss() => { root.ctx-dismiss(); }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota

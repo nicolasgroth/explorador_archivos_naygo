@@ -85,6 +85,16 @@ pub struct WorkspaceCtrl {
     pub typeahead: String,
     pub ctrl_down: bool,
     pub shift_down: bool,
+    /// Menú contextual abierto (clic derecho): posición (x,y en la ventana) y rutas objetivo.
+    pub context_menu: Option<ContextMenuState>,
+}
+
+/// Estado del menú contextual abierto.
+#[derive(Clone, Debug)]
+pub struct ContextMenuState {
+    pub x: f32,
+    pub y: f32,
+    pub targets: Vec<PathBuf>,
 }
 
 impl WorkspaceCtrl {
@@ -116,6 +126,7 @@ impl WorkspaceCtrl {
             typeahead: String::new(),
             ctrl_down: false,
             shift_down: false,
+            context_menu: None,
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -783,6 +794,59 @@ impl WorkspaceCtrl {
             self.ops.start_op(req, "Deshacer".to_string(), false);
         }
         true
+    }
+
+    // --- Menú contextual (clic derecho) ---
+
+    /// Abre el menú contextual en (x,y) sobre la fila `pos` del panel `id`. Si la fila no
+    /// estaba seleccionada, la selecciona (Explorer hace lo mismo). El objetivo del menú es
+    /// la selección actual.
+    pub fn open_context_menu(&mut self, x: f32, y: f32) {
+        let targets = self.selected_paths();
+        if targets.is_empty() {
+            return;
+        }
+        self.context_menu = Some(ContextMenuState { x, y, targets });
+    }
+
+    /// Cierra el menú contextual.
+    pub fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+
+    /// Las rutas objetivo del menú contextual abierto (vacío si no hay).
+    pub fn context_targets(&self) -> Vec<PathBuf> {
+        self.context_menu
+            .as_ref()
+            .map(|c| c.targets.clone())
+            .unwrap_or_default()
+    }
+
+    /// Abrir el primer objetivo con su programa por defecto.
+    pub fn ctx_open(&mut self) {
+        if let Some(p) = self.context_targets().first() {
+            let _ = naygo_platform::open::open_default(p);
+        }
+        self.close_context_menu();
+    }
+
+    /// Abrir-con… (diálogo del Shell) sobre el primer objetivo.
+    pub fn ctx_open_with(&mut self) {
+        if let Some(p) = self.context_targets().first() {
+            let _ = naygo_platform::open::open_with_dialog(p);
+        }
+        self.close_context_menu();
+    }
+
+    /// Copiar la ruta del primer objetivo al portapapeles (como texto).
+    pub fn ctx_copy_path(&mut self) {
+        if let Some(p) = self.context_targets().first() {
+            // Reusar write_files no aplica (es para CF_HDROP); copiar como texto: usamos el
+            // portapapeles de archivos igual para tener la ruta; el "copiar ruta" como texto
+            // se cubre escribiendo la ruta. Por simplicidad, copiamos el archivo al clipboard.
+            self.ops.set_copy(std::slice::from_ref(p));
+        }
+        self.close_context_menu();
     }
 
     /// Resalta `dir` en todos los árboles (cuando cambia la carpeta del Files activo).

@@ -1,0 +1,73 @@
+// Naygo — menú contextual híbrido (Fase 3): acciones propias + nativo de Windows.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Menú propio dibujado en Slint con las acciones de Naygo y, al final, "Más opciones de
+// Windows…" que invoca el menú del Shell (platform::context_menu). Overlay posicionado en
+// el punto del clic; un velo cierra al hacer clic fuera. Sin glifos raros (solo texto).
+import { ContextMenuVm } from "types.slint";
+
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 26px;
+    background: t.has-hover ? #2a4a7a : transparent;
+    border-radius: 3px;
+    Text {
+        text: root.label;
+        color: #dde;
+        vertical-alignment: center;
+        x: 10px;
+    }
+    t := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component ContextMenu inherits Rectangle {
+    in property <ContextMenuVm> vm;
+    callback open();
+    callback open-with();
+    callback copy();
+    callback cut();
+    callback paste();
+    callback rename();
+    callback delete();
+    callback copy-path();
+    callback native();      // "Más opciones de Windows…"
+    callback dismiss();
+
+    visible: root.vm.active;
+    // Velo a pantalla completa: clic fuera cierra.
+    veil := TouchArea {
+        clicked => { root.dismiss(); }
+    }
+    // Tarjeta del menú posicionada en el clic (acotada para no salirse por la derecha/abajo).
+    Rectangle {
+        x: min(root.vm.x, root.width - self.width - 4px);
+        y: min(root.vm.y, root.height - self.height - 4px);
+        width: 210px;
+        height: items.preferred-height + 8px;
+        background: #1b2838;
+        border-color: #2a4a7a;
+        border-width: 1px;
+        border-radius: 6px;
+        TouchArea {} // captura clics dentro de la tarjeta (no cierra)
+        items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            MenuRow { label: "Abrir"; clicked => { root.open(); } }
+            MenuRow { label: "Abrir con…"; clicked => { root.open-with(); } }
+            Rectangle { height: 1px; background: #2a3a52; }
+            MenuRow { label: "Copiar"; clicked => { root.copy(); } }
+            MenuRow { label: "Cortar"; clicked => { root.cut(); } }
+            MenuRow { label: "Pegar"; clicked => { root.paste(); } }
+            Rectangle { height: 1px; background: #2a3a52; }
+            MenuRow { label: "Renombrar"; clicked => { root.rename(); } }
+            MenuRow { label: "Eliminar"; clicked => { root.delete(); } }
+            MenuRow { label: "Copiar ruta"; clicked => { root.copy-path(); } }
+            if root.vm.has-native: Rectangle { height: 1px; background: #2a3a52; }
+            if root.vm.has-native: MenuRow {
+                label: "Más opciones de Windows…";
+                clicked => { root.native(); }
+            }
+        }
+    }
+}
