@@ -228,8 +228,10 @@ impl Workspace {
                 LayoutShape::Tabs { members, active } => {
                     // Traducir índices → PaneIds, ignorando los fuera de rango. Un grupo con
                     // 0 miembros válidos desaparece; con 1 se colapsa a hoja.
-                    let resolved: Vec<PaneId> =
-                        members.iter().filter_map(|i| ids.get(*i).copied()).collect();
+                    let resolved: Vec<PaneId> = members
+                        .iter()
+                        .filter_map(|i| ids.get(*i).copied())
+                        .collect();
                     match resolved.len() {
                         0 => None,
                         1 => Some(DockNode::Leaf(resolved[0])),
@@ -270,6 +272,64 @@ impl Workspace {
         };
         w
     }
+
+    /// Inserta un `PaneNode` ya construido (con su id propio), para reconstruir un workspace
+    /// desde un persist. Si es el primero, queda activo. No toca `next_id` (lo fija el
+    /// llamador con `set_next_id` tras insertar todos).
+    pub fn push_node(&mut self, node: PaneNode) {
+        let id = node.id;
+        self.panes.push(node);
+        if self.active.is_none() {
+            self.active = Some(id);
+        }
+    }
+
+    /// Fija el contador de ids (tras reconstruir desde persist), para que un `add_pane`
+    /// posterior no colisione con un id ya restaurado.
+    pub fn set_next_id(&mut self, next: u64) {
+        self.next_id = next;
+    }
+
+    /// Reconstruye un `Workspace` desde un `WorkspacePersist` (sesión guardada). Crea cada
+    /// panel con su purpose y, si es `Files`, su `FilePaneState` restaurado; conserva los
+    /// `PaneId` del persist y rearma la disposición tal cual se guardó; fija el panel activo.
+    /// Devuelve `None` si el layout guardado no referencia ningún panel (persist vacío o
+    /// corrupto) para que el llamador caiga al arranque por defecto.
+    pub fn from_persist(p: &crate::config::WorkspacePersist) -> Option<Workspace> {
+        if p.layout.pane_ids().is_empty() {
+            return None;
+        }
+        let mut w = Workspace::new();
+        let files: std::collections::HashMap<PaneId, FilePanePersist> =
+            p.files.iter().cloned().collect();
+        let mut max_id = 0u64;
+        for (id, purpose) in &p.purposes {
+            let pane_files = match purpose {
+                PanePurpose::Files => files
+                    .get(id)
+                    .cloned()
+                    .map(FilePaneState::from_persist)
+                    .or_else(|| {
+                        // Un panel Files sin su persist (raro): arranca en HOME para no perder
+                        // el panel del layout.
+                        Some(FilePaneState::new(std::path::PathBuf::new()))
+                    }),
+                _ => None,
+            };
+            w.push_node(PaneNode {
+                id: *id,
+                purpose: *purpose,
+                files: pane_files,
+            });
+            max_id = max_id.max(id.0);
+        }
+        w.set_next_id(max_id + 1);
+        w.layout = p.layout.clone();
+        if let Some(a) = p.active {
+            w.set_active(a);
+        }
+        Some(w)
+    }
 }
 
 impl Default for Workspace {
@@ -301,6 +361,57 @@ mod tests {
         let mut w = Workspace::new();
         let id = w.add_pane(PanePurpose::Files, PathBuf::from("C:/"));
         assert_eq!(w.active_id(), Some(id));
+    }
+
+    /// Arma un `WorkspacePersist` a partir de un workspace vivo (como hará la UI al cerrar).
+    fn persist_de(w: &Workspace) -> crate::config::WorkspacePersist {
+        crate::config::WorkspacePersist {
+            version: 1,
+            layout: w.layout.clone(),
+            active: w.active_id(),
+            files: w
+                .panes()
+                .iter()
+                .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.to_persist())))
+                .collect(),
+            purposes: w.panes().iter().map(|p| (p.id, p.purpose)).collect(),
+        }
+    }
+
+    #[test]
+    fn workspace_round_trip_persist() {
+        let mut w = Workspace::new();
+        let a = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        let _tree = w.add_pane(PanePurpose::Tree, PathBuf::new());
+        w.layout = SerializableDockLayout::single(a);
+        w.set_active(a);
+
+        let persist = persist_de(&w);
+        let w2 = Workspace::from_persist(&persist).expect("layout no vacío → Some");
+
+        assert_eq!(w2.panes().len(), 2);
+        assert_eq!(w2.active_id(), Some(a));
+        assert_eq!(
+            w2.active_files().map(|f| f.current_dir.clone()),
+            Some(PathBuf::from("C:/a"))
+        );
+        // Un panel nuevo no debe colisionar con los ids restaurados.
+        let mut w3 = w2;
+        let nuevo = w3.add_pane(PanePurpose::Files, PathBuf::from("C:/c"));
+        assert!(w3.panes().iter().filter(|p| p.id == nuevo).count() == 1);
+        assert_ne!(nuevo, a);
+    }
+
+    #[test]
+    fn from_persist_con_layout_vacio_es_none() {
+        let persist = crate::config::WorkspacePersist {
+            version: 1,
+            layout: SerializableDockLayout::empty(),
+            active: None,
+            files: Vec::new(),
+            purposes: Vec::new(),
+        };
+        assert!(Workspace::from_persist(&persist).is_none());
     }
 
     #[test]

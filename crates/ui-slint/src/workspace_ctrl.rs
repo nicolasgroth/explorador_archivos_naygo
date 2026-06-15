@@ -141,6 +141,81 @@ impl WorkspaceCtrl {
         c
     }
 
+    /// Estado persistible del workspace (para guardar al cerrar la ventana): disposición,
+    /// panel activo, estado de cada panel Files y el tipo de cada panel.
+    pub fn session_persist(&self) -> naygo_core::config::WorkspacePersist {
+        naygo_core::config::WorkspacePersist {
+            version: 1,
+            layout: self.ws.layout.clone(),
+            active: self.ws.active_id(),
+            files: self
+                .ws
+                .panes()
+                .iter()
+                .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.to_persist())))
+                .collect(),
+            purposes: self.ws.panes().iter().map(|p| (p.id, p.purpose)).collect(),
+        }
+    }
+
+    /// Guarda la sesión actual en disco (la llama la UI al cerrar la ventana).
+    pub fn save_session(&self) {
+        naygo_core::config::save_workspace(&self.config.config_dir, &self.session_persist());
+    }
+
+    /// Intenta restaurar la sesión guardada (al arrancar). Si hay un workspace.json válido,
+    /// reemplaza el workspace de arranque por el restaurado y relanza el listado de cada
+    /// panel Files + el árbol de cada panel Tree. Si no hay sesión guardada (o el layout es
+    /// vacío/corrupto), no hace nada y se conserva el arranque por defecto.
+    pub fn load_session(&mut self) {
+        let (persist, _recovered) =
+            naygo_core::config::load_workspace_flagged(&self.config.config_dir);
+        let Some(persist) = persist else {
+            return;
+        };
+        let Some(restored) = Workspace::from_persist(&persist) else {
+            return;
+        };
+        // Cancelar los listados del arranque por defecto antes de reemplazar el workspace.
+        for l in self.listings.values() {
+            l.cancel();
+        }
+        self.listings.clear();
+        self.trees.clear();
+        self.ws = restored;
+        // Relanzar el contenido de cada panel restaurado.
+        let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
+            .ws
+            .panes()
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.purpose,
+                    p.files.as_ref().map(|f| f.current_dir.clone()),
+                )
+            })
+            .collect();
+        for (id, purpose, dir) in panes {
+            match purpose {
+                PanePurpose::Files => {
+                    if let Some(dir) = dir {
+                        self.recents.push(dir.clone());
+                        self.start_listing(id, dir);
+                    }
+                }
+                PanePurpose::Tree => {
+                    let mut t = build_tree();
+                    if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+                        t.set_active(cur);
+                    }
+                    self.trees.insert(id, t);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
     pub fn start_listing(&mut self, id: PaneId, dir: std::path::PathBuf) {
         if let Some(l) = self.listings.get(&id) {

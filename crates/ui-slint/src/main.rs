@@ -123,6 +123,9 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada; si no, se
+    // conserva el panel único del arranque por defecto.
+    ctrl.borrow_mut().load_session();
     let models = Rc::new(RefCell::new(Models::new()));
 
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
@@ -989,6 +992,21 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let sync_layout = sync_layout.clone();
         ui.on_content_resized(move || sync_layout());
+    }
+
+    // Al cerrar la ventana: persistir la sesión (paneles + carpetas) para restaurarla en el
+    // próximo arranque. Devolvemos HideWindow y salimos del loop a mano para garantizar que
+    // el guardado corre antes de terminar.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.window().on_close_requested(move || {
+            ctrl.borrow().save_session();
+            if let Some(ui) = ui_weak.upgrade() {
+                let _ = ui.hide();
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
     }
 
     // Al arrancar: si hay operaciones interrumpidas (journal), ofrecer retomarlas.
