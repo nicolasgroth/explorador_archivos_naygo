@@ -144,6 +144,10 @@ export component FilePanel inherits FocusScope {
                                 self.pressed-here = false;
                                 root.activate(root.pane-id);
                                 root.row-clicked(root.pane-id, i);
+                                // Tomar el foco de teclado: así los atajos (Supr, Ctrl+C…)
+                                // llegan al panel tras hacer clic en una fila. (Se hace en el
+                                // `up`, ya completado el gesto, para no robar el grab del clic.)
+                                root.focus();
                             }
                             // Clic derecho: seleccionar la fila y abrir el menú contextual en
                             // coords de la ventana (absolute-position del TouchArea + puntero).
