@@ -1,6 +1,10 @@
 // Naygo — arranque de la capa UI en Slint (Fase 2b: multi-panel + paneles especiales).
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 //
+// Subsistema GUI en release: sin ventana de consola negra al lanzar el .exe. En debug se
+// conserva la consola para ver stderr/logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//
 // Para forzar el renderizador por software (caso VM sin GPU):
 //   $env:SLINT_BACKEND="winit-software"; cargo run -p naygo-ui-slint
 //

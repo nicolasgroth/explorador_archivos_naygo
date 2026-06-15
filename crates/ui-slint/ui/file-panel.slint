@@ -125,20 +125,26 @@ export component FilePanel inherits FocusScope {
                         }
                     }
                     row-touch := TouchArea {
-                        // El foco de teclado se toma en `pointer-event` (al PRESIONAR), no
-                        // en `clicked`: llamar focus() dentro de `clicked` reinicia el
-                        // rastreo de clics de Slint y se pierde el doble-clic.
+                        // El `clicked` de un TouchArea DENTRO de un ListView no se dispara
+                        // bajo el backend winit/software: el Flickable del ListView se traga
+                        // el press/release para interpretar scroll. Los eventos pointer-event
+                        // SÍ llegan (el hover funciona), así que detectamos el clic a mano:
+                        // press y release sobre la misma fila = clic. El doble-clic lo detecta
+                        // Rust por tiempo. (Si el puntero se va entre press y release, no es
+                        // clic: se cancela.)
+                        property <bool> pressed-here: false;
                         pointer-event(ev) => {
-                            if (ev.kind == PointerEventKind.down) {
-                                root.focus();
-                                root.activate(root.pane-id);
+                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                                self.pressed-here = true;
                             }
-                        }
-                        clicked => {
-                            root.row-clicked(root.pane-id, i);
-                        }
-                        double-clicked => {
-                            root.row-double-clicked(root.pane-id, i);
+                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
+                                self.pressed-here = false;
+                                root.activate(root.pane-id);
+                                root.row-clicked(root.pane-id, i);
+                            }
+                            if (ev.kind == PointerEventKind.cancel) {
+                                self.pressed-here = false;
+                            }
                         }
                     }
                 }
