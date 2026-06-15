@@ -15,10 +15,12 @@ import { ConfigWindow } from "config-window.slint";
 import { SettingsVm, ShortcutRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
+import { Splash } from "splash.slint";
 // Reexportar los globals para que Slint genere su binding accesible desde Rust
-// (i18n_keys / theme_apply).
+// (i18n_keys / theme_apply). Splash se reexporta para tener su componente en Rust.
 export { Tr }
 export { Theme }
+export { Splash }
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.

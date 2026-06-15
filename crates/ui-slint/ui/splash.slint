@@ -1,0 +1,42 @@
+// Naygo — splash de arranque (Fase 5F): ventana breve de bienvenida en release. Se cierra sola
+// tras ~1.2s o cuando la ventana principal está lista. No retrasa el arranque real.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { Theme } from "theme.slint";
+
+export component Splash inherits Window {
+    no-frame: true;
+    width: 360px;
+    height: 200px;
+    background: transparent;
+
+    Rectangle {
+        background: Theme.panel-bg;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.accent;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 8px;
+            alignment: center;
+            Text {
+                text: "📁  Naygo";
+                color: Theme.text;
+                font-size: 34px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Explorador de archivos";
+                color: Theme.text-dim;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "© 2026 Nicolás Groth / ISGroth";
+                color: Theme.text-dim;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

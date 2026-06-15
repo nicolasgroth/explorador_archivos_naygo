@@ -136,6 +136,31 @@ fn main() -> Result<(), slint::PlatformError> {
     i18n_keys::apply(&ui, &ctrl.borrow().config);
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
     theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+
+    // Splash de arranque (Fase 5F): solo en release. Ventana breve de bienvenida que se cierra
+    // sola a ~1.2s. La ventana principal se construye por detrás (el splash no la bloquea). En
+    // debug se omite (arranque directo). Se mantiene vivo en una variable de la función `main`.
+    // Nota: el Splash usa los colores POR DEFECTO del global Theme (azul marino), que coinciden
+    // con el tema default — no hace falta aplicarle el tema activo (es una pantalla efímera).
+    #[cfg(not(debug_assertions))]
+    let _splash_keepalive = match Splash::new() {
+        Ok(splash) => {
+            let _ = splash.show();
+            let splash = Rc::new(splash);
+            let splash_for_timer = splash.clone();
+            let timer = slint::Timer::default();
+            timer.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(1200),
+                move || {
+                    let _ = splash_for_timer.hide();
+                },
+            );
+            Some((splash, timer))
+        }
+        Err(_) => None,
+    };
+
     let models = Rc::new(RefCell::new(Models::new()));
 
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
