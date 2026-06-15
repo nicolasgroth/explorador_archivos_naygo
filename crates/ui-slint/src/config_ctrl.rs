@@ -10,9 +10,9 @@
 // desde el binario, de ahí el allow a nivel de módulo. Se quita al cerrar la fase.
 #![allow(dead_code)]
 
-use naygo_core::config::{self, Settings};
+use naygo_core::config::{self, BarPosition, OpsMode, Settings};
 use naygo_core::i18n::{I18n, LangId};
-use naygo_core::keymap::KeyMap;
+use naygo_core::keymap::{Action, Chord, KeyCode, KeyMap};
 use naygo_core::theme::{Theme, ThemeCatalog, ThemeId};
 use std::path::PathBuf;
 
@@ -77,6 +77,152 @@ impl ConfigCtrl {
         self.settings.theme = id;
         self.save();
     }
+
+    // --- Setters de ajustes (cada uno persiste). Los usa la ventana de configuración. ---
+
+    /// Modo de ejecución de operaciones: 0 = cola, 1 = paralelo.
+    pub fn set_ops_mode(&mut self, mode: i32) {
+        self.settings.ops_mode = if mode == 1 {
+            OpsMode::Parallel
+        } else {
+            OpsMode::Queue
+        };
+        self.save();
+    }
+
+    /// Confirmar también el borrado a papelera.
+    pub fn set_confirm_trash(&mut self, v: bool) {
+        self.settings.confirm_trash = v;
+        self.save();
+    }
+
+    /// Mostrar el resumen al terminar una operación.
+    pub fn set_show_op_summary(&mut self, v: bool) {
+        self.settings.show_op_summary = v;
+        self.save();
+    }
+
+    /// Mostrar la fila virtual ".." al tope de los paneles.
+    pub fn set_show_parent(&mut self, v: bool) {
+        self.settings.show_parent_entry = v;
+        self.save();
+    }
+
+    /// Botones de la barra solo con ícono.
+    pub fn set_icon_only(&mut self, v: bool) {
+        self.settings.icon_only = v;
+        self.save();
+    }
+
+    /// Posición de la barra: 0 = arriba, 1 = al costado.
+    pub fn set_bar_position(&mut self, pos: i32) {
+        self.settings.bar_position = if pos == 1 {
+            BarPosition::Side
+        } else {
+            BarPosition::Top
+        };
+        self.save();
+    }
+
+    /// Al calcular tamaño de carpeta, no bajar a subdirectorios.
+    pub fn set_size_no_subdirs(&mut self, v: bool) {
+        self.settings.size_no_subdirs = v;
+        self.save();
+    }
+
+    /// Pegar texto/imagen: pedir confirmación de nombre (modo B).
+    pub fn set_paste_confirm(&mut self, v: bool) {
+        self.settings.paste_confirm = v;
+        self.save();
+    }
+
+    /// Plantilla de nombre para texto pegado.
+    pub fn set_paste_text_name(&mut self, name: String) {
+        self.settings.paste_text_name = name;
+        self.save();
+    }
+
+    /// Extensión (sin punto) para texto pegado.
+    pub fn set_paste_text_ext(&mut self, ext: String) {
+        self.settings.paste_text_ext = ext;
+        self.save();
+    }
+
+    // --- Editor de atajos ---
+
+    /// Texto legible de un chord, p. ej. "Ctrl+C", "Supr", "Shift+↑". Sin i18n: los nombres de
+    /// modificadores y teclas son convención.
+    pub fn chord_to_text(chord: &Chord) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if chord.ctrl {
+            parts.push("Ctrl");
+        }
+        if chord.shift {
+            parts.push("Shift");
+        }
+        if chord.alt {
+            parts.push("Alt");
+        }
+        let key = match chord.key {
+            KeyCode::ArrowUp => "↑".to_string(),
+            KeyCode::ArrowDown => "↓".to_string(),
+            KeyCode::ArrowLeft => "←".to_string(),
+            KeyCode::ArrowRight => "→".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Escape => "Esc".to_string(),
+            KeyCode::Delete => "Supr".to_string(),
+            KeyCode::F2 => "F2".to_string(),
+            KeyCode::F3 => "F3".to_string(),
+            KeyCode::F4 => "F4".to_string(),
+            KeyCode::F5 => "F5".to_string(),
+            KeyCode::F6 => "F6".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::Space => "Espacio".to_string(),
+            KeyCode::Char(c) => c.to_uppercase().to_string(),
+        };
+        parts.push(&key);
+        parts.join("+")
+    }
+
+    /// El primer chord de una acción como texto, o vacío si no tiene atajo.
+    pub fn chord_text_for(&self, action: Action) -> String {
+        self.keymap
+            .chords_for(action)
+            .first()
+            .map(Self::chord_to_text)
+            .unwrap_or_default()
+    }
+
+    /// Reasigna el PRIMER chord de `action` a `chord`. Si el chord ya pertenecía a otra acción,
+    /// se la quita (la reasignación gana) y devuelve esa acción desplazada (para avisar del
+    /// conflicto). Persiste el keymap.
+    pub fn rebind(&mut self, action: Action, chord: Chord) -> Option<Action> {
+        // Quitar el chord viejo de esta acción (reemplazo del primero), luego asignar el nuevo.
+        let old: Vec<Chord> = self.keymap.chords_for(action).to_vec();
+        for c in old {
+            self.keymap.unbind(action, &c);
+        }
+        let displaced = self.keymap.bind(action, chord);
+        config::save_keymap(&self.config_dir, &self.keymap);
+        displaced
+    }
+
+    /// Restaura los atajos por defecto de una acción y persiste.
+    pub fn reset_shortcut(&mut self, action: Action) {
+        self.keymap.reset_action(action);
+        config::save_keymap(&self.config_dir, &self.keymap);
+    }
+
+    /// Restaura TODOS los atajos a sus valores por defecto y persiste.
+    pub fn reset_all_shortcuts(&mut self) {
+        self.keymap.reset_all();
+        config::save_keymap(&self.config_dir, &self.keymap);
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +251,56 @@ mod tests {
         // Reabrir: el tema persistió.
         let c2 = ConfigCtrl::new(dir);
         assert_eq!(c2.settings.theme, ThemeId::new("light"));
+    }
+
+    #[test]
+    fn setters_persisten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        {
+            let mut c = ConfigCtrl::new(dir.clone());
+            c.set_ops_mode(1);
+            c.set_confirm_trash(true);
+            c.set_paste_text_ext("md".into());
+        }
+        let c2 = ConfigCtrl::new(dir);
+        assert_eq!(c2.settings.ops_mode, OpsMode::Parallel);
+        assert!(c2.settings.confirm_trash);
+        assert_eq!(c2.settings.paste_text_ext, "md");
+    }
+
+    #[test]
+    fn chord_to_text_legible() {
+        assert_eq!(
+            ConfigCtrl::chord_to_text(&Chord::ctrl(KeyCode::Char('c'))),
+            "Ctrl+C"
+        );
+        assert_eq!(
+            ConfigCtrl::chord_to_text(&Chord::plain(KeyCode::Delete)),
+            "Supr"
+        );
+        assert_eq!(
+            ConfigCtrl::chord_to_text(&Chord::shift(KeyCode::ArrowUp)),
+            "Shift+↑"
+        );
+    }
+
+    #[test]
+    fn rebind_detecta_conflicto_y_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        // Ctrl+C es Copy por defecto. Reasignarlo a Cut → conflicto con Copy.
+        let displaced = c.rebind(Action::Cut, Chord::ctrl(KeyCode::Char('c')));
+        assert_eq!(displaced, Some(Action::Copy));
+        assert_eq!(
+            c.keymap.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Cut)
+        );
+        // Reset de Cut vuelve Ctrl+C a Copy (default de Copy lo recupera tras reset de Copy).
+        c.reset_shortcut(Action::Copy);
+        assert_eq!(
+            c.keymap.action_for(&Chord::ctrl(KeyCode::Char('c'))),
+            Some(Action::Copy)
+        );
     }
 }
