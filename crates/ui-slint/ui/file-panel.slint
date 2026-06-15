@@ -95,6 +95,8 @@ export component FilePanel inherits FocusScope {
                     border-color: #4f8ae0;
                     HorizontalLayout {
                         padding-left: 6px;
+                        // Atenuar las filas cortadas (Ctrl+X) hasta pegar.
+                        opacity: row.cut ? 0.45 : 1.0;
                         Text {
                             text: (row.is-dir ? "📁 " : "") + row.name;
                             color: row.is-dir ? #ffd479 : #dde;

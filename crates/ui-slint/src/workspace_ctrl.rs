@@ -179,10 +179,10 @@ impl WorkspaceCtrl {
         self.ws.layout.set_fraction(path, fraction);
     }
 
-    /// Filas a pintar del panel `id`.
+    /// Filas a pintar del panel `id` (marca las cortadas para atenuarlas).
     pub fn rows_of(&self, id: PaneId) -> Vec<PlainRow> {
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
-            Some(f) => rows_from_view(f),
+            Some(f) => rows_from_view(f, &|p| self.ops.is_cut(p)),
             None => Vec::new(),
         }
     }

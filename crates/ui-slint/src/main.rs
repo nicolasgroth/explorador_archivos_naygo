@@ -777,6 +777,7 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         is_dir: r.is_dir,
         selected: r.selected,
         focused: r.focused,
+        cut: r.cut,
     }
 }
 
