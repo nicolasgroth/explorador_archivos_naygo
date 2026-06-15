@@ -4,6 +4,7 @@
 // Clic en una fila navega el panel Files activo; el botón × quita un favorito.
 import { ListView } from "std-widgets.slint";
 import { NavRow } from "types.slint";
+import { Tr } from "i18n.slint";
 
 export component FavoritesPanel inherits Rectangle {
     in property <bool> active;
@@ -24,7 +25,7 @@ export component FavoritesPanel inherits Rectangle {
         HorizontalLayout {
             height: 20px;
             Text {
-                text: "Favoritos";
+                text: Tr.fav-title;
                 color: #9ab;
                 font-weight: 700;
                 vertical-alignment: center;
@@ -34,12 +35,12 @@ export component FavoritesPanel inherits Rectangle {
                 width: 52px;
                 background: pin-touch.has-hover ? #2a4a7a : #1b2838;
                 border-radius: 3px;
-                Text { text: "Anclar"; color: #ffd479; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: Tr.fav-pin; color: #ffd479; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
         }
         if root.favs.length == 0: Text {
-            text: "Sin favoritos (Ctrl+D)";
+            text: Tr.fav-empty;
             color: #678;
             height: 18px;
         }
@@ -73,7 +74,7 @@ export component FavoritesPanel inherits Rectangle {
         }
 
         Text {
-            text: "Recientes";
+            text: Tr.fav-recents;
             color: #9ab;
             font-weight: 700;
             height: 20px;

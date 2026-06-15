@@ -5,6 +5,7 @@
 // Windows…" que invoca el menú del Shell (platform::context_menu). Overlay posicionado en
 // el punto del clic; un velo cierra al hacer clic fuera. Sin glifos raros (solo texto).
 import { ContextMenuVm } from "types.slint";
+import { Tr } from "i18n.slint";
 
 component MenuRow inherits Rectangle {
     in property <string> label;
@@ -53,19 +54,19 @@ export component ContextMenu inherits Rectangle {
         items := VerticalLayout {
             padding: 4px;
             spacing: 1px;
-            MenuRow { label: "Abrir"; clicked => { root.open(); } }
-            MenuRow { label: "Abrir con…"; clicked => { root.open-with(); } }
+            MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
             Rectangle { height: 1px; background: #2a3a52; }
-            MenuRow { label: "Copiar"; clicked => { root.copy(); } }
-            MenuRow { label: "Cortar"; clicked => { root.cut(); } }
-            MenuRow { label: "Pegar"; clicked => { root.paste(); } }
+            MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
+            MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
+            MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
             Rectangle { height: 1px; background: #2a3a52; }
-            MenuRow { label: "Renombrar"; clicked => { root.rename(); } }
-            MenuRow { label: "Eliminar"; clicked => { root.delete(); } }
-            MenuRow { label: "Copiar ruta"; clicked => { root.copy-path(); } }
+            MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
+            MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
+            MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
             if root.vm.has-native: Rectangle { height: 1px; background: #2a3a52; }
             if root.vm.has-native: MenuRow {
-                label: "Más opciones de Windows…";
+                label: Tr.ctx-more-windows;
                 clicked => { root.native(); }
             }
         }

@@ -6,6 +6,7 @@
 // operación AÚN aplica (validado en Rust); si no, el motivo va de tooltip.
 import { ListView } from "std-widgets.slint";
 import { HistRow } from "types.slint";
+import { Tr } from "i18n.slint";
 
 export component HistoryPanel inherits Rectangle {
     in property <bool> active;
@@ -21,14 +22,14 @@ export component HistoryPanel inherits Rectangle {
         padding: 6px;
         spacing: 4px;
         Text {
-            text: "Historial";
+            text: Tr.history-title;
             color: #9ab;
             font-weight: 700;
             height: 20px;
             vertical-alignment: center;
         }
         if root.rows.length == 0: Text {
-            text: "Sin operaciones todavía";
+            text: Tr.history-empty;
             color: #678;
             height: 18px;
         }
@@ -56,7 +57,7 @@ export component HistoryPanel inherits Rectangle {
                         background: e.undoable ? (undo-touch.has-hover ? #2a4a7a : #1b2838) : #141d2b;
                         border-radius: 4px;
                         Text {
-                            text: "Deshacer";
+                            text: Tr.history-undo;
                             color: e.undoable ? white : #566;
                             horizontal-alignment: center;
                             vertical-alignment: center;

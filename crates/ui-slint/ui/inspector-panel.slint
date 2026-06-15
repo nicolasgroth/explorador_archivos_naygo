@@ -1,6 +1,7 @@
 // Naygo — panel Inspector (Fase 2b): propiedades del ítem enfocado del panel activo.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 import { InspectorVm } from "types.slint";
+import { Tr } from "i18n.slint";
 
 // Una fila etiqueta/valor del inspector.
 component PropRow inherits HorizontalLayout {
@@ -36,25 +37,25 @@ export component InspectorPanel inherits Rectangle {
         padding: 8px;
         spacing: 4px;
         Text {
-            text: "Propiedades";
+            text: Tr.inspector-title;
             color: #9ab;
             font-weight: 700;
             height: 22px;
             vertical-alignment: center;
         }
         if !root.info.present: Text {
-            text: "Sin selección";
+            text: Tr.inspector-no-selection;
             color: #678;
             vertical-alignment: center;
         }
         if root.info.present: VerticalLayout {
             spacing: 2px;
-            PropRow { label: "Nombre"; value: root.info.name; }
-            PropRow { label: "Tipo"; value: root.info.kind; }
-            PropRow { label: "Tamaño"; value: root.info.size; }
-            PropRow { label: "Modificado"; value: root.info.modified; }
-            PropRow { label: "Creado"; value: root.info.created; }
-            PropRow { label: "Ruta"; value: root.info.path; }
+            PropRow { label: Tr.inspector-name; value: root.info.name; }
+            PropRow { label: Tr.inspector-kind; value: root.info.kind; }
+            PropRow { label: Tr.inspector-size; value: root.info.size; }
+            PropRow { label: Tr.inspector-modified; value: root.info.modified; }
+            PropRow { label: Tr.inspector-created; value: root.info.created; }
+            PropRow { label: Tr.inspector-path; value: root.info.path; }
         }
         // Empuja el contenido hacia arriba.
         Rectangle { vertical-stretch: 1; }

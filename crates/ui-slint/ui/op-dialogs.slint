@@ -6,6 +6,7 @@
 // al controlador. Sin glifos Unicode raros (el render por software no los dibuja): solo
 // texto. Los modales: confirmar borrado, conflicto por-ítem, pedir nombre, pegar preview.
 import { OpDialogVm, ResumeRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
 
 // Botón de diálogo reutilizable (texto legible + hover).
 component DlgBtn inherits Rectangle {
@@ -92,15 +93,15 @@ export component OpDialogs inherits Rectangle {
                     wrap: word-wrap;
                 }
                 if root.vm.del-permanent: Text {
-                    text: "Esta acción no se puede deshacer.";
+                    text: Tr.dlg-no-undo;
                     color: #e08a8a;
                     font-size: 12px;
                 }
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
-                    DlgBtn { label: "Cancelar"; clicked => { root.delete-cancel(); } }
-                    DlgBtn { label: "Eliminar"; danger: true; clicked => { root.delete-confirm(); } }
+                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.delete-cancel(); } }
+                    DlgBtn { label: Tr.dlg-delete; danger: true; clicked => { root.delete-confirm(); } }
                 }
             }
 
@@ -123,15 +124,15 @@ export component OpDialogs inherits Rectangle {
                         Text { text: apply-all-row.checked ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                         all-touch := TouchArea { clicked => { apply-all-row.checked = !apply-all-row.checked; } }
                     }
-                    Text { text: "Aplicar a todos los conflictos"; color: #cdd; vertical-alignment: center; }
+                    Text { text: Tr.dlg-apply-all; color: #cdd; vertical-alignment: center; }
                     property <bool> checked: false;
                 }
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
-                    DlgBtn { label: "Saltar"; clicked => { root.conflict-decide(1, apply-all-row.checked); } }
-                    DlgBtn { label: "Renombrar"; clicked => { root.conflict-decide(2, apply-all-row.checked); } }
-                    DlgBtn { label: "Sobrescribir"; danger: true; clicked => { root.conflict-decide(0, apply-all-row.checked); } }
+                    DlgBtn { label: Tr.dlg-skip; clicked => { root.conflict-decide(1, apply-all-row.checked); } }
+                    DlgBtn { label: Tr.dlg-rename; clicked => { root.conflict-decide(2, apply-all-row.checked); } }
+                    DlgBtn { label: Tr.dlg-overwrite; danger: true; clicked => { root.conflict-decide(0, apply-all-row.checked); } }
                 }
             }
 
@@ -156,15 +157,15 @@ export component OpDialogs inherits Rectangle {
                     }
                 }
                 if !root.vm.name-valid: Text {
-                    text: "Nombre no válido.";
+                    text: Tr.dlg-invalid-name;
                     color: #e08a8a;
                     font-size: 12px;
                 }
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
-                    DlgBtn { label: "Cancelar"; clicked => { root.name-cancel(); } }
-                    DlgBtn { label: "Aceptar"; primary: true; enabled: root.vm.name-valid; clicked => { root.name-confirm(); } }
+                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.name-cancel(); } }
+                    DlgBtn { label: Tr.dlg-accept; primary: true; enabled: root.vm.name-valid; clicked => { root.name-confirm(); } }
                 }
             }
 
@@ -179,8 +180,8 @@ export component OpDialogs inherits Rectangle {
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
-                    DlgBtn { label: "Cancelar"; clicked => { root.paste-cancel(); } }
-                    DlgBtn { label: "Crear"; primary: true; clicked => { root.paste-confirm(); } }
+                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.paste-cancel(); } }
+                    DlgBtn { label: Tr.dlg-create; primary: true; clicked => { root.paste-confirm(); } }
                 }
             }
 
@@ -188,7 +189,7 @@ export component OpDialogs inherits Rectangle {
             if root.vm.kind == 5: VerticalLayout {
                 spacing: 10px;
                 Text {
-                    text: "Hay operaciones que no terminaron. ¿Retomarlas?";
+                    text: Tr.dlg-resume-q;
                     color: white;
                     wrap: word-wrap;
                 }
@@ -201,8 +202,8 @@ export component OpDialogs inherits Rectangle {
                         horizontal-stretch: 1;
                         overflow: elide;
                     }
-                    DlgBtn { label: "Retomar"; primary: true; clicked => { root.resume-decide(r.id, 0); } }
-                    DlgBtn { label: "Descartar"; clicked => { root.resume-decide(r.id, 1); } }
+                    DlgBtn { label: Tr.dlg-resume; primary: true; clicked => { root.resume-decide(r.id, 0); } }
+                    DlgBtn { label: Tr.dlg-discard; clicked => { root.resume-decide(r.id, 1); } }
                 }
             }
         }

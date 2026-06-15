@@ -7,6 +7,7 @@
 // panel Files activo. Las raíces (unidades) muestran una barrita de uso de disco.
 import { ListView } from "std-widgets.slint";
 import { TreeRow } from "types.slint";
+import { Tr } from "i18n.slint";
 
 export component TreePanel inherits Rectangle {
     in property <bool> active;
@@ -22,7 +23,7 @@ export component TreePanel inherits Rectangle {
     VerticalLayout {
         padding: 4px;
         Text {
-            text: "Carpetas";
+            text: Tr.tree-title;
             color: #9ab;
             font-weight: 700;
             height: 20px;

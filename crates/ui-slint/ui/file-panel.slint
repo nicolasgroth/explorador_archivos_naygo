@@ -6,6 +6,7 @@
 // sobre cuál actuar; el panel activo lleva borde de acento.
 import { ListView } from "std-widgets.slint";
 import { RowData } from "types.slint";
+import { Tr } from "i18n.slint";
 
 component HeaderCell inherits Rectangle {
     in property <string> text;
@@ -59,28 +60,28 @@ export component FilePanel inherits FocusScope {
             HorizontalLayout {
                 height: 22px;
                 HeaderCell {
-                    text: "Nombre";
+                    text: Tr.col-name;
                     horizontal-stretch: 50;
                     clicked => {
                         root.sort-by(root.pane-id, "name");
                     }
                 }
                 HeaderCell {
-                    text: "Extensión";
+                    text: Tr.col-ext;
                     horizontal-stretch: 15;
                     clicked => {
                         root.sort-by(root.pane-id, "ext");
                     }
                 }
                 HeaderCell {
-                    text: "Tamaño";
+                    text: Tr.col-size;
                     horizontal-stretch: 15;
                     clicked => {
                         root.sort-by(root.pane-id, "size");
                     }
                 }
                 HeaderCell {
-                    text: "Modificado";
+                    text: Tr.col-modified;
                     horizontal-stretch: 20;
                     clicked => {
                         root.sort-by(root.pane-id, "modified");
