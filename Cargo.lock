@@ -3614,6 +3614,7 @@ dependencies = [
  "naygo-core",
  "naygo-platform",
  "raw-window-handle",
+ "serde_json",
  "slint",
  "slint-build",
  "tempfile",

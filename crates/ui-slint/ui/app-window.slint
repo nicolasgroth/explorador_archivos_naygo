@@ -11,6 +11,8 @@ import { PreviewPanel } from "preview-panel.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
+import { ConfigWindow } from "config-window.slint";
+import { SettingsVm, ShortcutRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 // Reexportar los globals para que Slint genere su binding accesible desde Rust
@@ -188,6 +190,33 @@ export component AppWindow inherits Window {
     callback ctx-dismiss();
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
+
+    // --- Ventana de configuración (Fase 4) ---
+    in-out property <bool> config-open: false;
+    in property <SettingsVm> settings-vm;
+    in property <[ShortcutRowVm]> shortcut-rows;
+    in property <string> config-dir;
+    in property <string> app-version;
+    callback cfg-set-ops-mode(int);
+    callback cfg-set-confirm-trash(bool);
+    callback cfg-set-show-op-summary(bool);
+    callback cfg-set-show-parent(bool);
+    callback cfg-set-icon-only(bool);
+    callback cfg-set-bar-position(int);
+    callback cfg-set-size-no-subdirs(bool);
+    callback cfg-set-paste-confirm(bool);
+    callback cfg-set-paste-text-name(string);
+    callback cfg-set-paste-text-ext(string);
+    callback cfg-set-language(string);
+    callback cfg-set-theme(string);
+    callback cfg-shortcut-capture(string);
+    callback cfg-capture-key(string, bool, bool, bool);
+    callback cfg-shortcut-reset(string);
+    callback cfg-shortcuts-reset-all();
+    callback cfg-export-language();
+    callback cfg-export-theme();
+    callback cfg-export-config();
+    callback cfg-import-pack();
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
     // Rust reparta los paneles aun en reposo (con el timer apagado).
     callback content-resized();
@@ -246,6 +275,12 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-tabs-tip;
                     btn-width: 50px;
                     clicked => { root.stack-pane(); }
+                }
+                ToolBtn {
+                    label: Tr.cfg-title;
+                    tip: Tr.cfg-title;
+                    btn-width: 76px;
+                    clicked => { root.config-open = true; }
                 }
                 Rectangle {
                     background: Theme.row-bg;
@@ -454,6 +489,37 @@ export component AppWindow inherits Window {
         copy-path() => { root.ctx-copy-path(); }
         native() => { root.ctx-native(); }
         dismiss() => { root.ctx-dismiss(); }
+    }
+
+    // Ventana de configuración (overlay modal). Visible solo si config-open.
+    if root.config-open: ConfigWindow {
+        width: 100%;
+        height: 100%;
+        vm: root.settings-vm;
+        shortcuts: root.shortcut-rows;
+        config-dir: root.config-dir;
+        app-version: root.app-version;
+        set-ops-mode(m) => { root.cfg-set-ops-mode(m); }
+        set-confirm-trash(v) => { root.cfg-set-confirm-trash(v); }
+        set-show-op-summary(v) => { root.cfg-set-show-op-summary(v); }
+        set-show-parent(v) => { root.cfg-set-show-parent(v); }
+        set-icon-only(v) => { root.cfg-set-icon-only(v); }
+        set-bar-position(p) => { root.cfg-set-bar-position(p); }
+        set-size-no-subdirs(v) => { root.cfg-set-size-no-subdirs(v); }
+        set-paste-confirm(v) => { root.cfg-set-paste-confirm(v); }
+        set-paste-text-name(n) => { root.cfg-set-paste-text-name(n); }
+        set-paste-text-ext(e) => { root.cfg-set-paste-text-ext(e); }
+        set-language(l) => { root.cfg-set-language(l); }
+        set-theme(t) => { root.cfg-set-theme(t); }
+        shortcut-capture(k) => { root.cfg-shortcut-capture(k); }
+        capture-key(txt, c, s, a) => { root.cfg-capture-key(txt, c, s, a); }
+        shortcut-reset(k) => { root.cfg-shortcut-reset(k); }
+        shortcuts-reset-all() => { root.cfg-shortcuts-reset-all(); }
+        export-language() => { root.cfg-export-language(); }
+        export-theme() => { root.cfg-export-theme(); }
+        export-config() => { root.cfg-export-config(); }
+        import-pack() => { root.cfg-import-pack(); }
+        close() => { root.config-open = false; }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota

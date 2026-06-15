@@ -223,6 +223,36 @@ impl ConfigCtrl {
         self.keymap.reset_all();
         config::save_keymap(&self.config_dir, &self.keymap);
     }
+
+    /// Clave estable de una acción (el nombre de la variante, p. ej. "Copy"). Sirve de
+    /// identificador en la UI para round-trip Slint→Rust sin acoplar a un índice.
+    pub fn action_key(action: Action) -> String {
+        // Una enum de variantes unitarias serializa al nombre de la variante.
+        match serde_json::to_value(action) {
+            Ok(serde_json::Value::String(s)) => s,
+            _ => String::new(),
+        }
+    }
+
+    /// La acción para una clave estable (inversa de `action_key`).
+    pub fn action_from_key(key: &str) -> Option<Action> {
+        serde_json::from_value(serde_json::Value::String(key.to_string())).ok()
+    }
+
+    /// Lista de atajos para el editor: (clave estable, nombre legible, chord como texto), en el
+    /// orden de presentación de `Action::all()`.
+    pub fn shortcut_list(&self) -> Vec<(String, String, String)> {
+        Action::all()
+            .iter()
+            .map(|&a| {
+                (
+                    Self::action_key(a),
+                    self.t(a.i18n_key()),
+                    self.chord_text_for(a),
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -283,6 +313,25 @@ mod tests {
             ConfigCtrl::chord_to_text(&Chord::shift(KeyCode::ArrowUp)),
             "Shift+↑"
         );
+    }
+
+    #[test]
+    fn action_key_round_trip() {
+        let k = ConfigCtrl::action_key(Action::Copy);
+        assert_eq!(k, "Copy");
+        assert_eq!(ConfigCtrl::action_from_key(&k), Some(Action::Copy));
+        assert_eq!(ConfigCtrl::action_from_key("noexiste"), None);
+    }
+
+    #[test]
+    fn shortcut_list_lista_todas_las_acciones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = ConfigCtrl::new(tmp.path().to_path_buf());
+        let rows = c.shortcut_list();
+        assert_eq!(rows.len(), Action::all().len());
+        // Copy debe estar y traer su chord por defecto (Ctrl+C).
+        let copy = rows.iter().find(|(k, _, _)| k == "Copy").unwrap();
+        assert_eq!(copy.2, "Ctrl+C");
     }
 
     #[test]

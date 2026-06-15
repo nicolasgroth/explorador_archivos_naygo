@@ -539,6 +539,148 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+
+    // --- Ventana de configuración (Fase 4) ---
+    // Reconstruye el SettingsVm + filas de atajos desde ConfigCtrl y los vuelca a la UI.
+    let refresh_config_vm: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let c = ctrl.borrow();
+            ui.set_settings_vm(build_settings_vm(&c.config));
+            let rows: Vec<ShortcutRowVm> = c
+                .config
+                .shortcut_list()
+                .into_iter()
+                .map(|(key, label, chord)| ShortcutRowVm {
+                    action_key: key.into(),
+                    label: label.into(),
+                    chord_text: chord.into(),
+                    conflict: SharedString::new(),
+                })
+                .collect();
+            ui.set_shortcut_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+            ui.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
+            ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+        })
+    };
+    refresh_config_vm();
+    // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
+    let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
+        Rc::new(RefCell::new(None));
+
+    // Toggles/combos/text que solo persisten (no requieren refrescar la vista de paneles).
+    macro_rules! cfg_setter {
+        ($on:ident, $arg:ty, $method:ident) => {{
+            let ctrl = ctrl.clone();
+            let refresh = refresh_config_vm.clone();
+            ui.$on(move |v: $arg| {
+                ctrl.borrow_mut().config.$method(v);
+                refresh();
+            });
+        }};
+    }
+    cfg_setter!(on_cfg_set_ops_mode, i32, set_ops_mode);
+    cfg_setter!(on_cfg_set_confirm_trash, bool, set_confirm_trash);
+    cfg_setter!(on_cfg_set_show_op_summary, bool, set_show_op_summary);
+    cfg_setter!(on_cfg_set_show_parent, bool, set_show_parent);
+    cfg_setter!(on_cfg_set_icon_only, bool, set_icon_only);
+    cfg_setter!(on_cfg_set_bar_position, i32, set_bar_position);
+    cfg_setter!(on_cfg_set_size_no_subdirs, bool, set_size_no_subdirs);
+    cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_set_paste_text_name(move |v| {
+            ctrl.borrow_mut().config.set_paste_text_name(v.to_string());
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_set_paste_text_ext(move |v| {
+            ctrl.borrow_mut().config.set_paste_text_ext(v.to_string());
+            refresh();
+        });
+    }
+    // Cambio de idioma en caliente: persiste + re-vuelca todos los textos a Tr.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_cfg_set_language(move |code| {
+            let lang = naygo_core::i18n::LangId::new(&code);
+            ctrl.borrow_mut().config.set_language(lang);
+            if let Some(ui) = ui_weak.upgrade() {
+                i18n_keys::apply(&ui, &ctrl.borrow().config);
+            }
+            refresh();
+        });
+    }
+    // Cambio de tema en caliente: persiste + re-vuelca los colores a Theme.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_cfg_set_theme(move |id| {
+            ctrl.borrow_mut()
+                .config
+                .set_theme(naygo_core::theme::ThemeId::new(&id));
+            if let Some(ui) = ui_weak.upgrade() {
+                theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+            }
+            refresh();
+        });
+    }
+    // Editor de atajos: capturar la acción a reasignar.
+    {
+        let capturing = capturing_action.clone();
+        ui.on_cfg_shortcut_capture(move |key| {
+            *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
+        });
+    }
+    // Captura de la combinación: si hay acción en captura y el chord es válido, reasigna.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let capturing = capturing_action.clone();
+        ui.on_cfg_capture_key(move |text, c, s, a| {
+            let action = match capturing.borrow_mut().take() {
+                Some(act) => act,
+                None => return,
+            };
+            // Esc cancela la captura sin reasignar (la UI ya salió del modo captura).
+            if text == keys::escape_char().to_string() {
+                return;
+            }
+            if let Some(chord) = keys::chord_from(&text, c, s, a) {
+                ctrl.borrow_mut().config.rebind(action, chord);
+                refresh();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_shortcut_reset(move |key| {
+            if let Some(action) = config_ctrl::ConfigCtrl::action_from_key(&key) {
+                ctrl.borrow_mut().config.reset_shortcut(action);
+                refresh();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_shortcuts_reset_all(move || {
+            ctrl.borrow_mut().config.reset_all_shortcuts();
+            refresh();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
@@ -1028,6 +1170,48 @@ fn int_to_purpose(p: i32) -> PanePurpose {
         4 => PanePurpose::Favorites,
         5 => PanePurpose::Preview,
         _ => PanePurpose::Files,
+    }
+}
+
+/// Construye el `SettingsVm` (snapshot para la ventana de config) desde el ConfigCtrl.
+fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
+    use naygo_core::config::{BarPosition, OpsMode};
+    let s = &c.settings;
+    let languages: Vec<SharedString> = c
+        .i18n
+        .available()
+        .iter()
+        .map(|l| SharedString::from(l.as_str()))
+        .collect();
+    let themes: Vec<SharedString> = c
+        .themes
+        .available()
+        .iter()
+        .map(|t| SharedString::from(t.as_str()))
+        .collect();
+    SettingsVm {
+        bar_position: if s.bar_position == BarPosition::Side {
+            1
+        } else {
+            0
+        },
+        icon_only: s.icon_only,
+        show_parent: s.show_parent_entry,
+        ops_mode: if s.ops_mode == OpsMode::Parallel {
+            1
+        } else {
+            0
+        },
+        confirm_trash: s.confirm_trash,
+        show_op_summary: s.show_op_summary,
+        size_no_subdirs: s.size_no_subdirs,
+        paste_confirm: s.paste_confirm,
+        paste_text_name: s.paste_text_name.clone().into(),
+        paste_text_ext: s.paste_text_ext.clone().into(),
+        language: s.language.as_str().into(),
+        theme: s.theme.as_str().into(),
+        languages: ModelRc::from(Rc::new(VecModel::from(languages))),
+        themes: ModelRc::from(Rc::new(VecModel::from(themes))),
     }
 }
 

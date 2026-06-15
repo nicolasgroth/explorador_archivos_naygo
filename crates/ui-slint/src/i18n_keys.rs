@@ -80,4 +80,43 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     // Otros.
     tr.set_fav_pin(c.t("slint.fav.pin").into());
     tr.set_drag_move(c.t("slint.drag.move").into());
+    // Ventana de configuración.
+    tr.set_cfg_title(c.t("settings.title").into());
+    tr.set_cfg_close(c.t("slint.cfg.close").into());
+    tr.set_cfg_cat_general(c.t("slint.cfg.cat_general").into());
+    tr.set_cfg_cat_ops(c.t("slint.cfg.cat_ops").into());
+    tr.set_cfg_cat_paste(c.t("slint.cfg.cat_paste").into());
+    tr.set_cfg_cat_appearance(c.t("slint.cfg.cat_appearance").into());
+    tr.set_cfg_cat_shortcuts(c.t("slint.cfg.cat_shortcuts").into());
+    tr.set_cfg_cat_import(c.t("slint.cfg.cat_import").into());
+    tr.set_cfg_show_parent(c.t("settings.show_parent").into());
+    tr.set_cfg_icon_only(c.t("settings.icon_only").into());
+    tr.set_cfg_bar_position(c.t("settings.bar_position").into());
+    tr.set_cfg_bar_top(c.t("settings.bar.top").into());
+    tr.set_cfg_bar_side(c.t("settings.bar.side").into());
+    tr.set_cfg_size_no_subdirs(c.t("slint.cfg.size_no_subdirs").into());
+    tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
+    tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
+    tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());
+    tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
+    tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());
+    tr.set_cfg_paste_confirm(c.t("slint.cfg.paste_confirm").into());
+    tr.set_cfg_paste_name(c.t("slint.cfg.paste_name").into());
+    tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
+    tr.set_cfg_theme(c.t("slint.cfg.theme").into());
+    tr.set_cfg_language(c.t("slint.cfg.language").into());
+    tr.set_cfg_shortcuts_hint(c.t("slint.cfg.shortcuts_hint").into());
+    tr.set_cfg_capturing(c.t("settings.shortcuts.capturing").into());
+    tr.set_cfg_press(c.t("slint.cfg.press").into());
+    tr.set_cfg_no_shortcut(c.t("settings.shortcuts.none").into());
+    tr.set_cfg_change(c.t("slint.cfg.change").into());
+    tr.set_cfg_reset(c.t("slint.cfg.reset").into());
+    tr.set_cfg_reset_all(c.t("settings.shortcuts.reset_all").into());
+    tr.set_cfg_export_hint(c.t("slint.cfg.export_hint").into());
+    tr.set_cfg_export_lang(c.t("slint.cfg.export_lang").into());
+    tr.set_cfg_export_theme(c.t("slint.cfg.export_theme").into());
+    tr.set_cfg_export_config(c.t("slint.cfg.export_config").into());
+    tr.set_cfg_import(c.t("slint.cfg.import").into());
+    tr.set_cfg_config_dir(c.t("settings.config_dir").into());
+    tr.set_cfg_version(c.t("settings.version").into());
 }

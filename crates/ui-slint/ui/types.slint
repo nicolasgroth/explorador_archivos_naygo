@@ -120,6 +120,34 @@ export struct PickVm {
     number: int,
 }
 
+// Ajustes editables en la ventana de configuración (espejo de los campos de core::Settings
+// que tocamos en la UI Slint). Las listas son los idiomas/temas disponibles para los combos.
+export struct SettingsVm {
+    bar-position: int,        // 0=arriba 1=costado
+    icon-only: bool,
+    show-parent: bool,
+    ops-mode: int,            // 0=cola 1=paralelo
+    confirm-trash: bool,
+    show-op-summary: bool,
+    size-no-subdirs: bool,
+    paste-confirm: bool,
+    paste-text-name: string,
+    paste-text-ext: string,
+    language: string,         // código del idioma activo
+    theme: string,            // id del tema activo
+    languages: [string],      // códigos disponibles
+    themes: [string],         // ids disponibles
+}
+
+// Una fila del editor de atajos: la clave estable de la acción, su nombre legible y el chord
+// actual como texto. `conflict` se setea tras una reasignación que pisó otra acción.
+export struct ShortcutRowVm {
+    action-key: string,
+    label: string,
+    chord-text: string,
+    conflict: string,         // vacío = sin conflicto; si no, mensaje a mostrar
+}
+
 // Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
 export struct SplitVm {
     index: int,

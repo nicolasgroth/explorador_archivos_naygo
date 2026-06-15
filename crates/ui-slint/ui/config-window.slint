@@ -1,0 +1,347 @@
+// Naygo — ventana de configuración (overlay, Fase 4). Categorías: General, Operaciones,
+// Pegado, Apariencia (tema+idioma en caliente), Atajos, Import/Export. Cada control emite un
+// callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { ListView, ComboBox, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { SettingsVm, ShortcutRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Una fila etiqueta + control (layout consistente).
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    height: 30px;
+    spacing: 8px;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+        overflow: elide;
+    }
+    @children
+}
+
+// Botón chico de texto (acciones de la ventana de config).
+component CfgBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback clicked();
+    height: 26px;
+    min-width: 80px;
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : Theme.row-bg;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 8px;
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component ConfigWindow inherits Rectangle {
+    in property <SettingsVm> vm;
+    in property <[ShortcutRowVm]> shortcuts;
+    in property <string> config-dir;
+    in property <string> app-version;
+    // Categoría seleccionada (0..5).
+    property <int> cat: 3;        // arranca en Apariencia (lo más visible)
+    // Acción cuyo atajo se está capturando (vacío = ninguna).
+    property <string> capturing: "";
+
+    // Settings (toggles/combos/text):
+    callback set-ops-mode(int);
+    callback set-confirm-trash(bool);
+    callback set-show-op-summary(bool);
+    callback set-show-parent(bool);
+    callback set-icon-only(bool);
+    callback set-bar-position(int);
+    callback set-size-no-subdirs(bool);
+    callback set-paste-confirm(bool);
+    callback set-paste-text-name(string);
+    callback set-paste-text-ext(string);
+    callback set-language(string);
+    callback set-theme(string);
+    // Atajos:
+    callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
+    callback shortcut-reset(string);     // reset de una acción
+    callback shortcuts-reset-all();
+    // Import/Export:
+    callback export-language();
+    callback export-theme();
+    callback export-config();
+    callback import-pack();
+    // Cerrar la ventana.
+    callback close();
+    // Captura de tecla (la UI la enruta cuando `capturing` != "").
+    callback capture-key(string, bool, bool, bool);
+
+    // Velo modal: clic fuera cierra.
+    background: #000000aa;
+    veil := TouchArea { clicked => { root.close(); } }
+
+    // FocusScope para capturar la combinación del atajo cuando corresponde.
+    fs := FocusScope {
+        enabled: root.capturing != "";
+        key-pressed(ev) => {
+            if (root.capturing != "") {
+                root.capture-key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                // Rust reasigna (o cancela con Esc); en cualquier caso salimos del modo captura.
+                root.capturing = "";
+            }
+            accept
+        }
+    }
+
+    // Tarjeta central.
+    Rectangle {
+        width: 720px;
+        height: 520px;
+        background: Theme.panel-bg;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border;
+        // Tragar clics dentro de la tarjeta (no cerrar).
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            // Encabezado.
+            HorizontalLayout {
+                height: 26px;
+                Text {
+                    text: Tr.cfg-title;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                CfgBtn { label: Tr.cfg-close; clicked => { root.close(); } }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
+
+                // Barra lateral de categorías.
+                Rectangle {
+                    width: 170px;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import]: Rectangle {
+                            height: 30px;
+                            background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
+                            border-radius: 4px;
+                            Text { text: c; color: Theme.text; vertical-alignment: center; x: 10px; }
+                            cat-touch := TouchArea { clicked => { root.cat = i; root.capturing = ""; } }
+                        }
+                    }
+                }
+
+                // Contenido de la categoría.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 6px;
+
+                            // === General (cat 0) ===
+                            if root.cat == 0: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-show-parent;
+                                    CheckBox { checked: root.vm.show-parent; toggled => { root.set-show-parent(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-icon-only;
+                                    CheckBox { checked: root.vm.icon-only; toggled => { root.set-icon-only(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-bar-position;
+                                    ComboBox {
+                                        model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
+                                        current-index: root.vm.bar-position;
+                                        selected => { root.set-bar-position(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-size-no-subdirs;
+                                    CheckBox { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
+                                }
+                            }
+
+                            // === Operaciones (cat 1) ===
+                            if root.cat == 1: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-ops-mode;
+                                    ComboBox {
+                                        model: [Tr.cfg-ops-queue, Tr.cfg-ops-parallel];
+                                        current-index: root.vm.ops-mode;
+                                        selected => { root.set-ops-mode(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-trash;
+                                    CheckBox { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-show-op-summary;
+                                    CheckBox { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
+                                }
+                            }
+
+                            // === Pegado (cat 2) ===
+                            if root.cat == 2: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-paste-confirm;
+                                    CheckBox { checked: root.vm.paste-confirm; toggled => { root.set-paste-confirm(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-name;
+                                    LineEdit {
+                                        text: root.vm.paste-text-name;
+                                        width: 220px;
+                                        edited => { root.set-paste-text-name(self.text); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-ext;
+                                    LineEdit {
+                                        text: root.vm.paste-text-ext;
+                                        width: 100px;
+                                        edited => { root.set-paste-text-ext(self.text); }
+                                    }
+                                }
+                            }
+
+                            // === Apariencia (cat 3) ===
+                            if root.cat == 3: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-theme;
+                                    ComboBox {
+                                        model: root.vm.themes;
+                                        current-value: root.vm.theme;
+                                        selected => { root.set-theme(self.current-value); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-language;
+                                    ComboBox {
+                                        model: root.vm.languages;
+                                        current-value: root.vm.language;
+                                        selected => { root.set-language(self.current-value); }
+                                    }
+                                }
+                            }
+
+                            // === Atajos (cat 4) ===
+                            if root.cat == 4: VerticalLayout {
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    height: 28px;
+                                    Text {
+                                        text: root.capturing != "" ? Tr.cfg-capturing : Tr.cfg-shortcuts-hint;
+                                        color: root.capturing != "" ? Theme.highlight : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    CfgBtn { label: Tr.cfg-reset-all; clicked => { root.shortcuts-reset-all(); } }
+                                }
+                                ListView {
+                                    vertical-stretch: 1;
+                                    for s[i] in root.shortcuts: Rectangle {
+                                        height: 30px;
+                                        background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            spacing: 6px;
+                                            Text {
+                                                text: s.label;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                            }
+                                            Rectangle {
+                                                width: 120px;
+                                                background: root.capturing == s.action-key ? Theme.selection-bg : Theme.row-bg;
+                                                border-radius: 4px;
+                                                Text {
+                                                    text: root.capturing == s.action-key ? Tr.cfg-press : (s.chord-text != "" ? s.chord-text : Tr.cfg-no-shortcut);
+                                                    color: Theme.text-dim;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            CfgBtn {
+                                                label: Tr.cfg-change;
+                                                clicked => { root.capturing = s.action-key; root.shortcut-capture(s.action-key); fs.focus(); }
+                                            }
+                                            CfgBtn {
+                                                label: Tr.cfg-reset;
+                                                clicked => { root.shortcut-reset(s.action-key); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Import / Export (cat 5) ===
+                            if root.cat == 5: VerticalLayout {
+                                spacing: 8px;
+                                Text { text: Tr.cfg-export-hint; color: Theme.text-dim; wrap: word-wrap; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    CfgBtn { label: Tr.cfg-export-lang; clicked => { root.export-language(); } }
+                                    CfgBtn { label: Tr.cfg-export-theme; clicked => { root.export-theme(); } }
+                                    CfgBtn { label: Tr.cfg-export-config; clicked => { root.export-config(); } }
+                                }
+                                CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pie: carpeta de config + versión.
+            HorizontalLayout {
+                height: 18px;
+                Text {
+                    text: Tr.cfg-config-dir + " " + root.config-dir;
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text {
+                    text: Tr.cfg-version + " " + root.app-version;
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
