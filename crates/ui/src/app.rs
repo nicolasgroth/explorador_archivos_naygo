@@ -1454,7 +1454,7 @@ impl NaygoApp {
         }
         // egui no expone el efecto (mover/copiar) del drop externo; copiamos por defecto
         // (el comportamiento seguro y habitual al traer archivos de afuera).
-        let req = crate::ops_actions::transfer(false, paths, dest.clone());
+        let req = naygo_core::ops::transfer(false, paths, dest.clone());
         let label = format!("{} → {}", self.i18n.t("op.copy"), dest.display());
         self.launch_transfer(req, label);
     }
@@ -2945,7 +2945,7 @@ impl NaygoApp {
         use naygo_core::clipboard::PastePlan;
         match plan {
             PastePlan::Transfer { paths, cut } => {
-                let req = crate::ops_actions::transfer(cut, paths, dest.clone());
+                let req = naygo_core::ops::transfer(cut, paths, dest.clone());
                 let verb = if cut {
                     self.i18n.t("op.cut")
                 } else {
@@ -3010,7 +3010,7 @@ impl NaygoApp {
         let Some(dest) = self.other_files_dir() else {
             return;
         };
-        let req = crate::ops_actions::transfer(move_it, sources, dest.clone());
+        let req = naygo_core::ops::transfer(move_it, sources, dest.clone());
         let verb = if move_it {
             self.i18n.t("op.cut")
         } else {
@@ -3029,7 +3029,7 @@ impl NaygoApp {
         }
         let count = sources.len();
         let to_trash = !permanent;
-        let req = crate::ops_actions::delete(sources, to_trash);
+        let req = naygo_core::ops::delete(sources, to_trash);
         let label = if permanent {
             self.i18n.t("op.delete_permanent").to_string()
         } else {
@@ -3222,7 +3222,7 @@ impl NaygoApp {
                 };
                 match crate::ops_dialogs::name_input(ctx, &self.i18n, title, &mut buf) {
                     Some(NameResult::Confirmed(name)) => {
-                        let mut req = crate::ops_actions::create(dir, name, is_dir);
+                        let mut req = naygo_core::ops::create(dir, name, is_dir);
                         req.conflict = ConflictPolicy::Overwrite;
                         let label = if is_dir {
                             self.i18n.t("op.new_folder").to_string()
@@ -4138,7 +4138,7 @@ impl eframe::App for NaygoApp {
                 crate::docking::PaneRequest::CommitRename { source, new_name } => {
                     // Mismo camino que tenía el diálogo de renombrar: rename de un
                     // paso con Overwrite (el motor maneja el choque).
-                    let mut req = crate::ops_actions::rename(source, new_name);
+                    let mut req = naygo_core::ops::rename(source, new_name);
                     req.conflict = ConflictPolicy::Overwrite;
                     let label = self.i18n.t("op.rename").to_string();
                     self.start_op(req, label);

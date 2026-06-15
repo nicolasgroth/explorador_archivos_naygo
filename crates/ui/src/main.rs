@@ -20,7 +20,6 @@ mod docking;
 mod icons;
 mod input;
 mod logging;
-mod ops_actions;
 mod ops_dialogs;
 mod ops_panel;
 mod panes;

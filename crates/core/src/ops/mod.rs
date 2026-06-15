@@ -6,12 +6,14 @@
 //! y el resumen. La planificación (`plan`) y la ejecución (`engine`) viven en sus
 //! propios submódulos. Todo el modelo es serializable (útil para el journal de ops-B).
 
+pub mod actions;
 pub mod engine;
 pub mod journal;
 pub mod names;
 pub mod plan;
 pub mod undo;
 
+pub use actions::{create, delete, rename, transfer};
 pub use engine::{run_plan, spawn};
 pub use journal::{
     journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan,
