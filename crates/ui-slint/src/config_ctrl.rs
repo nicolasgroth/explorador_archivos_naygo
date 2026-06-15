@@ -27,10 +27,23 @@ pub struct ConfigCtrl {
 
 impl ConfigCtrl {
     /// Carga todo desde `config_dir` (settings.json, lang/, themes/, keymap.json). Un
-    /// directorio vacío o archivos corruptos caen a defaults sin panic.
+    /// directorio vacío o archivos corruptos caen a defaults sin panic. En el PRIMER arranque
+    /// (no hay settings.json) detecta el idioma del SO y lo deja persistido.
     pub fn new(config_dir: PathBuf) -> ConfigCtrl {
-        let (settings, _recovered) = config::load_settings_flagged(&config_dir);
-        let i18n = I18n::load(&config_dir, &settings.language);
+        let first_launch = !config_dir.join("settings.json").exists();
+        let (mut settings, _recovered) = config::load_settings_flagged(&config_dir);
+        let mut i18n = I18n::load(&config_dir, &settings.language);
+        if first_launch {
+            // Elegir el idioma según el locale del SO (es-CL → es, en-US → en, …) entre los
+            // disponibles; persistirlo para que el próximo arranque no vuelva a detectar.
+            if let Some(loc) = naygo_platform::locale::os_locale() {
+                let lang = naygo_core::i18n::pick_default_language(&loc, i18n.available());
+                if i18n.set_language(&lang) {
+                    settings.language = lang;
+                    config::save_settings(&config_dir, &settings);
+                }
+            }
+        }
         let themes = ThemeCatalog::load(&config_dir, &settings.theme);
         let keymap = config::load_keymap(&config_dir);
         ConfigCtrl {
