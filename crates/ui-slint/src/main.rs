@@ -446,10 +446,22 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        // El doble-clic lo maneja la detección en Rust dentro de on_row_clicked (Slint
-        // siempre emite `clicked` en cada release). El `double-clicked` de Slint se ignora
-        // para no navegar dos veces si el backend además lo dispara.
-        ui.on_row_double_clicked(move |_id, _pos| {});
+        // Doble clic NATIVO de Slint (cronometrado por el SO): camino primario para abrir
+        // carpetas, robusto ante la latencia del hilo de UI bajo render por software (caso
+        // VM). La detección por tiempo en Rust (en on_row_clicked) queda de respaldo; el
+        // controlador evita la doble navegación con una marca temporal.
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_row_double_clicked(move |id, pos| {
+            if ctrl
+                .borrow_mut()
+                .on_row_double_clicked_native(PaneId(id as u64), pos as usize)
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
     }
     {
         let ctrl = ctrl.clone();

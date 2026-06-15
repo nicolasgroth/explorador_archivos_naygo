@@ -82,6 +82,10 @@ pub struct WorkspaceCtrl {
     /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
     /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
     pub last_click: Option<(PaneId, usize, std::time::Instant)>,
+    /// Instante de la última APERTURA por doble-clic, para que los dos detectores (nativo de
+    /// Slint y por tiempo en Rust) no naveguen dos veces sobre el mismo gesto. Quien dispara
+    /// primero navega y estampa; el otro ve la estampa reciente y se abstiene.
+    pub last_open: Option<std::time::Instant>,
     pub typeahead: String,
     pub ctrl_down: bool,
     pub shift_down: bool,
@@ -123,6 +127,7 @@ impl WorkspaceCtrl {
                 h: 0.0,
             },
             last_click: None,
+            last_open: None,
             typeahead: String::new(),
             ctrl_down: false,
             shift_down: false,
@@ -965,13 +970,17 @@ impl WorkspaceCtrl {
     /// tiempo, lo trata como doble-clic (navega/abre) y devuelve true. Esto no depende del
     /// `double-clicked` de Slint, que bajo el renderizador por software puede no dispararse.
     pub fn on_row_clicked(&mut self, id: PaneId, pos: usize, now: std::time::Instant) -> bool {
-        const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
-        let is_double = matches!(
-            self.last_click,
-            Some((lid, lpos, t)) if lid == id && lpos == pos && now.duration_since(t) <= DOUBLE_CLICK
-        );
+        // Ventana amplia (700 ms): bajo render por software en una VM, el segundo `clicked`
+        // puede llegar al hilo de UI con latencia; un umbral chico se pierde el doble-clic.
+        const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(700);
+        let is_double = !self.opened_recently(now)
+            && matches!(
+                self.last_click,
+                Some((lid, lpos, t)) if lid == id && lpos == pos && now.duration_since(t) <= DOUBLE_CLICK
+            );
         if is_double {
             self.last_click = None; // un triple clic no encadena dos navegaciones
+            self.last_open = Some(now);
             return self.on_row_double_clicked(id, pos);
         }
         self.last_click = Some((id, pos, now));
@@ -987,6 +996,26 @@ impl WorkspaceCtrl {
             }
         }
         false
+    }
+
+    /// ¿Se abrió algo por doble-clic hace muy poco? (Para que los dos detectores no
+    /// naveguen dos veces sobre el mismo gesto.)
+    fn opened_recently(&self, now: std::time::Instant) -> bool {
+        self.last_open
+            .map(|t| now.duration_since(t) <= std::time::Duration::from_millis(500))
+            .unwrap_or(false)
+    }
+
+    /// Doble clic NATIVO de Slint (camino primario, cronometrado por el SO). Si el detector
+    /// por tiempo de Rust no se adelantó en este mismo gesto, navega y estampa.
+    pub fn on_row_double_clicked_native(&mut self, id: PaneId, pos: usize) -> bool {
+        let now = std::time::Instant::now();
+        if self.opened_recently(now) {
+            return false; // ya navegó el detector por tiempo en este gesto
+        }
+        self.last_open = Some(now);
+        self.last_click = None;
+        self.on_row_double_clicked(id, pos)
     }
 
     /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
@@ -1269,13 +1298,13 @@ mod tests {
         // Una sola línea de tiempo sintética (mezclar Instant::now() con offsets daría
         // instantes incoherentes). Base + offsets crecientes.
         let base = Instant::now();
-        // Dos clics LENTOS (separados > 400 ms) NO navegan: solo seleccionan.
+        // Dos clics LENTOS (separados > 700 ms) NO navegan: solo seleccionan.
         assert!(!c.on_row_clicked(id, pos, base));
-        assert!(!c.on_row_clicked(id, pos, base + Duration::from_millis(600)));
+        assert!(!c.on_row_clicked(id, pos, base + Duration::from_millis(900)));
         assert_eq!(c.path_of(id), tmp.path().display().to_string());
 
-        // Dos clics RÁPIDOS (dentro de 400 ms) SÍ navegan. Siguen la misma línea de tiempo.
-        let t1 = base + Duration::from_secs(2);
+        // Dos clics RÁPIDOS (dentro de 700 ms) SÍ navegan. Siguen la misma línea de tiempo.
+        let t1 = base + Duration::from_secs(5);
         assert!(!c.on_row_clicked(id, pos, t1), "1er clic: selecciona");
         assert!(
             c.on_row_clicked(id, pos, t1 + Duration::from_millis(150)),

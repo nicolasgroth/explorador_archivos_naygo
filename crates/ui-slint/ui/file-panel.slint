@@ -163,6 +163,13 @@ export component FilePanel inherits FocusScope {
                                 self.pressed-here = false;
                             }
                         }
+                        // Doble clic NATIVO de Slint (cronometrado por el SO, robusto ante la
+                        // latencia del hilo de UI bajo render por software). Es el camino
+                        // primario para abrir; la detección por tiempo en Rust queda de
+                        // respaldo. Rust evita la doble navegación (ver on_row_double_clicked).
+                        double-clicked => {
+                            root.row-double-clicked(root.pane-id, i);
+                        }
                     }
                 }
             }
