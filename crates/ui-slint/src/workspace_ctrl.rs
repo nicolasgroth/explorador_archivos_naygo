@@ -93,6 +93,11 @@ pub struct WorkspaceCtrl {
     pub shift_down: bool,
     /// Menú contextual abierto (clic derecho): posición (x,y en la ventana) y rutas objetivo.
     pub context_menu: Option<ContextMenuState>,
+    /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
+    /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
+    /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
+    /// con el render por software de Slint puede no dispararse). Ver `maybe_persist_session`.
+    pub last_saved_fingerprint: Option<String>,
 }
 
 /// Estado del menú contextual abierto.
@@ -105,13 +110,18 @@ pub struct ContextMenuState {
 
 impl WorkspaceCtrl {
     /// Arranca con UN panel Files en `start` (el usuario agrega más con el botón). Lanza
-    /// su listado inicial.
+    /// su listado inicial. La configuración se carga del directorio portable.
     pub fn new(start: std::path::PathBuf) -> WorkspaceCtrl {
+        WorkspaceCtrl::new_in(start, naygo_core::config::portable_dir())
+    }
+
+    /// Como `new`, pero con el directorio de configuración explícito (para tests: permite
+    /// usar un directorio temporal en vez del portable).
+    pub fn new_in(start: std::path::PathBuf, config_dir: std::path::PathBuf) -> WorkspaceCtrl {
         let mut ws = Workspace::new();
         let id = ws.add_pane(PanePurpose::Files, start.clone());
         ws.layout = SerializableDockLayout::single(id);
         ws.set_active(id);
-        let config_dir = naygo_core::config::portable_dir();
         let mut c = WorkspaceCtrl {
             ws,
             config: crate::config_ctrl::ConfigCtrl::new(config_dir.clone()),
@@ -135,6 +145,7 @@ impl WorkspaceCtrl {
             ctrl_down: false,
             shift_down: false,
             context_menu: None,
+            last_saved_fingerprint: None,
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -213,6 +224,49 @@ impl WorkspaceCtrl {
                 }
                 _ => {}
             }
+        }
+        // La sesión recién cargada ES el estado en disco: sembrar la huella para no
+        // reescribir el mismo workspace.json en el primer tick.
+        self.last_saved_fingerprint = Some(self.session_fingerprint());
+    }
+
+    /// Huella barata del estado persistible (lo que cambia entre sesiones que vale la pena
+    /// guardar): por cada panel, su id + tipo + carpeta; más la disposición y el activo. NO
+    /// incluye scroll ni selección (no se persisten). Si cambia, hay que volver a guardar.
+    pub fn session_fingerprint(&self) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        for p in self.ws.panes() {
+            let dir = p
+                .files
+                .as_ref()
+                .map(|f| f.current_dir.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let _ = write!(s, "{}:{:?}:{}|", p.id.0, p.purpose, dir);
+        }
+        let _ = write!(
+            s,
+            "active={:?};layout={:?}",
+            self.ws.active_id().map(|a| a.0),
+            self.ws
+                .layout
+                .pane_ids()
+                .iter()
+                .map(|i| i.0)
+                .collect::<Vec<_>>()
+        );
+        s
+    }
+
+    /// Persiste la sesión SOLO si cambió respecto de la última guardada (compara huellas).
+    /// La UI la llama en cada tick: barato cuando no hay cambios (solo construye la huella),
+    /// y garantiza que la sesión en disco quede al día tras agregar/cerrar/navegar paneles,
+    /// sin depender del evento de cierre de ventana.
+    pub fn maybe_persist_session(&mut self) {
+        let fp = self.session_fingerprint();
+        if self.last_saved_fingerprint.as_deref() != Some(fp.as_str()) {
+            self.save_session();
+            self.last_saved_fingerprint = Some(fp);
         }
     }
 
@@ -1336,6 +1390,58 @@ mod tests {
         f.view_indices()
             .iter()
             .position(|&real| f.entries[real].name == name)
+    }
+
+    /// F4: la sesión (paneles + carpetas + disposición) se guarda al cerrar y se restaura al
+    /// abrir. Dividir en dos paneles, navegar uno a una subcarpeta, guardar, y reconstruir en
+    /// un controlador nuevo (mismo config_dir) restaura los dos paneles con sus carpetas.
+    #[test]
+    fn sesion_guarda_y_restaura_dos_paneles() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        // Controlador 1: arranca con un panel en `work`, lo divide (segundo panel), y navega
+        // el panel activo (el nuevo) a la subcarpeta.
+        let mut c1 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c1));
+        c1.add_pane_split();
+        assert_eq!(c1.ws.panes().len(), 2, "tras dividir hay dos paneles");
+        assert!(drain(&mut c1));
+        c1.navigate_active_to(sub.clone());
+        assert!(drain(&mut c1));
+        // El layout referencia los dos paneles.
+        assert_eq!(
+            c1.ws.layout.pane_ids().len(),
+            2,
+            "el layout tiene dos hojas"
+        );
+        c1.save_session();
+
+        // Controlador 2: mismo config_dir; load_session reemplaza el arranque por la sesión.
+        let mut c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        c2.load_session();
+        assert_eq!(c2.ws.panes().len(), 2, "se restauran los dos paneles");
+        assert_eq!(
+            c2.ws.layout.pane_ids().len(),
+            2,
+            "se restaura la disposición"
+        );
+        let dirs: Vec<std::path::PathBuf> = c2
+            .ws
+            .panes()
+            .iter()
+            .filter_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
+            .collect();
+        assert!(
+            dirs.contains(&work.path().to_path_buf()),
+            "un panel quedó en la carpeta raíz"
+        );
+        assert!(
+            dirs.contains(&sub),
+            "el otro panel quedó en la subcarpeta navegada"
+        );
     }
 
     /// REGRESIÓN (heredada de F1): navegar a una carpeta repuebla la vista del panel

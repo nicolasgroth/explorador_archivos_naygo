@@ -420,6 +420,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     // Drenar el progreso de las operaciones de archivo (F3).
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
                     sync_rows();
+                    // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato
+                    // si no cambió. Antes de parar el timer, así el último cambio se guarda.
+                    ctrl.borrow_mut().maybe_persist_session();
                     if files_done && tree_done && !preview_busy && ops_done {
                         timer2.stop();
                     }
@@ -995,16 +998,12 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Al cerrar la ventana: persistir la sesión (paneles + carpetas) para restaurarla en el
-    // próximo arranque. Devolvemos HideWindow y salimos del loop a mano para garantizar que
-    // el guardado corre antes de terminar.
+    // próximo arranque. Devolvemos HideWindow; Slint, con quit-on-last-window-closed (default),
+    // termina el loop al ocultarse la última ventana. El guardado corre antes de ese retorno.
     {
         let ctrl = ctrl.clone();
-        let ui_weak = ui.as_weak();
         ui.window().on_close_requested(move || {
             ctrl.borrow().save_session();
-            if let Some(ui) = ui_weak.upgrade() {
-                let _ = ui.hide();
-            }
             slint::CloseRequestResponse::HideWindow
         });
     }
