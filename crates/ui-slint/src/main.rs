@@ -22,6 +22,7 @@
 // reconcilia la lista de paneles y splitters.
 mod bridge;
 mod config_ctrl;
+mod devices;
 mod i18n_keys;
 mod keys;
 mod listing;
@@ -424,6 +425,15 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
 
+    // Watcher de dispositivos (Fase 5B): detecta USB enchufado/quitado. Vive toda la sesión.
+    let devices = Rc::new(devices::Devices::start(waker.clone()));
+    // HOME para reubicar paneles cuya unidad desapareció.
+    let home: Rc<std::path::PathBuf> = Rc::new(
+        std::env::var_os("USERPROFILE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("C:/")),
+    );
+
     // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
     // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     let timer = Rc::new(slint::Timer::default());
@@ -431,17 +441,37 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let timer = timer.clone();
+        let devices = devices.clone();
+        let home = home.clone();
         let waker = waker.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
             let timer2 = timer.clone();
             let waker = waker.clone();
+            let devices = devices.clone();
+            let home = home.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
                 move || {
                     let now = std::time::Instant::now();
+                    // Watcher de dispositivos (F5B): si cambiaron las unidades (USB), reubicar
+                    // los paneles cuya carpeta desapareció y re-listarlos.
+                    if devices.drives_changed() {
+                        let moved = ctrl.borrow_mut().relocate_orphans(&home);
+                        for id in moved {
+                            let dir = ctrl
+                                .borrow()
+                                .ws
+                                .pane(id)
+                                .and_then(|p| p.files.as_ref())
+                                .map(|f| f.current_dir.clone());
+                            if let Some(dir) = dir {
+                                ctrl.borrow_mut().start_listing(id, dir);
+                            }
+                        }
+                    }
                     // Asegurar que cada panel Files vigile su carpeta actual (barato si nada
                     // cambió). Arranca/re-arranca watchers tras navegar/agregar/cerrar paneles.
                     ctrl.borrow_mut().reconcile_watchers(waker.clone());

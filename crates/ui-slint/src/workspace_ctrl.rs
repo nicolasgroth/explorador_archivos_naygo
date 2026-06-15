@@ -323,6 +323,29 @@ impl WorkspaceCtrl {
         nuevas
     }
 
+    /// Tras un cambio de unidades (USB enchufado/quitado), reubica a `home` los paneles Files
+    /// cuya carpeta ya no existe (p. ej. el USB se sacó). Devuelve los panes reubicados para
+    /// que la UI re-liste su contenido. No crashea: "el filesystem es hostil".
+    pub fn relocate_orphans(&mut self, home: &std::path::Path) -> Vec<PaneId> {
+        let mut moved = Vec::new();
+        let ids: Vec<PaneId> = self.ws.files_panes();
+        for id in ids {
+            let gone = self
+                .ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| !f.current_dir.exists())
+                .unwrap_or(false);
+            if gone {
+                if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                    f.navigate_to(home.to_path_buf());
+                }
+                moved.push(id);
+            }
+        }
+        moved
+    }
+
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
     pub fn start_listing(&mut self, id: PaneId, dir: std::path::PathBuf) {
         if let Some(l) = self.listings.get(&id) {
@@ -1551,6 +1574,21 @@ mod tests {
             .rows_of(id, 8, std::time::Instant::now())
             .iter()
             .any(|r| r.name == "nuevo.txt"));
+    }
+
+    /// F5B: si un panel quedó parado en una carpeta que desapareció (p. ej. se sacó el USB),
+    /// relocate_orphans lo reubica a HOME y lo reporta como reubicado.
+    #[test]
+    fn relocate_reubica_panel_huerfano() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("usb");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new_in(sub.clone(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        std::fs::remove_dir_all(&sub).unwrap(); // "sacar el USB"
+        let moved = c.relocate_orphans(tmp.path());
+        assert_eq!(moved.len(), 1);
+        assert_eq!(c.ws.active_files().unwrap().current_dir, tmp.path());
     }
 
     /// REGRESIÓN (heredada de F1): navegar a una carpeta repuebla la vista del panel
