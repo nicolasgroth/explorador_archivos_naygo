@@ -21,6 +21,7 @@
 // `sync_rows` (barato, en cada tick) actualiza el contenido. `sync_layout` (estructural)
 // reconcilia la lista de paneles y splitters.
 mod bridge;
+mod config_ctrl;
 mod keys;
 mod listing;
 mod ops_ctrl;
@@ -433,9 +434,11 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_row_clicked(move |id, pos| {
             // El doble-clic se detecta en Rust (no en Slint): on_row_clicked devuelve true
             // si este clic completó un doble-clic, en cuyo caso navegó/abrió.
-            let navigated = ctrl
-                .borrow_mut()
-                .on_row_clicked(PaneId(id as u64), pos as usize, std::time::Instant::now());
+            let navigated = ctrl.borrow_mut().on_row_clicked(
+                PaneId(id as u64),
+                pos as usize,
+                std::time::Instant::now(),
+            );
             // Cambiar el foco/navegar puede disparar un preview o cambiar el layout.
             start_timer();
             if navigated {
@@ -819,9 +822,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 let pos = ui.window().position();
                 let sx = pos.x + x as i32;
                 let sy = pos.y + y as i32;
-                let _ = naygo_platform::context_menu::show_native_context_menu(
-                    hwnd, &targets, sx, sy,
-                );
+                let _ =
+                    naygo_platform::context_menu::show_native_context_menu(hwnd, &targets, sx, sy);
             }
         });
     }
@@ -911,9 +913,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             };
             let area = area_of();
-            let preview = ctrl
-                .borrow()
-                .drop_preview(PaneId(id as u64), x, y, area);
+            let preview = ctrl.borrow().drop_preview(PaneId(id as u64), x, y, area);
             match preview {
                 Some(r) => {
                     ui.set_drop_x(r.x);
@@ -936,7 +936,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let area_of = area_of.clone();
         ui.on_pane_drag_drop(move |id, x, y| {
             let area = area_of();
-            ctrl.borrow_mut().perform_drop(PaneId(id as u64), x, y, area);
+            ctrl.borrow_mut()
+                .perform_drop(PaneId(id as u64), x, y, area);
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_drop_w(0.0);
                 ui.set_drop_h(0.0);

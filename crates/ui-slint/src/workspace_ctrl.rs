@@ -9,7 +9,7 @@ use crate::bridge::{
 use crate::listing::Listing;
 use naygo_core::favorites::Favorites;
 use naygo_core::fs_model::{EntryKind, SortKey};
-use naygo_core::keymap::{Action, KeyMap};
+use naygo_core::keymap::Action;
 use naygo_core::recent_dirs::RecentDirs;
 use naygo_core::tree::DirTree;
 use naygo_core::workspace::layout::{
@@ -56,7 +56,9 @@ pub struct PanePick {
 
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
-    pub keymap: KeyMap,
+    /// Configuración de la app (settings + i18n + temas + atajos), cargada del core y
+    /// persistida en el directorio portable. El keymap vive aquí (`config.keymap`).
+    pub config: crate::config_ctrl::ConfigCtrl,
     /// Un listado en curso por panel (la carpeta de cada panel se lista por separado).
     pub listings: HashMap<PaneId, Listing>,
     /// Un árbol de carpetas por panel Tree (lazy; se llena con workers solo-dirs).
@@ -109,15 +111,16 @@ impl WorkspaceCtrl {
         let id = ws.add_pane(PanePurpose::Files, start.clone());
         ws.layout = SerializableDockLayout::single(id);
         ws.set_active(id);
+        let config_dir = naygo_core::config::portable_dir();
         let mut c = WorkspaceCtrl {
             ws,
-            keymap: KeyMap::defaults(),
+            config: crate::config_ctrl::ConfigCtrl::new(config_dir.clone()),
             listings: HashMap::new(),
             trees: HashMap::new(),
             tree_listings: HashMap::new(),
             favorites: Favorites::new(),
             recents: RecentDirs::new(),
-            ops: crate::ops_ctrl::OpsCtrl::new(naygo_core::config::portable_dir()),
+            ops: crate::ops_ctrl::OpsCtrl::new(config_dir),
             preview: crate::preview::PreviewState::new(),
             pending_pick: None,
             last_area: Rect {
@@ -513,7 +516,10 @@ impl WorkspaceCtrl {
         if target == dragged {
             return None;
         }
-        let target_rect = panes.iter().find(|(id, _)| *id == target).map(|(_, r)| *r)?;
+        let target_rect = panes
+            .iter()
+            .find(|(id, _)| *id == target)
+            .map(|(_, r)| *r)?;
         drop_zones(target_rect)
             .into_iter()
             .find(|(z, _)| *z == zone)
@@ -557,7 +563,6 @@ impl WorkspaceCtrl {
         }
         true
     }
-
 
     /// El usuario eligió el panel número `n` (1..9) del selector. Aplica la acción y cierra
     /// el selector. Devuelve true si arrancó listado. No-op si `n` está fuera de rango.
@@ -1111,7 +1116,7 @@ impl WorkspaceCtrl {
             self.typeahead(text);
             return false;
         };
-        let Some(action) = self.keymap.action_for(&chord) else {
+        let Some(action) = self.config.keymap.action_for(&chord) else {
             self.typeahead(text);
             return false;
         };
