@@ -9,8 +9,8 @@
 
 use super::journal::JournalWriter;
 use super::{
-    ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress, OpStep,
-    OpSummary,
+    ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpKind, OpMsg, OpOutcome,
+    OpPlan, OpProgress, OpStep, OpSummary,
 };
 use crate::cancel::CancellationToken;
 use std::io::{Read, Write};
@@ -81,7 +81,7 @@ pub fn run_plan(
     conflict: ConflictPolicy,
     token: &CancellationToken,
     tx: &Sender<OpMsg>,
-    _conflict_rx: &Receiver<ConflictDecision>,
+    conflict_rx: &Receiver<ConflictDecision>,
     mut journal: Option<&mut JournalWriter>,
 ) -> OpSummary {
     let start = std::time::Instant::now();
@@ -94,6 +94,9 @@ pub fn run_plan(
     // Overwrite).
     let mut journal_cursor = 0usize;
     let mut barrier_hit = false;
+    // Acción elegida con "aplicar a todos" en un conflicto interactivo (ops-B): mientras
+    // sea `Some`, los choques siguientes la usan sin volver a preguntar.
+    let mut applied_all: Option<ConflictAction> = None;
 
     for (idx, step) in plan.steps.iter().enumerate() {
         if token.is_cancelled() {
@@ -110,7 +113,7 @@ pub fn run_plan(
         }));
 
         let (record_path, outcome, bytes_added, counts_as_file) =
-            exec_step(step, kind, conflict, token);
+            exec_step(step, kind, conflict, token, tx, conflict_rx, &mut applied_all);
         summary.bytes_done += bytes_added;
         if counts_as_file && matches!(outcome, OpOutcome::Done) {
             files_done += 1;
@@ -138,15 +141,19 @@ pub fn run_plan(
 
 /// Ejecuta un paso individual. Devuelve `(ruta_registrada, resultado, bytes_sumados,
 /// cuenta_como_archivo)`.
+#[allow(clippy::too_many_arguments)]
 fn exec_step(
     step: &OpStep,
     kind: &OpKind,
     conflict: ConflictPolicy,
     token: &CancellationToken,
+    tx: &Sender<OpMsg>,
+    conflict_rx: &Receiver<ConflictDecision>,
+    applied_all: &mut Option<ConflictAction>,
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     match kind {
-        OpKind::Copy => exec_copy_step(step, conflict, token, false),
-        OpKind::Move => exec_copy_step(step, conflict, token, true),
+        OpKind::Copy => exec_copy_step(step, conflict, token, false, tx, conflict_rx, applied_all),
+        OpKind::Move => exec_copy_step(step, conflict, token, true, tx, conflict_rx, applied_all),
         OpKind::Delete { to_trash } => {
             if *to_trash {
                 // El motor solo hace borrado permanente; la papelera la maneja platform.
@@ -180,11 +187,15 @@ fn exec_step(
 
 /// Ejecuta un paso de copia (o mover, si `is_move`). Maneja carpetas (crea el dir),
 /// conflictos según la política, y copia archivos por buffers (cancelable).
+#[allow(clippy::too_many_arguments)]
 fn exec_copy_step(
     step: &OpStep,
     conflict: ConflictPolicy,
     token: &CancellationToken,
     is_move: bool,
+    tx: &Sender<OpMsg>,
+    conflict_rx: &Receiver<ConflictDecision>,
+    applied_all: &mut Option<ConflictAction>,
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     // Paso de carpeta: asegurar el directorio destino, no cuenta como archivo.
     if step.is_dir {
@@ -207,15 +218,47 @@ fn exec_copy_step(
         }
     };
 
-    // Resolver el destino según la política de conflictos.
+    // Resolver el destino según la política de conflictos. Con `Ask` (ops-B), si el
+    // destino existe se consulta a la UI por ítem: emite `OpMsg::Conflict` y bloquea
+    // esperando una `ConflictDecision` por `conflict_rx`. Con "aplicar a todos", la acción
+    // elegida se memoriza en `applied_all` y los choques siguientes no vuelven a preguntar.
     let to = if step.to.exists() {
-        match conflict {
-            ConflictPolicy::Skip => {
-                return (step.to.clone(), OpOutcome::Skipped, 0, true);
+        let effective: ConflictAction = match conflict {
+            ConflictPolicy::Skip => ConflictAction::Skip,
+            ConflictPolicy::Overwrite => ConflictAction::Overwrite,
+            ConflictPolicy::Rename => ConflictAction::Rename,
+            ConflictPolicy::Ask => {
+                if let Some(prev) = *applied_all {
+                    prev
+                } else {
+                    let _ = tx.send(OpMsg::Conflict(ConflictPrompt {
+                        existing: step.to.clone(),
+                        incoming: from.clone(),
+                    }));
+                    // Esperar la decisión sin colgar si se cancela: poll con timeout.
+                    let decision = loop {
+                        if token.is_cancelled() {
+                            return (step.to.clone(), OpOutcome::Skipped, 0, true);
+                        }
+                        match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                            Ok(d) => break d,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                return (step.to.clone(), OpOutcome::Skipped, 0, true);
+                            }
+                        }
+                    };
+                    if decision.apply_all {
+                        *applied_all = Some(decision.action);
+                    }
+                    decision.action
+                }
             }
-            ConflictPolicy::Rename => super::dedup_name(&step.to, &|p: &Path| p.exists()),
-            // Ask se trata como Overwrite a nivel motor (la UI resuelve Ask antes).
-            ConflictPolicy::Overwrite | ConflictPolicy::Ask => step.to.clone(),
+        };
+        match effective {
+            ConflictAction::Skip => return (step.to.clone(), OpOutcome::Skipped, 0, true),
+            ConflictAction::Rename => super::dedup_name(&step.to, &|p: &Path| p.exists()),
+            ConflictAction::Overwrite => step.to.clone(),
         }
     } else {
         step.to.clone()
@@ -564,5 +607,155 @@ mod tests {
         let (_m, summary) = run(req);
         assert!(!src.exists());
         assert_eq!(summary.count_done(), 1);
+    }
+
+    // --- ops-B: conflicto interactivo por-ítem ---
+
+    use super::super::ConflictAction;
+
+    /// Corre un plan con política `Ask`, respondiendo cada `OpMsg::Conflict` con la
+    /// `ConflictDecision` dada (en un hilo aparte). Devuelve el summary y cuántos
+    /// `Conflict` se emitieron. Si nunca llega un `Conflict` y sí un `Done`, se considera
+    /// error de la lógica (el motor no preguntó cuando debía).
+    fn run_ask(req: OpRequest, decision: ConflictDecision) -> (OpSummary, usize) {
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let conflicts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let conflicts2 = conflicts.clone();
+        let resp = std::thread::spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    conflicts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = ctx.send(decision);
+                }
+            }
+        });
+        let summary = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+        (summary, conflicts.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[test]
+    fn ask_emite_conflict_y_aplica_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::Overwrite,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1, "debió emitir exactamente un Conflict");
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "NUEVO");
+    }
+
+    #[test]
+    fn ask_skip_deja_el_existente() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::Skip,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_skipped(), 1);
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
+    }
+
+    #[test]
+    fn ask_rename_crea_copia() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::Rename,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_done(), 1);
+        // El original intacto; la copia con sufijo " (2)".
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
+        assert_eq!(fs::read_to_string(dst.join("a (2).txt")).unwrap(), "NUEVO");
+    }
+
+    #[test]
+    fn apply_all_no_vuelve_a_preguntar() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, b"NA").unwrap();
+        fs::write(&b, b"NB").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VA").unwrap();
+        fs::write(dst.join("b.txt"), b"VB").unwrap();
+        let req = super::super::transfer(false, vec![a, b], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::Overwrite,
+                apply_all: true,
+            },
+        );
+        // Dos choques pero "aplicar a todos" → un solo Conflict emitido.
+        assert_eq!(conflicts, 1, "con apply_all solo se pregunta una vez");
+        assert_eq!(summary.count_done(), 2);
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "NA");
+        assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "NB");
+    }
+
+    #[test]
+    fn cancelar_durante_espera_aborta() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let token2 = token.clone();
+        // Cuando llegue el Conflict, NO responder: cancelar el token.
+        let resp = std::thread::spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    token2.cancel();
+                }
+            }
+        });
+        let summary = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+        // El item quedó Skipped (no se copió) y el existente intacto.
+        assert_eq!(summary.count_done(), 0);
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
     }
 }
