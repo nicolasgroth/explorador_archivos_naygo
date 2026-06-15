@@ -6,16 +6,17 @@
 // el punto del clic; un velo cierra al hacer clic fuera. Sin glifos raros (solo texto).
 import { ContextMenuVm } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 component MenuRow inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 26px;
-    background: t.has-hover ? #2a4a7a : transparent;
+    background: t.has-hover ? Theme.selection-bg : transparent;
     border-radius: 3px;
     Text {
         text: root.label;
-        color: #dde;
+        color: Theme.text;
         vertical-alignment: center;
         x: 10px;
     }
@@ -46,8 +47,8 @@ export component ContextMenu inherits Rectangle {
         y: min(root.vm.y, root.height - self.height - 4px);
         width: 210px;
         height: items.preferred-height + 8px;
-        background: #1b2838;
-        border-color: #2a4a7a;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
         border-width: 1px;
         border-radius: 6px;
         TouchArea {} // captura clics dentro de la tarjeta (no cierra)
@@ -56,15 +57,15 @@ export component ContextMenu inherits Rectangle {
             spacing: 1px;
             MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
             MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
-            Rectangle { height: 1px; background: #2a3a52; }
+            Rectangle { height: 1px; background: Theme.border; }
             MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
             MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
             MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
-            Rectangle { height: 1px; background: #2a3a52; }
+            Rectangle { height: 1px; background: Theme.border; }
             MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
             MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
             MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
-            if root.vm.has-native: Rectangle { height: 1px; background: #2a3a52; }
+            if root.vm.has-native: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.has-native: MenuRow {
                 label: Tr.ctx-more-windows;
                 clicked => { root.native(); }

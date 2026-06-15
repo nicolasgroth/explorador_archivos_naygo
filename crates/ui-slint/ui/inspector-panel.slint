@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 import { InspectorVm } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 // Una fila etiqueta/valor del inspector.
 component PropRow inherits HorizontalLayout {
@@ -11,7 +12,7 @@ component PropRow inherits HorizontalLayout {
     padding: 2px;
     Text {
         text: root.label;
-        color: #9ab;
+        color: Theme.text-dim;
         font-weight: 700;
         width: 84px;
         horizontal-alignment: right;
@@ -19,7 +20,7 @@ component PropRow inherits HorizontalLayout {
     }
     Text {
         text: root.value;
-        color: #dde;
+        color: Theme.text;
         vertical-alignment: center;
         horizontal-stretch: 1;
         overflow: elide;
@@ -29,23 +30,23 @@ component PropRow inherits HorizontalLayout {
 export component InspectorPanel inherits Rectangle {
     in property <bool> active;
     in property <InspectorVm> info;
-    background: #0e1622;
+    background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
-    border-color: #4f8ae0;
+    border-color: Theme.accent;
 
     VerticalLayout {
         padding: 8px;
         spacing: 4px;
         Text {
             text: Tr.inspector-title;
-            color: #9ab;
+            color: Theme.text-dim;
             font-weight: 700;
             height: 22px;
             vertical-alignment: center;
         }
         if !root.info.present: Text {
             text: Tr.inspector-no-selection;
-            color: #678;
+            color: Theme.text-dim;
             vertical-alignment: center;
         }
         if root.info.present: VerticalLayout {

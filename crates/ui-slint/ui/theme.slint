@@ -1,0 +1,18 @@
+// Naygo — colores del tema activo (global `Theme`). Rust los rellena desde el tema activo
+// del catálogo del core (ver theme_apply.rs). Los valores por defecto son los del tema
+// "dark-blue" embebido, así que si Rust no setea nada la UI se ve con ese tema.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+export global Theme {
+    // Tokens del tema (ver core::theme::Theme). Defaults = dark-blue.
+    in property <color> accent: #4f8ae0;
+    in property <color> panel-bg: #0e1622;
+    in property <color> row-bg: #1b2838;
+    in property <color> row-alt-bg: #1f3350;
+    in property <color> text: #dddde6;
+    in property <color> text-dim: #99aabb;
+    in property <color> selection-bg: #2a4a7a;
+    in property <color> active-bar: #4f8ae0;
+    in property <color> error: #d4574e;
+    in property <color> highlight: #ffd479;
+    in property <color> border: #2a3a52;
+}

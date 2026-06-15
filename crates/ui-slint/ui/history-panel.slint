@@ -7,6 +7,7 @@
 import { ListView } from "std-widgets.slint";
 import { HistRow } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 export component HistoryPanel inherits Rectangle {
     in property <bool> active;
@@ -14,30 +15,30 @@ export component HistoryPanel inherits Rectangle {
     callback undo(int);   // id de la entrada a deshacer
     callback focus-pane();
 
-    background: #0e1622;
+    background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
-    border-color: #4f8ae0;
+    border-color: Theme.accent;
 
     VerticalLayout {
         padding: 6px;
         spacing: 4px;
         Text {
             text: Tr.history-title;
-            color: #9ab;
+            color: Theme.text-dim;
             font-weight: 700;
             height: 20px;
             vertical-alignment: center;
         }
         if root.rows.length == 0: Text {
             text: Tr.history-empty;
-            color: #678;
+            color: Theme.text-dim;
             height: 18px;
         }
         ListView {
             vertical-stretch: 1;
             for e[i] in root.rows: Rectangle {
                 height: 30px;
-                background: row-touch.has-hover ? #16243a : transparent;
+                background: row-touch.has-hover ? Theme.row-bg : transparent;
                 border-radius: 3px;
                 HorizontalLayout {
                     padding-left: 6px;
@@ -47,18 +48,18 @@ export component HistoryPanel inherits Rectangle {
                         horizontal-stretch: 1;
                         Text {
                             text: e.label;
-                            color: #dde;
+                            color: Theme.text;
                             overflow: elide;
                             vertical-alignment: center;
                         }
                     }
                     Rectangle {
                         width: 74px;
-                        background: e.undoable ? (undo-touch.has-hover ? #2a4a7a : #1b2838) : #141d2b;
+                        background: e.undoable ? (undo-touch.has-hover ? Theme.selection-bg : Theme.row-bg) : Theme.panel-bg;
                         border-radius: 4px;
                         Text {
                             text: Tr.history-undo;
-                            color: e.undoable ? white : #566;
+                            color: e.undoable ? white : Theme.text-dim;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }

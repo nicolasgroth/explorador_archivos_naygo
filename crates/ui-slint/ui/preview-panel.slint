@@ -6,20 +6,21 @@
 import { ScrollView } from "std-widgets.slint";
 import { PreviewVm } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 export component PreviewPanel inherits Rectangle {
     in property <bool> active;
     in property <PreviewVm> view;
-    background: #0e1622;
+    background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
-    border-color: #4f8ae0;
+    border-color: Theme.accent;
 
     VerticalLayout {
         padding: 6px;
         spacing: 4px;
         Text {
             text: Tr.preview-title;
-            color: #9ab;
+            color: Theme.text-dim;
             font-weight: 700;
             height: 20px;
             vertical-alignment: center;
@@ -27,7 +28,7 @@ export component PreviewPanel inherits Rectangle {
 
         if root.view.mode == 0: Text {
             text: Tr.preview-select;
-            color: #678;
+            color: Theme.text-dim;
             vertical-alignment: center;
         }
 
@@ -38,14 +39,14 @@ export component PreviewPanel inherits Rectangle {
                 vertical-stretch: 1;
                 Text {
                     text: root.view.text;
-                    color: #cdd;
+                    color: Theme.text;
                     font-family: "Consolas";
                     wrap: no-wrap;
                 }
             }
             if root.view.truncated: Text {
                 text: Tr.preview-truncated;
-                color: #889;
+                color: Theme.text-dim;
                 font-size: 11px;
             }
         }
@@ -58,7 +59,7 @@ export component PreviewPanel inherits Rectangle {
 
         if root.view.mode == 3: Text {
             text: root.view.message;
-            color: #889;
+            color: Theme.text-dim;
             vertical-alignment: center;
             horizontal-alignment: center;
             vertical-stretch: 1;

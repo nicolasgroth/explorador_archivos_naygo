@@ -12,8 +12,11 @@ import { OpDialogs } from "op-dialogs.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
 import { Tr } from "i18n.slint";
-// Reexportar el global para que Slint genere su binding accesible desde Rust (i18n_keys).
+import { Theme } from "theme.slint";
+// Reexportar los globals para que Slint genere su binding accesible desde Rust
+// (i18n_keys / theme_apply).
 export { Tr }
+export { Theme }
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.
@@ -22,12 +25,12 @@ component TabBar inherits Rectangle {
     callback select(int);
     callback close(int);
     height: 24px;
-    background: #0b1320;
+    background: Theme.panel-bg;
     HorizontalLayout {
         padding: 2px;
         spacing: 2px;
         for t in root.tabs: Rectangle {
-            background: t.active ? #2a4a7a : (tab-touch.has-hover ? #1f3350 : #16243a);
+            background: t.active ? Theme.selection-bg : (tab-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg);
             border-radius: 4px;
             HorizontalLayout {
                 padding-left: 8px;
@@ -35,15 +38,15 @@ component TabBar inherits Rectangle {
                 spacing: 4px;
                 Text {
                     text: t.label;
-                    color: t.active ? white : #9ab;
+                    color: t.active ? white : Theme.text-dim;
                     vertical-alignment: center;
                     overflow: elide;
                 }
                 Rectangle {
                     width: 16px;
-                    background: x-touch.has-hover ? #5a2630 : transparent;
+                    background: x-touch.has-hover ? Theme.error : transparent;
                     border-radius: 3px;
-                    Text { text: "x"; color: #c99; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "x"; color: Theme.error; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                     x-touch := TouchArea { clicked => { root.close(t.id); } }
                 }
             }
@@ -61,7 +64,7 @@ component ToolBtn inherits Rectangle {
     in property <bool> highlight: false;
     callback clicked();
     width: root.btn-width;
-    background: (touch.has-hover || root.highlight) ? #2a4a7a : #1b2838;
+    background: (touch.has-hover || root.highlight) ? Theme.selection-bg : Theme.row-bg;
     border-radius: 4px;
     Text {
         text: root.label;
@@ -79,13 +82,13 @@ component ToolBtn inherits Rectangle {
         y: parent.height + 3px;
         width: tip-text.preferred-width + 12px;
         height: 22px;
-        background: #0b1320;
-        border-color: #2a4a7a;
+        background: Theme.panel-bg;
+        border-color: Theme.selection-bg;
         border-width: 1px;
         border-radius: 4px;
         tip-text := Text {
             text: root.tip;
-            color: #dde;
+            color: Theme.text;
             font-size: 11px;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -98,11 +101,11 @@ component MenuItem inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 26px;
-    background: mi-touch.has-hover ? #2a4a7a : transparent;
+    background: mi-touch.has-hover ? Theme.selection-bg : transparent;
     border-radius: 4px;
     Text {
         text: root.label;
-        color: #dde;
+        color: Theme.text;
         vertical-alignment: center;
         x: 8px;
     }
@@ -204,7 +207,7 @@ export component AppWindow inherits Window {
         // Barra superior: path del panel activo + subir + agregar panel.
         Rectangle {
             height: root.top-bar-h;
-            background: #141d2b;
+            background: Theme.panel-bg;
             HorizontalLayout {
                 padding: 4px;
                 spacing: 6px;
@@ -245,15 +248,15 @@ export component AppWindow inherits Window {
                     clicked => { root.stack-pane(); }
                 }
                 Rectangle {
-                    background: #1b2838;
+                    background: Theme.row-bg;
                     border-radius: 4px;
-                    Text { text: root.active-path; color: #cdd; vertical-alignment: center; x: 8px; }
+                    Text { text: root.active-path; color: Theme.text; vertical-alignment: center; x: 8px; }
                 }
             }
         }
         // Zona de contenido: paneles posicionados absolutamente + barras de splitter.
         content := Rectangle {
-            background: #0e1622;
+            background: Theme.panel-bg;
             // Paneles (posición/tamaño calculados en Rust). El componente concreto se
             // elige por `p.purpose`: 0=Files 1=Tree 2=Inspector 3=History 4=Favorites
             // 5=Preview. Cada `if` instancia su componente en el mismo rect del panel.
@@ -280,14 +283,14 @@ export component AppWindow inherits Window {
                     y: 0;
                     width: 100%;
                     height: parent.bar-h;
-                    background: p.active ? #1c2c44 : #16243a;
+                    background: p.active ? Theme.row-bg : Theme.row-bg;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 6px;
                         spacing: 6px;
                         Text {
                             text: p.title;
-                            color: p.active ? white : #9ab;
+                            color: p.active ? white : Theme.text-dim;
                             font-weight: 600;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -295,7 +298,7 @@ export component AppWindow inherits Window {
                         }
                         Text {
                             text: Tr.drag-move;
-                            color: title-touch.pressed ? #4f8ae0 : #678;
+                            color: title-touch.pressed ? Theme.accent : Theme.text-dim;
                             font-size: 10px;
                             vertical-alignment: center;
                         }
@@ -380,7 +383,7 @@ export component AppWindow inherits Window {
                 y: s.y;
                 width: s.w;
                 height: s.h;
-                background: sp-touch.has-hover || sp-touch.pressed ? #4f8ae0 : #2a3a52;
+                background: sp-touch.has-hover || sp-touch.pressed ? Theme.accent : Theme.border;
                 sp-touch := TouchArea {
                     mouse-cursor: s.horizontal ? ew-resize : ns-resize;
                     moved => {
@@ -396,7 +399,7 @@ export component AppWindow inherits Window {
                 height: root.drop-h;
                 background: #4f8ae055;
                 border-width: 2px;
-                border-color: #4f8ae0;
+                border-color: Theme.accent;
                 border-radius: 4px;
             }
         }
@@ -408,10 +411,10 @@ export component AppWindow inherits Window {
         // Barra de estado: carpeta activa + recuento de ítems y selección.
         Rectangle {
             height: 22px;
-            background: #141d2b;
+            background: Theme.panel-bg;
             Text {
                 text: root.status;
-                color: #9ab;
+                color: Theme.text-dim;
                 font-size: 11px;
                 vertical-alignment: center;
                 x: 8px;
@@ -463,8 +466,8 @@ export component AppWindow inherits Window {
         y: root.top-bar-h + 2px;
         width: 160px;
         height: menu-items.preferred-height + 8px;
-        background: #1b2838;
-        border-color: #2a4a7a;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
         border-width: 1px;
         border-radius: 6px;
         menu-items := VerticalLayout {
@@ -492,7 +495,7 @@ export component AppWindow inherits Window {
         height: p.h;
         background: #000000cc;
         border-width: 2px;
-        border-color: #4f8ae0;
+        border-color: Theme.accent;
         border-radius: 4px;
         Text {
             text: p.number;

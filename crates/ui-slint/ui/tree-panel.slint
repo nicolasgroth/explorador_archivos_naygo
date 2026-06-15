@@ -8,6 +8,7 @@
 import { ListView } from "std-widgets.slint";
 import { TreeRow } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 export component TreePanel inherits Rectangle {
     in property <bool> active;
@@ -16,15 +17,15 @@ export component TreePanel inherits Rectangle {
     callback navigate(string);  // navegar el Files activo a esa carpeta
     callback focus-pane();
 
-    background: #0e1622;
+    background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
-    border-color: #4f8ae0;
+    border-color: Theme.accent;
 
     VerticalLayout {
         padding: 4px;
         Text {
             text: Tr.tree-title;
-            color: #9ab;
+            color: Theme.text-dim;
             font-weight: 700;
             height: 20px;
             vertical-alignment: center;
@@ -34,7 +35,7 @@ export component TreePanel inherits Rectangle {
             vertical-stretch: 1;
             for n[i] in root.rows: Rectangle {
                 height: 22px;
-                background: n.active ? #2a4a7a : (node-touch.has-hover ? #1f3350 : transparent);
+                background: n.active ? Theme.selection-bg : (node-touch.has-hover ? Theme.row-alt-bg : transparent);
                 border-radius: 3px;
                 HorizontalLayout {
                     padding-left: 2px + n.depth * 14px;
@@ -46,7 +47,7 @@ export component TreePanel inherits Rectangle {
                             // El renderizador por software no dibuja flechas/triángulos
                             // Unicode: usamos +/− (colapsado/expandido) que sí se ven.
                             text: n.has-children ? (n.expanded ? "−" : "+") : "";
-                            color: #9ab;
+                            color: Theme.text-dim;
                             font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -57,7 +58,7 @@ export component TreePanel inherits Rectangle {
                     }
                     Text {
                         text: (n.is-drive ? "💾 " : "📁 ") + n.name + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
-                        color: n.is-drive ? #cde : (n.error ? #d99 : #dde);
+                        color: n.is-drive ? Theme.text : (n.error ? Theme.error : Theme.text);
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                         overflow: elide;
@@ -67,13 +68,13 @@ export component TreePanel inherits Rectangle {
                         width: 42px;
                         height: 8px;
                         y: (parent.height - self.height) / 2;
-                        background: #1b2838;
+                        background: Theme.row-bg;
                         border-radius: 4px;
                         Rectangle {
                             x: 0;
                             width: parent.width * (n.disk-percent / 100);
                             height: parent.height;
-                            background: n.disk-percent > 90 ? #d4574e : (n.disk-percent > 75 ? #d4a24e : #4f8ae0);
+                            background: n.disk-percent > 90 ? Theme.error : (n.disk-percent > 75 ? Theme.highlight : Theme.accent);
                             border-radius: 4px;
                         }
                     }

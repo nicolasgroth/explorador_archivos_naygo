@@ -27,6 +27,7 @@ mod keys;
 mod listing;
 mod ops_ctrl;
 mod preview;
+mod theme_apply;
 mod workspace_ctrl;
 
 use naygo_core::workspace::layout::{Rect, SplitDir};
@@ -129,6 +130,8 @@ fn main() -> Result<(), slint::PlatformError> {
     ctrl.borrow_mut().load_session();
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
+    // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
+    theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
     let models = Rc::new(RefCell::new(Models::new()));
 
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));

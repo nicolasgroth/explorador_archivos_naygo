@@ -5,6 +5,7 @@
 // de progreso, estado y botón cancelar. Visible solo si hay operaciones. Sin glifos raros.
 import { ListView } from "std-widgets.slint";
 import { OpRowVm } from "types.slint";
+import { Theme } from "theme.slint";
 
 export component OpsPanel inherits Rectangle {
     in property <[OpRowVm]> rows;
@@ -12,8 +13,8 @@ export component OpsPanel inherits Rectangle {
 
     visible: root.rows.length > 0;
     height: root.rows.length > 0 ? min(rows.length * 30px + 8px, 140px) : 0px;
-    background: #10192a;
-    border-color: #2a3a52;
+    background: Theme.panel-bg;
+    border-color: Theme.border;
     border-width: 1px;
 
     ListView {
@@ -31,7 +32,7 @@ export component OpsPanel inherits Rectangle {
                     spacing: 2px;
                     Text {
                         text: r.label + "   —   " + r.status;
-                        color: #cdd;
+                        color: Theme.text;
                         font-size: 11px;
                         vertical-alignment: center;
                         overflow: elide;
@@ -39,14 +40,14 @@ export component OpsPanel inherits Rectangle {
                     // Barra de progreso (track + relleno proporcional).
                     Rectangle {
                         height: 6px;
-                        background: #1b2838;
+                        background: Theme.row-bg;
                         border-radius: 3px;
                         Rectangle {
                             x: 0;
                             y: 0;
                             width: parent.width * (r.percent / 100);
                             height: parent.height;
-                            background: r.running ? #4f8ae0 : #3a6a3a;
+                            background: r.running ? Theme.accent : Theme.accent;
                             border-radius: 3px;
                         }
                     }
@@ -56,10 +57,10 @@ export component OpsPanel inherits Rectangle {
                     width: 22px;
                     y: (parent.height - self.height) / 2;
                     height: 22px;
-                    background: x-touch.has-hover ? #5a2630 : transparent;
+                    background: x-touch.has-hover ? Theme.error : transparent;
                     border-radius: 3px;
                     visible: r.running;
-                    Text { text: "x"; color: #c99; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "x"; color: Theme.error; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
                     x-touch := TouchArea { clicked => { root.cancel(r.index); } }
                 }
             }

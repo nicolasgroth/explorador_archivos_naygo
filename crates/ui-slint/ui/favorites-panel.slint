@@ -5,6 +5,7 @@
 import { ListView } from "std-widgets.slint";
 import { NavRow } from "types.slint";
 import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
 
 export component FavoritesPanel inherits Rectangle {
     in property <bool> active;
@@ -15,9 +16,9 @@ export component FavoritesPanel inherits Rectangle {
     callback pin-current();      // anclar la carpeta del panel activo como favorita
     callback focus-pane();       // marcar este panel como activo al interactuar
 
-    background: #0e1622;
+    background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
-    border-color: #4f8ae0;
+    border-color: Theme.accent;
 
     VerticalLayout {
         padding: 6px;
@@ -26,43 +27,43 @@ export component FavoritesPanel inherits Rectangle {
             height: 20px;
             Text {
                 text: Tr.fav-title;
-                color: #9ab;
+                color: Theme.text-dim;
                 font-weight: 700;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
             Rectangle {
                 width: 52px;
-                background: pin-touch.has-hover ? #2a4a7a : #1b2838;
+                background: pin-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
                 border-radius: 3px;
-                Text { text: Tr.fav-pin; color: #ffd479; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: Tr.fav-pin; color: Theme.highlight; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
         }
         if root.favs.length == 0: Text {
             text: Tr.fav-empty;
-            color: #678;
+            color: Theme.text-dim;
             height: 18px;
         }
         for f[i] in root.favs: Rectangle {
             height: 22px;
-            background: fav-touch.has-hover ? #1f3350 : transparent;
+            background: fav-touch.has-hover ? Theme.row-alt-bg : transparent;
             border-radius: 3px;
             HorizontalLayout {
                 padding-left: 6px;
                 spacing: 4px;
                 Text {
                     text: f.label;
-                    color: #ffd479;
+                    color: Theme.highlight;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
                 }
                 Rectangle {
                     width: 18px;
-                    background: rm-touch.has-hover ? #5a2630 : transparent;
+                    background: rm-touch.has-hover ? Theme.error : transparent;
                     border-radius: 3px;
-                    Text { text: "x"; color: #c99; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "x"; color: Theme.error; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                     rm-touch := TouchArea {
                         clicked => { root.remove(f.path); }
                     }
@@ -75,7 +76,7 @@ export component FavoritesPanel inherits Rectangle {
 
         Text {
             text: Tr.fav-recents;
-            color: #9ab;
+            color: Theme.text-dim;
             font-weight: 700;
             height: 20px;
             vertical-alignment: center;
@@ -84,13 +85,13 @@ export component FavoritesPanel inherits Rectangle {
             vertical-stretch: 1;
             for r[i] in root.recents: Rectangle {
                 height: 22px;
-                background: rec-touch.has-hover ? #1f3350 : transparent;
+                background: rec-touch.has-hover ? Theme.row-alt-bg : transparent;
                 border-radius: 3px;
                 HorizontalLayout {
                     padding-left: 6px;
                     Text {
                         text: r.label;
-                        color: #cdd;
+                        color: Theme.text;
                         vertical-alignment: center;
                         overflow: elide;
                     }
