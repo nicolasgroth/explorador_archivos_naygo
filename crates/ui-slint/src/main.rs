@@ -557,6 +557,19 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        // Arrastre OLE hacia afuera (Fase 5C): saca los archivos seleccionados del panel
+        // hacia el Explorer/escritorio/otra app. `start_drag` es BLOQUEANTE (corre el bucle OLE
+        // de Windows hasta soltar), que es el comportamiento nativo esperado.
+        let ctrl = ctrl.clone();
+        ui.on_row_drag_out(move |_id| {
+            let paths = ctrl.borrow().selected_paths();
+            if paths.is_empty() {
+                return;
+            }
+            let _ = naygo_platform::dnd::start_drag(&paths);
+        });
+    }
+    {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         ui.on_sort_by(move |_id, col| {

@@ -131,6 +131,7 @@ export component AppWindow inherits Window {
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
+    callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
     callback sort-by(int, string);
     callback activate(int);
     callback key(string, bool, bool, bool);
@@ -376,6 +377,7 @@ export component AppWindow inherits Window {
                         rows: p.rows;
                         row-clicked(id, pos) => { root.row-clicked(id, pos); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                        row-drag-out(id) => { root.row-drag-out(id); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         sort-by(id, col) => { root.sort-by(id, col); }
                         activate(id) => { root.activate(id); }

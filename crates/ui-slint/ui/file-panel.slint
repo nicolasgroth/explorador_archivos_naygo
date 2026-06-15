@@ -34,6 +34,7 @@ export component FilePanel inherits FocusScope {
     in property <length> scroll-y;
     callback row-clicked(int, int);          // (pane-id, pos)
     callback row-double-clicked(int, int);
+    callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
     callback sort-by(int, string);           // (pane-id, columna)
     callback activate(int);                  // (pane-id) al interactuar
@@ -143,9 +144,29 @@ export component FilePanel inherits FocusScope {
                         // Rust por tiempo. (Si el puntero se va entre press y release, no es
                         // clic: se cancela.)
                         property <bool> pressed-here: false;
+                        // Coords del press (para detectar el inicio de un arrastre por umbral).
+                        property <length> press-x;
+                        property <length> press-y;
+                        // Se disparó ya el arrastre OLE de este gesto (no repetir).
+                        property <bool> dragging: false;
                         pointer-event(ev) => {
                             if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
                                 self.pressed-here = true;
+                                self.dragging = false;
+                                self.press-x = self.mouse-x;
+                                self.press-y = self.mouse-y;
+                            }
+                            // Inicio de ARRASTRE OLE: el botón sigue abajo y el puntero se movió
+                            // más que el umbral sobre una fila SELECCIONADA → sacar los archivos.
+                            // Solo si la fila ya estaba seleccionada (arrastrar lo elegido), para
+                            // no pisar el clic-para-seleccionar ni el scroll del ListView.
+                            if (ev.kind == PointerEventKind.move && self.pressed-here && !self.dragging && row.selected) {
+                                if (abs(self.mouse-x - self.press-x) > 6px || abs(self.mouse-y - self.press-y) > 6px) {
+                                    self.dragging = true;
+                                    self.pressed-here = false;
+                                    root.activate(root.pane-id);
+                                    root.row-drag-out(root.pane-id);
+                                }
                             }
                             if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
                                 self.pressed-here = false;
