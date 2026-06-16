@@ -414,6 +414,7 @@
   "slint.cfg.paste_ext": "Extensión",
   "slint.cfg.theme": "Tema",
   "slint.cfg.language": "Idioma",
+  "slint.cfg.icon_set": "Set de íconos",
   "slint.cfg.shortcuts_hint": "Cambiá un atajo con «Cambiar» y presioná la nueva combinación.",
   "slint.cfg.press": "presioná…",
   "slint.cfg.change": "Cambiar",

@@ -171,6 +171,14 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Set de íconos por id (de los disponibles en el catálogo: embebidos + packs sueltos).
+    /// Lo coacciona contra el catálogo (un id inexistente cae a "flat") y persiste.
+    pub fn set_icon_set(&mut self, id: String) {
+        let catalog = naygo_core::icon_set::IconSetCatalog::load(&self.config_dir);
+        self.settings.icon_set = catalog.resolve(&id);
+        self.save();
+    }
+
     /// Plantilla de nombre para texto pegado.
     pub fn set_paste_text_name(&mut self, name: String) {
         self.settings.paste_text_name = name;

@@ -876,6 +876,21 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    // Cambio de set de íconos en caliente: persiste + apunta el IconCache al set nuevo. Las
+    // filas repintan en el próximo tick (sync_rows consulta el cache, que decodifica el set
+    // nuevo on-demand). El refresh re-snapshotea el VM de config para reflejar la selección.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_set_icon_set(move |id| {
+            let mut c = ctrl.borrow_mut();
+            c.config.set_icon_set(id.to_string());
+            // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "flat").
+            let active = c.config.settings.icon_set.clone();
+            c.icons.set_active(active);
+            refresh();
+        });
+    }
     // Editor de atajos: capturar la acción a reasignar.
     {
         let capturing = capturing_action.clone();
@@ -1627,6 +1642,11 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         .iter()
         .map(|t| SharedString::from(t.as_str()))
         .collect();
+    let icon_sets: Vec<SharedString> = naygo_core::icon_set::IconSetCatalog::load(&c.config_dir)
+        .available()
+        .iter()
+        .map(|s| SharedString::from(s.id.as_str()))
+        .collect();
     SettingsVm {
         bar_position: if s.bar_position == BarPosition::Side {
             1
@@ -1655,8 +1675,10 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         paste_text_ext: s.paste_text_ext.clone().into(),
         language: s.language.as_str().into(),
         theme: s.theme.as_str().into(),
+        icon_set: s.icon_set.as_str().into(),
         languages: ModelRc::from(Rc::new(VecModel::from(languages))),
         themes: ModelRc::from(Rc::new(VecModel::from(themes))),
+        icon_sets: ModelRc::from(Rc::new(VecModel::from(icon_sets))),
     }
 }
 

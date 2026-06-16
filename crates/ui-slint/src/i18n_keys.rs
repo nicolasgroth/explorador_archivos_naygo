@@ -113,6 +113,7 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
     tr.set_cfg_theme(c.t("slint.cfg.theme").into());
     tr.set_cfg_language(c.t("slint.cfg.language").into());
+    tr.set_cfg_icon_set(c.t("slint.cfg.icon_set").into());
     tr.set_cfg_shortcuts_hint(c.t("slint.cfg.shortcuts_hint").into());
     tr.set_cfg_capturing(c.t("settings.shortcuts.capturing").into());
     tr.set_cfg_press(c.t("slint.cfg.press").into());

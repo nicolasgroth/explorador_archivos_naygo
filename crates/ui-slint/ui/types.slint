@@ -148,8 +148,10 @@ export struct SettingsVm {
     date-format: int,         // 0=ISO min, 1=ISO fecha, 2=DMY min, 3=DMY fecha
     language: string,         // código del idioma activo
     theme: string,            // id del tema activo
+    icon-set: string,         // id del set de íconos activo
     languages: [string],      // códigos disponibles
     themes: [string],         // ids disponibles
+    icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
 }
 
 // Una fila del editor de atajos: la clave estable de la acción, su nombre legible y el chord
