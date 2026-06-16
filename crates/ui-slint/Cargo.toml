@@ -1,5 +1,6 @@
-# Naygo — capa UI en Slint (render por software, sin GPU). Convive con naygo-ui (egui)
-# durante la migracion. Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+# Naygo — capa UI en Slint (render por software, sin GPU). Es la UI oficial: tras la
+# migración egui→Slint (F6) se retiró naygo-ui (egui) y este binario heredó el nombre
+# `naygo`. Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 [package]
 name = "naygo-ui-slint"
 version.workspace = true
@@ -8,7 +9,7 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "naygo-slint"
+name = "naygo"
 path = "src/main.rs"
 
 [dependencies]
