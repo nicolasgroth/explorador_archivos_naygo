@@ -108,6 +108,10 @@ pub struct WorkspaceCtrl {
     /// El atajo "editar ruta" (Ctrl+L / F4) pidió editar este panel. La UI lo lee con
     /// `take_edit_path_request` para abrir el editor de la path-bar.
     pub edit_path_requested: Option<PaneId>,
+    /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
+    /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
+    /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
+    pub icons: crate::icons::IconCache,
 }
 
 /// Estado del menú contextual abierto.
@@ -132,9 +136,12 @@ impl WorkspaceCtrl {
         let id = ws.add_pane(PanePurpose::Files, start.clone());
         ws.layout = SerializableDockLayout::single(id);
         ws.set_active(id);
+        let config = crate::config_ctrl::ConfigCtrl::new(config_dir.clone());
+        let icons =
+            crate::icons::IconCache::new(config.settings.icon_set.clone(), config_dir.clone());
         let mut c = WorkspaceCtrl {
             ws,
-            config: crate::config_ctrl::ConfigCtrl::new(config_dir.clone()),
+            config,
             listings: HashMap::new(),
             trees: HashMap::new(),
             tree_listings: HashMap::new(),
@@ -159,6 +166,7 @@ impl WorkspaceCtrl {
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
             edit_path_requested: None,
+            icons,
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -432,18 +440,28 @@ impl WorkspaceCtrl {
     /// Filas a pintar del panel `id` (marca las cortadas para atenuarlas y las recién
     /// aparecidas para resaltarlas durante `highlight_secs` segundos).
     pub fn rows_of(
-        &self,
+        &mut self,
         id: PaneId,
         highlight_secs: u64,
         now: std::time::Instant,
     ) -> Vec<PlainRow> {
         let date_format = self.config.settings.date_format;
         let tz = naygo_platform::time::local_utc_offset_secs();
-        match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+        // Préstamos disjuntos: `ops`/`watchers` (lectura) y `icons` (mutable para cachear) son
+        // campos distintos; al destructurar `self` el borrow checker los separa.
+        let WorkspaceCtrl {
+            ws,
+            ops,
+            watchers,
+            icons,
+            ..
+        } = self;
+        match ws.pane(id).and_then(|p| p.files.as_ref()) {
             Some(f) => rows_from_view(
                 f,
-                &|p| self.ops.is_cut(p),
-                &|p| self.watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                &|p| ops.is_cut(p),
+                &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                &mut |e| icons.get(naygo_core::icon_kind::icon_key_for(e)),
                 date_format,
                 tz,
             ),

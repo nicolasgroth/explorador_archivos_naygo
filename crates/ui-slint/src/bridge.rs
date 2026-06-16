@@ -22,6 +22,9 @@ pub struct PlainRow {
     pub cut: bool,
     /// El ítem apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     pub highlight: bool,
+    /// Ícono de color por tipo, ya decodificado y cacheado (6A). Lo resuelve el `icon_of`
+    /// que pasa el controlador (consulta el `IconCache` por la clave del entry).
+    pub icon: slint::Image,
 }
 
 /// Construye las filas a pintar desde el estado del panel: usa los índices de vista
@@ -32,6 +35,7 @@ pub fn rows_from_view(
     f: &FilePaneState,
     is_cut: &dyn Fn(&std::path::Path) -> bool,
     is_fresh: &dyn Fn(&std::path::Path) -> bool,
+    icon_of: &mut dyn FnMut(&naygo_core::fs_model::Entry) -> slint::Image,
     date_format: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
 ) -> Vec<PlainRow> {
@@ -60,6 +64,7 @@ pub fn rows_from_view(
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
                 highlight: is_fresh(&e.path),
+                icon: icon_of(e),
             })
         })
         .collect()
@@ -302,6 +307,7 @@ mod tests {
             &f,
             &|_| false,
             &|_| false,
+            &mut |_| slint::Image::default(),
             naygo_core::format::DateFormat::IsoMinute,
             0,
         );
@@ -323,6 +329,7 @@ mod tests {
             &f,
             &|p| p.ends_with("a.txt"),
             &|_| false,
+            &mut |_| slint::Image::default(),
             naygo_core::format::DateFormat::IsoMinute,
             0,
         );
@@ -336,6 +343,7 @@ mod tests {
             &f,
             &|_| false,
             &|_| false,
+            &mut |_| slint::Image::default(),
             naygo_core::format::DateFormat::IsoMinute,
             0
         )

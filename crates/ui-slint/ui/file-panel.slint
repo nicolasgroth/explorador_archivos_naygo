@@ -200,12 +200,26 @@ export component FilePanel inherits FocusScope {
                         padding-left: 6px;
                         // Atenuar las filas cortadas (Ctrl+X) hasta pegar.
                         opacity: row.cut ? 0.45 : 1.0;
-                        Text {
-                            text: (row.is-dir ? "📁 " : "") + row.name;
-                            color: row.is-dir ? Theme.highlight : Theme.text;
-                            vertical-alignment: center;
+                        // Nombre con su ícono de color a la izquierda (6A). El ícono ya viene
+                        // decodificado y cacheado desde Rust (slint::Image): pintarlo cuesta lo
+                        // mismo que un glifo, no se re-rasteriza por frame.
+                        HorizontalLayout {
                             horizontal-stretch: 50;
-                            overflow: elide;
+                            spacing: 6px;
+                            Image {
+                                source: row.icon;
+                                width: 16px;
+                                height: 16px;
+                                vertical-alignment: center;
+                                image-rendering: smooth;
+                            }
+                            Text {
+                                text: row.name;
+                                color: row.is-dir ? Theme.highlight : Theme.text;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
                         }
                         Text {
                             text: row.ext;

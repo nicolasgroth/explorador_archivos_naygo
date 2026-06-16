@@ -107,6 +107,39 @@ pub fn bytes_for(set: IconSet, key: IconKey) -> &'static [u8] {
         .unwrap_or(&[])
 }
 
+/// Mapea un id de set embebido (`flat`/`fluent`/`mono`) a su enum; cualquier otro id
+/// (un pack suelto del usuario) cae a `Flat` para el fallback embebido.
+pub fn embedded_set(id: &str) -> IconSet {
+    match id {
+        "fluent" => IconSet::Fluent,
+        "mono" => IconSet::Mono,
+        _ => IconSet::Flat,
+    }
+}
+
+/// Bytes PNG del ícono `key` para un set identificado por `set_id`, owned:
+/// - sets embebidos (`flat`/`fluent`/`mono`) → de los assets compilados.
+/// - cualquier otro id → pack suelto del usuario en `<config_dir>/icons/<id>/<name>.png`,
+///   con fallback al `unknown` embebido (flat) si el archivo falta o es ilegible.
+///
+/// Esta es la resolución compartida por las dos UIs (egui y Slint): centralizar acá evita
+/// duplicar la lógica de "embebido vs pack suelto" en cada capa. No falla: siempre devuelve
+/// algún PNG válido (el fallback embebido nunca está vacío).
+pub fn resolve_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
+    let builtin = matches!(set_id, "flat" | "fluent" | "mono");
+    if builtin {
+        return bytes_for(embedded_set(set_id), key).to_vec();
+    }
+    let path = config_dir
+        .join("icons")
+        .join(set_id)
+        .join(format!("{}.png", file_name(key)));
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => bytes_for(IconSet::Flat, IconKey::Unknown).to_vec(),
+    }
+}
+
 /// Todas las claves que la app pinta (para precargar el atlas).
 pub fn all_keys() -> Vec<IconKey> {
     use FileCategory::*;

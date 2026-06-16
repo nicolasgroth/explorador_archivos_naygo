@@ -11,6 +11,8 @@ export struct RowData {
     cut: bool,
     // Apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     highlight: bool,
+    // Ícono de color por tipo, ya decodificado y cacheado en Rust (6A).
+    icon: image,
 }
 
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.

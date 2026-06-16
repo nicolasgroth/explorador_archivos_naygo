@@ -198,7 +198,8 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            let c = ctrl.borrow();
+            // `borrow_mut` porque `rows_of` necesita mutar el IconCache (decodifica on-demand).
+            let mut c = ctrl.borrow_mut();
             let active = c.active_id();
             let hl_secs = c.highlight_secs();
             let hl_now = std::time::Instant::now();
@@ -1725,6 +1726,7 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         focused: r.focused,
         cut: r.cut,
         highlight: r.highlight,
+        icon: r.icon,
     }
 }
 
