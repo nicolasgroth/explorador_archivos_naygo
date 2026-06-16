@@ -67,16 +67,29 @@ Convert-LogoToBmp $wizLarge 164 314
 Convert-LogoToBmp $wizSmall 55 58
 Write-Host "Imagenes del asistente generadas."
 
-# --- 6. Instalador Inno (opcional): solo si ISCC.exe esta disponible ---
-$iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-if ($null -eq $iscc) {
-    Write-Warning "Inno Setup (ISCC.exe) no encontrado en PATH."
+# --- 6. Instalador Inno (opcional): usa ISCC.exe del PATH o de la ruta estandar ---
+# Busca ISCC.exe primero en el PATH; si no, en las ubicaciones tipicas de Inno Setup 6
+# (instalacion por defecto, 64 y 32 bits). Asi no hace falta tenerlo en el PATH.
+$isccPath = $null
+$fromPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+if ($null -ne $fromPath) {
+    $isccPath = $fromPath.Source
+} else {
+    foreach ($cand in @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe"
+    )) {
+        if (Test-Path $cand) { $isccPath = $cand; break }
+    }
+}
+if ($null -eq $isccPath) {
+    Write-Warning "Inno Setup (ISCC.exe) no encontrado (ni en PATH ni en las rutas estandar)."
     Write-Warning "Se genero solo el ZIP portable. Para el instalador, instala Inno Setup:"
     Write-Warning "  https://jrsoftware.org/isdl.php"
     Write-Warning "y volve a correr este script."
 } else {
-    Write-Host "Generando instalador con Inno Setup..."
-    & $iscc.Source "/DMyAppVersion=$version" (Join-Path $repo "installer\naygo.iss")
+    Write-Host "Generando instalador con Inno Setup ($isccPath)..."
+    & $isccPath "/DMyAppVersion=$version" (Join-Path $repo "installer\naygo.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC fallo al compilar el instalador." }
     Write-Host "Instalador: $dist\Naygo-$version-setup.exe"
 }
