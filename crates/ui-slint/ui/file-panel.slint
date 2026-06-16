@@ -82,6 +82,7 @@ export component FilePanel inherits FocusScope {
     callback row-clicked(int, int);          // (pane-id, pos)
     callback row-double-clicked(int, int);
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
+    callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
     callback sort-by(int, string);           // (pane-id, columna) — legado (no usado por el header)
     callback sort-by-kind(int, int);         // (pane-id, kind) ordenar por columna dinámica
@@ -317,6 +318,18 @@ export component FilePanel inherits FocusScope {
                                     self.pressed-here = false;
                                     root.activate(root.pane-id);
                                     root.row-drag-out(root.pane-id);
+                                }
+                            }
+                            // RUBBER-BAND (6F): arrastrar desde una fila NO seleccionada selecciona
+                            // el rango entre la fila de inicio (i) y la de destino (i + Δfilas por
+                            // la y arrastrada; filas de 22px). Ctrl = aditivo. No pisa el OLE
+                            // (que sale de filas YA seleccionadas) ni el clic simple.
+                            if (ev.kind == PointerEventKind.move && self.pressed-here && !row.selected) {
+                                if (abs(self.mouse-y - self.press-y) > 6px) {
+                                    root.activate(root.pane-id);
+                                    root.rubber-band(
+                                        root.pane-id, i,
+                                        i + round((self.mouse-y - self.press-y) / 22px));
                                 }
                             }
                             if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {

@@ -151,6 +151,7 @@ export component AppWindow inherits Window {
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
+    callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     // El panel que está editando su ruta (-1 = ninguno), su texto y sus candidatos. Rust los
     // controla; el FilePanel correspondiente muestra el editor.
@@ -463,6 +464,7 @@ export component AppWindow inherits Window {
                         row-clicked(id, pos) => { root.row-clicked(id, pos); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
+                        rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         sort-by(id, col) => { root.sort-by(id, col); }
                         sort-by-kind(id, kind) => { root.sort-by-kind(id, kind); }

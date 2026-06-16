@@ -1528,6 +1528,25 @@ impl WorkspaceCtrl {
         false
     }
 
+    /// Selección por rectángulo (rubber-band, 6F): selecciona el rango inclusivo de posiciones
+    /// de vista [from_pos, to_pos] del panel `id`. `additive` (Ctrl) suma a la selección previa;
+    /// si no, la reemplaza. Reusa `FilePaneState::select_rect`. La UI calcula from/to por la `y`
+    /// del arrastre (filas de alto fijo).
+    pub fn select_rect_range(&mut self, id: PaneId, from_pos: i32, to_pos: i32, additive: bool) {
+        self.ws.set_active(id);
+        let Some(f) = self.ws.active_files_mut() else {
+            return;
+        };
+        let len = f.view_len() as i32;
+        if len == 0 {
+            return;
+        }
+        let lo = from_pos.min(to_pos).clamp(0, len - 1) as usize;
+        let hi = from_pos.max(to_pos).clamp(0, len - 1) as usize;
+        let positions: Vec<usize> = (lo..=hi).collect();
+        f.select_rect(&positions, additive);
+    }
+
     /// ¿Se abrió algo por doble-clic hace muy poco? (Para que los dos detectores no
     /// naveguen dos veces sobre el mismo gesto.)
     fn opened_recently(&self, now: std::time::Instant) -> bool {
@@ -1925,6 +1944,29 @@ mod tests {
         assert!(next.is_some(), "encadena a una fila válida");
         let req2 = c.take_rename_request().expect("chain reabre el editor");
         assert_eq!(req2.2, 0, "el chain selecciona el nombre sin extensión");
+    }
+
+    /// 6F: rubber-band. select_rect_range selecciona el rango inclusivo de filas; aditivo (Ctrl)
+    /// suma a lo ya seleccionado.
+    #[test]
+    fn rubber_band_selecciona_rango() {
+        let tmp = tempfile::tempdir().unwrap();
+        for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            std::fs::write(tmp.path().join(n), b"x").unwrap();
+        }
+        let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.active_id().unwrap();
+        // Rectángulo de la fila 0 a la 2 (inclusive) → 3 seleccionadas.
+        c.select_rect_range(id, 0, 2, false);
+        let sel = c.ws.active_files().unwrap().selected.len();
+        assert_eq!(sel, 3);
+        // Aditivo: sumar la fila 3 conserva las anteriores → 4.
+        c.select_rect_range(id, 3, 3, true);
+        assert_eq!(c.ws.active_files().unwrap().selected.len(), 4);
+        // No-aditivo: reemplaza con una sola.
+        c.select_rect_range(id, 1, 1, false);
+        assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
     }
 
     /// La path-bar: breadcrumbs de la carpeta del panel + autocompletado del editor.

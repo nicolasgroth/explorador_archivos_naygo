@@ -704,6 +704,18 @@ fn main() -> Result<(), slint::PlatformError> {
             let _ = naygo_platform::dnd::start_drag(&paths);
         });
     }
+    // Rubber-band (6F): selección por rectángulo arrastrando desde una fila no seleccionada.
+    // Ctrl (estado del controlador) hace la selección aditiva.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_rubber_band(move |id, from, to| {
+            let additive = ctrl.borrow().ctrl_down;
+            ctrl.borrow_mut()
+                .select_rect_range(PaneId(id as u64), from, to, additive);
+            sync_rows();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
