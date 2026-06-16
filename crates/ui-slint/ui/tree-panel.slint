@@ -33,12 +33,18 @@ export component TreePanel inherits Rectangle {
         }
         ListView {
             vertical-stretch: 1;
-            for n[i] in root.rows: Rectangle {
+            for n[i] in root.rows: row-rect := Rectangle {
                 height: 22px;
                 background: n.active ? Theme.selection-bg : (node-touch.has-hover ? Theme.row-alt-bg : transparent);
                 border-radius: 3px;
+                // Sangría + ancho de la zona del chevron (los primeros 16px tras la sangría).
+                // El clic dentro de esa zona expande/colapsa; fuera, navega. Antes había DOS
+                // TouchAreas (chevron + fila): el de la fila, declarado último, quedaba ENCIMA y
+                // se tragaba el clic del chevron → el árbol nunca expandía. Ahora es UN solo
+                // TouchArea que decide por la x del clic.
+                property <length> indent: 2px + n.depth * 14px;
                 HorizontalLayout {
-                    padding-left: 2px + n.depth * 14px;
+                    padding-left: row-rect.indent;
                     spacing: 2px;
                     // Chevron (o hueco si no tiene hijos).
                     Rectangle {
@@ -51,25 +57,6 @@ export component TreePanel inherits Rectangle {
                             font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
-                        }
-                        // El `clicked` de un TouchArea DENTRO de un ListView NO se dispara bajo
-                        // winit/software (el Flickable se traga press/release). Detectamos el
-                        // clic a mano con pointer-event (igual que las filas del file-panel).
-                        chev-touch := TouchArea {
-                            property <bool> pressed-here: false;
-                            pointer-event(ev) => {
-                                if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
-                                    self.pressed-here = true;
-                                }
-                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
-                                    self.pressed-here = false;
-                                    root.focus-pane();
-                                    root.toggle(n.path);
-                                }
-                                if (ev.kind == PointerEventKind.cancel) {
-                                    self.pressed-here = false;
-                                }
-                            }
                         }
                     }
                     // Ícono de color cacheado (carpeta o disco) + nombre con sufijo de estado.
@@ -103,6 +90,9 @@ export component TreePanel inherits Rectangle {
                         }
                     }
                 }
+                // UN TouchArea por fila (el `clicked` no se dispara dentro de un ListView bajo
+                // winit/software; detectamos press+release con pointer-event). Decide por la x:
+                // clic en la zona del chevron (con hijos) → toggle; resto → navegar.
                 node-touch := TouchArea {
                     property <bool> pressed-here: false;
                     pointer-event(ev) => {
@@ -112,7 +102,11 @@ export component TreePanel inherits Rectangle {
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
                             self.pressed-here = false;
                             root.focus-pane();
-                            root.navigate(n.path);
+                            if (n.has-children && self.mouse-x >= row-rect.indent && self.mouse-x < row-rect.indent + 16px) {
+                                root.toggle(n.path);
+                            } else {
+                                root.navigate(n.path);
+                            }
                         }
                         if (ev.kind == PointerEventKind.cancel) {
                             self.pressed-here = false;
