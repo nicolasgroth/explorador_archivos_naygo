@@ -484,7 +484,10 @@ fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
         }
         // Quitar un miembro del grupo: si quedan ≥2 sigue siendo Tabs (ajustando `active`);
         // si queda 1 se colapsa a Leaf; si queda 0 desaparece.
-        DockNode::Tabs { mut members, mut active } => {
+        DockNode::Tabs {
+            mut members,
+            mut active,
+        } => {
             members.retain(|m| *m != id);
             match members.len() {
                 0 => None,
@@ -838,7 +841,10 @@ mod tests {
             }),
         };
         l.set_active_tab(PaneId(3));
-        assert_eq!(l.tab_groups(), vec![(vec![PaneId(1), PaneId(2), PaneId(3)], 2)]);
+        assert_eq!(
+            l.tab_groups(),
+            vec![(vec![PaneId(1), PaneId(2), PaneId(3)], 2)]
+        );
     }
 
     #[test]
@@ -907,13 +913,25 @@ mod tests {
             },
         )];
         // Centro (50,50) → Center.
-        assert_eq!(drop_hit(&panes, 50.0, 50.0), Some((PaneId(1), DropZone::Center)));
+        assert_eq!(
+            drop_hit(&panes, 50.0, 50.0),
+            Some((PaneId(1), DropZone::Center))
+        );
         // Cerca del borde izquierdo (5,50) → Left.
-        assert_eq!(drop_hit(&panes, 5.0, 50.0), Some((PaneId(1), DropZone::Left)));
+        assert_eq!(
+            drop_hit(&panes, 5.0, 50.0),
+            Some((PaneId(1), DropZone::Left))
+        );
         // Cerca del borde superior (50,5) → Top.
-        assert_eq!(drop_hit(&panes, 50.0, 5.0), Some((PaneId(1), DropZone::Top)));
+        assert_eq!(
+            drop_hit(&panes, 50.0, 5.0),
+            Some((PaneId(1), DropZone::Top))
+        );
         // Cerca del borde derecho (95,50) → Right.
-        assert_eq!(drop_hit(&panes, 95.0, 50.0), Some((PaneId(1), DropZone::Right)));
+        assert_eq!(
+            drop_hit(&panes, 95.0, 50.0),
+            Some((PaneId(1), DropZone::Right))
+        );
         // Fuera de todo panel → None.
         assert_eq!(drop_hit(&panes, 200.0, 200.0), None);
     }
@@ -941,7 +959,10 @@ mod tests {
             ),
         ];
         // Punto en el segundo panel, al centro.
-        assert_eq!(drop_hit(&panes, 150.0, 50.0), Some((PaneId(2), DropZone::Center)));
+        assert_eq!(
+            drop_hit(&panes, 150.0, 50.0),
+            Some((PaneId(2), DropZone::Center))
+        );
     }
 
     #[test]

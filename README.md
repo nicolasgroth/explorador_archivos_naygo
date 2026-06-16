@@ -25,9 +25,9 @@ multi-idioma y temas personalizables.
 
 ## Stack
 
-Rust + [egui](https://github.com/emilk/egui) (UI por GPU) + el crate oficial
-`windows` para la integración con el Shell de Windows. 100% open source, sin
-dependencias de pago.
+Rust + [Slint](https://slint.dev) (UI con renderizador por software, sin GPU) +
+el crate oficial `windows` para la integración con el Shell de Windows. 100% open
+source, sin dependencias de pago.
 
 ## Instalación / Build
 

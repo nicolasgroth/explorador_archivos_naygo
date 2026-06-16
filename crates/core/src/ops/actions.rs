@@ -82,7 +82,12 @@ mod tests {
     #[test]
     fn rename_arma_kind_rename() {
         let r = rename(PathBuf::from("a.txt"), "b.txt".into());
-        assert_eq!(r.kind, OpKind::Rename { new_name: "b.txt".into() });
+        assert_eq!(
+            r.kind,
+            OpKind::Rename {
+                new_name: "b.txt".into()
+            }
+        );
         assert_eq!(r.sources, vec![PathBuf::from("a.txt")]);
     }
 

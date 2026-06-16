@@ -112,8 +112,15 @@ pub fn run_plan(
             current: step.to.clone(),
         }));
 
-        let (record_path, outcome, bytes_added, counts_as_file) =
-            exec_step(step, kind, conflict, token, tx, conflict_rx, &mut applied_all);
+        let (record_path, outcome, bytes_added, counts_as_file) = exec_step(
+            step,
+            kind,
+            conflict,
+            token,
+            tx,
+            conflict_rx,
+            &mut applied_all,
+        );
         summary.bytes_done += bytes_added;
         if counts_as_file && matches!(outcome, OpOutcome::Done) {
             files_done += 1;
