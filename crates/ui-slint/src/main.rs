@@ -24,6 +24,7 @@ mod bridge;
 mod config_ctrl;
 mod devices;
 mod i18n_keys;
+mod icons;
 mod keys;
 mod listing;
 mod ops_ctrl;

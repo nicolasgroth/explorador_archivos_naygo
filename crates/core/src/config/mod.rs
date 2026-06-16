@@ -22,7 +22,7 @@ pub enum BarPosition {
 }
 
 /// Qué set de íconos usa la app. Flat es el default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IconSet {
     /// Multicolor plano (default).
     Flat,
