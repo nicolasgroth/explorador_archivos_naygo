@@ -25,6 +25,41 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Cómo se muestra el tamaño en la columna. Configurable por el usuario.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SizeFormat {
+    /// Unidad automática legible (default): 512 B / 1.5 KB / 20.2 MB.
+    #[default]
+    Auto,
+    /// Siempre en bytes, con separadores de miles: "21.250.048".
+    Bytes,
+    /// Siempre en KB (1 decimal): "20.2 KB".
+    Kb,
+    /// Siempre en MB (1 decimal): "20.2 MB".
+    Mb,
+}
+
+/// Formatea `bytes` según `fmt`.
+pub fn format_size(bytes: u64, fmt: SizeFormat) -> String {
+    match fmt {
+        SizeFormat::Auto => human_size(bytes),
+        SizeFormat::Bytes => {
+            // Separador de miles con punto (convención es-CL).
+            let s = bytes.to_string();
+            let mut out = String::new();
+            for (i, c) in s.chars().rev().enumerate() {
+                if i > 0 && i % 3 == 0 {
+                    out.push('.');
+                }
+                out.push(c);
+            }
+            out.chars().rev().collect()
+        }
+        SizeFormat::Kb => format!("{:.1} KB", bytes as f64 / KB),
+        SizeFormat::Mb => format!("{:.1} MB", bytes as f64 / MB),
+    }
+}
+
 /// Cómo se muestran las fechas de las columnas (Modificado/Creado). El usuario lo elige en
 /// Configuración. Todas son legibles; difieren en precisión/estilo.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,6 +114,17 @@ pub fn format_time(local_epoch_secs: Option<i64>, fmt: DateFormat) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn size_format_variantes() {
+        assert_eq!(format_size(512, SizeFormat::Auto), "512 B");
+        assert_eq!(format_size(1536, SizeFormat::Auto), "1.5 KB");
+        assert_eq!(format_size(21_250_048, SizeFormat::Bytes), "21.250.048");
+        assert_eq!(format_size(1024 * 1024, SizeFormat::Kb), "1024.0 KB");
+        assert_eq!(format_size(1024 * 1024, SizeFormat::Mb), "1.0 MB");
+        // Caso chico de bytes: sin separador.
+        assert_eq!(format_size(512, SizeFormat::Bytes), "512");
+    }
 
     #[test]
     fn fecha_iso_minuto() {

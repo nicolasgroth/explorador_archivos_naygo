@@ -179,6 +179,9 @@ pub struct Settings {
     /// Formato de las columnas de fecha (Modificado/Creado). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub date_format: crate::format::DateFormat,
+    /// Formato de la columna de tamaño (Auto/Bytes/KB/MB). `#[serde(default)]` retro-compat.
+    #[serde(default)]
+    pub size_format: crate::format::SizeFormat,
     /// Caché de carpetas visitadas: nº máximo de carpetas recordadas en memoria
     /// (0 = desactivado). Volver a una carpeta cacheada pinta al instante y el
     /// listado real corre por detrás (stale-while-revalidate).
@@ -352,6 +355,7 @@ impl Default for Settings {
             close_to_tray: false,
             autostart: false,
             date_format: crate::format::DateFormat::IsoMinute,
+            size_format: crate::format::SizeFormat::Auto,
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
@@ -597,6 +601,7 @@ mod tests {
             close_to_tray: true,
             autostart: false,
             date_format: crate::format::DateFormat::DmyMinute,
+            size_format: crate::format::SizeFormat::Kb,
             cache_max_dirs: 12,
             column_width_mode: ColumnWidthMode::Auto,
             default_table: Some({
