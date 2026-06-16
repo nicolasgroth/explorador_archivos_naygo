@@ -70,6 +70,7 @@ export component ConfigWindow inherits Rectangle {
     callback set-paste-text-ext(string);
     callback set-language(string);
     callback set-theme(string);
+    callback set-date-format(int);
     // Atajos:
     callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
     callback shortcut-reset(string);     // reset de una acción
@@ -254,6 +255,14 @@ export component ConfigWindow inherits Rectangle {
                                         model: root.vm.languages;
                                         current-value: root.vm.language;
                                         selected => { root.set-language(self.current-value); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-date-format;
+                                    ComboBox {
+                                        model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
+                                        current-index: root.vm.date-format;
+                                        selected => { root.set-date-format(self.current-index); }
                                     }
                                 }
                             }

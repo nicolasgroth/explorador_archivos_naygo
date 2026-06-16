@@ -101,6 +101,10 @@ pub struct WorkspaceCtrl {
     /// Watchers de carpeta por panel (Fase 5A): refrescan el panel sin re-listar y resaltan los
     /// archivos recién aparecidos. La UI los arranca al navegar (tiene el waker de Slint).
     pub watchers: crate::watch::Watchers,
+    /// Último panel Files que estuvo activo. Cuando se activa un panel AUXILIAR (Árbol,
+    /// Favoritos…) y desde ahí se navega, la navegación va a ESTE panel (el que el usuario venía
+    /// usando), no al primer Files cualquiera. Ver `active_files_id`.
+    pub last_active_files: Option<PaneId>,
 }
 
 /// Estado del menú contextual abierto.
@@ -150,6 +154,7 @@ impl WorkspaceCtrl {
             context_menu: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
+            last_active_files: Some(id),
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -232,6 +237,12 @@ impl WorkspaceCtrl {
         // La sesión recién cargada ES el estado en disco: sembrar la huella para no
         // reescribir el mismo workspace.json en el primer tick.
         self.last_saved_fingerprint = Some(self.session_fingerprint());
+        // Sembrar el último Files activo con el activo restaurado (o el primer Files).
+        self.last_active_files = self
+            .ws
+            .active_id()
+            .filter(|a| self.ws.pane(*a).map(|p| p.purpose) == Some(PanePurpose::Files))
+            .or_else(|| self.ws.files_panes().first().copied());
     }
 
     /// Huella barata del estado persistible (lo que cambia entre sesiones que vale la pena
@@ -422,10 +433,16 @@ impl WorkspaceCtrl {
         highlight_secs: u64,
         now: std::time::Instant,
     ) -> Vec<PlainRow> {
+        let date_format = self.config.settings.date_format;
+        let tz = naygo_platform::time::local_utc_offset_secs();
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
-            Some(f) => rows_from_view(f, &|p| self.ops.is_cut(p), &|p| {
-                self.watchers.is_fresh_ro(id.0, p, highlight_secs, now)
-            }),
+            Some(f) => rows_from_view(
+                f,
+                &|p| self.ops.is_cut(p),
+                &|p| self.watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                date_format,
+                tz,
+            ),
             None => Vec::new(),
         }
     }
@@ -490,6 +507,11 @@ impl WorkspaceCtrl {
 
     pub fn set_active(&mut self, id: PaneId) {
         self.ws.set_active(id);
+        // Recordar el último panel Files activo, para que la navegación desde paneles
+        // auxiliares (Árbol/Favoritos) vaya al panel que el usuario venía usando.
+        if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Files) {
+            self.last_active_files = Some(id);
+        }
     }
 
     /// Agrega un panel Files dividiendo el leaf activo lado a lado (horizontal, el nuevo a la
@@ -516,7 +538,8 @@ impl WorkspaceCtrl {
                 self.ws.layout.swap_split_children(active, new_id);
             }
         }
-        self.ws.set_active(new_id);
+        // Vía self.set_active para que `last_active_files` apunte al nuevo panel Files.
+        self.set_active(new_id);
         self.start_listing(new_id, dir);
     }
 
@@ -549,10 +572,10 @@ impl WorkspaceCtrl {
                 }
             }
         }
-        // El panel nuevo queda activo, salvo que sea un panel "auxiliar" sin foco propio:
-        // mantener el foco en el Files mejora el flujo (el usuario sigue navegando). Pero
-        // por simplicidad y consistencia con add_pane_split, lo dejamos activo.
-        self.ws.set_active(new_id);
+        // El panel nuevo queda activo. Vía self.set_active: si es auxiliar (Árbol…),
+        // `last_active_files` NO cambia (sigue apuntando al Files que el usuario venía usando),
+        // que es justo lo que queremos para que el árbol navegue ese panel.
+        self.set_active(new_id);
     }
 
     // --- Acciones multi-panel (abrir en otro / swap / clonar) + selector 1..9 ---
@@ -828,7 +851,11 @@ impl WorkspaceCtrl {
     /// Info del inspector para el panel `id` (lee el Files ACTIVO, no el `id`: el
     /// inspector refleja el panel de archivos activo, sea cual sea su posición).
     pub fn inspector_info(&self) -> InspectorInfo {
-        inspector_info(self.ws.active_files())
+        inspector_info(
+            self.ws.active_files(),
+            self.config.settings.date_format,
+            naygo_platform::time::local_utc_offset_secs(),
+        )
     }
 
     /// Filas de favoritos (orden de usuario).
@@ -895,6 +922,13 @@ impl WorkspaceCtrl {
         if let Some(a) = active {
             if self.ws.pane(a).map(|p| p.purpose) == Some(PanePurpose::Files) {
                 return Some(a);
+            }
+        }
+        // El activo no es un panel Files (p. ej. el Árbol): usar el ÚLTIMO Files activo (el que
+        // el usuario venía usando), si todavía existe; si no, el primer Files que haya.
+        if let Some(last) = self.last_active_files {
+            if self.ws.pane(last).map(|p| p.purpose) == Some(PanePurpose::Files) {
+                return Some(last);
             }
         }
         self.ws.files_panes().first().copied()
@@ -1601,6 +1635,39 @@ mod tests {
             .rows_of(id, 8, std::time::Instant::now())
             .iter()
             .any(|r| r.name == "nuevo.txt"));
+    }
+
+    /// La navegación desde un panel auxiliar (Árbol) va al ÚLTIMO panel Files activo, no al
+    /// primero. Regresión del bug "clic en disco cambia el primer panel".
+    #[test]
+    fn navega_al_ultimo_files_activo_no_al_primero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let first = c.active_id().unwrap(); // primer Files
+        c.add_pane_split(); // segundo Files, queda activo
+        let second = c.active_id().unwrap();
+        assert_ne!(first, second);
+        // Agregar un Árbol y activarlo (simula clic en el panel Carpetas).
+        c.add_pane_of(PanePurpose::Tree);
+        let tree = c.active_id().unwrap();
+        c.set_active(tree);
+        // Navegar desde el árbol → debe ir al SEGUNDO Files (el último activo), no al primero.
+        c.navigate_active_to(sub.clone());
+        assert_eq!(
+            c.ws.pane(second)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone()),
+            Some(sub.clone())
+        );
+        assert_ne!(
+            c.ws.pane(first)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone()),
+            Some(sub)
+        );
     }
 
     /// F5B: si un panel quedó parado en una carpeta que desapareció (p. ej. se sacó el USB),

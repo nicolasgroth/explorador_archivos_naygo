@@ -176,6 +176,9 @@ pub struct Settings {
     /// Iniciar Naygo con Windows (entrada Run del registro). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub autostart: bool,
+    /// Formato de las columnas de fecha (Modificado/Creado). `#[serde(default)]` retro-compat.
+    #[serde(default)]
+    pub date_format: crate::format::DateFormat,
     /// Caché de carpetas visitadas: nº máximo de carpetas recordadas en memoria
     /// (0 = desactivado). Volver a una carpeta cacheada pinta al instante y el
     /// listado real corre por detrás (stale-while-revalidate).
@@ -348,6 +351,7 @@ impl Default for Settings {
             tray_enabled: true,
             close_to_tray: false,
             autostart: false,
+            date_format: crate::format::DateFormat::IsoMinute,
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
@@ -592,6 +596,7 @@ mod tests {
             tray_enabled: false,
             close_to_tray: true,
             autostart: false,
+            date_format: crate::format::DateFormat::DmyMinute,
             cache_max_dirs: 12,
             column_width_mode: ColumnWidthMode::Auto,
             default_table: Some({

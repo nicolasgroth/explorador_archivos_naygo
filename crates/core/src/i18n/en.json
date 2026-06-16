@@ -430,5 +430,6 @@
   "slint.drop.as_tab": "tab",
   "slint.cfg.autostart": "Start with Windows",
   "slint.tray.open": "Open",
-  "slint.tray.exit": "Exit"
+  "slint.tray.exit": "Exit",
+  "slint.cfg.date_format": "Date format"
 }

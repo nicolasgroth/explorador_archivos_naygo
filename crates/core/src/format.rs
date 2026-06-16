@@ -25,9 +25,86 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Cómo se muestran las fechas de las columnas (Modificado/Creado). El usuario lo elige en
+/// Configuración. Todas son legibles; difieren en precisión/estilo.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DateFormat {
+    /// "2026-06-15 18:48" (ISO, default — lo prefiere Nicolás).
+    #[default]
+    IsoMinute,
+    /// "2026-06-15" (solo fecha ISO).
+    IsoDate,
+    /// "15-06-2026 18:48" (día-mes-año + hora).
+    DmyMinute,
+    /// "15-06-2026" (solo fecha día-mes-año).
+    DmyDate,
+}
+
+/// Convierte segundos epoch UTC a (año, mes 1..12, día 1..31, hora, minuto). Algoritmo de
+/// fecha civil de Howard Hinnant (sin dependencias). Asume días de 86400s.
+fn civil_from_epoch(secs: i64) -> (i64, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let hour = (rem / 3600) as u32;
+    let minute = ((rem % 3600) / 60) as u32;
+    // Hinnant: días desde 1970-01-01 → fecha civil.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m, d, hour, minute)
+}
+
+/// Formatea un instante (segundos epoch, ya ajustados al huso local por el llamador) según
+/// `fmt`. Cadena vacía si no hay fecha. Puro y sin dependencias.
+pub fn format_time(local_epoch_secs: Option<i64>, fmt: DateFormat) -> String {
+    let Some(secs) = local_epoch_secs else {
+        return String::new();
+    };
+    let (y, mo, d, h, mi) = civil_from_epoch(secs);
+    match fmt {
+        DateFormat::IsoMinute => format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}"),
+        DateFormat::IsoDate => format!("{y:04}-{mo:02}-{d:02}"),
+        DateFormat::DmyMinute => format!("{d:02}-{mo:02}-{y:04} {h:02}:{mi:02}"),
+        DateFormat::DmyDate => format!("{d:02}-{mo:02}-{y:04}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fecha_iso_minuto() {
+        // 2021-01-01 00:00:00 UTC = 1609459200.
+        assert_eq!(
+            format_time(Some(1_609_459_200), DateFormat::IsoMinute),
+            "2021-01-01 00:00"
+        );
+    }
+
+    #[test]
+    fn fecha_variantes() {
+        // 1781481600 = 2026-06-15 00:00:00 UTC.
+        let t = 1_781_481_600;
+        assert_eq!(format_time(Some(t), DateFormat::IsoDate), "2026-06-15");
+        assert_eq!(format_time(Some(t), DateFormat::DmyDate), "15-06-2026");
+        assert_eq!(
+            format_time(Some(t), DateFormat::DmyMinute),
+            "15-06-2026 00:00"
+        );
+    }
+
+    #[test]
+    fn fecha_vacia_si_none() {
+        assert_eq!(format_time(None, DateFormat::IsoMinute), "");
+    }
 
     #[test]
     fn bytes_crudos() {

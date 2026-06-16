@@ -158,6 +158,19 @@ impl ConfigCtrl {
         }
     }
 
+    /// Formato de fecha de las columnas: 0=ISO aaaa-mm-dd hh:mm, 1=ISO solo fecha,
+    /// 2=dd-mm-aaaa hh:mm, 3=dd-mm-aaaa solo fecha.
+    pub fn set_date_format(&mut self, idx: i32) {
+        use naygo_core::format::DateFormat::*;
+        self.settings.date_format = match idx {
+            1 => IsoDate,
+            2 => DmyMinute,
+            3 => DmyDate,
+            _ => IsoMinute,
+        };
+        self.save();
+    }
+
     /// Plantilla de nombre para texto pegado.
     pub fn set_paste_text_name(&mut self, name: String) {
         self.settings.paste_text_name = name;

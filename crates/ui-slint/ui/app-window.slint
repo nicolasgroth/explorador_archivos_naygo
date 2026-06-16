@@ -220,6 +220,7 @@ export component AppWindow inherits Window {
     callback cfg-set-paste-text-ext(string);
     callback cfg-set-language(string);
     callback cfg-set-theme(string);
+    callback cfg-set-date-format(int);
     callback cfg-shortcut-capture(string);
     callback cfg-capture-key(string, bool, bool, bool);
     callback cfg-shortcut-reset(string);
@@ -549,6 +550,7 @@ export component AppWindow inherits Window {
         set-paste-text-ext(e) => { root.cfg-set-paste-text-ext(e); }
         set-language(l) => { root.cfg-set-language(l); }
         set-theme(t) => { root.cfg-set-theme(t); }
+        set-date-format(i) => { root.cfg-set-date-format(i); }
         shortcut-capture(k) => { root.cfg-shortcut-capture(k); }
         capture-key(txt, c, s, a) => { root.cfg-capture-key(txt, c, s, a); }
         shortcut-reset(k) => { root.cfg-shortcut-reset(k); }

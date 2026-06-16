@@ -52,8 +52,24 @@ export component TreePanel inherits Rectangle {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
+                        // El `clicked` de un TouchArea DENTRO de un ListView NO se dispara bajo
+                        // winit/software (el Flickable se traga press/release). Detectamos el
+                        // clic a mano con pointer-event (igual que las filas del file-panel).
                         chev-touch := TouchArea {
-                            clicked => { root.focus-pane(); root.toggle(n.path); }
+                            property <bool> pressed-here: false;
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                                    self.pressed-here = true;
+                                }
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
+                                    self.pressed-here = false;
+                                    root.focus-pane();
+                                    root.toggle(n.path);
+                                }
+                                if (ev.kind == PointerEventKind.cancel) {
+                                    self.pressed-here = false;
+                                }
+                            }
                         }
                     }
                     Text {
@@ -80,7 +96,20 @@ export component TreePanel inherits Rectangle {
                     }
                 }
                 node-touch := TouchArea {
-                    clicked => { root.focus-pane(); root.navigate(n.path); }
+                    property <bool> pressed-here: false;
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                            self.pressed-here = true;
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
+                            self.pressed-here = false;
+                            root.focus-pane();
+                            root.navigate(n.path);
+                        }
+                        if (ev.kind == PointerEventKind.cancel) {
+                            self.pressed-here = false;
+                        }
+                    }
                 }
             }
         }

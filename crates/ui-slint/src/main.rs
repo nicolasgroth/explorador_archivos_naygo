@@ -802,6 +802,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_cfg_set_bar_position, i32, set_bar_position);
     cfg_setter!(on_cfg_set_size_no_subdirs, bool, set_size_no_subdirs);
     cfg_setter!(on_cfg_set_autostart, bool, set_autostart);
+    cfg_setter!(on_cfg_set_date_format, i32, set_date_format);
     cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -1523,6 +1524,12 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         show_op_summary: s.show_op_summary,
         size_no_subdirs: s.size_no_subdirs,
         autostart: s.autostart,
+        date_format: match s.date_format {
+            naygo_core::format::DateFormat::IsoMinute => 0,
+            naygo_core::format::DateFormat::IsoDate => 1,
+            naygo_core::format::DateFormat::DmyMinute => 2,
+            naygo_core::format::DateFormat::DmyDate => 3,
+        },
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),

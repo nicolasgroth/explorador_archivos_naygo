@@ -32,6 +32,8 @@ pub fn rows_from_view(
     f: &FilePaneState,
     is_cut: &dyn Fn(&std::path::Path) -> bool,
     is_fresh: &dyn Fn(&std::path::Path) -> bool,
+    date_format: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
 ) -> Vec<PlainRow> {
     let view = f.view_indices();
     view.iter()
@@ -52,7 +54,7 @@ pub fn rows_from_view(
                 name: e.name.clone(),
                 ext,
                 size,
-                modified: fmt_time(e.modified),
+                modified: fmt_time(e.modified, date_format, tz_offset_secs),
                 is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
                 selected: f.selected.contains(&pos),
                 focused: f.focused == Some(pos),
@@ -63,14 +65,18 @@ pub fn rows_from_view(
         .collect()
 }
 
-/// Formato provisional de fecha (epoch en segundos), igual que la capa egui actual; el
-/// formato bonito es ortogonal a la migración.
-fn fmt_time(t: Option<std::time::SystemTime>) -> String {
+/// Formatea la fecha de modificación legible según el ajuste, ajustando al huso local
+/// (`tz_offset_secs`). Cadena vacía si no hay fecha.
+fn fmt_time(
+    t: Option<std::time::SystemTime>,
+    fmt: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+) -> String {
     use std::time::UNIX_EPOCH;
-    match t.and_then(|t| t.duration_since(UNIX_EPOCH).ok()) {
-        Some(d) => format!("{}", d.as_secs()),
-        None => String::new(),
-    }
+    let local = t
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64 + tz_offset_secs);
+    naygo_core::format::format_time(local, fmt)
 }
 
 // --- Inspector (propiedades del ítem enfocado del panel activo) ---
@@ -91,7 +97,11 @@ pub struct InspectorInfo {
 /// Construye la info del inspector desde el `FilePaneState` del panel Files activo.
 /// Sin foco → `InspectorInfo::default()` (present = false). El texto de `kind` es una
 /// CLAVE provisional (la traducción real llega con i18n en F6); aquí va literal.
-pub fn inspector_info(f: Option<&FilePaneState>) -> InspectorInfo {
+pub fn inspector_info(
+    f: Option<&FilePaneState>,
+    date_format: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+) -> InspectorInfo {
     let Some(e) = f.and_then(|f| f.focused_view_entry()) else {
         return InspectorInfo::default();
     };
@@ -110,8 +120,8 @@ pub fn inspector_info(f: Option<&FilePaneState>) -> InspectorInfo {
             Some(b) => naygo_core::format::human_size(b),
             None => String::new(),
         },
-        modified: fmt_time(e.modified),
-        created: fmt_time(e.created),
+        modified: fmt_time(e.modified, date_format, tz_offset_secs),
+        created: fmt_time(e.created, date_format, tz_offset_secs),
     }
 }
 
@@ -288,7 +298,13 @@ mod tests {
         f.entries = vec![mk("a.txt", false, Some(1024)), mk("dir", true, None)];
         // Ordenado por core: dirs_first → "dir" primero, "a.txt" después.
         f.select_single(0); // selecciona la 1ª de la vista
-        let rows = rows_from_view(&f, &|_| false, &|_| false);
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+        );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
         assert!(rows
@@ -303,23 +319,36 @@ mod tests {
     fn cut_marca_la_fila() {
         let mut f = FilePaneState::new(PathBuf::from("C:/x"));
         f.entries = vec![mk("a.txt", false, Some(1))];
-        let rows = rows_from_view(&f, &|p| p.ends_with("a.txt"), &|_| false);
+        let rows = rows_from_view(
+            &f,
+            &|p| p.ends_with("a.txt"),
+            &|_| false,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+        );
         assert!(rows[0].cut, "la fila cortada se marca");
     }
 
     #[test]
     fn vista_vacia_da_modelo_vacio() {
         let f = FilePaneState::new(PathBuf::from("C:/x"));
-        assert!(rows_from_view(&f, &|_| false, &|_| false).is_empty());
+        assert!(rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            naygo_core::format::DateFormat::IsoMinute,
+            0
+        )
+        .is_empty());
     }
 
     #[test]
     fn inspector_sin_foco_no_esta_presente() {
         let f = FilePaneState::new(PathBuf::from("C:/x"));
-        let info = inspector_info(Some(&f));
+        let info = inspector_info(Some(&f), naygo_core::format::DateFormat::IsoMinute, 0);
         assert!(!info.present);
         // Sin panel: tampoco presente.
-        assert!(!inspector_info(None).present);
+        assert!(!inspector_info(None, naygo_core::format::DateFormat::IsoMinute, 0).present);
     }
 
     #[test]
@@ -327,7 +356,7 @@ mod tests {
         let mut f = FilePaneState::new(PathBuf::from("C:/x"));
         f.entries = vec![mk("a.txt", false, Some(2048)), mk("dir", true, None)];
         f.select_single(0);
-        let info = inspector_info(Some(&f));
+        let info = inspector_info(Some(&f), naygo_core::format::DateFormat::IsoMinute, 0);
         assert!(info.present);
         // El foco lo mueve select_single; el nombre debe ser uno de los dos visibles.
         assert!(info.name == "a.txt" || info.name == "dir");
