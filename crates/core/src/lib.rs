@@ -28,6 +28,7 @@ pub mod ops;
 pub mod path_segments;
 pub mod preview;
 pub mod recent_dirs;
+pub mod rename;
 pub mod render_hint;
 pub mod sizing;
 pub mod sort;
