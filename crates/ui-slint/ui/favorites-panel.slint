@@ -52,6 +52,13 @@ export component FavoritesPanel inherits Rectangle {
             HorizontalLayout {
                 padding-left: 6px;
                 spacing: 4px;
+                Image {
+                    source: f.icon;
+                    width: 16px;
+                    height: 16px;
+                    vertical-alignment: center;
+                    image-rendering: smooth;
+                }
                 Text {
                     text: f.label;
                     color: Theme.highlight;
@@ -89,10 +96,19 @@ export component FavoritesPanel inherits Rectangle {
                 border-radius: 3px;
                 HorizontalLayout {
                     padding-left: 6px;
+                    spacing: 4px;
+                    Image {
+                        source: r.icon;
+                        width: 16px;
+                        height: 16px;
+                        vertical-alignment: center;
+                        image-rendering: smooth;
+                    }
                     Text {
                         text: r.label;
                         color: Theme.text;
                         vertical-alignment: center;
+                        horizontal-stretch: 1;
                         overflow: elide;
                     }
                 }

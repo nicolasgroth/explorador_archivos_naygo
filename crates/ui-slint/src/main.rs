@@ -1808,6 +1808,7 @@ fn to_nav_row(r: bridge::NavRow) -> NavRow {
     NavRow {
         label: SharedString::from(r.label.as_str()),
         path: SharedString::from(r.path.as_str()),
+        icon: r.icon,
     }
 }
 

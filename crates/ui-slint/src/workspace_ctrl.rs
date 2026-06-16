@@ -940,14 +940,16 @@ impl WorkspaceCtrl {
         )
     }
 
-    /// Filas de favoritos (orden de usuario).
-    pub fn favorite_rows(&self) -> Vec<NavRow> {
-        favorite_rows(&self.favorites)
+    /// Filas de favoritos (orden de usuario). Llevan el ícono de carpeta del set activo.
+    pub fn favorite_rows(&mut self) -> Vec<NavRow> {
+        let folder = self.icons.get(naygo_core::icon_kind::IconKey::Folder);
+        favorite_rows(&self.favorites, &folder)
     }
 
-    /// Filas de recientes (más nueva primero).
-    pub fn recent_rows(&self) -> Vec<NavRow> {
-        recent_rows(&self.recents)
+    /// Filas de recientes (más nueva primero). Llevan el ícono de carpeta del set activo.
+    pub fn recent_rows(&mut self) -> Vec<NavRow> {
+        let folder = self.icons.get(naygo_core::icon_kind::IconKey::Folder);
+        recent_rows(&self.recents, &folder)
     }
 
     /// Filas del historial de deshacer (validadas contra el disco).

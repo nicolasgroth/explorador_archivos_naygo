@@ -132,27 +132,31 @@ pub fn inspector_info(
 
 // --- Favoritos y recientes ---
 
-/// Fila de favorito/reciente (espejo de `NavRow` de Slint): etiqueta + ruta.
+/// Fila de favorito/reciente (espejo de `NavRow` de Slint): etiqueta + ruta + ícono. Favoritos
+/// y recientes son siempre carpetas, así que el ícono es el de carpeta del set activo (6B).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NavRow {
     pub label: String,
     pub path: String,
+    pub icon: slint::Image,
 }
 
-/// Favoritos en orden de usuario (índice 0 = Ctrl+1).
-pub fn favorite_rows(favs: &Favorites) -> Vec<NavRow> {
+/// Favoritos en orden de usuario (índice 0 = Ctrl+1). `folder_icon` es el ícono de carpeta
+/// ya cacheado (igual para todas las filas: comparten el mismo buffer).
+pub fn favorite_rows(favs: &Favorites, folder_icon: &slint::Image) -> Vec<NavRow> {
     favs.list()
         .iter()
         .map(|f| NavRow {
             label: f.label.clone(),
             path: f.path.display().to_string(),
+            icon: folder_icon.clone(),
         })
         .collect()
 }
 
 /// Recientes (los más recientes primero, según el orden que provea `RecentDirs`). La
 /// etiqueta es el nombre de la carpeta; la ruta completa va en `path` (tooltip/navegar).
-pub fn recent_rows(recents: &RecentDirs) -> Vec<NavRow> {
+pub fn recent_rows(recents: &RecentDirs, folder_icon: &slint::Image) -> Vec<NavRow> {
     recents
         .list()
         .iter()
@@ -162,6 +166,7 @@ pub fn recent_rows(recents: &RecentDirs) -> Vec<NavRow> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| p.display().to_string()),
             path: p.display().to_string(),
+            icon: folder_icon.clone(),
         })
         .collect()
 }
@@ -394,14 +399,14 @@ mod tests {
         use naygo_core::recent_dirs::RecentDirs;
         let mut favs = Favorites::new();
         favs.toggle(std::path::Path::new("D:/Empresas/ISGroth"));
-        let rows = favorite_rows(&favs);
+        let rows = favorite_rows(&favs, &slint::Image::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "ISGroth");
         assert!(rows[0].path.contains("ISGroth"));
 
         let mut recents = RecentDirs::new();
         recents.push(PathBuf::from("C:/Users/ng/Documents"));
-        let r = recent_rows(&recents);
+        let r = recent_rows(&recents, &slint::Image::default());
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].label, "Documents");
     }
