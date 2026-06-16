@@ -1020,6 +1020,27 @@ impl WorkspaceCtrl {
         recent_rows(&self.recents, &folder)
     }
 
+    /// Tira de unidades de disco para la toolbar (paridad con egui): una entrada por unidad,
+    /// etiqueta = letra (p. ej. "C:"), ícono de disco cacheado, ruta = raíz. Clic navega el
+    /// panel Files activo a la raíz. Se reconsulta al cambiar los dispositivos (USB).
+    pub fn drive_strip(&mut self) -> Vec<NavRow> {
+        let drives = naygo_platform::drives::drives();
+        drives
+            .into_iter()
+            .map(|d| {
+                let icon = self
+                    .icons
+                    .get(naygo_core::icon_kind::IconKey::Drive(d.kind));
+                NavRow {
+                    // Letra compacta de la unidad, sin la barra final ("C:\\" → "C:").
+                    label: d.label.trim_end_matches(['\\', '/']).to_string(),
+                    path: d.path.display().to_string(),
+                    icon,
+                }
+            })
+            .collect()
+    }
+
     /// Filas del historial de deshacer (validadas contra el disco).
     pub fn history_rows(&self) -> Vec<HistRow> {
         history_rows(&self.ops.undo_history)

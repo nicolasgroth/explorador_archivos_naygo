@@ -606,6 +606,16 @@ fn main() -> Result<(), slint::PlatformError> {
                                 ctrl.borrow_mut().start_listing(id, dir);
                             }
                         }
+                        // Refrescar la tira de unidades de la toolbar (se conectó/sacó un USB).
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let drives: Vec<NavRow> = ctrl
+                                .borrow_mut()
+                                .drive_strip()
+                                .into_iter()
+                                .map(to_nav_row)
+                                .collect();
+                            ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
+                        }
                     }
                     // Asegurar que cada panel Files vigile su carpeta actual (barato si nada
                     // cambió). Arranca/re-arranca watchers tras navegar/agregar/cerrar paneles.
@@ -960,6 +970,25 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     refresh_toolbar_icons();
+    // Vuelca la tira de unidades de disco a la toolbar. Se llama al arrancar, al cambiar el set
+    // de íconos (los íconos de disco cambian) y al cambiar los dispositivos (USB conectado/sacado).
+    let refresh_drives: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let drives: Vec<NavRow> = ctrl
+                .borrow_mut()
+                .drive_strip()
+                .into_iter()
+                .map(to_nav_row)
+                .collect();
+            ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
+        })
+    };
+    refresh_drives();
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));
@@ -1038,6 +1067,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
         ui.on_cfg_set_icon_set(move |id| {
             {
                 let mut c = ctrl.borrow_mut();
@@ -1046,8 +1076,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 let active = c.config.settings.icon_set.clone();
                 c.icons.set_active(active);
             }
-            // Repintar los íconos de la toolbar con el set nuevo (borrow ya liberado arriba).
+            // Repintar los íconos de la toolbar y de la tira de discos con el set nuevo.
             refresh_icons();
+            refresh_drives();
             refresh();
         });
     }
@@ -1213,6 +1244,21 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_nav_navigate(move |path| {
+            if ctrl
+                .borrow_mut()
+                .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    // Clic en una unidad de la tira de discos de la toolbar: navega el panel activo a su raíz.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_nav_drive(move |path| {
             if ctrl
                 .borrow_mut()
                 .navigate_active_to(std::path::PathBuf::from(path.as_str()))
