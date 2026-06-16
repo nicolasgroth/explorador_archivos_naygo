@@ -66,16 +66,33 @@ component ToolBtn inherits Rectangle {
     in property <string> tip;
     in property <length> btn-width: 34px;
     in property <bool> highlight: false;
+    // Ícono de acción cacheado (6B). Vacío = botón solo-texto (p. ej. el "+").
+    in property <image> icon;
+    // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
+    in property <bool> icon-only: false;
     callback clicked();
     width: root.btn-width;
     background: (touch.has-hover || root.highlight) ? Theme.selection-bg : Theme.row-bg;
     border-radius: 4px;
-    Text {
-        text: root.label;
-        color: white;
-        font-size: 12px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        alignment: center;
+        spacing: 4px;
+        padding-left: 4px;
+        padding-right: 4px;
+        if root.icon.width > 0: Image {
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            vertical-alignment: center;
+            image-rendering: smooth;
+        }
+        if !root.icon-only || root.icon.width == 0: Text {
+            text: root.label;
+            color: white;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -213,6 +230,15 @@ export component AppWindow inherits Window {
     // Estado del menú del botón "+" (elegir dirección de la división).
     property <bool> dir-menu-open: false;
 
+    // --- Íconos de acción de la toolbar (6B) ---
+    // Los setea Rust desde el IconCache al arrancar y al cambiar de set de íconos.
+    in property <image> ic-up;
+    in property <image> ic-panel;
+    in property <image> ic-swap;
+    in property <image> ic-clone;
+    in property <image> ic-tabs;
+    in property <image> ic-settings;
+
     // --- Ventana de configuración (Fase 4) ---
     in-out property <bool> config-open: false;
     in property <SettingsVm> settings-vm;
@@ -271,10 +297,13 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;
-                    btn-width: 46px;
+                    icon: root.ic-up;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 64px;
                     clicked => { root.go-up(); }
                 }
                 ToolBtn {
+                    // El "+" se queda solo-texto: es un glifo, no una acción con ícono propio.
                     label: "+";
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
@@ -283,32 +312,42 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-panel;
                     tip: Tr.toolbar-panel-tip;
-                    btn-width: 50px;
+                    icon: root.ic-panel;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     highlight: root.add-menu-open;
                     clicked => { root.add-menu-open = !root.add-menu-open; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-swap;
                     tip: Tr.toolbar-swap-tip;
-                    btn-width: 50px;
+                    icon: root.ic-swap;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.swap-panes(); }
                 }
                 ToolBtn {
                     label: Tr.toolbar-clone;
                     tip: Tr.toolbar-clone-tip;
-                    btn-width: 54px;
+                    icon: root.ic-clone;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 72px;
                     clicked => { root.clone-pane(); }
                 }
                 ToolBtn {
                     label: Tr.toolbar-tabs;
                     tip: Tr.toolbar-tabs-tip;
-                    btn-width: 50px;
+                    icon: root.ic-tabs;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.stack-pane(); }
                 }
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.cfg-title;
-                    btn-width: 76px;
+                    icon: root.ic-settings;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.config-open = true; }
                 }
                 Rectangle {

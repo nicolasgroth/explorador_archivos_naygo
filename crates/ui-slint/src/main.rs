@@ -806,6 +806,29 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     refresh_config_vm();
+    // Vuelca los íconos de acción de la toolbar desde el IconCache a la AppWindow. Se llama al
+    // arrancar y al cambiar el set de íconos. Decodifica una vez (cacheado): clonar es barato.
+    let refresh_toolbar_icons: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            use naygo_core::icon_kind::{ActionIcon, IconKey};
+            let mut c = ctrl.borrow_mut();
+            let ic = |c: &mut workspace_ctrl::WorkspaceCtrl, a: ActionIcon| {
+                c.icons.get(IconKey::Action(a))
+            };
+            ui.set_ic_up(ic(&mut c, ActionIcon::Up));
+            ui.set_ic_panel(ic(&mut c, ActionIcon::NewWindow));
+            ui.set_ic_swap(ic(&mut c, ActionIcon::SwapPanes));
+            ui.set_ic_clone(ic(&mut c, ActionIcon::ClonePath));
+            ui.set_ic_tabs(ic(&mut c, ActionIcon::AddPane));
+            ui.set_ic_settings(ic(&mut c, ActionIcon::Settings));
+        })
+    };
+    refresh_toolbar_icons();
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));
@@ -882,12 +905,17 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
         ui.on_cfg_set_icon_set(move |id| {
-            let mut c = ctrl.borrow_mut();
-            c.config.set_icon_set(id.to_string());
-            // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "flat").
-            let active = c.config.settings.icon_set.clone();
-            c.icons.set_active(active);
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_icon_set(id.to_string());
+                // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "flat").
+                let active = c.config.settings.icon_set.clone();
+                c.icons.set_active(active);
+            }
+            // Repintar los íconos de la toolbar con el set nuevo (borrow ya liberado arriba).
+            refresh_icons();
             refresh();
         });
     }
