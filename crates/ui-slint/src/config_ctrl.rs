@@ -179,6 +179,18 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Formato de la columna de tamaño: 0=Auto legible, 1=Bytes (miles), 2=KB, 3=MB.
+    pub fn set_size_format(&mut self, idx: i32) {
+        use naygo_core::format::SizeFormat::*;
+        self.settings.size_format = match idx {
+            1 => Bytes,
+            2 => Kb,
+            3 => Mb,
+            _ => Auto,
+        };
+        self.save();
+    }
+
     /// Plantilla de nombre para texto pegado.
     pub fn set_paste_text_name(&mut self, name: String) {
         self.settings.paste_text_name = name;

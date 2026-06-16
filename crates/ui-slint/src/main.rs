@@ -48,6 +48,10 @@ slint::include_modules!();
 /// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
 struct PaneModels {
     rows: Rc<VecModel<RowData>>,
+    /// Columnas visibles del panel Files (6C): se actualizan in situ como las filas.
+    columns: Rc<VecModel<ColumnVm>>,
+    /// TODAS las columnas (para el menú agregar/quitar) (6C).
+    col_menu: Rc<VecModel<ColumnToggleVm>>,
     tree: Rc<VecModel<TreeRow>>,
     favs: Rc<VecModel<NavRow>>,
     recents: Rc<VecModel<NavRow>>,
@@ -58,6 +62,8 @@ impl PaneModels {
     fn new() -> PaneModels {
         PaneModels {
             rows: Rc::new(VecModel::default()),
+            columns: Rc::new(VecModel::default()),
+            col_menu: Rc::new(VecModel::default()),
             tree: Rc::new(VecModel::default()),
             favs: Rc::new(VecModel::default()),
             recents: Rc::new(VecModel::default()),
@@ -221,7 +227,17 @@ fn main() -> Result<(), slint::PlatformError> {
                             .into_iter()
                             .map(to_row_data)
                             .collect();
-                        m.models_for(id).rows.set_vec(rows);
+                        let cols: Vec<ColumnVm> =
+                            c.columns_of(id).into_iter().map(to_column_vm).collect();
+                        let col_menu: Vec<ColumnToggleVm> = c
+                            .column_toggles_of(id)
+                            .into_iter()
+                            .map(to_column_toggle_vm)
+                            .collect();
+                        let pm = m.models_for(id);
+                        pm.rows.set_vec(rows);
+                        pm.columns.set_vec(cols);
+                        pm.col_menu.set_vec(col_menu);
                     }
                     Some(PanePurpose::Tree) => {
                         let rows: Vec<TreeRow> =
@@ -374,6 +390,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             purpose,
                             title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
                             rows: ModelRc::from(pm.rows.clone()),
+                            columns: ModelRc::from(pm.columns.clone()),
+                            col_menu: ModelRc::from(pm.col_menu.clone()),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -694,6 +712,42 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // Ordenar por columna dinámica (header de columnas) (6C).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_sort_by_kind(move |_id, kind| {
+            ctrl.borrow_mut().sort_by_kind(kind);
+            sync_rows();
+        });
+    }
+    // Mostrar/ocultar una columna (menú "Columnas…") (6C).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_column_toggle(move |id, kind| {
+            ctrl.borrow_mut().column_toggle(PaneId(id as u64), kind);
+            sync_rows();
+        });
+    }
+    // Reordenar columnas (arrastrar el header) (6C).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_column_move(move |id, from, to| {
+            ctrl.borrow_mut().column_move(PaneId(id as u64), from, to);
+            sync_rows();
+        });
+    }
+    // Redimensionar una columna (arrastrar su borde) (6C).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_column_resize(move |id, kind, w| {
+            ctrl.borrow_mut().column_resize(PaneId(id as u64), kind, w);
+            sync_rows();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
@@ -853,6 +907,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_cfg_set_size_no_subdirs, bool, set_size_no_subdirs);
     cfg_setter!(on_cfg_set_autostart, bool, set_autostart);
     cfg_setter!(on_cfg_set_date_format, i32, set_date_format);
+    cfg_setter!(on_cfg_set_size_format, i32, set_size_format);
     cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -1698,6 +1753,12 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             naygo_core::format::DateFormat::DmyMinute => 2,
             naygo_core::format::DateFormat::DmyDate => 3,
         },
+        size_format: match s.size_format {
+            naygo_core::format::SizeFormat::Auto => 0,
+            naygo_core::format::SizeFormat::Bytes => 1,
+            naygo_core::format::SizeFormat::Kb => 2,
+            naygo_core::format::SizeFormat::Mb => 3,
+        },
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),
@@ -1766,17 +1827,38 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
 }
 
 fn to_row_data(r: bridge::PlainRow) -> RowData {
+    let cells: Vec<SharedString> = r
+        .cells
+        .iter()
+        .map(|c| SharedString::from(c.as_str()))
+        .collect();
     RowData {
         name: SharedString::from(r.name.as_str()),
-        ext: SharedString::from(r.ext.as_str()),
-        size: SharedString::from(r.size.as_str()),
-        modified: SharedString::from(r.modified.as_str()),
+        cells: ModelRc::from(Rc::new(VecModel::from(cells))),
         is_dir: r.is_dir,
         selected: r.selected,
         focused: r.focused,
         cut: r.cut,
         highlight: r.highlight,
         icon: r.icon,
+    }
+}
+
+fn to_column_vm(c: bridge::ColumnInfo) -> ColumnVm {
+    ColumnVm {
+        kind: c.kind,
+        label: SharedString::from(c.label.as_str()),
+        width: c.width,
+        align_right: c.align_right,
+    }
+}
+
+fn to_column_toggle_vm(c: bridge::ColumnToggle) -> ColumnToggleVm {
+    ColumnToggleVm {
+        kind: c.kind,
+        label: SharedString::from(c.label.as_str()),
+        visible: c.visible,
+        fixed: c.fixed,
     }
 }
 

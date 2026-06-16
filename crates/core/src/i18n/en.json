@@ -432,5 +432,10 @@
   "slint.cfg.autostart": "Start with Windows",
   "slint.tray.open": "Open",
   "slint.tray.exit": "Exit",
-  "slint.cfg.date_format": "Date format"
+  "slint.cfg.date_format": "Date format",
+  "slint.cfg.size_format": "Size format",
+  "slint.cfg.size_auto": "Automatic",
+  "slint.cfg.size_bytes": "Bytes",
+  "slint.cfg.size_kb": "Kilobytes",
+  "slint.cfg.size_mb": "Megabytes"
 }

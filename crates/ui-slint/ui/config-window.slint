@@ -72,6 +72,7 @@ export component ConfigWindow inherits Rectangle {
     callback set-theme(string);
     callback set-icon-set(string);
     callback set-date-format(int);
+    callback set-size-format(int);
     // Atajos:
     callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
     callback shortcut-reset(string);     // reset de una acción
@@ -272,6 +273,14 @@ export component ConfigWindow inherits Rectangle {
                                         model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
                                         current-index: root.vm.date-format;
                                         selected => { root.set-date-format(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-size-format;
+                                    ComboBox {
+                                        model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
+                                        current-index: root.vm.size-format;
+                                        selected => { root.set-size-format(self.current-index); }
                                     }
                                 }
                             }

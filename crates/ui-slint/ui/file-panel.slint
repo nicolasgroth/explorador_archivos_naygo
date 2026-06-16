@@ -5,24 +5,52 @@
 // binding. Cada panel emite sus callbacks con su `pane-id` para que el controller sepa
 // sobre cuál actuar; el panel activo lleva borde de acento.
 import { ListView, LineEdit } from "std-widgets.slint";
-import { RowData, PathSeg } from "types.slint";
+import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
 component HeaderCell inherits Rectangle {
     in property <string> text;
+    in property <bool> align-right: false;
     callback clicked();
+    // Redimensionar: `delta` en px arrastrados sobre el asa del borde derecho (6C).
+    callback resize(length);
     background: hcell-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
     Text {
         text: root.text;
         color: Theme.text-dim;
         font-weight: 700;
         vertical-alignment: center;
+        horizontal-alignment: root.align-right ? right : left;
         x: 6px;
+        width: parent.width - 12px;
     }
     hcell-touch := TouchArea {
+        // El asa de resize ocupa los últimos 6px del borde derecho; el resto ordena al hacer clic.
+        width: parent.width - 6px;
         clicked => {
             root.clicked();
+        }
+    }
+    // Asa de redimensionado: barra de 6px en el borde derecho. Arrastrar cambia el ancho.
+    resize-handle := TouchArea {
+        x: parent.width - 6px;
+        width: 6px;
+        mouse-cursor: ew-resize;
+        property <length> start-x;
+        property <bool> resizing: false;
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                self.resizing = true;
+                self.start-x = self.mouse-x;
+            }
+            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.resizing) {
+                self.resizing = false;
+                root.resize(self.mouse-x - self.start-x);
+            }
+            if (ev.kind == PointerEventKind.cancel) {
+                self.resizing = false;
+            }
         }
     }
 }
@@ -31,6 +59,8 @@ export component FilePanel inherits FocusScope {
     in property <int> pane-id;
     in property <bool> active;
     in property <[RowData]> rows;
+    in property <[ColumnVm]> columns;        // columnas visibles (orden/ancho/alineación) (6C)
+    in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
     in property <length> scroll-y;
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
@@ -47,7 +77,13 @@ export component FilePanel inherits FocusScope {
     callback row-double-clicked(int, int);
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
-    callback sort-by(int, string);           // (pane-id, columna)
+    callback sort-by(int, string);           // (pane-id, columna) — legado (no usado por el header)
+    callback sort-by-kind(int, int);         // (pane-id, kind) ordenar por columna dinámica
+    callback column-toggle(int, int);        // (pane-id, kind) mostrar/ocultar columna
+    callback column-move(int, int, int);     // (pane-id, from, to) reordenar columnas
+    callback column-resize(int, int, length);// (pane-id, kind, ancho) redimensionar
+    // Menú de columnas abierto (clic en "Columnas…"): muestra los toggles.
+    property <bool> col-menu-open: false;
     callback activate(int);                  // (pane-id) al interactuar
     callback key(string, bool, bool, bool);
 
@@ -153,34 +189,29 @@ export component FilePanel inherits FocusScope {
                     }
                 }
             }
+            // Encabezado dinámico: una HeaderCell por columna visible, con su ancho persistido.
+            // Clic = ordenar por esa columna; arrastrar el borde derecho = redimensionar (6C).
+            // El botón "≡" al final abre el menú de columnas (agregar/quitar).
             HorizontalLayout {
                 height: 22px;
-                HeaderCell {
-                    text: Tr.col-name;
-                    horizontal-stretch: 50;
+                for col[ci] in root.columns: HeaderCell {
+                    width: col.width;
+                    text: col.label;
+                    align-right: col.align-right;
                     clicked => {
-                        root.sort-by(root.pane-id, "name");
+                        root.sort-by-kind(root.pane-id, col.kind);
+                    }
+                    resize(delta) => {
+                        root.column-resize(root.pane-id, col.kind, col.width + delta);
                     }
                 }
-                HeaderCell {
-                    text: Tr.col-ext;
-                    horizontal-stretch: 15;
-                    clicked => {
-                        root.sort-by(root.pane-id, "ext");
-                    }
-                }
-                HeaderCell {
-                    text: Tr.col-size;
-                    horizontal-stretch: 15;
-                    clicked => {
-                        root.sort-by(root.pane-id, "size");
-                    }
-                }
-                HeaderCell {
-                    text: Tr.col-modified;
-                    horizontal-stretch: 20;
-                    clicked => {
-                        root.sort-by(root.pane-id, "modified");
+                // Botón de menú de columnas (al final, ancho fijo).
+                Rectangle {
+                    width: 24px;
+                    background: colbtn-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                    Text { text: "≡"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                    colbtn-touch := TouchArea {
+                        clicked => { root.col-menu-open = !root.col-menu-open; }
                     }
                 }
             }
@@ -200,13 +231,13 @@ export component FilePanel inherits FocusScope {
                         padding-left: 6px;
                         // Atenuar las filas cortadas (Ctrl+X) hasta pegar.
                         opacity: row.cut ? 0.45 : 1.0;
-                        // Nombre con su ícono de color a la izquierda (6A). El ícono ya viene
-                        // decodificado y cacheado desde Rust (slint::Image): pintarlo cuesta lo
-                        // mismo que un glifo, no se re-rasteriza por frame.
-                        HorizontalLayout {
-                            horizontal-stretch: 50;
+                        // Celdas dinámicas: una por columna visible, con su ancho. La columna Name
+                        // (kind 0) se pinta como ícono + nombre; las demás como texto de `cells[ci]`.
+                        // El ícono cacheado (6A) cuesta como un glifo: no se re-rasteriza por frame.
+                        for col[ci] in root.columns: HorizontalLayout {
+                            width: col.width;
                             spacing: 6px;
-                            Image {
+                            if col.kind == 0: Image {
                                 source: row.icon;
                                 width: 16px;
                                 height: 16px;
@@ -214,33 +245,15 @@ export component FilePanel inherits FocusScope {
                                 image-rendering: smooth;
                             }
                             Text {
-                                text: row.name;
-                                color: row.is-dir ? Theme.highlight : Theme.text;
+                                text: row.cells[ci];
+                                color: col.kind == 0
+                                    ? (row.is-dir ? Theme.highlight : Theme.text)
+                                    : Theme.text-dim;
                                 vertical-alignment: center;
+                                horizontal-alignment: col.align-right ? right : left;
                                 horizontal-stretch: 1;
                                 overflow: elide;
                             }
-                        }
-                        Text {
-                            text: row.ext;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            horizontal-stretch: 15;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: row.size;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            horizontal-stretch: 15;
-                            horizontal-alignment: right;
-                        }
-                        Text {
-                            text: row.modified;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            horizontal-stretch: 20;
-                            overflow: elide;
                         }
                     }
                     row-touch := TouchArea {
@@ -306,6 +319,47 @@ export component FilePanel inherits FocusScope {
                         double-clicked => {
                             root.row-double-clicked(root.pane-id, i);
                         }
+                    }
+                }
+            }
+        }
+        // Menú "Columnas…" (6C): flota arriba-derecha al pulsar el botón ≡ del header. Cada
+        // entrada togglea su columna; Name es fija (deshabilitada).
+        if root.col-menu-open: Rectangle {
+            x: parent.width - self.width - 8px;
+            y: 50px;
+            width: 180px;
+            height: menu-col.preferred-height + 8px;
+            background: Theme.panel-bg;
+            border-color: Theme.selection-bg;
+            border-width: 1px;
+            border-radius: 4px;
+            menu-col := VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+                for item in root.col-menu: Rectangle {
+                    height: 24px;
+                    background: item-touch.has-hover && !item.fixed ? Theme.selection-bg : transparent;
+                    border-radius: 3px;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: item.visible ? "✓" : "  ";
+                            color: Theme.highlight;
+                            width: 14px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: item.label;
+                            color: item.fixed ? Theme.text-dim : Theme.text;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    item-touch := TouchArea {
+                        enabled: !item.fixed;
+                        clicked => { root.column-toggle(root.pane-id, item.kind); }
                     }
                 }
             }

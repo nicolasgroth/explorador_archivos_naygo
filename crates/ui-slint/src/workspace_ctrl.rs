@@ -446,6 +446,7 @@ impl WorkspaceCtrl {
         now: std::time::Instant,
     ) -> Vec<PlainRow> {
         let date_format = self.config.settings.date_format;
+        let size_format = self.config.settings.size_format;
         let tz = naygo_platform::time::local_utc_offset_secs();
         // Préstamos disjuntos: `ops`/`watchers` (lectura) y `icons` (mutable para cachear) son
         // campos distintos; al destructurar `self` el borrow checker los separa.
@@ -462,11 +463,73 @@ impl WorkspaceCtrl {
                 &|p| ops.is_cut(p),
                 &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
                 &mut |e| icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                size_format,
                 date_format,
                 tz,
             ),
             None => Vec::new(),
         }
+    }
+
+    /// Etiqueta i18n de una columna (clave `col.*`).
+    fn column_label(&self, kind: naygo_core::columns::ColumnKind) -> String {
+        use naygo_core::columns::ColumnKind::*;
+        let key = match kind {
+            Name => "col.name",
+            Extension => "col.extension",
+            Size => "col.size",
+            Modified => "col.modified",
+            Created => "col.created",
+        };
+        self.config.t(key)
+    }
+
+    /// Columnas visibles del panel `id` (orden/etiqueta/ancho/alineación) para pintar el header
+    /// y repartir las celdas. Vacío si el panel no es Files. La etiqueta sale del i18n.
+    pub fn columns_of(&self, id: PaneId) -> Vec<crate::bridge::ColumnInfo> {
+        let label_of = |kind| self.column_label(kind);
+        match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+            Some(f) => crate::bridge::columns_info(f, &label_of),
+            None => Vec::new(),
+        }
+    }
+
+    /// TODAS las columnas del panel `id` (con su visibilidad) para el menú "Columnas…".
+    pub fn column_toggles_of(&self, id: PaneId) -> Vec<crate::bridge::ColumnToggle> {
+        let label_of = |kind| self.column_label(kind);
+        match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+            Some(f) => crate::bridge::column_toggles(f, &label_of),
+            None => Vec::new(),
+        }
+    }
+
+    /// Alterna la visibilidad de una columna del panel `id` (Name nunca se oculta). Persiste.
+    pub fn column_toggle(&mut self, id: PaneId, kind_int: i32) {
+        let kind = crate::bridge::column_kind_from_int(kind_int);
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.table.toggle_visible(kind);
+        }
+        self.maybe_persist_session();
+    }
+
+    /// Reordena la columna `from`→`to` (índices en el orden COMPLETO de columnas) del panel `id`.
+    pub fn column_move(&mut self, id: PaneId, from: i32, to: i32) {
+        if from < 0 || to < 0 {
+            return;
+        }
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.table.move_column(from as usize, to as usize);
+        }
+        self.maybe_persist_session();
+    }
+
+    /// Fija el ancho de una columna del panel `id` (clamp a MIN/MAX). Persiste.
+    pub fn column_resize(&mut self, id: PaneId, kind_int: i32, width: f32) {
+        let kind = crate::bridge::column_kind_from_int(kind_int);
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.table.set_width(kind, width);
+        }
+        self.maybe_persist_session();
     }
 
     /// Carpeta actual del panel `id` (para su path-bar).
@@ -1460,6 +1523,23 @@ impl WorkspaceCtrl {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Ordena el panel activo por la columna `kind_int` (0..4). Reusa `sort_key_of` para cubrir
+    /// las 5 columnas (incluida Creado), a diferencia del `on_sort_by` por string. Alterna
+    /// ascendente/descendente si ya estaba ordenado por esa clave.
+    pub fn sort_by_kind(&mut self, kind_int: i32) {
+        let key = naygo_core::columns::sort_key_of(crate::bridge::column_kind_from_int(kind_int));
+        if let Some(f) = self.ws.active_files_mut() {
+            if f.sort.key == key {
+                f.sort.ascending = !f.sort.ascending;
+            } else {
+                f.sort.key = key;
+                f.sort.ascending = true;
+            }
+            let spec = f.sort;
+            naygo_core::sort::sort_entries(&mut f.entries, &spec);
         }
     }
 

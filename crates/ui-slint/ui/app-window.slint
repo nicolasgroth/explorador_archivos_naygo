@@ -164,6 +164,10 @@ export component AppWindow inherits Window {
     callback path-edit-cancel(int);
     callback path-suggestion-clicked(int, string);
     callback sort-by(int, string);
+    callback sort-by-kind(int, int);      // (pane-id, kind) ordenar por columna dinámica
+    callback column-toggle(int, int);     // (pane-id, kind) mostrar/ocultar columna
+    callback column-move(int, int, int);  // (pane-id, from, to) reordenar columnas
+    callback column-resize(int, int, length); // (pane-id, kind, ancho) redimensionar
     callback activate(int);
     callback key(string, bool, bool, bool);
     callback split-drag(int, length, length);
@@ -260,6 +264,7 @@ export component AppWindow inherits Window {
     callback cfg-set-theme(string);
     callback cfg-set-icon-set(string);
     callback cfg-set-date-format(int);
+    callback cfg-set-size-format(int);
     callback cfg-shortcut-capture(string);
     callback cfg-capture-key(string, bool, bool, bool);
     callback cfg-shortcut-reset(string);
@@ -431,6 +436,8 @@ export component AppWindow inherits Window {
                         pane-id: p.id;
                         active: p.active;
                         rows: p.rows;
+                        columns: p.columns;
+                        col-menu: p.col-menu;
                         segments: p.segments;
                         editing: root.edit-pane == p.id;
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";
@@ -446,6 +453,10 @@ export component AppWindow inherits Window {
                         row-drag-out(id) => { root.row-drag-out(id); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         sort-by(id, col) => { root.sort-by(id, col); }
+                        sort-by-kind(id, kind) => { root.sort-by-kind(id, kind); }
+                        column-toggle(id, kind) => { root.column-toggle(id, kind); }
+                        column-move(id, from, to) => { root.column-move(id, from, to); }
+                        column-resize(id, kind, w) => { root.column-resize(id, kind, w); }
                         activate(id) => { root.activate(id); }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
                     }
@@ -614,6 +625,7 @@ export component AppWindow inherits Window {
         set-theme(t) => { root.cfg-set-theme(t); }
         set-icon-set(s) => { root.cfg-set-icon-set(s); }
         set-date-format(i) => { root.cfg-set-date-format(i); }
+        set-size-format(i) => { root.cfg-set-size-format(i); }
         shortcut-capture(k) => { root.cfg-shortcut-capture(k); }
         capture-key(txt, c, s, a) => { root.cfg-capture-key(txt, c, s, a); }
         shortcut-reset(k) => { root.cfg-shortcut-reset(k); }

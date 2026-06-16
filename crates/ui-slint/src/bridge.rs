@@ -12,9 +12,10 @@ use naygo_core::workspace::FilePaneState;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlainRow {
     pub name: String,
-    pub ext: String,
-    pub size: String,
-    pub modified: String,
+    /// Celdas PARALELAS a las columnas visibles (mismo índice/orden, 6C). La celda de Name lleva
+    /// el nombre (la UI la pinta como ícono+nombre); el resto son Extension/Size/Modified/Created.
+    /// Mantenerlas paralelas a `columns` hace trivial el índice en Slint (`cells[ci]`).
+    pub cells: Vec<String>,
     pub is_dir: bool,
     pub selected: bool,
     pub focused: bool,
@@ -27,38 +28,62 @@ pub struct PlainRow {
     pub icon: slint::Image,
 }
 
+/// Valor de texto de una celda para un entry y una columna (6C). Name se pinta aparte;
+/// aquí se cubren las demás. Size respeta `size_format`; las fechas, `date_format`+huso.
+pub fn cell_value(
+    e: &naygo_core::fs_model::Entry,
+    kind: naygo_core::columns::ColumnKind,
+    size_format: naygo_core::format::SizeFormat,
+    date_format: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+) -> String {
+    use naygo_core::columns::ColumnKind::*;
+    match kind {
+        Name => e.name.clone(),
+        Extension => e
+            .path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string(),
+        Size => match e.size {
+            Some(b) => naygo_core::format::format_size(b, size_format),
+            None => String::new(),
+        },
+        Modified => fmt_time(e.modified, date_format, tz_offset_secs),
+        Created => fmt_time(e.created, date_format, tz_offset_secs),
+    }
+}
+
 /// Construye las filas a pintar desde el estado del panel: usa los índices de vista
 /// CACHEADOS del core (filtrados+ordenados), y marca selección/foco por POSICIÓN DE
 /// VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las entries
 /// completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
+/// Las celdas siguen el orden de las columnas visibles del `TableState` (sin Name).
 pub fn rows_from_view(
     f: &FilePaneState,
     is_cut: &dyn Fn(&std::path::Path) -> bool,
     is_fresh: &dyn Fn(&std::path::Path) -> bool,
     icon_of: &mut dyn FnMut(&naygo_core::fs_model::Entry) -> slint::Image,
+    size_format: naygo_core::format::SizeFormat,
     date_format: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
 ) -> Vec<PlainRow> {
+    // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
+    let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
+        f.table.visible_columns().map(|c| c.kind).collect();
     let view = f.view_indices();
     view.iter()
         .enumerate()
         .filter_map(|(pos, &real)| {
             let e = f.entries.get(real)?;
-            let ext = e
-                .path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            let size = match e.size {
-                Some(b) => naygo_core::format::human_size(b),
-                None => String::new(),
-            };
+            let cells = cell_kinds
+                .iter()
+                .map(|k| cell_value(e, *k, size_format, date_format, tz_offset_secs))
+                .collect();
             Some(PlainRow {
                 name: e.name.clone(),
-                ext,
-                size,
-                modified: fmt_time(e.modified, date_format, tz_offset_secs),
+                cells,
                 is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
                 selected: f.selected.contains(&pos),
                 focused: f.focused == Some(pos),
@@ -66,6 +91,85 @@ pub fn rows_from_view(
                 highlight: is_fresh(&e.path),
                 icon: icon_of(e),
             })
+        })
+        .collect()
+}
+
+/// Datos de una columna visible para la UI (espejo de `ColumnVm` de Slint): qué es, su etiqueta
+/// traducida, su ancho y si se alinea a la derecha (Size). El orden es el visual del TableState.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnInfo {
+    pub kind: i32,
+    pub label: String,
+    pub width: f32,
+    pub align_right: bool,
+}
+
+/// Mapea `ColumnKind` a un entero estable para Slint (coincide con el orden del enum).
+pub fn column_kind_to_int(kind: naygo_core::columns::ColumnKind) -> i32 {
+    use naygo_core::columns::ColumnKind::*;
+    match kind {
+        Name => 0,
+        Extension => 1,
+        Size => 2,
+        Modified => 3,
+        Created => 4,
+    }
+}
+
+/// Inverso de `column_kind_to_int`. Desconocido → Name (no rompe).
+pub fn column_kind_from_int(i: i32) -> naygo_core::columns::ColumnKind {
+    use naygo_core::columns::ColumnKind::*;
+    match i {
+        1 => Extension,
+        2 => Size,
+        3 => Modified,
+        4 => Created,
+        _ => Name,
+    }
+}
+
+/// Columnas visibles del panel con su etiqueta i18n y alineación. `label_of` traduce la clave.
+pub fn columns_info(
+    f: &FilePaneState,
+    label_of: &dyn Fn(naygo_core::columns::ColumnKind) -> String,
+) -> Vec<ColumnInfo> {
+    use naygo_core::columns::ColumnKind;
+    f.table
+        .visible_columns()
+        .map(|c| ColumnInfo {
+            kind: column_kind_to_int(c.kind),
+            label: label_of(c.kind),
+            width: c.width,
+            align_right: c.kind == ColumnKind::Size,
+        })
+        .collect()
+}
+
+/// Una entrada del menú "Columnas…" (espejo de `ColumnToggleVm`): TODAS las columnas con su
+/// estado de visibilidad. Name es `fixed` (no se puede ocultar).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnToggle {
+    pub kind: i32,
+    pub label: String,
+    pub visible: bool,
+    pub fixed: bool,
+}
+
+/// Todas las columnas del panel (en su orden), para el menú de agregar/quitar.
+pub fn column_toggles(
+    f: &FilePaneState,
+    label_of: &dyn Fn(naygo_core::columns::ColumnKind) -> String,
+) -> Vec<ColumnToggle> {
+    use naygo_core::columns::ColumnKind;
+    f.table
+        .columns
+        .iter()
+        .map(|c| ColumnToggle {
+            kind: column_kind_to_int(c.kind),
+            label: label_of(c.kind),
+            visible: c.visible,
+            fixed: c.kind == ColumnKind::Name,
         })
         .collect()
 }
@@ -329,14 +433,16 @@ mod tests {
             &|_| false,
             &|_| false,
             &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
         );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
+        // "a.txt" tiene tamaño: alguna de sus celdas (la de Size) no está vacía.
         assert!(rows
             .iter()
-            .any(|r| r.name == "a.txt" && !r.is_dir && !r.size.is_empty()));
+            .any(|r| r.name == "a.txt" && !r.is_dir && r.cells.iter().any(|c| c.contains("KB"))));
         assert_eq!(rows.iter().filter(|r| r.selected).count(), 1);
         assert_eq!(rows.iter().filter(|r| r.focused).count(), 1);
         assert!(rows.iter().all(|r| !r.cut), "sin corte por defecto");
@@ -351,6 +457,7 @@ mod tests {
             &|p| p.ends_with("a.txt"),
             &|_| false,
             &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
         );
@@ -365,6 +472,7 @@ mod tests {
             &|_| false,
             &|_| false,
             &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0
         )

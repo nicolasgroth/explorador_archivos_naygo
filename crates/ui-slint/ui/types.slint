@@ -2,9 +2,8 @@
 // Las structs se declaran ANTES de quien las usa (PaneVm las referencia todas).
 export struct RowData {
     name: string,
-    ext: string,
-    size: string,
-    modified: string,
+    // Celdas de las columnas visibles distintas de Name, en orden visual (6C).
+    cells: [string],
     is-dir: bool,
     selected: bool,
     focused: bool,
@@ -13,6 +12,22 @@ export struct RowData {
     highlight: bool,
     // Ícono de color por tipo, ya decodificado y cacheado en Rust (6A).
     icon: image,
+}
+
+// Una columna visible de la tabla (6C): qué es, su etiqueta, ancho y alineación.
+export struct ColumnVm {
+    kind: int,             // 0=Name 1=Extension 2=Size 3=Modified 4=Created
+    label: string,
+    width: length,
+    align-right: bool,     // Size se alinea a la derecha
+}
+
+// Una entrada del menú "Columnas…" (6C): TODAS las columnas con su estado de visibilidad.
+export struct ColumnToggleVm {
+    kind: int,
+    label: string,
+    visible: bool,
+    fixed: bool,           // Name no se puede ocultar (toggle deshabilitado)
 }
 
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
@@ -149,6 +164,7 @@ export struct SettingsVm {
     paste-text-name: string,
     paste-text-ext: string,
     date-format: int,         // 0=ISO min, 1=ISO fecha, 2=DMY min, 3=DMY fecha
+    size-format: int,         // 0=Auto, 1=Bytes, 2=KB, 3=MB
     language: string,         // código del idioma activo
     theme: string,            // id del tema activo
     icon-set: string,         // id del set de íconos activo
@@ -190,6 +206,8 @@ export struct PaneVm {
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
     rows: [RowData],          // Files
+    columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
+    col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)
