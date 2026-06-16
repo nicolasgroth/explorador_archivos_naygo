@@ -105,6 +105,9 @@ pub struct WorkspaceCtrl {
     /// Favoritos…) y desde ahí se navega, la navegación va a ESTE panel (el que el usuario venía
     /// usando), no al primer Files cualquiera. Ver `active_files_id`.
     pub last_active_files: Option<PaneId>,
+    /// El atajo "editar ruta" (Ctrl+L / F4) pidió editar este panel. La UI lo lee con
+    /// `take_edit_path_request` para abrir el editor de la path-bar.
+    pub edit_path_requested: Option<PaneId>,
 }
 
 /// Estado del menú contextual abierto.
@@ -155,6 +158,7 @@ impl WorkspaceCtrl {
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
+            edit_path_requested: None,
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
@@ -454,6 +458,66 @@ impl WorkspaceCtrl {
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.display().to_string())
             .unwrap_or_default()
+    }
+
+    /// Segmentos clicables (breadcrumbs) de la carpeta del panel `id`: (etiqueta, ruta).
+    pub fn path_segments_of(&self, id: PaneId) -> Vec<(String, String)> {
+        let Some(dir) = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return Vec::new();
+        };
+        naygo_core::path_segments::split_segments(&dir)
+            .into_iter()
+            .map(|(label, path)| (label, path.display().to_string()))
+            .collect()
+    }
+
+    /// Autocompletado del editor de ruta: dado el `buffer` tecleado, lista las subcarpetas de la
+    /// carpeta padre que matchean el último segmento (case-insensitive). Lista superficial,
+    /// acotada a 50, en el hilo de UI (un read_dir somero es barato).
+    pub fn path_autocomplete(&self, buffer: &str) -> Vec<String> {
+        let (parent, prefix) = naygo_core::path_segments::split_edit_buffer(buffer);
+        if parent.is_empty() {
+            return Vec::new();
+        }
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&parent) {
+            for entry in rd.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                    if names.len() >= 200 {
+                        break;
+                    }
+                }
+            }
+        }
+        names.sort_by_key(|n| n.to_lowercase());
+        naygo_core::path_segments::filter_candidates(&names, &prefix, 50)
+    }
+
+    /// Consume la petición de "editar ruta" (Ctrl+L / F4), si la hay. La UI la llama tras
+    /// procesar una tecla para abrir el editor de la path-bar del panel devuelto.
+    pub fn take_edit_path_request(&mut self) -> Option<PaneId> {
+        self.edit_path_requested.take()
+    }
+
+    /// Navega el panel `id` a `dir` (clic en un breadcrumb / commit del editor). Reusa la
+    /// lógica de navegación del panel activo, pero dirigida a `id`.
+    pub fn navigate_pane_to(&mut self, id: PaneId, dir: PathBuf) -> bool {
+        if self.ws.pane(id).and_then(|p| p.files.as_ref()).is_none() {
+            return false;
+        }
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dir.clone());
+        }
+        self.recents.push(dir.clone());
+        self.start_listing(id, dir.clone());
+        self.sync_trees_active(dir);
+        true
     }
 
     pub fn active_id(&self) -> Option<PaneId> {
@@ -1483,6 +1547,10 @@ impl WorkspaceCtrl {
             Action::NewDir => self.op_new(true),
             Action::Rename => self.op_rename(),
             Action::Undo => return self.op_undo_last(),
+            // Editar la ruta del panel activo (Ctrl+L / F4): la UI abre el editor de la path-bar.
+            Action::EditPath => {
+                self.edit_path_requested = self.active_files_id();
+            }
             _ => {}
         }
         false
@@ -1635,6 +1703,28 @@ mod tests {
             .rows_of(id, 8, std::time::Instant::now())
             .iter()
             .any(|r| r.name == "nuevo.txt"));
+    }
+
+    /// La path-bar: breadcrumbs de la carpeta del panel + autocompletado del editor.
+    #[test]
+    fn pathbar_segmentos_y_autocompletado() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Alpha")).unwrap();
+        std::fs::create_dir(tmp.path().join("alfajor")).unwrap();
+        std::fs::create_dir(tmp.path().join("Beta")).unwrap();
+        let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.active_id().unwrap();
+        // Breadcrumbs: el último segmento es el nombre de la carpeta actual.
+        let segs = c.path_segments_of(id);
+        assert!(!segs.is_empty());
+        assert_eq!(segs.last().unwrap().1, tmp.path().display().to_string());
+        // Autocompletado: tecleando "<tmp>\al" matchea Alpha y alfajor (case-insensitive).
+        let buffer = format!("{}\\al", tmp.path().display());
+        let sugg = c.path_autocomplete(&buffer);
+        assert!(sugg.iter().any(|s| s == "Alpha"));
+        assert!(sugg.iter().any(|s| s == "alfajor"));
+        assert!(!sugg.iter().any(|s| s == "Beta"));
     }
 
     /// La navegación desde un panel auxiliar (Árbol) va al ÚLTIMO panel Files activo, no al

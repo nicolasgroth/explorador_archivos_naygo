@@ -19,6 +19,13 @@ export struct NavRow {
     path: string,
 }
 
+// Un segmento de la barra de ruta (breadcrumb): etiqueta visible + ruta acumulada a la que
+// navegar si se clickea. Ej: ("Empresas", "D:\Empresas").
+export struct PathSeg {
+    label: string,
+    path: string,
+}
+
 // --- Operaciones de archivo (Fase 3) ---
 
 // Estado del modal de operaciones activo. `kind`: 0=ninguno 1=confirmar-borrado
@@ -176,6 +183,7 @@ export struct PaneVm {
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
     rows: [RowData],          // Files
+    segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)
     recents: [NavRow],        // Favorites (sección recientes)

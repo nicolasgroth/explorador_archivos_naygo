@@ -4,8 +4,8 @@
 // Columnas repartidas con `horizontal-stretch` (50/15/15/20) para evitar bucles de
 // binding. Cada panel emite sus callbacks con su `pane-id` para que el controller sepa
 // sobre cuál actuar; el panel activo lleva borde de acento.
-import { ListView } from "std-widgets.slint";
-import { RowData } from "types.slint";
+import { ListView, LineEdit } from "std-widgets.slint";
+import { RowData, PathSeg } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
@@ -32,6 +32,17 @@ export component FilePanel inherits FocusScope {
     in property <bool> active;
     in property <[RowData]> rows;
     in property <length> scroll-y;
+    // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
+    in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
+    in property <bool> editing;              // este panel está editando su ruta
+    in property <string> edit-text;          // texto del editor (lo controla Rust)
+    in property <[string]> suggestions;      // autocompletado del editor
+    callback segment-clicked(int, string);   // (pane-id, ruta) clic en un breadcrumb → navegar
+    callback path-edit-start(int);           // (pane-id) entrar a modo edición
+    callback path-edit-changed(int, string); // (pane-id, texto) recalcular autocompletado
+    callback path-edit-commit(int, string);  // (pane-id, texto) Enter → navegar
+    callback path-edit-cancel(int);          // (pane-id) Esc → salir de edición
+    callback suggestion-clicked(int, string);// (pane-id, nombre) elegir un candidato
     callback row-clicked(int, int);          // (pane-id, pos)
     callback row-double-clicked(int, int);
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
@@ -59,6 +70,89 @@ export component FilePanel inherits FocusScope {
         border-width: root.active ? 1.5px : 0px;
         border-color: Theme.accent;
         VerticalLayout {
+            // --- Barra de ruta: breadcrumbs (modo normal) o editor con autocompletado. ---
+            Rectangle {
+                height: 26px;
+                background: Theme.row-bg;
+                border-radius: 4px;
+                // Modo BREADCRUMB: segmentos clicables; clic en el hueco entra a edición.
+                if !root.editing: HorizontalLayout {
+                    padding-left: 4px;
+                    spacing: 0px;
+                    for seg[i] in root.segments: Rectangle {
+                        width: seg-label.preferred-width + 10px;
+                        background: seg-touch.has-hover ? Theme.selection-bg : transparent;
+                        border-radius: 3px;
+                        seg-label := Text {
+                            text: (i == 0 ? "" : "› ") + seg.label;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            x: 4px;
+                        }
+                        seg-touch := TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                    root.activate(root.pane-id);
+                                    root.segment-clicked(root.pane-id, seg.path);
+                                }
+                            }
+                        }
+                    }
+                    // Zona vacía a la derecha: clic = editar la ruta.
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        edit-touch := TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                    root.activate(root.pane-id);
+                                    root.path-edit-start(root.pane-id);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela.
+                if root.editing: path-edit := LineEdit {
+                    text: root.edit-text;
+                    placeholder-text: "C:\\…";
+                    edited(t) => { root.path-edit-changed(root.pane-id, t); }
+                    accepted(t) => { root.path-edit-commit(root.pane-id, t); }
+                    key-pressed(ev) => {
+                        if (ev.text == Key.Escape) {
+                            root.path-edit-cancel(root.pane-id);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            // Autocompletado: lista flotante de candidatos bajo el editor (solo en edición).
+            if root.editing && root.suggestions.length > 0: Rectangle {
+                height: min(root.suggestions.length * 22px + 4px, 132px);
+                background: Theme.row-bg;
+                border-width: 1px;
+                border-color: Theme.selection-bg;
+                border-radius: 4px;
+                ListView {
+                    for s[i] in root.suggestions: Rectangle {
+                        height: 22px;
+                        background: sug-touch.has-hover ? Theme.selection-bg : transparent;
+                        Text {
+                            text: "📁 " + s;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            x: 6px;
+                        }
+                        sug-touch := TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                    root.suggestion-clicked(root.pane-id, s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             HorizontalLayout {
                 height: 22px;
                 HeaderCell {

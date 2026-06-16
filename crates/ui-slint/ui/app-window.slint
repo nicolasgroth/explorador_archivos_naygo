@@ -134,6 +134,18 @@ export component AppWindow inherits Window {
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
+    // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
+    // El panel que está editando su ruta (-1 = ninguno), su texto y sus candidatos. Rust los
+    // controla; el FilePanel correspondiente muestra el editor.
+    in-out property <int> edit-pane: -1;
+    in property <string> edit-text;
+    in property <[string]> edit-suggestions;
+    callback path-segment-clicked(int, string);
+    callback path-edit-start(int);
+    callback path-edit-changed(int, string);
+    callback path-edit-commit(int, string);
+    callback path-edit-cancel(int);
+    callback path-suggestion-clicked(int, string);
     callback sort-by(int, string);
     callback activate(int);
     callback key(string, bool, bool, bool);
@@ -379,6 +391,16 @@ export component AppWindow inherits Window {
                         pane-id: p.id;
                         active: p.active;
                         rows: p.rows;
+                        segments: p.segments;
+                        editing: root.edit-pane == p.id;
+                        edit-text: root.edit-pane == p.id ? root.edit-text : "";
+                        suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
+                        segment-clicked(id, path) => { root.path-segment-clicked(id, path); }
+                        path-edit-start(id) => { root.path-edit-start(id); }
+                        path-edit-changed(id, t) => { root.path-edit-changed(id, t); }
+                        path-edit-commit(id, t) => { root.path-edit-commit(id, t); }
+                        path-edit-cancel(id) => { root.path-edit-cancel(id); }
+                        suggestion-clicked(id, name) => { root.path-suggestion-clicked(id, name); }
                         row-clicked(id, pos) => { root.row-clicked(id, pos); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }

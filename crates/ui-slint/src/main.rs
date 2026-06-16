@@ -372,6 +372,18 @@ fn main() -> Result<(), slint::PlatformError> {
                             purpose,
                             title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
                             rows: ModelRc::from(pm.rows.clone()),
+                            segments: {
+                                let segs: Vec<PathSeg> = ctrl
+                                    .borrow()
+                                    .path_segments_of(*id)
+                                    .into_iter()
+                                    .map(|(label, path)| PathSeg {
+                                        label: SharedString::from(label.as_str()),
+                                        path: SharedString::from(path.as_str()),
+                                    })
+                                    .collect();
+                                ModelRc::from(Rc::new(VecModel::from(segs)))
+                            },
                             tree_rows: ModelRc::from(pm.tree.clone()),
                             favs: ModelRc::from(pm.favs.clone()),
                             recents: ModelRc::from(pm.recents.clone()),
@@ -694,9 +706,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
         ui.on_key(move |text, c, s, a| {
             if ctrl.borrow_mut().on_key(text.as_str(), c, s, a) {
                 start_timer();
+            }
+            // Atajo "editar ruta" (Ctrl+L / F4): abrir el editor de la path-bar del panel pedido.
+            if let Some(pane) = ctrl.borrow_mut().take_edit_path_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let path = ctrl.borrow().path_of(pane);
+                    let sugg = ctrl.borrow().path_autocomplete(&path);
+                    ui.set_edit_pane(pane.0 as i32);
+                    ui.set_edit_text(path.into());
+                    ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                        sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                    ))));
+                }
             }
             start_timer();
             sync_layout();
@@ -1018,6 +1043,99 @@ fn main() -> Result<(), slint::PlatformError> {
                 start_timer();
             }
             sync_layout();
+        });
+    }
+    // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
+    {
+        // Clic en un breadcrumb: navegar ese panel a la ruta del segmento.
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_path_segment_clicked(move |id, path| {
+            if ctrl
+                .borrow_mut()
+                .navigate_pane_to(PaneId(id as u64), std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        // Entrar a modo edición: cargar la ruta actual del panel y sus candidatos.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_path_edit_start(move |id| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let path = ctrl.borrow().path_of(PaneId(id as u64));
+            let sugg = ctrl.borrow().path_autocomplete(&path);
+            ui.set_edit_pane(id);
+            ui.set_edit_text(path.into());
+            ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            ))));
+        });
+    }
+    {
+        // El texto del editor cambió: recalcular el autocompletado.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_path_edit_changed(move |_id, text| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let sugg = ctrl.borrow().path_autocomplete(text.as_str());
+            ui.set_edit_text(text);
+            ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            ))));
+        });
+    }
+    {
+        // Enter en el editor: navegar a la ruta tecleada (si existe como carpeta) y salir.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_path_edit_commit(move |id, text| {
+            let dir = std::path::PathBuf::from(text.as_str());
+            if dir.is_dir() && ctrl.borrow_mut().navigate_pane_to(PaneId(id as u64), dir) {
+                start_timer();
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_edit_pane(-1);
+            }
+            sync_layout();
+        });
+    }
+    {
+        // Esc: salir de edición sin navegar.
+        let ui_weak = ui.as_weak();
+        ui.on_path_edit_cancel(move |_id| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_edit_pane(-1);
+            }
+        });
+    }
+    {
+        // Clic en un candidato: completar el último segmento del editor y seguir editando.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_path_suggestion_clicked(move |_id, name| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let buffer = ui.get_edit_text().to_string();
+            let (parent, _) = naygo_core::path_segments::split_edit_buffer(&buffer);
+            // Completar: padre + nombre elegido + separador (listo para seguir bajando).
+            let completed = format!("{parent}{name}\\");
+            let sugg = ctrl.borrow().path_autocomplete(&completed);
+            ui.set_edit_text(completed.into());
+            ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            ))));
         });
     }
     {
