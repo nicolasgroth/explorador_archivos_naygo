@@ -1014,6 +1014,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_cfg_set_autostart, bool, set_autostart);
     cfg_setter!(on_cfg_set_date_format, i32, set_date_format);
     cfg_setter!(on_cfg_set_size_format, i32, set_size_format);
+    cfg_setter!(on_cfg_set_row_density, i32, set_row_density);
     cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -1892,6 +1893,11 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             naygo_core::format::SizeFormat::Kb => 2,
             naygo_core::format::SizeFormat::Mb => 3,
         },
+        row_density: match s.row_density {
+            naygo_core::config::RowDensity::Compact => 0,
+            naygo_core::config::RowDensity::Comfortable => 1,
+        },
+        row_h: s.row_density.row_height(),
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),

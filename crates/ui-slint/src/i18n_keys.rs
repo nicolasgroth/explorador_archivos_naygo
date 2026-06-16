@@ -108,6 +108,9 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_size_bytes(c.t("slint.cfg.size_bytes").into());
     tr.set_cfg_size_kb(c.t("slint.cfg.size_kb").into());
     tr.set_cfg_size_mb(c.t("slint.cfg.size_mb").into());
+    tr.set_cfg_row_density(c.t("slint.cfg.row_density").into());
+    tr.set_cfg_density_compact(c.t("slint.cfg.density_compact").into());
+    tr.set_cfg_density_comfortable(c.t("slint.cfg.density_comfortable").into());
     tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
     tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());

@@ -165,6 +165,8 @@ export struct SettingsVm {
     paste-text-ext: string,
     date-format: int,         // 0=ISO min, 1=ISO fecha, 2=DMY min, 3=DMY fecha
     size-format: int,         // 0=Auto, 1=Bytes, 2=KB, 3=MB
+    row-density: int,         // 0=compacta, 1=cómoda
+    row-h: length,            // alto de fila resuelto (22/26px) — lo usan tabla y árbol
     language: string,         // código del idioma activo
     theme: string,            // id del tema activo
     icon-set: string,         // id del set de íconos activo

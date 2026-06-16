@@ -328,6 +328,7 @@ export component AppWindow inherits Window {
     callback cfg-set-icon-set(string);
     callback cfg-set-date-format(int);
     callback cfg-set-size-format(int);
+    callback cfg-set-row-density(int);
     callback cfg-shortcut-capture(string);
     callback cfg-capture-key(string, bool, bool, bool);
     callback cfg-shortcut-reset(string);
@@ -510,6 +511,7 @@ export component AppWindow inherits Window {
                         rows: p.rows;
                         columns: p.columns;
                         col-menu: p.col-menu;
+                        row-h: root.settings-vm.row-h;
                         segments: p.segments;
                         editing: root.edit-pane == p.id;
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";
@@ -543,6 +545,7 @@ export component AppWindow inherits Window {
                         height: 100%;
                         active: p.active;
                         rows: p.tree-rows;
+                        row-h: root.settings-vm.row-h;
                         toggle(path) => { root.tree-toggle(p.id, path); }
                         navigate(path) => { root.tree-navigate(path); }
                         focus-pane() => { root.activate(p.id); }
@@ -704,6 +707,7 @@ export component AppWindow inherits Window {
         set-icon-set(s) => { root.cfg-set-icon-set(s); }
         set-date-format(i) => { root.cfg-set-date-format(i); }
         set-size-format(i) => { root.cfg-set-size-format(i); }
+        set-row-density(i) => { root.cfg-set-row-density(i); }
         shortcut-capture(k) => { root.cfg-shortcut-capture(k); }
         capture-key(txt, c, s, a) => { root.cfg-capture-key(txt, c, s, a); }
         shortcut-reset(k) => { root.cfg-shortcut-reset(k); }

@@ -13,6 +13,7 @@ import { Theme } from "theme.slint";
 export component TreePanel inherits Rectangle {
     in property <bool> active;
     in property <[TreeRow]> rows;
+    in property <length> row-h: 22px;   // alto de fila (densidad configurable)
     callback toggle(string);    // expandir/colapsar la rama (por ruta)
     callback navigate(string);  // navegar el Files activo a esa carpeta
     callback focus-pane();
@@ -34,7 +35,7 @@ export component TreePanel inherits Rectangle {
         ListView {
             vertical-stretch: 1;
             for n[i] in root.rows: row-rect := Rectangle {
-                height: 22px;
+                height: root.row-h;
                 background: n.active ? Theme.selection-bg : (node-touch.has-hover ? Theme.row-alt-bg : transparent);
                 border-radius: 3px;
                 // Sangría + ancho de la zona del chevron (los primeros 16px tras la sangría).

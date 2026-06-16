@@ -2,7 +2,7 @@
 // Pegado, Apariencia (tema+idioma en caliente), Atajos, Import/Export. Cada control emite un
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
-import { ListView, ComboBox, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { ListView, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { SettingsVm, ShortcutRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -20,6 +20,33 @@ component Field inherits HorizontalLayout {
         overflow: elide;
     }
     @children
+}
+
+// Interruptor on/off pulido (reemplaza al CheckBox cuadrado). Animación mínima del pomo
+// (transición de color/posición instantánea-ish, sin costo de GPU).
+component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled(bool);
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: root.checked ? Theme.accent : Theme.row-bg;
+    border-width: 1px;
+    border-color: root.checked ? Theme.accent : Theme.selection-bg;
+    knob := Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: white;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        y: (parent.height - self.height) / 2;
+    }
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
 }
 
 // Botón chico de texto (acciones de la ventana de config).
@@ -73,6 +100,7 @@ export component ConfigWindow inherits Rectangle {
     callback set-icon-set(string);
     callback set-date-format(int);
     callback set-size-format(int);
+    callback set-row-density(int);
     // Atajos:
     callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
     callback shortcut-reset(string);     // reset de una acción
@@ -170,11 +198,11 @@ export component ConfigWindow inherits Rectangle {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-show-parent;
-                                    CheckBox { checked: root.vm.show-parent; toggled => { root.set-show-parent(self.checked); } }
+                                    Switch { checked: root.vm.show-parent; toggled => { root.set-show-parent(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-icon-only;
-                                    CheckBox { checked: root.vm.icon-only; toggled => { root.set-icon-only(self.checked); } }
+                                    Switch { checked: root.vm.icon-only; toggled => { root.set-icon-only(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-bar-position;
@@ -186,11 +214,11 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-size-no-subdirs;
-                                    CheckBox { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
+                                    Switch { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-autostart;
-                                    CheckBox { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
+                                    Switch { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
                                 }
                             }
 
@@ -207,11 +235,11 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-confirm-trash;
-                                    CheckBox { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
+                                    Switch { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-show-op-summary;
-                                    CheckBox { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
+                                    Switch { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
                                 }
                             }
 
@@ -220,7 +248,7 @@ export component ConfigWindow inherits Rectangle {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-paste-confirm;
-                                    CheckBox { checked: root.vm.paste-confirm; toggled => { root.set-paste-confirm(self.checked); } }
+                                    Switch { checked: root.vm.paste-confirm; toggled => { root.set-paste-confirm(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-paste-name;
@@ -281,6 +309,14 @@ export component ConfigWindow inherits Rectangle {
                                         model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
                                         current-index: root.vm.size-format;
                                         selected => { root.set-size-format(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-row-density;
+                                    ComboBox {
+                                        model: [Tr.cfg-density-compact, Tr.cfg-density-comfortable];
+                                        current-index: root.vm.row-density;
+                                        selected => { root.set-row-density(self.current-index); }
                                     }
                                 }
                             }

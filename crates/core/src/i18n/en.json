@@ -437,5 +437,8 @@
   "slint.cfg.size_auto": "Automatic",
   "slint.cfg.size_bytes": "Bytes",
   "slint.cfg.size_kb": "Kilobytes",
-  "slint.cfg.size_mb": "Megabytes"
+  "slint.cfg.size_mb": "Megabytes",
+  "slint.cfg.row_density": "Row density",
+  "slint.cfg.density_compact": "Compact",
+  "slint.cfg.density_comfortable": "Comfortable"
 }

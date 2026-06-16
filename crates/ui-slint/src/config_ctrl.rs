@@ -179,6 +179,13 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Densidad de las filas: 0=Compacta (22px), 1=Cómoda (26px).
+    pub fn set_row_density(&mut self, idx: i32) {
+        use naygo_core::config::RowDensity::*;
+        self.settings.row_density = if idx == 1 { Comfortable } else { Compact };
+        self.save();
+    }
+
     /// Formato de la columna de tamaño: 0=Auto legible, 1=Bytes (miles), 2=KB, 3=MB.
     pub fn set_size_format(&mut self, idx: i32) {
         use naygo_core::format::SizeFormat::*;

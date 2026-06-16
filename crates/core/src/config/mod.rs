@@ -21,6 +21,27 @@ pub enum BarPosition {
     Side,
 }
 
+/// Densidad de las filas de la tabla. Compacta (default) maximiza cuántos archivos se ven;
+/// Cómoda da un poco más de aire (estilo egui). La UI traduce a px.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RowDensity {
+    /// 22 px por fila — máxima densidad (default; prioridad del proyecto = navegación rápida).
+    #[default]
+    Compact,
+    /// 26 px por fila — un toque más respirado.
+    Comfortable,
+}
+
+impl RowDensity {
+    /// Alto de fila en px lógicos para esta densidad.
+    pub fn row_height(self) -> f32 {
+        match self {
+            RowDensity::Compact => 22.0,
+            RowDensity::Comfortable => 26.0,
+        }
+    }
+}
+
 /// Qué set de íconos usa la app. Flat es el default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IconSet {
@@ -182,6 +203,9 @@ pub struct Settings {
     /// Formato de la columna de tamaño (Auto/Bytes/KB/MB). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub size_format: crate::format::SizeFormat,
+    /// Densidad de las filas (Compacta/Cómoda). `#[serde(default)]` retro-compat.
+    #[serde(default)]
+    pub row_density: RowDensity,
     /// Caché de carpetas visitadas: nº máximo de carpetas recordadas en memoria
     /// (0 = desactivado). Volver a una carpeta cacheada pinta al instante y el
     /// listado real corre por detrás (stale-while-revalidate).
@@ -356,6 +380,7 @@ impl Default for Settings {
             autostart: false,
             date_format: crate::format::DateFormat::IsoMinute,
             size_format: crate::format::SizeFormat::Auto,
+            row_density: RowDensity::Compact,
             cache_max_dirs: 50,
             column_width_mode: ColumnWidthMode::Fixed,
             default_table: None,
@@ -602,6 +627,7 @@ mod tests {
             autostart: false,
             date_format: crate::format::DateFormat::DmyMinute,
             size_format: crate::format::SizeFormat::Kb,
+            row_density: RowDensity::Comfortable,
             cache_max_dirs: 12,
             column_width_mode: ColumnWidthMode::Auto,
             default_table: Some({
