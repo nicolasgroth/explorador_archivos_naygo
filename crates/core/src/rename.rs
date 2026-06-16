@@ -29,7 +29,7 @@ mod tests {
         assert_eq!(rename_selection("foto.png", 0), (0, 4)); // "foto"
         assert_eq!(rename_selection("foto.png", 1), (5, 8)); // "png"
         assert_eq!(rename_selection("foto.png", 2), (0, 8)); // todo
-        // Sin extensión válida → siempre todo.
+                                                             // Sin extensión válida → siempre todo.
         assert_eq!(rename_selection("carpeta", 0), (0, 7));
         assert_eq!(rename_selection(".gitignore", 0), (0, 10));
         // Punto final sin extensión real → todo (ext vacía).
