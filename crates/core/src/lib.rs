@@ -20,6 +20,7 @@ pub mod fs_model;
 pub mod i18n;
 pub mod icon_kind;
 pub mod icon_set;
+pub mod icons;
 pub mod keymap;
 pub mod listing;
 pub mod listing_cache;
