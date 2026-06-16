@@ -225,15 +225,22 @@ pub struct TreeRow {
     pub loading: bool,
     pub error: bool,
     pub disk_percent: i32,
+    /// Ícono de color cacheado (6A): carpeta o disco según `is_drive`.
+    pub icon: slint::Image,
 }
 
 /// Aplana el árbol visible (solo nodos expandidos descienden) a una lista con sangría.
 /// `disk` mapea ruta de raíz → porcentaje de uso (0..100); las raíces sin dato van con -1.
-pub fn tree_rows(tree: &DirTree, disk: &dyn Fn(&std::path::Path) -> Option<u8>) -> Vec<TreeRow> {
+/// `icon_of` resuelve el ícono de cada nodo (carpeta/disco) desde el cache.
+pub fn tree_rows(
+    tree: &DirTree,
+    disk: &dyn Fn(&std::path::Path) -> Option<u8>,
+    icon_of: &mut dyn FnMut(naygo_core::icon_kind::IconKey) -> slint::Image,
+) -> Vec<TreeRow> {
     let mut out = Vec::new();
     let active = tree.active_path.as_deref();
     for root in &tree.roots {
-        push_tree_node(root, 0, active, disk, &mut out);
+        push_tree_node(root, 0, active, disk, icon_of, &mut out);
     }
     out
 }
@@ -243,6 +250,7 @@ fn push_tree_node(
     depth: i32,
     active: Option<&std::path::Path>,
     disk: &dyn Fn(&std::path::Path) -> Option<u8>,
+    icon_of: &mut dyn FnMut(naygo_core::icon_kind::IconKey) -> slint::Image,
     out: &mut Vec<TreeRow>,
 ) {
     let is_drive = node.drive_kind.is_some();
@@ -264,11 +272,19 @@ fn push_tree_node(
         } else {
             -1
         },
+        icon: icon_of(if is_drive {
+            naygo_core::icon_kind::IconKey::Drive(
+                node.drive_kind
+                    .unwrap_or(naygo_core::icon_kind::DriveKind::Unknown),
+            )
+        } else {
+            naygo_core::icon_kind::IconKey::Folder
+        }),
     });
     if node.expanded {
         if let Some(children) = node.children.as_ref() {
             for child in children {
-                push_tree_node(child, depth + 1, active, disk, out);
+                push_tree_node(child, depth + 1, active, disk, icon_of, out);
             }
         }
     }
@@ -403,7 +419,7 @@ mod tests {
         let mut t = DirTree::from_drives(&drives);
         // Sin expandir: solo la raíz, depth 0, con chevron (Collapsed).
         let no_disk = |_: &std::path::Path| None;
-        let rows = tree_rows(&t, &no_disk);
+        let rows = tree_rows(&t, &no_disk, &mut |_| slint::Image::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].depth, 0);
         assert!(rows[0].is_drive);
@@ -414,7 +430,7 @@ mod tests {
         t.begin_loading(std::path::Path::new("C:\\"));
         t.push_child(std::path::Path::new("C:\\"), PathBuf::from("C:\\Users"));
         t.finish_loading(std::path::Path::new("C:\\"), NodeOutcome::Done);
-        let rows = tree_rows(&t, &no_disk);
+        let rows = tree_rows(&t, &no_disk, &mut |_| slint::Image::default());
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1].depth, 1);
         assert_eq!(rows[1].name, "Users");
@@ -435,7 +451,7 @@ mod tests {
                 None
             }
         };
-        let rows = tree_rows(&t, &disk);
+        let rows = tree_rows(&t, &disk, &mut |_| slint::Image::default());
         assert!(rows[0].active, "la raíz activa está marcada");
         assert_eq!(rows[0].disk_percent, 42);
     }

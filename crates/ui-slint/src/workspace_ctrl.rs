@@ -957,9 +957,11 @@ impl WorkspaceCtrl {
 
     /// Filas del árbol del panel `id` (aplanadas con sangría). Vacío si el panel no tiene
     /// árbol (no es un Tree). El uso de disco se consulta por unidad.
-    pub fn tree_rows(&self, id: PaneId) -> Vec<TreeRow> {
-        match self.trees.get(&id) {
-            Some(t) => tree_rows(t, &disk_percent),
+    pub fn tree_rows(&mut self, id: PaneId) -> Vec<TreeRow> {
+        // Préstamos disjuntos: `trees` (lectura del árbol) e `icons` (mutable para cachear).
+        let WorkspaceCtrl { trees, icons, .. } = self;
+        match trees.get(&id) {
+            Some(t) => tree_rows(t, &disk_percent, &mut |key| icons.get(key)),
             None => Vec::new(),
         }
     }

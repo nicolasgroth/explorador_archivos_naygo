@@ -72,8 +72,16 @@ export component TreePanel inherits Rectangle {
                             }
                         }
                     }
+                    // Ícono de color cacheado (carpeta o disco) + nombre con sufijo de estado.
+                    Image {
+                        source: n.icon;
+                        width: 16px;
+                        height: 16px;
+                        vertical-alignment: center;
+                        image-rendering: smooth;
+                    }
                     Text {
-                        text: (n.is-drive ? "💾 " : "📁 ") + n.name + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
+                        text: " " + n.name + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
                         color: n.is-drive ? Theme.text : (n.error ? Theme.error : Theme.text);
                         vertical-alignment: center;
                         horizontal-stretch: 1;

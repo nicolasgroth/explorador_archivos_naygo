@@ -1806,6 +1806,7 @@ fn to_tree_row(r: bridge::TreeRow) -> TreeRow {
         loading: r.loading,
         error: r.error,
         disk_percent: r.disk_percent,
+        icon: r.icon,
     }
 }
 
