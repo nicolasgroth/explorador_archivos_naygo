@@ -60,6 +60,16 @@ fn keycode_from(text: &str) -> Option<KeyCode> {
         KeyCode::Home
     } else if first == special(Key::End) {
         KeyCode::End
+    } else if first == special(Key::F2) {
+        KeyCode::F2
+    } else if first == special(Key::F3) {
+        KeyCode::F3
+    } else if first == special(Key::F4) {
+        KeyCode::F4
+    } else if first == special(Key::F5) {
+        KeyCode::F5
+    } else if first == special(Key::F6) {
+        KeyCode::F6
     } else if first == special(Key::Space) || first == ' ' {
         KeyCode::Space
     } else if first.is_alphanumeric() {
@@ -109,6 +119,16 @@ mod tests {
         assert_eq!(
             chord_from(&key_char(slint::platform::Key::Home), false, false, false),
             Some(Chord::plain(KeyCode::Home))
+        );
+        // Teclas de función (F2 = rename, etc.): antes no se mapeaban, así que F2 nunca
+        // disparaba el rename en la UI Slint. Ahora sí. (6D)
+        assert_eq!(
+            chord_from(&key_char(slint::platform::Key::F2), false, false, false),
+            Some(Chord::plain(KeyCode::F2))
+        );
+        assert_eq!(
+            chord_from(&key_char(slint::platform::Key::F5), false, false, false),
+            Some(Chord::plain(KeyCode::F5))
         );
     }
 

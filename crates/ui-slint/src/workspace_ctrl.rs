@@ -108,6 +108,10 @@ pub struct WorkspaceCtrl {
     /// El atajo "editar ruta" (Ctrl+L / F4) pidió editar este panel. La UI lo lee con
     /// `take_edit_path_request` para abrir el editor de la path-bar.
     pub edit_path_requested: Option<PaneId>,
+    /// El rename inline (F2 / menú) pidió editar la fila `pos` del panel, con la etapa de
+    /// selección del ciclo F2. La UI lo lee con `take_rename_request` para abrir el editor en
+    /// la celda Name. (pane, posición de vista, etapa). Ver 6D.
+    pub rename_requested: Option<(PaneId, usize, u8)>,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
@@ -166,6 +170,7 @@ impl WorkspaceCtrl {
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
             edit_path_requested: None,
+            rename_requested: None,
             icons,
         };
         c.recents.push(start.clone());
@@ -1204,19 +1209,88 @@ impl WorkspaceCtrl {
     }
 
     /// Renombrar el ítem enfocado: abre el modal de nombre con el nombre actual.
+    /// Rename inline (F2 / menú): pide a la UI abrir el editor en la celda Name de la fila
+    /// enfocada del panel Files activo, con la etapa 0 del ciclo (nombre sin extensión). En vez
+    /// del modal, marca `rename_requested`; la UI lo consume con `take_rename_request`. (6D)
     pub fn op_rename(&mut self) {
-        let Some(f) = self.ws.active_files() else {
+        let Some(id) = self.active_files_id() else {
             return;
         };
-        let Some(e) = f.focused_view_entry() else {
+        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
             return;
         };
-        let dir = f.current_dir.clone();
-        self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
-            purpose: crate::ops_ctrl::NamePurpose::Rename(e.path.clone()),
-            dir,
-            buf: e.name.clone(),
-        });
+        let Some(pos) = f.focused else {
+            return;
+        };
+        self.rename_requested = Some((id, pos, 0));
+    }
+
+    /// La UI consume el pedido de rename inline (pane, posición de vista, etapa del ciclo F2).
+    pub fn take_rename_request(&mut self) -> Option<(PaneId, usize, u8)> {
+        self.rename_requested.take()
+    }
+
+    /// Nombre actual de la fila en la posición de vista `pos` del panel `id` (para precargar el
+    /// editor inline). Vacío si no existe.
+    pub fn rename_name_at(&self, id: PaneId, pos: usize) -> String {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .and_then(|f| f.view_entry_at(pos))
+            .map(|e| e.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// Confirma el rename inline de la fila `pos` del panel `id` al nombre `new_name`. Arma la
+    /// op de rename (reusa el engine de F3, con su validación) y la lanza. Devuelve true si
+    /// arrancó algo (nombre válido y distinto del actual).
+    pub fn rename_commit(&mut self, id: PaneId, pos: usize, new_name: &str) -> bool {
+        let new_name = new_name.trim();
+        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
+            return false;
+        };
+        let Some(e) = f.view_entry_at(pos) else {
+            return false;
+        };
+        // Sin cambio o nombre inválido → no hacer nada (evita una op vacía o un error del engine).
+        if new_name.is_empty()
+            || new_name == e.name
+            || !naygo_core::ops::names::is_valid_name(new_name)
+        {
+            return false;
+        }
+        let source = e.path.clone();
+        let req = naygo_core::ops::rename(source, new_name.to_string());
+        self.ops.start_op(req, "Renombrar".to_string(), true);
+        true
+    }
+
+    /// Rename EN CADENA: confirma el rename actual y pide abrir el editor en la fila anterior
+    /// (`dir < 0`) o siguiente (`dir > 0`), seleccionando el nombre sin extensión (etapa 0,
+    /// decisión de Nicolás). Devuelve la nueva posición si la hay (clamp a la vista). (6D)
+    pub fn rename_chain(
+        &mut self,
+        id: PaneId,
+        pos: usize,
+        new_name: &str,
+        dir: i32,
+    ) -> Option<usize> {
+        self.rename_commit(id, pos, new_name);
+        let count = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.view_len())?;
+        if count == 0 {
+            return None;
+        }
+        let next = (pos as i32 + dir).clamp(0, count as i32 - 1) as usize;
+        // Mover el foco/selección a la fila nueva, para que el scroll la acompañe.
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            f.select_single(next);
+        }
+        self.rename_requested = Some((id, next, 0));
+        Some(next)
     }
 
     /// Deshace la entrada del historial con `id` (botón "Deshacer" del panel Historial).
@@ -1805,6 +1879,52 @@ mod tests {
             .rows_of(id, 8, std::time::Instant::now())
             .iter()
             .any(|r| r.name == "nuevo.txt"));
+    }
+
+    /// 6D: el rename inline. `op_rename` marca el pedido sobre la fila enfocada; `rename_commit`
+    /// renombra el archivo en disco; `rename_chain` confirma y avanza a la fila siguiente.
+    #[test]
+    fn rename_inline_y_en_cadena() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"y").unwrap();
+        let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.active_id().unwrap();
+        // Enfocar "a.txt" y pedir rename (F2): debe marcar el pedido en esa posición.
+        let pos = active_pos_of(&c, "a.txt").expect("a.txt visible");
+        c.ws.active_files_mut().unwrap().select_single(pos);
+        c.op_rename();
+        let req = c
+            .take_rename_request()
+            .expect("F2 marcó el pedido de rename");
+        assert_eq!(req.0, id);
+        assert_eq!(req.1, pos);
+        assert_eq!(req.2, 0, "etapa inicial = nombre sin extensión");
+        // Confirmar el rename y bombear la op hasta completarla (mismo patrón que ops_ctrl).
+        assert!(c.rename_commit(id, pos, "renombrado.txt"));
+        for _ in 0..4000 {
+            let done = c.ops.pump_ops();
+            if done && !c.ops.active_ops.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            tmp.path().join("renombrado.txt").exists(),
+            "el archivo se renombró en disco"
+        );
+        assert!(!tmp.path().join("a.txt").exists());
+        // Rename en cadena hacia abajo desde "b.txt": confirma (sin cambio) y devuelve la
+        // posición avanzada con un nuevo pedido en etapa 0.
+        // Re-listar para reflejar el rename antes de seguir.
+        c.start_listing(id, tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        let pos_b = active_pos_of(&c, "b.txt").expect("b.txt visible");
+        let next = c.rename_chain(id, pos_b, "b.txt", 1);
+        assert!(next.is_some(), "encadena a una fila válida");
+        let req2 = c.take_rename_request().expect("chain reabre el editor");
+        assert_eq!(req2.2, 0, "el chain selecciona el nombre sin extensión");
     }
 
     /// La path-bar: breadcrumbs de la carpeta del panel + autocompletado del editor.

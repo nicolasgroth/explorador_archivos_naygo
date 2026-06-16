@@ -209,6 +209,18 @@ impl FilePaneState {
         view.get(pos).and_then(|&real| self.entries.get(real))
     }
 
+    /// La entrada en la posición de VISTA `pos` (filtrada+ordenada). `None` si está fuera de
+    /// rango. Reusado por el rename inline para resolver la fila a renombrar.
+    pub fn view_entry_at(&self, pos: usize) -> Option<&Entry> {
+        let view = self.view_indices();
+        view.get(pos).and_then(|&real| self.entries.get(real))
+    }
+
+    /// Cuántas filas tiene la vista actual (filtrada). Para acotar el avance del rename en cadena.
+    pub fn view_len(&self) -> usize {
+        self.view_indices().len()
+    }
+
     /// Navega a una carpeta nueva: registra en el historial y limpia entries/foco.
     /// (La UI lanzará el listado de `dir` tras llamar esto.)
     pub fn navigate_to(&mut self, dir: PathBuf) {

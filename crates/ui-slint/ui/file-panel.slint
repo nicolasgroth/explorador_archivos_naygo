@@ -67,6 +67,12 @@ export component FilePanel inherits FocusScope {
     in property <bool> editing;              // este panel está editando su ruta
     in property <string> edit-text;          // texto del editor (lo controla Rust)
     in property <[string]> suggestions;      // autocompletado del editor
+    // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
+    in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
+    in property <string> rename-text;        // nombre inicial del editor
+    callback rename-commit(int, string);     // (pos, nombre) Enter → renombrar
+    callback rename-chain(int, string, int); // (pos, nombre, dir) ↑/↓ → encadenar
+    callback rename-cancel();                // Esc → cerrar
     callback segment-clicked(int, string);   // (pane-id, ruta) clic en un breadcrumb → navegar
     callback path-edit-start(int);           // (pane-id) entrar a modo edición
     callback path-edit-changed(int, string); // (pane-id, texto) recalcular autocompletado
@@ -244,7 +250,31 @@ export component FilePanel inherits FocusScope {
                                 vertical-alignment: center;
                                 image-rendering: smooth;
                             }
-                            Text {
+                            // Editor inline de rename (6D): en la celda Name de la fila en edición.
+                            // Enter confirma; ↑/↓ encadenan al anterior/siguiente; Esc cancela.
+                            if col.kind == 0 && root.rename-pos == i: rename-edit := LineEdit {
+                                text: root.rename-text;
+                                horizontal-stretch: 1;
+                                font-size: 13px;
+                                init => { self.focus(); self.select-all(); }
+                                accepted => { root.rename-commit(i, self.text); }
+                                key-pressed(ev) => {
+                                    if (ev.text == Key.Escape) {
+                                        root.rename-cancel();
+                                        return accept;
+                                    }
+                                    if (ev.text == Key.UpArrow) {
+                                        root.rename-chain(i, self.text, -1);
+                                        return accept;
+                                    }
+                                    if (ev.text == Key.DownArrow) {
+                                        root.rename-chain(i, self.text, 1);
+                                        return accept;
+                                    }
+                                    reject
+                                }
+                            }
+                            if !(col.kind == 0 && root.rename-pos == i): Text {
                                 text: row.cells[ci];
                                 color: col.kind == 0
                                     ? (row.is-dir ? Theme.highlight : Theme.text)

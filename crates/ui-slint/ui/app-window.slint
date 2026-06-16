@@ -157,6 +157,13 @@ export component AppWindow inherits Window {
     in-out property <int> edit-pane: -1;
     in property <string> edit-text;
     in property <[string]> edit-suggestions;
+    // --- Rename inline (6D): la fila `rename-pos` del panel `rename-pane` muestra un editor. ---
+    in-out property <int> rename-pane: -1;
+    in-out property <int> rename-pos: -1;
+    in property <string> rename-text;          // texto inicial del editor (lo fija Rust)
+    callback rename-commit(int, int, string);  // (pane, pos, nombre) Enter → renombrar y cerrar
+    callback rename-chain(int, int, string, int); // (pane, pos, nombre, dir) ↑/↓ → encadenar
+    callback rename-cancel();                   // Esc → cerrar sin renombrar
     callback path-segment-clicked(int, string);
     callback path-edit-start(int);
     callback path-edit-changed(int, string);
@@ -442,6 +449,11 @@ export component AppWindow inherits Window {
                         editing: root.edit-pane == p.id;
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";
                         suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
+                        rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
+                        rename-text: root.rename-pane == p.id ? root.rename-text : "";
+                        rename-commit(pos, name) => { root.rename-commit(p.id, pos, name); }
+                        rename-chain(pos, name, dir) => { root.rename-chain(p.id, pos, name, dir); }
+                        rename-cancel() => { root.rename-cancel(); }
                         segment-clicked(id, path) => { root.path-segment-clicked(id, path); }
                         path-edit-start(id) => { root.path-edit-start(id); }
                         path-edit-changed(id, t) => { root.path-edit-changed(id, t); }

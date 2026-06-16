@@ -779,8 +779,73 @@ fn main() -> Result<(), slint::PlatformError> {
                     ))));
                 }
             }
+            // Rename inline (F2): abrir el editor en la celda Name de la fila pedida.
+            if let Some((pane, pos, _stage)) = ctrl.borrow_mut().take_rename_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let name = ctrl.borrow().rename_name_at(pane, pos);
+                    ui.set_rename_pane(pane.0 as i32);
+                    ui.set_rename_pos(pos as i32);
+                    ui.set_rename_text(name.into());
+                }
+            }
             start_timer();
             sync_layout();
+        });
+    }
+    // Rename inline: confirmar (Enter). Renombra y cierra el editor. (6D)
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_rename_commit(move |id, pos, name| {
+            ctrl.borrow_mut()
+                .rename_commit(PaneId(id as u64), pos as usize, name.as_str());
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_rename_pane(-1);
+                ui.set_rename_pos(-1);
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    // Rename inline: encadenar (↑/↓). Confirma el actual y reabre el editor en la fila vecina. (6D)
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_rename_chain(move |id, pos, name, dir| {
+            let pane = PaneId(id as u64);
+            let next = ctrl
+                .borrow_mut()
+                .rename_chain(pane, pos as usize, name.as_str(), dir);
+            if let Some(ui) = ui_weak.upgrade() {
+                match next {
+                    Some(p) => {
+                        let nm = ctrl.borrow().rename_name_at(pane, p);
+                        ui.set_rename_pane(pane.0 as i32);
+                        ui.set_rename_pos(p as i32);
+                        ui.set_rename_text(nm.into());
+                    }
+                    None => {
+                        ui.set_rename_pane(-1);
+                        ui.set_rename_pos(-1);
+                    }
+                }
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    // Rename inline: cancelar (Esc). Cierra el editor sin renombrar. (6D)
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_rename_cancel(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_rename_pane(-1);
+                ui.set_rename_pos(-1);
+            }
         });
     }
     {
@@ -1448,9 +1513,19 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let ui_weak = ui.as_weak();
         ui.on_ctx_rename(move || {
             ctrl.borrow_mut().op_rename();
             ctrl.borrow_mut().close_context_menu();
+            // Abrir el editor inline en la fila pedida (igual que el camino de F2).
+            if let Some((pane, pos, _stage)) = ctrl.borrow_mut().take_rename_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let name = ctrl.borrow().rename_name_at(pane, pos);
+                    ui.set_rename_pane(pane.0 as i32);
+                    ui.set_rename_pos(pos as i32);
+                    ui.set_rename_text(name.into());
+                }
+            }
             sync_rows();
         });
     }

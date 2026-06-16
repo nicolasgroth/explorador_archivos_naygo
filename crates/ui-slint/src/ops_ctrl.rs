@@ -18,19 +18,22 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
-/// Para qué se pide un nombre en el modal `NameInput`.
+/// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
+/// el modal queda solo para crear archivo/carpeta.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamePurpose {
     NewFile,
     NewDir,
-    Rename(PathBuf),
 }
 
 /// El modal de operaciones activo (uno a la vez).
 #[derive(Clone, Debug)]
 pub enum OpDialog {
     /// Confirmar borrado de `sources` (a papelera o permanente).
-    ConfirmDelete { sources: Vec<PathBuf>, permanent: bool },
+    ConfirmDelete {
+        sources: Vec<PathBuf>,
+        permanent: bool,
+    },
     /// Conflicto por-ítem (ops-B): el motor preguntó por el choque en `prompt`.
     Conflict {
         op_index: usize,
@@ -193,7 +196,13 @@ impl OpsCtrl {
             return;
         }
 
-        self.spawn_op(plan, req.kind.clone(), conflict, label, record_undo.then_some(req));
+        self.spawn_op(
+            plan,
+            req.kind.clone(),
+            conflict,
+            label,
+            record_undo.then_some(req),
+        );
     }
 
     /// Spawnea el motor para un plan ya resuelto y agrega la `ActiveOp`. Crea un journal
@@ -213,10 +222,7 @@ impl OpsCtrl {
             let id = format!("op-{}", self.next_journal_seq);
             self.next_journal_seq += 1;
             let j = OpJournal::new(id.clone(), kind.clone(), conflict, plan.clone());
-            (
-                Some(JournalWriter::new(&self.config_dir, j)),
-                Some(id),
-            )
+            (Some(JournalWriter::new(&self.config_dir, j)), Some(id))
         } else {
             (None, None)
         };
@@ -397,7 +403,6 @@ impl OpsCtrl {
                 name_title: match purpose {
                     NamePurpose::NewFile => "Nuevo archivo".to_string(),
                     NamePurpose::NewDir => "Nueva carpeta".to_string(),
-                    NamePurpose::Rename(_) => "Renombrar".to_string(),
                 },
                 name_value: buf.clone(),
                 name_valid: naygo_core::ops::names::is_valid_name(buf),
@@ -483,7 +488,6 @@ impl OpsCtrl {
         let (req, label) = match purpose {
             NamePurpose::NewFile => (naygo_core::ops::create(dir, buf, false), "Nuevo archivo"),
             NamePurpose::NewDir => (naygo_core::ops::create(dir, buf, true), "Nueva carpeta"),
-            NamePurpose::Rename(source) => (naygo_core::ops::rename(source, buf), "Renombrar"),
         };
         self.start_op(req, label.to_string(), true);
         true
@@ -528,7 +532,11 @@ impl OpsCtrl {
             Some(OpDialog::Resume { items }) => items.iter().find(|j| j.id == id).cloned(),
             _ => None,
         }
-        .or_else(|| journal::scan(&self.config_dir).into_iter().find(|j| j.id == id));
+        .or_else(|| {
+            journal::scan(&self.config_dir)
+                .into_iter()
+                .find(|j| j.id == id)
+        });
         let Some(journal) = journal else {
             return false;
         };
