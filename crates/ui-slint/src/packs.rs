@@ -57,7 +57,8 @@ pub fn export_lang(config_dir: &Path, code: &str, out_zip: &Path) -> Result<(), 
 
 /// Exporta el tema `id` (themes/<id>.json) a `out_zip`. Los temas embebidos no tienen archivo
 /// en disco; en ese caso el export falla con un mensaje claro (el usuario solo puede exportar
-/// temas que viven como archivo en su carpeta de config).
+/// temas que viven como archivo en su carpeta de config). Si el tema tiene un set de íconos
+/// propio en `<config_dir>/icons/<id>/`, sus PNGs se incluyen como `icons/<id>/<name>.png` (6E).
 pub fn export_theme(config_dir: &Path, id: &str, out_zip: &Path) -> Result<(), String> {
     let rel = format!("themes/{id}.json");
     let src = config_dir.join(&rel);
@@ -66,7 +67,25 @@ pub fn export_theme(config_dir: &Path, id: &str, out_zip: &Path) -> Result<(), S
             "el tema «{id}» es embebido (no hay archivo que exportar)"
         ));
     }
-    zip_files(out_zip, &[(rel, src)])
+    let mut entries = vec![(rel, src)];
+    // Adjuntar los PNGs del set de íconos del tema, si existe la carpeta.
+    let icons_dir = config_dir.join("icons").join(id);
+    if let Ok(rd) = std::fs::read_dir(&icons_dir) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let is_png = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("png"))
+                .unwrap_or(false);
+            if path.is_file() && is_png {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    entries.push((format!("icons/{id}/{name}"), path));
+                }
+            }
+        }
+    }
+    zip_files(out_zip, &entries)
 }
 
 /// Exporta la configuración (settings.json + keybindings.json si existe) a `out_zip`.
@@ -106,45 +125,79 @@ pub fn import_zip(config_dir: &Path, in_zip: &Path) -> Result<ImportKind, String
         if name.contains("..") {
             return Err(format!("ruta sospechosa en el pack: {name}"));
         }
-        let mut contents = String::new();
-        entry
-            .read_to_string(&mut contents)
-            .map_err(|e| format!("no se pudo leer {name}: {e}"))?;
-        // Validar que es JSON.
-        serde_json::from_str::<serde_json::Value>(&contents)
-            .map_err(|_| format!("{name} no es JSON válido"))?;
-
         let (subdir, this_kind) = classify(&name)?;
-        let dest_dir = config_dir.join(subdir);
-        std::fs::create_dir_all(&dest_dir)
-            .map_err(|e| format!("no se pudo crear {}: {e}", dest_dir.display()))?;
-        let dest = config_dir.join(&name);
-        std::fs::write(&dest, contents.as_bytes())
-            .map_err(|e| format!("no se pudo escribir {}: {e}", dest.display()))?;
-        // El primer archivo decide el tipo informado (un pack de config trae 2).
-        if kind.is_none() {
+        // Los PNGs (íconos de un tema) son binarios: se validan por la firma, no como JSON.
+        // El resto son JSON de config (lang/themes/settings): se validan parseándolos.
+        if name.to_ascii_lowercase().ends_with(".png") {
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("no se pudo leer {name}: {e}"))?;
+            if !is_png(&bytes) {
+                return Err(format!("{name} no es un PNG válido"));
+            }
+            write_entry(config_dir, subdir, &name, &bytes)?;
+        } else {
+            let mut contents = String::new();
+            entry
+                .read_to_string(&mut contents)
+                .map_err(|e| format!("no se pudo leer {name}: {e}"))?;
+            serde_json::from_str::<serde_json::Value>(&contents)
+                .map_err(|_| format!("{name} no es JSON válido"))?;
+            write_entry(config_dir, subdir, &name, contents.as_bytes())?;
+        }
+        // El primer archivo decide el tipo informado (un pack de config trae 2; un tema con
+        // íconos trae el .json primero, así que el tipo Theme prevalece sobre los PNGs).
+        if kind.is_none() || matches!(this_kind, ImportKind::Theme(_)) {
             kind = Some(this_kind);
         }
     }
     kind.ok_or_else(|| "el pack está vacío o no tiene archivos reconocidos".to_string())
 }
 
-/// Mapea el nombre de una entrada del zip a (subcarpeta, tipo). Error si no se reconoce.
-fn classify(name: &str) -> Result<(&'static str, ImportKind), String> {
+/// Mapea el nombre de una entrada del zip a (subcarpeta destino relativa, tipo). La subcarpeta
+/// se deriva del nombre (puede tener un nivel intermedio como `icons/<id>`). Error si no se
+/// reconoce.
+fn classify(name: &str) -> Result<(String, ImportKind), String> {
     if let Some(rest) = name.strip_prefix("lang/") {
         if let Some(code) = rest.strip_suffix(".json") {
-            return Ok(("lang", ImportKind::Lang(code.to_string())));
+            return Ok(("lang".to_string(), ImportKind::Lang(code.to_string())));
         }
     }
     if let Some(rest) = name.strip_prefix("themes/") {
         if let Some(id) = rest.strip_suffix(".json") {
-            return Ok(("themes", ImportKind::Theme(id.to_string())));
+            return Ok(("themes".to_string(), ImportKind::Theme(id.to_string())));
+        }
+    }
+    // Set de íconos de un tema: icons/<id>/<name>.png → carpeta icons/<id>; tipo Theme(id) para
+    // que la UI recargue el catálogo de sets/temas tras importar.
+    if let Some(rest) = name.strip_prefix("icons/") {
+        if rest.to_ascii_lowercase().ends_with(".png") {
+            if let Some((id, _file)) = rest.split_once('/') {
+                if !id.is_empty() {
+                    return Ok((format!("icons/{id}"), ImportKind::Theme(id.to_string())));
+                }
+            }
         }
     }
     if name == "settings.json" || name == "keybindings.json" {
-        return Ok(("", ImportKind::Config));
+        return Ok((String::new(), ImportKind::Config));
     }
     Err(format!("entrada no reconocida en el pack: {name}"))
+}
+
+/// Crea la subcarpeta destino y escribe los bytes de una entrada del pack en `config_dir/name`.
+fn write_entry(config_dir: &Path, subdir: String, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let dest_dir = config_dir.join(&subdir);
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("no se pudo crear {}: {e}", dest_dir.display()))?;
+    let dest = config_dir.join(name);
+    std::fs::write(&dest, bytes).map_err(|e| format!("no se pudo escribir {}: {e}", dest.display()))
+}
+
+/// ¿Los bytes empiezan con la firma PNG (\x89PNG\r\n\x1a\n)? Validación barata anti-basura.
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 }
 
 #[cfg(test)]
@@ -184,6 +237,50 @@ mod tests {
         let bad = dir.path().join("bad.zip");
         std::fs::write(&bad, b"esto no es un zip").unwrap();
         assert!(import_zip(dir.path(), &bad).is_err());
+    }
+
+    /// Un PNG mínimo válido (firma + IHDR + IEND), suficiente para la validación por firma.
+    fn png_minimo() -> Vec<u8> {
+        let mut v = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend_from_slice(b"resto-cualquiera");
+        v
+    }
+
+    #[test]
+    fn export_import_tema_con_iconos_round_trip() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        // Tema con su set de íconos propio.
+        std::fs::create_dir_all(src.path().join("themes")).unwrap();
+        std::fs::write(src.path().join("themes/mio.json"), r#"{"name":"mio"}"#).unwrap();
+        std::fs::create_dir_all(src.path().join("icons/mio")).unwrap();
+        std::fs::write(src.path().join("icons/mio/folder.png"), png_minimo()).unwrap();
+        let zip_path = src.path().join("tema.zip");
+
+        export_theme(src.path(), "mio", &zip_path).unwrap();
+        let kind = import_zip(dst.path(), &zip_path).unwrap();
+        assert_eq!(kind, ImportKind::Theme("mio".to_string()));
+        assert!(dst.path().join("themes/mio.json").exists());
+        assert!(
+            dst.path().join("icons/mio/folder.png").exists(),
+            "el PNG del set de íconos del tema se importó"
+        );
+    }
+
+    #[test]
+    fn import_png_no_valido_falla() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        // Empaquetar a mano un icons/x/evil.png que NO es PNG.
+        let zip_path = src.path().join("p.zip");
+        let f = std::fs::File::create(&zip_path).unwrap();
+        let mut zw = zip::ZipWriter::new(f);
+        zw.start_file("icons/x/evil.png", opts()).unwrap();
+        zw.write_all(b"no es png").unwrap();
+        zw.finish().unwrap();
+
+        assert!(import_zip(dst.path(), &zip_path).is_err());
+        assert!(!dst.path().join("icons/x/evil.png").exists());
     }
 
     #[test]
