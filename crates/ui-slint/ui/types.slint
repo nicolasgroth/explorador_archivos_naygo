@@ -61,6 +61,12 @@ export struct ColumnMenuVm {
     exts: [ExtRowVm],      // extensiones marcables (Extension)
 }
 
+// Una plantilla de disposición en el menú de Layouts (F4): nombre + si es built-in (no borrable).
+export struct LayoutRow {
+    name: string,
+    builtin: bool,
+}
+
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
 export struct NavRow {
     label: string,

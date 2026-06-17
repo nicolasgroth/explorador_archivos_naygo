@@ -273,6 +273,71 @@ impl Workspace {
         w
     }
 
+    /// Captura la disposición ACTUAL como una `LayoutTemplate` con el `name` dado (inverso de
+    /// `from_template`). Los paneles se recogen en el orden en que aparecen en el árbol de
+    /// disposición; los `Files` apuntan a su carpeta actual como `TemplateDir::Fixed`, los demás
+    /// a `Home`. Útil para «guardar la disposición actual como plantilla».
+    pub fn to_template(&self, name: &str) -> crate::workspace::template::LayoutTemplate {
+        use crate::workspace::layout::DockNode;
+        use crate::workspace::template::{LayoutShape, LayoutTemplate, TemplateDir, TemplatePane};
+
+        // Recorre el árbol recogiendo PaneIds en orden y construye el LayoutShape por índice.
+        // `order` mapea PaneId → índice en `panes` (en orden de aparición).
+        let mut order: Vec<PaneId> = Vec::new();
+        fn idx_of(order: &mut Vec<PaneId>, id: PaneId) -> usize {
+            if let Some(i) = order.iter().position(|x| *x == id) {
+                i
+            } else {
+                order.push(id);
+                order.len() - 1
+            }
+        }
+        fn node_to_shape(node: &DockNode, order: &mut Vec<PaneId>) -> LayoutShape {
+            match node {
+                DockNode::Leaf(id) => LayoutShape::Leaf(idx_of(order, *id)),
+                DockNode::Tabs { members, active } => LayoutShape::Tabs {
+                    members: members.iter().map(|id| idx_of(order, *id)).collect(),
+                    active: *active,
+                },
+                DockNode::Split {
+                    dir,
+                    fraction,
+                    first,
+                    second,
+                } => LayoutShape::Split {
+                    dir: *dir,
+                    fraction: *fraction,
+                    first: Box::new(node_to_shape(first, order)),
+                    second: Box::new(node_to_shape(second, order)),
+                },
+            }
+        }
+
+        let layout = match &self.layout.root {
+            Some(root) => node_to_shape(root, &mut order),
+            None => LayoutShape::Leaf(0),
+        };
+        // Construir los TemplatePane en el orden recogido del árbol.
+        let panes: Vec<TemplatePane> = order
+            .iter()
+            .filter_map(|id| self.pane(*id))
+            .map(|p| TemplatePane {
+                purpose: p.purpose,
+                dir: match &p.files {
+                    Some(f) => TemplateDir::Fixed(f.current_dir.to_string_lossy().into_owned()),
+                    None => TemplateDir::Home,
+                },
+            })
+            .collect();
+        LayoutTemplate {
+            name: name.to_string(),
+            builtin: false,
+            favorite: false,
+            panes,
+            layout,
+        }
+    }
+
     /// Inserta un `PaneNode` ya construido (con su id propio), para reconstruir un workspace
     /// desde un persist. Si es el primero, queda activo. No toca `next_id` (lo fija el
     /// llamador con `set_next_id` tras insertar todos).
@@ -504,5 +569,23 @@ mod tests {
         // El panel se creó; el layout cae al primer id en vez de panicar.
         assert_eq!(w.panes().len(), 1);
         assert_eq!(w.layout.pane_ids(), vec![w.panes()[0].id]);
+    }
+
+    #[test]
+    fn to_template_captura_la_disposicion_actual() {
+        // from_template(dual_pane) → to_template debe reproducir tipos y forma del layout.
+        let tpl = crate::workspace::template::LayoutTemplate::dual_pane();
+        let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
+        let captured = w.to_template("Mi captura");
+        assert_eq!(captured.name, "Mi captura");
+        assert!(!captured.builtin);
+        // Mismos tipos de panel en el mismo orden.
+        let orig_purposes: Vec<_> = tpl.panes.iter().map(|p| p.purpose).collect();
+        let cap_purposes: Vec<_> = captured.panes.iter().map(|p| p.purpose).collect();
+        assert_eq!(orig_purposes, cap_purposes);
+        // Re-materializar la captura da el mismo nº de paneles y hojas.
+        let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
+        assert_eq!(w2.panes().len(), w.panes().len());
+        assert_eq!(w2.layout.pane_ids().len(), w.layout.pane_ids().len());
     }
 }

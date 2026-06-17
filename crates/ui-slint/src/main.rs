@@ -1243,6 +1243,63 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     refresh_drives();
+    // Vuelca la lista de plantillas de disposición (built-in + usuario) al menú de Layouts (F4).
+    // Se llama al arrancar y tras guardar/borrar una plantilla.
+    let refresh_layouts: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let rows: Vec<LayoutRow> = ctrl
+                .borrow()
+                .layout_templates()
+                .into_iter()
+                .map(|(name, builtin)| LayoutRow {
+                    name: SharedString::from(name.as_str()),
+                    builtin,
+                })
+                .collect();
+            ui.set_layout_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+        })
+    };
+    refresh_layouts();
+    // Aplicar una plantilla: reconstruye el workspace y relanza el contenido de cada panel.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        let refresh_layouts = refresh_layouts.clone();
+        ui.on_apply_layout(move |name| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            ctrl.borrow_mut().apply_template(name.as_str(), now);
+            start_timer();
+            sync_layout();
+            refresh_layouts();
+        });
+    }
+    // Guardar la disposición actual como plantilla de usuario.
+    {
+        let ctrl = ctrl.clone();
+        let refresh_layouts = refresh_layouts.clone();
+        ui.on_save_layout(move |name| {
+            ctrl.borrow_mut().save_current_template(name.as_str());
+            refresh_layouts();
+        });
+    }
+    // Borrar una plantilla de usuario.
+    {
+        let ctrl = ctrl.clone();
+        let refresh_layouts = refresh_layouts.clone();
+        ui.on_delete_layout(move |name| {
+            ctrl.borrow_mut().delete_template(name.as_str());
+            refresh_layouts();
+        });
+    }
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));

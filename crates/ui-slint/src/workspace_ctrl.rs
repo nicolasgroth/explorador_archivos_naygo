@@ -99,6 +99,9 @@ pub struct WorkspaceCtrl {
     pub context_menu: Option<ContextMenuState>,
     /// Menú/editor de columna abierto (clic derecho en el header, F2): panel, columna y posición.
     pub column_menu: Option<ColumnMenuState>,
+    /// Plantillas de disposición del usuario + recientes (templates.json). Los built-in viven en
+    /// código (`LayoutTemplate::builtins`). Fase 4.
+    pub templates: naygo_core::workspace::TemplateStore,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -186,7 +189,7 @@ impl WorkspaceCtrl {
             reveal_targets: HashMap::new(),
             favorites: Favorites::new(),
             recents: RecentDirs::new(),
-            ops: crate::ops_ctrl::OpsCtrl::new(config_dir),
+            ops: crate::ops_ctrl::OpsCtrl::new(config_dir.clone()),
             preview: crate::preview::PreviewState::new(),
             pending_pick: None,
             last_area: Rect {
@@ -202,6 +205,7 @@ impl WorkspaceCtrl {
             shift_down: false,
             context_menu: None,
             column_menu: None,
+            templates: naygo_core::config::load_templates(&config_dir),
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -856,6 +860,115 @@ impl WorkspaceCtrl {
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
             Some(f) => !f.table.filters.is_empty() && !f.entries.is_empty() && f.view_len() == 0,
             None => false,
+        }
+    }
+
+    // --- Plantillas de disposición de paneles (Fase 4) ---
+
+    /// Carpeta «home» para las plantillas (`TemplateDir::Home`): la carpeta del Files activo si la
+    /// hay; si no, %USERPROFILE%; si no, la raíz del disco del sistema.
+    fn template_home(&self) -> PathBuf {
+        if let Some(f) = self.ws.active_files() {
+            return f.current_dir.clone();
+        }
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\"))
+    }
+
+    /// Lista de plantillas para el menú: (nombre, es_builtin), built-ins primero y luego las del
+    /// usuario. El orden de los built-in es el de `LayoutTemplate::builtins`.
+    pub fn layout_templates(&self) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = naygo_core::workspace::LayoutTemplate::builtins()
+            .into_iter()
+            .map(|t| (t.name, true))
+            .collect();
+        out.extend(self.templates.user.iter().map(|t| (t.name.clone(), false)));
+        out
+    }
+
+    /// Busca una plantilla por nombre entre los built-in y las del usuario.
+    fn find_template(&self, name: &str) -> Option<naygo_core::workspace::LayoutTemplate> {
+        naygo_core::workspace::LayoutTemplate::builtins()
+            .into_iter()
+            .find(|t| t.name == name)
+            .or_else(|| self.templates.user.iter().find(|t| t.name == name).cloned())
+    }
+
+    /// Aplica la plantilla `name`: reconstruye el workspace desde ella, relanza el contenido de
+    /// cada panel y registra el uso. `now_secs` lo inyecta la UI (core no llama a SystemTime).
+    /// No hace nada si el nombre no existe.
+    pub fn apply_template(&mut self, name: &str, now_secs: u64) {
+        let Some(tpl) = self.find_template(name) else {
+            return;
+        };
+        let home = self.template_home();
+        // Cancelar los listados/árboles actuales antes de reemplazar el workspace.
+        for l in self.listings.values() {
+            l.cancel();
+        }
+        self.listings.clear();
+        self.trees.clear();
+        self.tree_listings.clear();
+        self.reveal_targets.clear();
+        self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.relaunch_all_panes();
+        self.last_active_files = self.ws.files_panes().first().copied();
+        self.templates.record_use(name, now_secs);
+        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+        self.maybe_persist_session();
+    }
+
+    /// Guarda la disposición ACTUAL como plantilla de usuario con `name` (reemplaza si ya existe).
+    /// Persiste. Nombre vacío = no hace nada.
+    pub fn save_current_template(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let tpl = self.ws.to_template(name);
+        self.templates.add_user(tpl);
+        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+    }
+
+    /// Borra una plantilla de USUARIO por nombre (los built-in no se borran). Persiste.
+    pub fn delete_template(&mut self, name: &str) {
+        self.templates.remove_user(name);
+        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+    }
+
+    /// Relanza el contenido de TODOS los paneles del workspace actual (tras reemplazarlo por una
+    /// plantilla): listados de los Files, árboles de los Tree. Mismo patrón que `load_session`.
+    fn relaunch_all_panes(&mut self) {
+        let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
+            .ws
+            .panes()
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.purpose,
+                    p.files.as_ref().map(|f| f.current_dir.clone()),
+                )
+            })
+            .collect();
+        for (id, purpose, dir) in panes {
+            match purpose {
+                PanePurpose::Files => {
+                    if let Some(dir) = dir {
+                        self.recents.push(dir.clone());
+                        self.start_listing(id, dir);
+                    }
+                }
+                PanePurpose::Tree => {
+                    let mut t = build_tree();
+                    if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+                        t.set_active(cur);
+                    }
+                    self.trees.insert(id, t);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -2571,6 +2684,42 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// Aplicar una plantilla built-in reconstruye el workspace con sus paneles, y guardar la
+    /// disposición actual como plantilla de usuario persiste (se ve en otro controlador).
+    #[test]
+    fn plantillas_aplicar_guardar_y_borrar() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.panes().len(), 1, "arranca con un panel");
+
+        // Aplicar "Dual-pane" (4 paneles: árbol + 2 files + inspector).
+        c.apply_template("Dual-pane", 100);
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.panes().len(), 4);
+        assert_eq!(c.ws.files_panes().len(), 2);
+        // Quedó registrado en recientes.
+        assert_eq!(
+            c.templates.recents.first().map(|r| r.name.as_str()),
+            Some("Dual-pane")
+        );
+
+        // Guardar la disposición actual como plantilla de usuario.
+        c.save_current_template("Mi setup");
+        assert!(c
+            .layout_templates()
+            .iter()
+            .any(|(n, builtin)| n == "Mi setup" && !builtin));
+        // Persistió: un controlador nuevo (mismo config_dir) la ve.
+        let c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(c2.templates.user.iter().any(|t| t.name == "Mi setup"));
+
+        // Borrarla.
+        c.delete_template("Mi setup");
+        assert!(!c.layout_templates().iter().any(|(n, _)| n == "Mi setup"));
     }
 
     /// "Mover →" desde el menú reordena la columna en el orden visual completo.

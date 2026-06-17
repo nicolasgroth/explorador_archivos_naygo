@@ -117,7 +117,9 @@ Faltan respecto al contrato I:
    imagen pegada, modo bajo consumo, tray, cerrar-a-bandeja, nuevos-al-final, factory reset en
    2 pasos). PENDIENTE: Previsualización (C3, tabla editable de reglas) + plantilla de tabla por
    defecto (C4); botón de cierre ✕ ya hecho en commit anterior.
-4. **Plantillas de layout** (P3) en la toolbar. ← SIGUIENTE
-5. **Batch-rename** (P4) — ventana modal.
+4. ✅ **Plantillas de layout** (P3): botón "Layouts" en la toolbar con built-ins (minimalista/
+   clásico/dual-pane/power-user) + plantillas de usuario (guardar disposición actual / borrar),
+   persistidas en templates.json. Core: `Workspace::from_template`/`to_template`. ← HECHO
+5. **Batch-rename** (P4) — ventana modal. ← SIGUIENTE
 6. **Navegación por teclado** completa + verificación del keymap.
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

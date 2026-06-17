@@ -22,6 +22,11 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_toolbar_clone_tip(c.t("toolbar.clone_path").into());
     tr.set_toolbar_tabs(c.t("slint.toolbar.tabs").into());
     tr.set_toolbar_tabs_tip(c.t("slint.toolbar.tabs_tip").into());
+    tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
+    tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
+    tr.set_layout_save_current(c.t("slint.layout.save_current").into());
+    tr.set_layout_save_title(c.t("slint.layout.save_title").into());
+    tr.set_layout_save_placeholder(c.t("slint.layout.save_placeholder").into());
     // Menú desplegable "agregar panel".
     tr.set_add_files(c.t("slint.add.files").into());
     tr.set_add_tree(c.t("pane.tree.title").into());

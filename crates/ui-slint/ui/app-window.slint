@@ -1,6 +1,7 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow } from "types.slint";
+import { LineEdit } from "std-widgets.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { ColumnMenu } from "column-menu.slint";
@@ -293,6 +294,15 @@ export component AppWindow inherits Window {
     property <bool> add-menu-open: false;
     // Estado del menú del botón "+" (elegir dirección de la división).
     property <bool> dir-menu-open: false;
+    // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
+    property <bool> layout-menu-open: false;
+    in property <[LayoutRow]> layout-rows;
+    callback apply-layout(string);      // aplicar la plantilla `name`
+    callback delete-layout(string);     // borrar una plantilla de usuario `name`
+    callback save-layout(string);       // guardar la disposición actual como plantilla `name`
+    // Modal para nombrar la plantilla al guardar la disposición actual.
+    property <bool> layout-save-open: false;
+    property <string> layout-save-name: "";
 
     // --- Íconos de acción de la toolbar (6B) ---
     // Los setea Rust desde el IconCache al arrancar y al cambiar de set de íconos.
@@ -438,6 +448,17 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.config-open = true; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Menú de plantillas de disposición (F4).
+                ToolBtn {
+                    label: Tr.toolbar-layouts;
+                    tip: Tr.toolbar-layouts-tip;
+                    icon: root.ic-tabs;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 84px;
+                    highlight: root.layout-menu-open;
+                    clicked => { root.layout-menu-open = !root.layout-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 // Separador antes de la tira de unidades.
@@ -839,6 +860,118 @@ export component AppWindow inherits Window {
             MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+        }
+    }
+
+    // Menú de Layouts (F4): plantillas built-in + del usuario. Clic aplica; ✕ borra las de
+    // usuario; al final, "Guardar disposición actual…" abre el modal de nombre.
+    if root.layout-menu-open: TouchArea {
+        clicked => { root.layout-menu-open = false; }
+    }
+    if root.layout-menu-open: Rectangle {
+        x: root.width - self.width - 90px;
+        y: root.top-bar-h + 2px;
+        width: 230px;
+        height: layout-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        layout-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            for row in root.layout-rows: Rectangle {
+                height: 28px;
+                background: lay-touch.has-hover ? Theme.selection-bg : transparent;
+                border-radius: 3px;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 4px;
+                    spacing: 4px;
+                    Text {
+                        text: (row.builtin ? "▦ " : "★ ") + row.name;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    // ✕ para borrar plantillas de usuario (no las built-in).
+                    if !row.builtin: Rectangle {
+                        width: 22px;
+                        background: del-touch.has-hover ? Theme.error : transparent;
+                        border-radius: 3px;
+                        Text { text: "✕"; color: Theme.text-dim; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        del-touch := TouchArea {
+                            clicked => { root.delete-layout(row.name); }
+                        }
+                    }
+                }
+                lay-touch := TouchArea {
+                    clicked => { root.apply-layout(row.name); root.layout-menu-open = false; }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+            MenuItem {
+                label: Tr.layout-save-current;
+                clicked => {
+                    root.layout-menu-open = false;
+                    root.layout-save-name = "";
+                    root.layout-save-open = true;
+                }
+            }
+        }
+    }
+
+    // Modal para nombrar la plantilla al guardar la disposición actual.
+    if root.layout-save-open: Rectangle {
+        background: #000000aa;
+        TouchArea { clicked => { root.layout-save-open = false; } }
+        Rectangle {
+            width: 360px;
+            height: 130px;
+            background: Theme.panel-bg;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            TouchArea {}
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                Text { text: Tr.layout-save-title; color: Theme.text; font-weight: 700; }
+                name-edit := LineEdit {
+                    placeholder-text: Tr.layout-save-placeholder;
+                    text: root.layout-save-name;
+                    init => { self.focus(); }
+                    edited(t) => { root.layout-save-name = t; }
+                    accepted(t) => {
+                        root.save-layout(t);
+                        root.layout-save-open = false;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Rectangle {
+                        width: 90px; height: 28px;
+                        background: cancel-t.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                        border-radius: 4px;
+                        Text { text: Tr.dlg-cancel; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                        cancel-t := TouchArea { clicked => { root.layout-save-open = false; } }
+                    }
+                    Rectangle {
+                        width: 90px; height: 28px;
+                        background: save-t.has-hover ? Theme.accent.darker(10%) : Theme.accent;
+                        border-radius: 4px;
+                        Text { text: Tr.dlg-accept; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                        save-t := TouchArea {
+                            clicked => {
+                                root.save-layout(name-edit.text);
+                                root.layout-save-open = false;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
