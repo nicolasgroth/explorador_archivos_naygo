@@ -158,6 +158,8 @@ por panel en el controlador.
 (`spawn_dir_size`), drenado en el tick; el resultado (con progreso en vivo) se muestra en la barra
 de estado. Respeta "no bajar a subdirectorios". Esc cancela.
 
-BACKLOG DE PARIDAD: ✅ CERRADO. Roadmap: paleta de comandos Ctrl+P. Limitación documentada:
-botones de mouse atrás/adelante no son posibles vía Slint.
+BACKLOG DE PARIDAD: ✅ CERRADO. Roadmap: paleta de comandos Ctrl+P.
+✅ **Botones de mouse atrás/adelante** (actualización 2026-06-17): SÍ resultaron posibles —
+Slint 1.16 expone `PointerEventButton::Back/Forward`. Cableados en filas y zona vacía del panel
+→ `on_go_back`/`on_go_forward`. (La limitación documentada antes quedó obsoleta.)
 7. (Roadmap) **Paleta de comandos Ctrl+P.**
