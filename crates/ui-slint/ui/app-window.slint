@@ -17,7 +17,7 @@ import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
 import { Help } from "help.slint";
 import { BatchRenameVm, HelpRowVm } from "types.slint";
-import { SettingsVm, ShortcutRowVm } from "types.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { Splash } from "splash.slint";
@@ -387,6 +387,11 @@ export component AppWindow inherits Window {
     callback cfg-factory-reset();
     callback cfg-save-default-table();
     callback cfg-clear-default-table();
+    in property <[PreviewRuleVm]> cfg-preview-rules;
+    callback cfg-preview-toggle(string);
+    callback cfg-preview-set-as(string, string);
+    callback cfg-preview-remove(string);
+    callback cfg-preview-add(string);
     callback cfg-open-repo();
     pure callback cfg-egg-prefix(int) -> string;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -887,6 +892,11 @@ export component AppWindow inherits Window {
         factory-reset() => { root.cfg-factory-reset(); }
         save-default-table() => { root.cfg-save-default-table(); }
         clear-default-table() => { root.cfg-clear-default-table(); }
+        preview-rules: root.cfg-preview-rules;
+        preview-toggle(e) => { root.cfg-preview-toggle(e); }
+        preview-set-as(e, a) => { root.cfg-preview-set-as(e, a); }
+        preview-remove(e) => { root.cfg-preview-remove(e); }
+        preview-add(e) => { root.cfg-preview-add(e); }
         open-repo() => { root.cfg-open-repo(); }
         egg-prefix(n) => { root.cfg-egg-prefix(n) }
         close() => { root.config-open = false; }

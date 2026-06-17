@@ -1473,6 +1473,84 @@ impl WorkspaceCtrl {
         self.config.save();
     }
 
+    // --- Reglas de previsualización (C3) ---
+
+    /// Reglas de preview actuales (espejo para la UI): (extensión, habilitada, tratar-como).
+    pub fn preview_rules(&self) -> Vec<(String, bool, String)> {
+        self.config
+            .settings
+            .preview_rules
+            .iter()
+            .map(|r| {
+                (
+                    r.ext.clone(),
+                    r.enabled,
+                    r.treat_as.clone().unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// Alterna si se previsualiza la extensión `ext`. Persiste.
+    pub fn preview_rule_toggle(&mut self, ext: &str) {
+        if let Some(r) = self
+            .config
+            .settings
+            .preview_rules
+            .iter_mut()
+            .find(|r| r.ext == ext)
+        {
+            r.enabled = !r.enabled;
+            self.config.save();
+        }
+    }
+
+    /// Fija el alias "tratar como" de la extensión `ext` (vacío = sin alias). Persiste.
+    pub fn preview_rule_set_treat_as(&mut self, ext: &str, treat_as: &str) {
+        if let Some(r) = self
+            .config
+            .settings
+            .preview_rules
+            .iter_mut()
+            .find(|r| r.ext == ext)
+        {
+            let t = treat_as.trim().to_ascii_lowercase();
+            r.treat_as = if t.is_empty() { None } else { Some(t) };
+            self.config.save();
+        }
+    }
+
+    /// Quita la regla de la extensión `ext`. Persiste.
+    pub fn preview_rule_remove(&mut self, ext: &str) {
+        self.config.settings.preview_rules.retain(|r| r.ext != ext);
+        self.config.save();
+    }
+
+    /// Agrega una regla habilitada para `ext` (normaliza a minúscula sin punto). No duplica.
+    /// Nombre vacío = no-op. Persiste.
+    pub fn preview_rule_add(&mut self, ext: &str) {
+        let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+        if ext.is_empty()
+            || self
+                .config
+                .settings
+                .preview_rules
+                .iter()
+                .any(|r| r.ext == ext)
+        {
+            return;
+        }
+        self.config
+            .settings
+            .preview_rules
+            .push(naygo_core::preview::PreviewRule {
+                ext,
+                enabled: true,
+                treat_as: None,
+            });
+        self.config.save();
+    }
+
     /// Punto de entrada de una acción multi-panel. Resuelve el destino: si es directo,
     /// actúa; si hay varios, deja un `pending_pick` para que la UI muestre el selector;
     /// si no hay otro panel, divide y usa el nuevo (para OpenDir/Clone; Swap necesita 2).
@@ -3028,6 +3106,47 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// C3: agregar/alternar/aliasar/quitar reglas de previsualización; persisten.
+    #[test]
+    fn reglas_de_preview_crud() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        // Agregar una extensión nueva (normaliza el punto y mayúsculas).
+        c.preview_rule_add(".SIF");
+        assert!(c.preview_rules().iter().any(|(e, on, _)| e == "sif" && *on));
+        // No duplica.
+        c.preview_rule_add("sif");
+        assert_eq!(
+            c.preview_rules()
+                .iter()
+                .filter(|(e, _, _)| e == "sif")
+                .count(),
+            1
+        );
+        // Tratar-como.
+        c.preview_rule_set_treat_as("sif", "XML");
+        assert!(c
+            .preview_rules()
+            .iter()
+            .any(|(e, _, t)| e == "sif" && t == "xml"));
+        // Alternar.
+        c.preview_rule_toggle("sif");
+        assert!(c
+            .preview_rules()
+            .iter()
+            .any(|(e, on, _)| e == "sif" && !*on));
+        // Persistió: reabrir y la regla sigue.
+        let c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(c2
+            .preview_rules()
+            .iter()
+            .any(|(e, _, t)| e == "sif" && t == "xml"));
+        // Quitar.
+        c.preview_rule_remove("sif");
+        assert!(!c.preview_rules().iter().any(|(e, _, _)| e == "sif"));
     }
 
     /// C4: guardar la tabla del panel activo como plantilla → un panel Files nuevo nace con esas

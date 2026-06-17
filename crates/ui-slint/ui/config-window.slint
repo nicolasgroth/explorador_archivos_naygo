@@ -3,7 +3,7 @@
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 import { ListView, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
-import { SettingsVm, ShortcutRowVm } from "types.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
@@ -125,6 +125,13 @@ export component ConfigWindow inherits Rectangle {
     // Plantilla de tabla por defecto (C4):
     callback save-default-table();
     callback clear-default-table();
+    // Reglas de previsualización (C3):
+    in property <[PreviewRuleVm]> preview-rules;
+    callback preview-toggle(string);
+    callback preview-set-as(string, string);
+    callback preview-remove(string);
+    callback preview-add(string);
+    property <string> preview-add-draft: "";
     // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
     property <bool> reset-armed: false;
     // Atajos:
@@ -239,7 +246,7 @@ export component ConfigWindow inherits Rectangle {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-about]: Rectangle {
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about]: Rectangle {
                             height: 30px;
                             background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
@@ -544,8 +551,75 @@ export component ConfigWindow inherits Rectangle {
                                 }
                             }
 
-                            // === Acerca de (cat 7) ===
+                            // === Previsualización (cat 7) ===
                             if root.cat == 7: VerticalLayout {
+                                spacing: 6px;
+                                Text { text: Tr.cfg-preview-hint; color: Theme.text-dim; wrap: word-wrap; }
+                                // Encabezado de la tabla.
+                                HorizontalLayout {
+                                    height: 22px;
+                                    spacing: 6px;
+                                    Text { text: Tr.cfg-preview-ext; color: Theme.text-dim; font-weight: 700; width: 90px; vertical-alignment: center; }
+                                    Text { text: Tr.cfg-preview-on; color: Theme.text-dim; font-weight: 700; width: 70px; vertical-alignment: center; }
+                                    Text { text: Tr.cfg-preview-as; color: Theme.text-dim; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Rectangle { width: 24px; }
+                                }
+                                // Filas de reglas (scroll).
+                                Rectangle {
+                                    height: 320px;
+                                    background: Theme.panel-bg;
+                                    border-radius: 4px;
+                                    ListView {
+                                        for r in root.preview-rules: Rectangle {
+                                            height: 32px;
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                spacing: 6px;
+                                                Text { text: r.ext; color: Theme.text; width: 86px; vertical-alignment: center; }
+                                                Rectangle {
+                                                    width: 70px;
+                                                    Switch {
+                                                        checked: r.enabled;
+                                                        toggled => { root.preview-toggle(r.ext); }
+                                                    }
+                                                }
+                                                LineEdit {
+                                                    horizontal-stretch: 1;
+                                                    text: r.treat-as;
+                                                    placeholder-text: "—";
+                                                    edited(t) => { root.preview-set-as(r.ext, t); }
+                                                }
+                                                Rectangle {
+                                                    width: 24px;
+                                                    background: rm-touch.has-hover ? Theme.error : transparent;
+                                                    border-radius: 3px;
+                                                    Text { text: "✕"; color: Theme.text-dim; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                                                    rm-touch := TouchArea { clicked => { root.preview-remove(r.ext); } }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Agregar una extensión nueva.
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit {
+                                        horizontal-stretch: 1;
+                                        text: root.preview-add-draft;
+                                        placeholder-text: Tr.cfg-preview-add-ph;
+                                        edited(t) => { root.preview-add-draft = t; }
+                                        accepted(t) => { root.preview-add(t); root.preview-add-draft = ""; }
+                                    }
+                                    CfgBtn {
+                                        label: Tr.cfg-preview-add;
+                                        clicked => { root.preview-add(root.preview-add-draft); root.preview-add-draft = ""; }
+                                    }
+                                }
+                            }
+
+                            // === Acerca de (cat 8) ===
+                            if root.cat == 8: VerticalLayout {
                                 spacing: 6px;
                                 alignment: start;
                                 HorizontalLayout {

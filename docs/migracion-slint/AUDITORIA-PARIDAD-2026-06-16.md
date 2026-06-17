@@ -145,6 +145,11 @@ Faltan respecto al contrato I:
 8. ✅ **Documentación**: `docs/GUIA-DE-USUARIO.md` (cada sección + atajos), README al día.
 9. (Roadmap) **Paleta de comandos Ctrl+P.**
 
-PENDIENTES restantes (tareas propias, no de paridad): teclado del árbol (#71), ComputeSize/F3
-(#72), config Previsualización C3 (#75) y plantilla de tabla C4 (#76).
+✅ **Config C3 (Previsualización)**: nueva categoría con tabla editable de reglas por extensión
+(on/off + tratar-como + agregar/quitar), sobre `Settings.preview_rules`.
+✅ **Config C4 (plantilla de tabla)**: "usar la tabla actual" guarda el `TableState` del panel
+activo como plantilla para paneles nuevos (`Settings.default_table`).
+
+PENDIENTES restantes (tareas propias, no de paridad): teclado del árbol (#71) y ComputeSize/F3
+(#72). Roadmap: paleta de comandos Ctrl+P.
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

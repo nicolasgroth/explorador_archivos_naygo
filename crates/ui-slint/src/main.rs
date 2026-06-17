@@ -1263,6 +1263,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .collect();
             ui.set_shortcut_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+            // Reglas de previsualización (C3).
+            let prev: Vec<PreviewRuleVm> = c
+                .preview_rules()
+                .into_iter()
+                .map(|(ext, enabled, treat_as)| PreviewRuleVm {
+                    ext: ext.into(),
+                    enabled,
+                    treat_as: treat_as.into(),
+                })
+                .collect();
+            ui.set_cfg_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
             ui.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
             ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         })
@@ -1694,6 +1705,40 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         ui.on_cfg_clear_default_table(move || {
             ctrl.borrow_mut().clear_default_table();
+            refresh();
+        });
+    }
+    // C3: reglas de previsualización (toggle / tratar-como / quitar / agregar).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_preview_toggle(move |ext| {
+            ctrl.borrow_mut().preview_rule_toggle(ext.as_str());
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_preview_set_as(move |ext, as_| {
+            ctrl.borrow_mut()
+                .preview_rule_set_treat_as(ext.as_str(), as_.as_str());
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_preview_remove(move |ext| {
+            ctrl.borrow_mut().preview_rule_remove(ext.as_str());
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_preview_add(move |ext| {
+            ctrl.borrow_mut().preview_rule_add(ext.as_str());
             refresh();
         });
     }

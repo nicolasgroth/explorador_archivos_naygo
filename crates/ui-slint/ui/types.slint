@@ -252,6 +252,13 @@ export struct SettingsVm {
     icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
 }
 
+// Una regla de previsualización editable (C3): extensión, si se previsualiza, y "tratar como".
+export struct PreviewRuleVm {
+    ext: string,
+    enabled: bool,
+    treat-as: string,
+}
+
 // Una fila del editor de atajos: la clave estable de la acción, su nombre legible y el chord
 // actual como texto. `conflict` se setea tras una reasignación que pisó otra acción.
 export struct ShortcutRowVm {
