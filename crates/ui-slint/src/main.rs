@@ -1679,6 +1679,24 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    // C4: guardar la tabla del panel activo como plantilla por defecto.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_save_default_table(move || {
+            ctrl.borrow_mut().save_default_table_from_active();
+            refresh();
+        });
+    }
+    // C4: limpiar la plantilla de tabla por defecto.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        ui.on_cfg_clear_default_table(move || {
+            ctrl.borrow_mut().clear_default_table();
+            refresh();
+        });
+    }
     // Acerca de: abrir el repositorio en el navegador por defecto.
     {
         ui.on_cfg_open_repo(move || {
@@ -2477,6 +2495,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             naygo_core::config::LowPowerMode::Always => 1,
             naygo_core::config::LowPowerMode::Never => 2,
         },
+        default_table_on: s.default_table.is_some(),
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),

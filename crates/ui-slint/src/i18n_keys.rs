@@ -192,6 +192,11 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_bar_side(c.t("settings.bar.side").into());
     tr.set_cfg_size_no_subdirs(c.t("slint.cfg.size_no_subdirs").into());
     tr.set_cfg_autostart(c.t("slint.cfg.autostart").into());
+    tr.set_cfg_default_table(c.t("slint.cfg.default_table").into());
+    tr.set_cfg_default_table_save(c.t("slint.cfg.default_table_save").into());
+    tr.set_cfg_default_table_clear(c.t("slint.cfg.default_table_clear").into());
+    tr.set_cfg_default_table_on(c.t("slint.cfg.default_table_on").into());
+    tr.set_cfg_default_table_off(c.t("slint.cfg.default_table_off").into());
     tr.set_cfg_date_format(c.t("slint.cfg.date_format").into());
     tr.set_cfg_size_format(c.t("slint.cfg.size_format").into());
     tr.set_cfg_size_auto(c.t("slint.cfg.size_auto").into());

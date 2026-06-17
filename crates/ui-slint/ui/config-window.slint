@@ -122,6 +122,9 @@ export component ConfigWindow inherits Rectangle {
     callback set-tray-enabled(bool);
     callback set-close-to-tray(bool);
     callback factory-reset();
+    // Plantilla de tabla por defecto (C4):
+    callback save-default-table();
+    callback clear-default-table();
     // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
     property <bool> reset-armed: false;
     // Atajos:
@@ -283,6 +286,26 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-autostart;
                                     Switch { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
+                                }
+                                // Plantilla de tabla por defecto (C4): usar la tabla del panel
+                                // activo como predeterminada para paneles nuevos.
+                                Field {
+                                    label: Tr.cfg-default-table;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: root.vm.default-table-on ? Tr.cfg-default-table-on : Tr.cfg-default-table-off;
+                                            color: root.vm.default-table-on ? Theme.highlight : Theme.text-dim;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                        CfgBtn { label: Tr.cfg-default-table-save; clicked => { root.save-default-table(); } }
+                                        CfgBtn {
+                                            label: Tr.cfg-default-table-clear;
+                                            danger: root.vm.default-table-on;
+                                            clicked => { root.clear-default-table(); }
+                                        }
+                                    }
                                 }
                             }
 

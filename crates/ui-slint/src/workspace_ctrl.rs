@@ -1288,6 +1288,7 @@ impl WorkspaceCtrl {
             .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
+        self.apply_default_table(new_id);
         if let Some(active) = active {
             self.ws.layout.split_leaf(active, dir_split, new_id);
             if first {
@@ -1315,6 +1316,9 @@ impl WorkspaceCtrl {
             .unwrap_or_else(|| PathBuf::from("C:/"));
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(purpose, dir);
+        if matches!(purpose, PanePurpose::Files) {
+            self.apply_default_table(new_id);
+        }
         if let Some(active) = active {
             self.ws
                 .layout
@@ -1430,6 +1434,7 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
             .unwrap_or_else(|| PathBuf::from("C:/"));
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
+        self.apply_default_table(new_id);
         self.ws
             .layout
             .split_leaf(origin, SplitDir::Horizontal, new_id);
@@ -1437,6 +1442,35 @@ impl WorkspaceCtrl {
         // El foco se queda en el origen (estás explorando desde ahí).
         self.ws.set_active(origin);
         Some(new_id)
+    }
+
+    // --- Plantilla de tabla por defecto (C4) ---
+
+    /// Si hay una plantilla de tabla por defecto configurada, la aplica al panel `id` recién
+    /// creado (columnas visibles, orden y anchos). Si no, el panel conserva `TableState::default`.
+    fn apply_default_table(&mut self, id: PaneId) {
+        if let Some(tpl) = self.config.settings.default_table.clone() {
+            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.table = tpl;
+            }
+        }
+    }
+
+    /// Guarda el `TableState` del panel Files activo como plantilla por defecto para los paneles
+    /// nuevos (los filtros NO se guardan: la plantilla es columnas/orden/ancho). Persiste.
+    pub fn save_default_table_from_active(&mut self) {
+        if let Some(f) = self.ws.active_files() {
+            let mut table = f.table.clone();
+            table.filters.clear(); // la plantilla no arrastra filtros del panel actual
+            self.config.settings.default_table = Some(table);
+            self.config.save();
+        }
+    }
+
+    /// Limpia la plantilla de tabla por defecto (los paneles nuevos vuelven a `TableState::default`).
+    pub fn clear_default_table(&mut self) {
+        self.config.settings.default_table = None;
+        self.config.save();
     }
 
     /// Punto de entrada de una acción multi-panel. Resuelve el destino: si es directo,
@@ -2994,6 +3028,46 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// C4: guardar la tabla del panel activo como plantilla → un panel Files nuevo nace con esas
+    /// columnas (no las default). Limpiar la plantilla restaura el comportamiento por defecto.
+    #[test]
+    fn plantilla_de_tabla_por_defecto_se_aplica_a_paneles_nuevos() {
+        use naygo_core::columns::ColumnKind;
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Ocultar "Extensión" en el panel activo y guardarlo como plantilla.
+        c.ws.active_files_mut()
+            .unwrap()
+            .table
+            .toggle_visible(ColumnKind::Extension);
+        c.save_default_table_from_active();
+        assert!(c.config.settings.default_table.is_some());
+        // Un panel nuevo (split) hereda la plantilla: Extensión oculta.
+        c.add_pane_split();
+        let new_id = *c.ws.files_panes().last().unwrap();
+        let ext_visible =
+            c.ws.pane(new_id)
+                .unwrap()
+                .files
+                .as_ref()
+                .unwrap()
+                .table
+                .columns
+                .iter()
+                .find(|col| col.kind == ColumnKind::Extension)
+                .unwrap()
+                .visible;
+        assert!(
+            !ext_visible,
+            "el panel nuevo hereda la plantilla (Extensión oculta)"
+        );
+        // Limpiar la plantilla.
+        c.clear_default_table();
+        assert!(c.config.settings.default_table.is_none());
     }
 
     /// La ayuda (F1) lista atajos activos (con chord no vacío) e incluye el propio F1.

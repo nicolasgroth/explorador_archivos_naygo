@@ -385,6 +385,8 @@ export component AppWindow inherits Window {
     callback cfg-set-tray-enabled(bool);
     callback cfg-set-close-to-tray(bool);
     callback cfg-factory-reset();
+    callback cfg-save-default-table();
+    callback cfg-clear-default-table();
     callback cfg-open-repo();
     pure callback cfg-egg-prefix(int) -> string;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -883,6 +885,8 @@ export component AppWindow inherits Window {
         set-tray-enabled(v) => { root.cfg-set-tray-enabled(v); }
         set-close-to-tray(v) => { root.cfg-set-close-to-tray(v); }
         factory-reset() => { root.cfg-factory-reset(); }
+        save-default-table() => { root.cfg-save-default-table(); }
+        clear-default-table() => { root.cfg-clear-default-table(); }
         open-repo() => { root.cfg-open-repo(); }
         egg-prefix(n) => { root.cfg-egg-prefix(n) }
         close() => { root.config-open = false; }
