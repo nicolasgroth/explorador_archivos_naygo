@@ -64,6 +64,7 @@
   "action.new_dir": "Nueva carpeta",
   "action.copy_to_other": "Copiar al otro panel",
   "action.move_to_other": "Mover al otro panel",
+  "action.refresh": "Refrescar",
   "action.compute_size": "Calcular tamaño",
   "action.select_all": "Seleccionar todo",
   "action.extend_up": "Extender selección arriba",

@@ -44,6 +44,9 @@ pub enum PaneAction {
     Clone,
     /// Apilar el origen como pestaña sobre el destino (agruparlos).
     Stack,
+    /// Copiar (`move_files=false`) o mover (`true`) la selección del origen a la carpeta del
+    /// destino (F5/F6 estilo Commander). La selección se lee al resolver el destino.
+    Transfer { move_files: bool },
 }
 
 /// Estado del selector numérico de panel destino (overlay 1..9).
@@ -93,6 +96,9 @@ pub struct WorkspaceCtrl {
     /// primero navega y estampa; el otro ve la estampa reciente y se abstiene.
     pub last_open: Option<std::time::Instant>,
     pub typeahead: String,
+    /// Instante del último carácter de typeahead: si pasan >500ms entre teclas, el buffer se
+    /// reinicia (escribir "in", pausa, "for" busca "for", no "infor"). Estilo Explorer.
+    pub typeahead_at: Option<std::time::Instant>,
     pub ctrl_down: bool,
     pub shift_down: bool,
     /// Menú contextual abierto (clic derecho): posición (x,y en la ventana) y rutas objetivo.
@@ -214,6 +220,7 @@ impl WorkspaceCtrl {
             last_click: None,
             last_open: None,
             typeahead: String::new(),
+            typeahead_at: None,
             ctrl_down: false,
             shift_down: false,
             context_menu: None,
@@ -1477,7 +1484,41 @@ impl WorkspaceCtrl {
                 self.stack_into(origin, dest);
                 false
             }
+            PaneAction::Transfer { move_files } => {
+                self.transfer_to(origin, dest, move_files);
+                false
+            }
         }
+    }
+
+    /// Copia/mueve la selección del panel `origin` a la carpeta del panel `dest`. Lanza una op
+    /// (deshacible) por el motor; el conflicto se resuelve por ítem si choca.
+    fn transfer_to(&mut self, _origin: PaneId, dest: PaneId, move_files: bool) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let Some(dest_dir) = self
+            .ws
+            .pane(dest)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return;
+        };
+        let req = naygo_core::ops::transfer(move_files, sources, dest_dir);
+        let label = if move_files { "Mover" } else { "Copiar" };
+        self.ops.start_op(req, label.to_string(), true);
+    }
+
+    /// Copiar/mover la selección al OTRO panel (F-keys estilo Commander). Resuelve el destino
+    /// con el selector si hay varios; divide si no hay otro panel. Usa `last_area` (la última
+    /// área conocida del contenido) porque el atajo de teclado no la trae.
+    pub fn op_to_other(&mut self, move_files: bool) -> bool {
+        let Some(origin) = self.active_files_id() else {
+            return false;
+        };
+        self.request_action(PaneAction::Transfer { move_files }, origin, self.last_area)
     }
 
     /// Apila el panel `origin` como pestaña sobre el grupo/hoja de `dest` (los agrupa). El
@@ -2454,6 +2495,76 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Atrás en el historial del panel activo (Alt+← / botón de mouse «atrás»). Devuelve true si
+    /// se movió (relanza el listado y resalta en el árbol). Mismo patrón que `on_go_up`.
+    pub fn on_go_back(&mut self) -> bool {
+        let Some(active) = self.active_files_id() else {
+            return false;
+        };
+        let moved = self
+            .ws
+            .pane_mut(active)
+            .and_then(|p| p.files.as_mut())
+            .and_then(|f| f.go_back());
+        match moved {
+            Some(dir) => {
+                self.recents.push(dir.clone());
+                self.start_listing(active, dir.clone());
+                self.sync_trees_active(dir);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Adelante en el historial del panel activo (Alt+→ / botón de mouse «adelante»).
+    pub fn on_go_forward(&mut self) -> bool {
+        let Some(active) = self.active_files_id() else {
+            return false;
+        };
+        let moved = self
+            .ws
+            .pane_mut(active)
+            .and_then(|p| p.files.as_mut())
+            .and_then(|f| f.go_forward());
+        match moved {
+            Some(dir) => {
+                self.recents.push(dir.clone());
+                self.start_listing(active, dir.clone());
+                self.sync_trees_active(dir);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Refresca (re-lista) la carpeta del panel activo — estilo navegador (F5). No toca el
+    /// historial; solo vuelve a leer el disco. Devuelve true si relanzó un listado.
+    pub fn refresh_active(&mut self) -> bool {
+        let Some(active) = self.active_files_id() else {
+            return false;
+        };
+        let Some(dir) = self
+            .ws
+            .pane(active)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return false;
+        };
+        self.start_listing(active, dir);
+        true
+    }
+
+    /// Cancela el listado en curso del panel activo (Esc). Lo deja con lo que alcanzó a listar.
+    pub fn cancel_active_listing(&mut self) {
+        if let Some(active) = self.active_files_id() {
+            if let Some(l) = self.listings.get(&active) {
+                l.cancel();
+            }
+        }
+    }
+
     /// Ordena el panel activo por la columna `kind_int` (0..4). Reusa `sort_key_of` para cubrir
     /// las 5 columnas (incluida Creado), a diferencia del `on_sort_by` por string. Alterna
     /// ascendente/descendente si ya estaba ordenado por esa clave.
@@ -2551,6 +2662,12 @@ impl WorkspaceCtrl {
                 }
             }
             Action::GoUp => return self.on_go_up(),
+            Action::GoBack => return self.on_go_back(),
+            Action::GoForward => return self.on_go_forward(),
+            Action::Refresh => return self.refresh_active(),
+            Action::CancelListing => self.cancel_active_listing(),
+            Action::CopyToOther => return self.op_to_other(false),
+            Action::MoveToOther => return self.op_to_other(true),
             Action::Activate => {
                 if let (Some(id), Some(pos)) =
                     (active, self.ws.active_files().and_then(|f| f.focused))
@@ -2608,6 +2725,15 @@ impl WorkspaceCtrl {
         let Some(ch) = text.chars().next().filter(|c| !c.is_control()) else {
             return;
         };
+        // Reiniciar el buffer si pasaron más de 500ms desde la última tecla (salto por tipeo
+        // estilo Explorer: una pausa empieza una búsqueda nueva).
+        let now = std::time::Instant::now();
+        if let Some(last) = self.typeahead_at {
+            if now.duration_since(last) > std::time::Duration::from_millis(500) {
+                self.typeahead.clear();
+            }
+        }
+        self.typeahead_at = Some(now);
         self.typeahead.push(ch.to_ascii_lowercase());
         let needle = self.typeahead.clone();
         if let Some(f) = self.ws.active_files_mut() {
@@ -2847,6 +2973,70 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// Atrás/adelante de teclado: navegar a una subcarpeta, volver con go_back, re-avanzar con
+    /// go_forward. Replica el historial estilo navegador.
+    #[test]
+    fn teclado_atras_y_adelante() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        c.navigate_active_to(sub.clone());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
+        // Atrás → vuelve a work.
+        assert!(c.on_go_back());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, work.path());
+        // Adelante → re-entra a sub.
+        assert!(c.on_go_forward());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
+        // Sin más adelante: no-op.
+        assert!(!c.on_go_forward());
+    }
+
+    /// "Mover al otro panel" con dos paneles: copia la selección al directorio del otro panel
+    /// (una op deshacible). Verifica que el archivo aparezca en el destino.
+    #[test]
+    fn mover_al_otro_panel_con_dos_paneles() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Segundo panel apuntando a `b`.
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Dar un área para que resolve_target tenga rects de ambos paneles.
+        c.set_area(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        });
+        c.ws.set_active(origin);
+        // Seleccionar el archivo y copiarlo al otro panel (move=false).
+        c.ws.active_files_mut().unwrap().select_all();
+        c.op_to_other(false);
+        for _ in 0..2000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(b.path().join("doc.txt").exists(), "se copió al otro panel");
+        assert!(
+            a.path().join("doc.txt").exists(),
+            "el original sigue (copia)"
+        );
     }
 
     /// El batch-rename: abrir con la selección, editar el spec (plantilla + contador) y aplicar.

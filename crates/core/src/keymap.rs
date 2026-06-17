@@ -121,6 +121,8 @@ pub enum Action {
     NewDir,
     CopyToOther,
     MoveToOther,
+    /// Refrescar (re-listar) la carpeta del panel activo — estilo navegador (F5).
+    Refresh,
     /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing).
     ComputeSize,
     /// Seleccionar todos los ítems de la vista (fase multi-selección).
@@ -195,6 +197,7 @@ impl Action {
             NewDir,
             CopyToOther,
             MoveToOther,
+            Refresh,
             ComputeSize,
             SelectAll,
             ExtendUp,
@@ -250,6 +253,7 @@ impl Action {
             NewDir => "action.new_dir",
             CopyToOther => "action.copy_to_other",
             MoveToOther => "action.move_to_other",
+            Refresh => "action.refresh",
             ComputeSize => "action.compute_size",
             SelectAll => "action.select_all",
             ExtendUp => "action.extend_up",
@@ -329,8 +333,11 @@ impl KeyMap {
             (BatchRename, vec![Chord::shift(F2)]),
             (NewFile, vec![Chord::ctrl(Char('n'))]),
             (NewDir, vec![Chord::ctrl_shift(Char('n'))]),
-            (CopyToOther, vec![Chord::plain(F5)]),
+            // F5 es REFRESCAR (estilo navegador), decisión de Nicolás. CopyToOther queda sin
+            // atajo por defecto (asignable en el editor); MoveToOther conserva F6.
+            (CopyToOther, vec![]),
             (MoveToOther, vec![Chord::plain(F6)]),
+            (Refresh, vec![Chord::plain(F5)]),
             (ComputeSize, vec![Chord::plain(F3)]),
             (SelectAll, vec![Chord::ctrl(Char('a'))]),
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
@@ -483,13 +490,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_48_acciones_con_clave_i18n_unica() {
+    fn all_tiene_49_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 48);
+        assert_eq!(all.len(), 49);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 48, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 49, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -576,11 +583,17 @@ mod tests {
         );
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::F5)),
-            Some(Action::CopyToOther)
+            Some(Action::Refresh),
+            "F5 = refrescar (estilo navegador)"
         );
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::F6)),
             Some(Action::MoveToOther)
+        );
+        assert_eq!(
+            km.chords_for(Action::CopyToOther),
+            &[],
+            "CopyToOther sin atajo por defecto (F5 liberado para refrescar)"
         );
         assert_eq!(
             km.action_for(&Chord::ctrl_shift(KeyCode::Char('n'))),

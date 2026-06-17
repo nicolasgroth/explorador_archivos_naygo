@@ -128,5 +128,17 @@ Faltan respecto al contrato I:
    contador (inicio/paso), incluir-extensión, preview Antes→Después con estado coloreado
    (Ok/SinCambio/Inválido/Colisión) y Aplicar (deshab. si no aplicable). Trigger Shift+F2
    (acción `BatchRename` en el keymap, editable en atajos). Una sola op deshacible.
-6. **Navegación por teclado** completa + verificación del keymap. ← SIGUIENTE
+6. **Navegación por teclado** (en curso): se rutearon las acciones que estaban muertas en
+   `on_key` y se ajustó el keymap:
+   - ✅ **F5 = Refrescar** (estilo navegador, decisión de Nicolás; nueva `Action::Refresh`).
+     `CopyToOther` quedó sin atajo por defecto (asignable); `MoveToOther` conserva F6.
+   - ✅ Atrás/Adelante (Alt+←/→ → `go_back`/`go_forward`), Esc = cancelar listado, F6 = mover
+     al otro panel, CopyToOther = copiar al otro panel (reusan el selector de panel + `last_area`).
+   - ✅ Typeahead con reset a ~500ms de inactividad (antes nunca reseteaba por tiempo).
+   - PENDIENTE (tareas propias): **teclado del árbol** (↑↓←→ con cursor — el árbol no tiene
+     cursor de teclado todavía) y **ComputeSize/F3** (el motor `spawn_dir_size` existe pero falta
+     el pipeline de UI: worker+pump+display). **Botones de mouse atrás/adelante**: NO factibles
+     vía Slint (su `PointerEventButton` no expone back/forward y el backend por software no rutea
+     esos botones) — se documenta como limitación.
+7. (Roadmap) **Paleta de comandos Ctrl+P.**
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

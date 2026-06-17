@@ -64,6 +64,7 @@
   "action.new_dir": "New folder",
   "action.copy_to_other": "Copy to other pane",
   "action.move_to_other": "Move to other pane",
+  "action.refresh": "Refresh",
   "action.compute_size": "Compute size",
   "action.select_all": "Select all",
   "action.extend_up": "Extend selection up",
