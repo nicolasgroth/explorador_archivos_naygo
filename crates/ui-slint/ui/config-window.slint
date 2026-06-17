@@ -165,6 +165,8 @@ export component ConfigWindow inherits Window {
     callback preview-remove(string);
     callback preview-add(string);
     property <string> preview-add-draft: "";
+    // Borrador del "tratar como" de la fila de alta (ej. "xml"); se aplica al agregar.
+    property <string> preview-add-as-draft: "";
     // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
     property <bool> reset-armed: false;
     // Atajos:
@@ -692,19 +694,49 @@ export component ConfigWindow inherits Window {
                                         }
                                     }
                                 }
-                                // Agregar una extensión nueva.
+                                // Alta de una extensión nueva: escribís la extensión y, opcional,
+                                // cómo tratarla en el preview (ej. "sif" → "xml"). El botón Agregar
+                                // crea la regla y le aplica el "tratar como" si lo pusiste.
+                                Rectangle { height: 4px; }
+                                Text {
+                                    text: Tr.cfg-preview-add-title;
+                                    color: Theme.text-dim;
+                                    font-size: 12px;
+                                }
                                 HorizontalLayout {
                                     spacing: 6px;
+                                    // Extensión (ej. sif).
                                     LineEdit {
-                                        horizontal-stretch: 1;
+                                        width: 110px;
                                         text: root.preview-add-draft;
                                         placeholder-text: Tr.cfg-preview-add-ph;
                                         edited(t) => { root.preview-add-draft = t; }
-                                        accepted(t) => { root.preview-add(t); root.preview-add-draft = ""; }
+                                    }
+                                    // Tratar como (ej. xml / txt). Opcional.
+                                    LineEdit {
+                                        horizontal-stretch: 1;
+                                        text: root.preview-add-as-draft;
+                                        placeholder-text: Tr.cfg-preview-as-ph;
+                                        edited(t) => { root.preview-add-as-draft = t; }
+                                        accepted => {
+                                            root.preview-add(root.preview-add-draft);
+                                            if (root.preview-add-as-draft != "") {
+                                                root.preview-set-as(root.preview-add-draft, root.preview-add-as-draft);
+                                            }
+                                            root.preview-add-draft = "";
+                                            root.preview-add-as-draft = "";
+                                        }
                                     }
                                     CfgBtn {
                                         label: Tr.cfg-preview-add;
-                                        clicked => { root.preview-add(root.preview-add-draft); root.preview-add-draft = ""; }
+                                        clicked => {
+                                            root.preview-add(root.preview-add-draft);
+                                            if (root.preview-add-as-draft != "") {
+                                                root.preview-set-as(root.preview-add-draft, root.preview-add-as-draft);
+                                            }
+                                            root.preview-add-draft = "";
+                                            root.preview-add-as-draft = "";
+                                        }
                                     }
                                 }
                             }

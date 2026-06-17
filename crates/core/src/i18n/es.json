@@ -494,6 +494,8 @@
   "slint.cfg.preview_as": "Tratar como",
   "slint.cfg.preview_add": "Agregar",
   "slint.cfg.preview_add_ph": "ej. sif",
+  "slint.cfg.preview_add_title": "Agregar una extensión:",
+  "slint.cfg.preview_as_ph": "tratar como (ej. xml, txt)",
   "slint.cfg.ops_display": "Mostrar progreso de operaciones",
   "slint.cfg.ops_display_panel": "Panel acoplado",
   "slint.cfg.ops_display_modal": "Diálogo modal",

@@ -494,6 +494,8 @@
   "slint.cfg.preview_as": "Treat as",
   "slint.cfg.preview_add": "Add",
   "slint.cfg.preview_add_ph": "e.g. sif",
+  "slint.cfg.preview_add_title": "Add an extension:",
+  "slint.cfg.preview_as_ph": "treat as (e.g. xml, txt)",
   "slint.cfg.ops_display": "Operation progress display",
   "slint.cfg.ops_display_panel": "Docked panel",
   "slint.cfg.ops_display_modal": "Modal dialog",

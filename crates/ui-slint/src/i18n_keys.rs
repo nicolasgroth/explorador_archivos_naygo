@@ -190,6 +190,8 @@ where
     tr.set_cfg_preview_as(c.t("slint.cfg.preview_as").into());
     tr.set_cfg_preview_add(c.t("slint.cfg.preview_add").into());
     tr.set_cfg_preview_add_ph(c.t("slint.cfg.preview_add_ph").into());
+    tr.set_cfg_preview_add_title(c.t("slint.cfg.preview_add_title").into());
+    tr.set_cfg_preview_as_ph(c.t("slint.cfg.preview_as_ph").into());
     tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
