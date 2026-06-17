@@ -1814,6 +1814,41 @@ impl WorkspaceCtrl {
         self.close_context_menu();
     }
 
+    /// Carpeta destino para "abrir terminal aquí": si el primer objetivo del menú es una carpeta,
+    /// se usa esa; si no (es un archivo, o no hay objetivo), la carpeta del panel activo.
+    fn terminal_dir(&self) -> Option<PathBuf> {
+        if let Some(p) = self.context_targets().first() {
+            if p.is_dir() {
+                return Some(p.clone());
+            }
+        }
+        self.ws
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .filter(|d| d.is_dir())
+    }
+
+    /// Abre una terminal (`term_int`: 0=PowerShell, 1=CMD, 2=Windows Terminal) en la carpeta
+    /// seleccionada o, si no hay, en la del panel activo. Cierra el menú contextual.
+    pub fn ctx_open_terminal(&mut self, term_int: i32) {
+        use naygo_platform::open::Terminal;
+        let term = match term_int {
+            1 => Terminal::Cmd,
+            2 => Terminal::WindowsTerminal,
+            _ => Terminal::PowerShell,
+        };
+        if let Some(dir) = self.terminal_dir() {
+            let _ = naygo_platform::open::open_terminal(&dir, term);
+        }
+        self.close_context_menu();
+    }
+
+    /// `true` si Windows Terminal (`wt.exe`) está disponible, para decidir si ofrecer la entrada
+    /// "Abrir Windows Terminal aquí" en el menú contextual.
+    pub fn windows_terminal_available(&self) -> bool {
+        naygo_platform::open::windows_terminal_available()
+    }
+
     /// Copiar la ruta del primer objetivo al portapapeles (como texto).
     /// Copia al portapapeles, como TEXTO, las rutas COMPLETAS de los ítems del menú contextual
     /// (uno por línea). Antes esto pegaba los archivos al clipboard (no copiaba la ruta de
@@ -2506,6 +2541,36 @@ mod tests {
         c.column_menu_open(id, 0, 0.0, 0.0);
         c.column_menu_clear_filter();
         assert_eq!(c.ws.active_files().unwrap().view_len(), 2);
+    }
+
+    /// La carpeta destino de "abrir terminal aquí" es la subcarpeta seleccionada si la hay, y si
+    /// no, la carpeta del panel activo.
+    #[test]
+    fn terminal_dir_usa_carpeta_seleccionada_o_actual() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+
+        // Sin selección de carpeta → la carpeta del panel.
+        assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+
+        // Seleccionar la subcarpeta → terminal apunta a la subcarpeta.
+        let pos = active_pos_of(&c, "sub").unwrap();
+        c.ws.active_files_mut().unwrap().select_single(pos);
+        // El menú contextual toma la selección como objetivo.
+        c.open_context_menu(0.0, 0.0);
+        assert_eq!(c.terminal_dir().as_deref(), Some(sub.as_path()));
+
+        // Seleccionar un ARCHIVO → cae a la carpeta del panel (no se abre terminal en un archivo).
+        c.column_menu_close();
+        let posf = active_pos_of(&c, "a.txt").unwrap();
+        c.ws.active_files_mut().unwrap().select_single(posf);
+        c.open_context_menu(0.0, 0.0);
+        assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
     }
 
     /// "Mover →" desde el menú reordena la columna en el orden visual completo.

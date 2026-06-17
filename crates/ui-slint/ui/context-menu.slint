@@ -34,6 +34,9 @@ export component ContextMenu inherits Rectangle {
     callback delete();
     callback copy-names();   // copiar nombre(s) de la selección
     callback copy-path();    // copiar ruta(s) completa(s)
+    callback terminal-ps();  // abrir PowerShell en la carpeta
+    callback terminal-cmd(); // abrir CMD en la carpeta
+    callback terminal-wt();  // abrir Windows Terminal en la carpeta
     callback native();      // "Más opciones de Windows…"
     callback dismiss();
 
@@ -68,6 +71,10 @@ export component ContextMenu inherits Rectangle {
             Rectangle { height: 1px; background: Theme.border; }
             MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
             MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
+            Rectangle { height: 1px; background: Theme.border; }
+            MenuRow { label: Tr.ctx-terminal-ps; clicked => { root.terminal-ps(); } }
+            MenuRow { label: Tr.ctx-terminal-cmd; clicked => { root.terminal-cmd(); } }
+            if root.vm.has-wt: MenuRow { label: Tr.ctx-terminal-wt; clicked => { root.terminal-wt(); } }
             if root.vm.has-native: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.has-native: MenuRow {
                 label: Tr.ctx-more-windows;

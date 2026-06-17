@@ -158,7 +158,24 @@ export component ConfigWindow inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
-                CfgBtn { label: Tr.cfg-close; clicked => { root.close(); } }
+                // Botón de cierre compacto con ícono (✕), no un texto grande.
+                Rectangle {
+                    width: 28px;
+                    height: 26px;
+                    background: close-touch.has-hover ? Theme.error : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "✕";
+                        color: close-touch.has-hover ? white : Theme.text-dim;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close(); }
+                    }
+                }
             }
 
             HorizontalLayout {

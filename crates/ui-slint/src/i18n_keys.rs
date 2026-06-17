@@ -58,6 +58,9 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_delete(c.t("slint.ctx.delete").into());
     tr.set_ctx_copy_names(c.t("slint.ctx.copy_names").into());
     tr.set_ctx_copy_path(c.t("slint.ctx.copy_path").into());
+    tr.set_ctx_terminal_ps(c.t("slint.ctx.terminal_ps").into());
+    tr.set_ctx_terminal_cmd(c.t("slint.ctx.terminal_cmd").into());
+    tr.set_ctx_terminal_wt(c.t("slint.ctx.terminal_wt").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
     // Menú/editor de columna (F2).
     tr.set_colmenu_sort_asc(c.t("slint.colmenu.sort_asc").into());

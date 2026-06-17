@@ -332,12 +332,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     x: cm.x,
                     y: cm.y,
                     has_native: naygo_hwnd(&ui).is_some(),
+                    has_wt: c.windows_terminal_available(),
                 },
                 None => ContextMenuVm {
                     active: false,
                     x: 0.0,
                     y: 0.0,
                     has_native: false,
+                    has_wt: false,
                 },
             };
             ui.set_ctx_menu(ctx);
@@ -1878,6 +1880,31 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_ctx_copy_names(move || {
             ctrl.borrow_mut().ctx_copy_names();
+            sync_rows();
+        });
+    }
+    // Abrir terminal en la carpeta: 0=PowerShell, 1=CMD, 2=Windows Terminal.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_terminal_ps(move || {
+            ctrl.borrow_mut().ctx_open_terminal(0);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_terminal_cmd(move || {
+            ctrl.borrow_mut().ctx_open_terminal(1);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_terminal_wt(move || {
+            ctrl.borrow_mut().ctx_open_terminal(2);
             sync_rows();
         });
     }
