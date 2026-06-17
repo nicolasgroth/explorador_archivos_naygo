@@ -811,6 +811,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     let _ = preview_ready;
                     // Drenar el progreso de las operaciones de archivo (F3).
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
+                    // Drenar el cálculo de tamaño de carpeta (F3 «calcular tamaño»).
+                    let size_done = ctrl.borrow_mut().pump_sizes();
                     // Watcher de carpeta (F5A): aplicar los cambios detectados a cada panel y
                     // marcar como nuevos los archivos recién aparecidos (para resaltarlos).
                     let batches = ctrl.borrow_mut().watchers.drain();
@@ -829,7 +831,13 @@ fn main() -> Result<(), slint::PlatformError> {
                     ctrl.borrow_mut().maybe_persist_session();
                     // El watcher corre en su propio hilo y despierta la UI con el waker; el
                     // timer puede dormir cuando no hay trabajo NI resaltados pendientes.
-                    if files_done && tree_done && !preview_busy && ops_done && !fresh_pending {
+                    if files_done
+                        && tree_done
+                        && !preview_busy
+                        && ops_done
+                        && size_done
+                        && !fresh_pending
+                    {
                         timer2.stop();
                     }
                 },

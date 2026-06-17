@@ -189,6 +189,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Tab | Cambiar panel activo |
 | F1 | Ayuda |
 | F2 / Shift+F2 | Renombrar / renombrar por lotes |
+| F3 | Calcular el tamaño de la carpeta |
 | F5 | Refrescar |
 | F6 | Mover al otro panel |
 | Esc | Cancelar listado |

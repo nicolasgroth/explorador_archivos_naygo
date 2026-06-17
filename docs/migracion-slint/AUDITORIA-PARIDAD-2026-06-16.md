@@ -154,7 +154,10 @@ activo como plantilla para paneles nuevos (`Settings.default_table`).
 colapsa / sube al padre, Enter navega el panel Files. `DirTree::flat_paths`/`parent_of` + cursor
 por panel en el controlador.
 
-PENDIENTE restante (tarea propia, no de paridad): ComputeSize/F3 (#72) — falta el pipeline de UI
-del tamaño (worker+pump+display); el motor `spawn_dir_size` ya existe en core.
-Roadmap: paleta de comandos Ctrl+P. Limitación: botones de mouse atrás/adelante no via Slint.
+✅ **ComputeSize / F3** (#72): F3 calcula el tamaño de la carpeta enfocada/del panel en un worker
+(`spawn_dir_size`), drenado en el tick; el resultado (con progreso en vivo) se muestra en la barra
+de estado. Respeta "no bajar a subdirectorios". Esc cancela.
+
+BACKLOG DE PARIDAD: ✅ CERRADO. Roadmap: paleta de comandos Ctrl+P. Limitación documentada:
+botones de mouse atrás/adelante no son posibles vía Slint.
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

@@ -116,6 +116,9 @@ pub struct WorkspaceCtrl {
     pub batch: Option<BatchRenameState>,
     /// La ayuda (F1) está abierta.
     pub help_open: bool,
+    /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
+    /// cancela y reemplaza el anterior. El resultado se muestra en la barra de estado.
+    pub size_job: Option<SizeJob>,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -177,6 +180,18 @@ pub struct ColumnMenuState {
     pub ext_checked: std::collections::BTreeSet<String>,
 }
 
+/// Cálculo de tamaño de carpeta en curso (F3): qué carpeta, el canal del worker, el token para
+/// cancelar, y el progreso/resultado acumulado.
+pub struct SizeJob {
+    pub target: PathBuf,
+    pub rx: std::sync::mpsc::Receiver<naygo_core::sizing::SizeMsg>,
+    pub token: naygo_core::CancellationToken,
+    pub bytes: u64,
+    pub done: bool,
+    pub partial: bool,
+    pub cancelled: bool,
+}
+
 /// Estado de la ventana de renombrado por lotes (Fase 5): el `BatchSpec` que el usuario edita en
 /// vivo + los ítems objetivo + los nombres existentes del directorio (para detectar colisiones).
 /// El preview se recalcula con `core::batch_rename::preview` cada vez que cambia el spec.
@@ -235,6 +250,7 @@ impl WorkspaceCtrl {
             templates: naygo_core::config::load_templates(&config_dir),
             batch: None,
             help_open: false,
+            size_job: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -1235,10 +1251,15 @@ impl WorkspaceCtrl {
         let total = f.view_indices().len();
         let sel = f.selected.len();
         let dir = f.current_dir.display();
-        if sel > 0 {
+        let base = if sel > 0 {
             format!("{dir}   —   {total} elementos, {sel} seleccionados")
         } else {
             format!("{dir}   —   {total} elementos")
+        };
+        // Si hay un cálculo de tamaño (F3) en curso/terminado, anexarlo a la derecha.
+        match self.size_status() {
+            Some(s) => format!("{base}   —   {s}"),
+            None => base,
         }
     }
 
@@ -2773,6 +2794,91 @@ impl WorkspaceCtrl {
         self.help_open = false;
     }
 
+    // --- Calcular tamaño de carpeta (F3) ---
+
+    /// Lanza el cálculo del tamaño de la carpeta enfocada/seleccionada del panel activo (o, si lo
+    /// enfocado es un archivo, la carpeta del panel). Cancela cualquier cálculo anterior. Respeta
+    /// el ajuste "no bajar a subdirectorios". El resultado se ve en la barra de estado.
+    pub fn compute_size_active(&mut self) {
+        // Carpeta objetivo: el ítem enfocado si es carpeta; si no, la carpeta del panel.
+        let target = self
+            .ws
+            .active_files()
+            .and_then(|f| f.focused_view_entry())
+            .filter(|e| e.kind == EntryKind::Directory)
+            .map(|e| e.path.clone())
+            .or_else(|| self.ws.active_files().map(|f| f.current_dir.clone()));
+        let Some(target) = target else {
+            return;
+        };
+        // Cancelar el job anterior.
+        if let Some(job) = self.size_job.take() {
+            job.token.cancel();
+        }
+        let recursive = !self.config.settings.size_no_subdirs;
+        let token = naygo_core::CancellationToken::new();
+        let rx = naygo_core::sizing::spawn_dir_size(target.clone(), recursive, token.clone());
+        self.size_job = Some(SizeJob {
+            target,
+            rx,
+            token,
+            bytes: 0,
+            done: false,
+            partial: false,
+            cancelled: false,
+        });
+    }
+
+    /// Drena el worker de tamaño en vuelo (si lo hay), actualizando bytes/estado. Devuelve true
+    /// si NO queda cálculo activo pendiente (para que el timer pueda apagarse). El job terminado
+    /// se conserva para que la barra de estado muestre el resultado hasta el próximo F3/navegar.
+    pub fn pump_sizes(&mut self) -> bool {
+        let Some(job) = self.size_job.as_mut() else {
+            return true;
+        };
+        if job.done {
+            return true;
+        }
+        use naygo_core::sizing::SizeMsg;
+        // Vaciar todo lo que llegó sin bloquear.
+        while let Ok(msg) = job.rx.try_recv() {
+            match msg {
+                SizeMsg::Progress { bytes } => job.bytes = bytes,
+                SizeMsg::Done { total, partial } => {
+                    job.bytes = total;
+                    job.partial = partial;
+                    job.done = true;
+                }
+                SizeMsg::Cancelled { bytes } => {
+                    job.bytes = bytes;
+                    job.cancelled = true;
+                    job.done = true;
+                }
+            }
+        }
+        job.done
+    }
+
+    /// Fragmento de barra de estado del cálculo de tamaño en curso/terminado (vacío si no hay).
+    fn size_status(&self) -> Option<String> {
+        let job = self.size_job.as_ref()?;
+        let name = job
+            .target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| job.target.display().to_string());
+        let size = naygo_core::format::format_size(job.bytes, self.config.settings.size_format);
+        Some(if !job.done {
+            format!("Calculando «{name}»… {size}")
+        } else if job.cancelled {
+            format!("«{name}»: cancelado en {size}")
+        } else if job.partial {
+            format!("«{name}»: {size} (parcial)")
+        } else {
+            format!("«{name}»: {size}")
+        })
+    }
+
     /// Atajos activos para la ayuda: pares (acción legible, chord) de las acciones que tienen
     /// al menos un atajo asignado, en el orden de presentación del keymap. Lee el keymap EN VIVO,
     /// así refleja lo que el usuario haya reasignado.
@@ -2885,7 +2991,16 @@ impl WorkspaceCtrl {
             Action::GoBack => return self.on_go_back(),
             Action::GoForward => return self.on_go_forward(),
             Action::Refresh => return self.refresh_active(),
-            Action::CancelListing => self.cancel_active_listing(),
+            Action::ComputeSize => self.compute_size_active(),
+            Action::CancelListing => {
+                self.cancel_active_listing();
+                // Esc también cancela un cálculo de tamaño en curso.
+                if let Some(job) = self.size_job.as_ref() {
+                    if !job.done {
+                        job.token.cancel();
+                    }
+                }
+            }
             Action::CopyToOther => return self.op_to_other(false),
             Action::MoveToOther => return self.op_to_other(true),
             Action::Activate => {
@@ -3275,6 +3390,43 @@ mod tests {
         // Limpiar la plantilla.
         c.clear_default_table();
         assert!(c.config.settings.default_table.is_none());
+    }
+
+    /// F3 calcula el tamaño de la carpeta del panel: spawnea el worker, se drena hasta terminar,
+    /// y la barra de estado muestra el total.
+    #[test]
+    fn calcular_tamano_de_carpeta() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.bin"), vec![0u8; 1000]).unwrap();
+        std::fs::write(work.path().join("b.bin"), vec![0u8; 2000]).unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Sin foco en una subcarpeta → calcula la carpeta del panel (work).
+        c.compute_size_active();
+        assert!(c.size_job.is_some());
+        // Drenar el worker hasta que termine.
+        for _ in 0..3000 {
+            if c.pump_sizes() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let job = c.size_job.as_ref().unwrap();
+        assert!(job.done);
+        assert_eq!(job.bytes, 3000, "suma de los dos archivos");
+        // La barra de estado anexa el resultado (el nombre de la carpeta calculada).
+        let name = work
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            c.status_line().contains(&name),
+            "el resultado del cálculo aparece en el status: {}",
+            c.status_line()
+        );
     }
 
     /// Navegación por teclado del árbol: ↓ mueve el cursor, → expande, Enter navega el panel
