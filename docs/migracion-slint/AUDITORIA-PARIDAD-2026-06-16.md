@@ -106,10 +106,14 @@ Faltan respecto al contrato I:
 
 ## PLAN DE CIERRE (orden propuesto)
 
-1. **Bugs** B1 (resize) + B2 (reveal árbol) — rompen el uso básico.
-2. **Menú de columna + filtros + clic derecho** (P1) + reordenar arrastrando (P2) — lo de "Excel".
+1. ✅ **Bugs** B1 (resize, commit e9d1929) + B2 (reveal árbol, commit 34e99be) — HECHO.
+   (gestos verificados por Nicolás en la VM)
+2. ✅ **Menú de columna + filtros + clic derecho** (P1) + reordenar (P2, vía "Mover ←/→" en
+   el menú en vez de arrastrar) — HECHO, commit dd66fb8. Incluye indicadores ▲/▼ + embudo +
+   aviso "sin coincidencias". El arrastre-con-línea-de-inserción quedó pendiente (se prefirió
+   "Mover ←/→" por robustez bajo render por software); reabrir si Nicolás quiere el gesto.
 3. **Config**: pulido U1–U3 (arrastrable, alto adaptable, combos parejos) + Acerca-de (C1) +
-   Avanzado (C2) + Previsualización (C3) + plantilla de tabla (C4).
+   Avanzado (C2) + Previsualización (C3) + plantilla de tabla (C4). ← SIGUIENTE
 4. **Plantillas de layout** (P3) en la toolbar.
 5. **Batch-rename** (P4) — ventana modal.
 6. **Navegación por teclado** completa + verificación del keymap.
