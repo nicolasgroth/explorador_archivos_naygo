@@ -245,6 +245,7 @@ export component AppWindow inherits Window {
     // Paneles especiales:
     callback tree-toggle(int, string);   // (pane-id, ruta) expandir/colapsar rama
     callback tree-navigate(string);      // navegar el Files activo a esa carpeta
+    callback tree-key(int, string);      // (pane-id, dir) navegación por teclado del árbol
     callback nav-navigate(string);       // favorito/reciente → navegar Files activo
     callback fav-remove(string);         // quitar favorito por ruta
     callback fav-pin-current();          // anclar la carpeta del Files activo
@@ -636,6 +637,7 @@ export component AppWindow inherits Window {
                         row-h: root.settings-vm.row-h;
                         toggle(path) => { root.tree-toggle(p.id, path); }
                         navigate(path) => { root.tree-navigate(path); }
+                        tree-key(k) => { root.tree-key(p.id, k); }
                         focus-pane() => { root.activate(p.id); }
                     }
                     if p.purpose == 2: InspectorPanel {

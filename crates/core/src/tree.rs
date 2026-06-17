@@ -116,6 +116,46 @@ impl DirTree {
         self.roots.iter_mut().find_map(|r| find_node_mut(r, path))
     }
 
+    /// Las rutas de los nodos VISIBLES en orden de display (raíces, y los hijos de cada nodo
+    /// expandido, recursivo). Mismo orden que la lista aplanada que pinta la UI; base de la
+    /// navegación por teclado del árbol (foco anterior/siguiente).
+    pub fn flat_paths(&self) -> Vec<PathBuf> {
+        fn walk(node: &TreeNode, out: &mut Vec<PathBuf>) {
+            out.push(node.path.clone());
+            if node.expanded {
+                if let Some(children) = node.children.as_ref() {
+                    for child in children {
+                        walk(child, out);
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for root in &self.roots {
+            walk(root, &mut out);
+        }
+        out
+    }
+
+    /// La ruta del padre de `path` en el árbol (el nodo cuyo `children` lo contiene), o `None`
+    /// si es una raíz o no está. Para colapsar/subir con ←.
+    pub fn parent_of(&self, path: &Path) -> Option<PathBuf> {
+        fn walk(node: &TreeNode, target: &Path) -> Option<PathBuf> {
+            if let Some(children) = node.children.as_ref() {
+                if children.iter().any(|c| c.path == target) {
+                    return Some(node.path.clone());
+                }
+                for child in children {
+                    if let Some(p) = walk(child, target) {
+                        return Some(p);
+                    }
+                }
+            }
+            None
+        }
+        self.roots.iter().find_map(|r| walk(r, path))
+    }
+
     /// Marca el nodo como `Loading`, expandido, y prepara su lista de hijos vacía
     /// (lista para recibir los que lleguen del worker). No-op si el path no existe.
     pub fn begin_loading(&mut self, path: &Path) {
@@ -341,6 +381,40 @@ mod tests {
         assert_eq!(
             t.node_at(Path::new("C:\\")).unwrap().state,
             NodeState::Error
+        );
+    }
+
+    #[test]
+    fn flat_paths_y_parent_of() {
+        let mut t = DirTree::from_drives(&drive_list());
+        // Colapsado: solo las raíces.
+        assert_eq!(
+            t.flat_paths(),
+            vec![PathBuf::from("C:\\"), PathBuf::from("D:\\")]
+        );
+        // Expandir C:\ con un hijo → aparece entre C:\ y D:\.
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        assert_eq!(
+            t.flat_paths(),
+            vec![
+                PathBuf::from("C:\\"),
+                PathBuf::from("C:\\Users"),
+                PathBuf::from("D:\\"),
+            ]
+        );
+        // El padre de C:\Users es C:\; las raíces no tienen padre.
+        assert_eq!(
+            t.parent_of(Path::new("C:\\Users")),
+            Some(PathBuf::from("C:\\"))
+        );
+        assert_eq!(t.parent_of(Path::new("C:\\")), None);
+        // Colapsar C:\ esconde sus hijos del flat.
+        t.collapse(Path::new("C:\\"));
+        assert_eq!(
+            t.flat_paths(),
+            vec![PathBuf::from("C:\\"), PathBuf::from("D:\\")]
         );
     }
 

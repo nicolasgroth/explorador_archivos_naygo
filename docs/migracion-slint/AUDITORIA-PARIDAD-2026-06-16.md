@@ -150,6 +150,11 @@ Faltan respecto al contrato I:
 ✅ **Config C4 (plantilla de tabla)**: "usar la tabla actual" guarda el `TableState` del panel
 activo como plantilla para paneles nuevos (`Settings.default_table`).
 
-PENDIENTES restantes (tareas propias, no de paridad): teclado del árbol (#71) y ComputeSize/F3
-(#72). Roadmap: paleta de comandos Ctrl+P.
+✅ **Teclado del árbol** (#71): cursor con ↑/↓ (filas visibles), → expande / baja al hijo, ←
+colapsa / sube al padre, Enter navega el panel Files. `DirTree::flat_paths`/`parent_of` + cursor
+por panel en el controlador.
+
+PENDIENTE restante (tarea propia, no de paridad): ComputeSize/F3 (#72) — falta el pipeline de UI
+del tamaño (worker+pump+display); el motor `spawn_dir_size` ya existe en core.
+Roadmap: paleta de comandos Ctrl+P. Limitación: botones de mouse atrás/adelante no via Slint.
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

@@ -67,6 +67,10 @@ pub struct WorkspaceCtrl {
     pub listings: HashMap<PaneId, Listing>,
     /// Un árbol de carpetas por panel Tree (lazy; se llena con workers solo-dirs).
     pub trees: HashMap<PaneId, DirTree>,
+    /// Cursor de teclado por árbol (la fila enfocada para ↑↓←→). Si falta, se siembra con la
+    /// carpeta activa del árbol o su primera raíz. Distinto de `active_path` (la carpeta navegada):
+    /// el cursor se mueve sin navegar; Enter/→ sí navegan.
+    pub tree_cursor: HashMap<PaneId, PathBuf>,
     /// Un worker solo-directorios por rama de árbol en vuelo (clave: panel + carpeta).
     pub tree_listings: HashMap<(PaneId, PathBuf), Listing>,
     /// Destino a "revelar" en cada árbol: al navegar el Files activo, el árbol expande
@@ -206,6 +210,7 @@ impl WorkspaceCtrl {
             config,
             listings: HashMap::new(),
             trees: HashMap::new(),
+            tree_cursor: HashMap::new(),
             tree_listings: HashMap::new(),
             reveal_targets: HashMap::new(),
             favorites: Favorites::new(),
@@ -2425,6 +2430,89 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// El cursor de teclado del árbol `id` (para resaltar la fila enfocada). Si no hay cursor
+    /// fijado, cae a la carpeta activa del árbol, o a su primera raíz.
+    pub fn tree_cursor_of(&self, id: PaneId) -> Option<PathBuf> {
+        if let Some(p) = self.tree_cursor.get(&id) {
+            return Some(p.clone());
+        }
+        let t = self.trees.get(&id)?;
+        t.active_path
+            .clone()
+            .or_else(|| t.roots.first().map(|r| r.path.clone()))
+    }
+
+    /// Navegación por teclado dentro del árbol `id`. `key`: "up"/"down"/"left"/"right"/"enter".
+    /// ↑/↓ mueven el cursor por las filas visibles; → expande (o baja al primer hijo si ya está
+    /// expandido); ← colapsa (o sube al padre si ya está colapsado); Enter navega el panel Files
+    /// activo a la carpeta del cursor. Devuelve true si navegó (para reactivar el timer).
+    pub fn tree_key(&mut self, id: PaneId, key: &str) -> bool {
+        // Asegurar que el panel del árbol quede activo (para que las teclas le lleguen).
+        self.set_active(id);
+        let Some(cursor) = self.tree_cursor_of(id) else {
+            return false;
+        };
+        let Some(t) = self.trees.get(&id) else {
+            return false;
+        };
+        let flat = t.flat_paths();
+        let pos = flat.iter().position(|p| p == &cursor).unwrap_or(0);
+        match key {
+            "up" | "down" => {
+                let next = if key == "down" {
+                    (pos + 1).min(flat.len().saturating_sub(1))
+                } else {
+                    pos.saturating_sub(1)
+                };
+                if let Some(p) = flat.get(next).cloned() {
+                    self.set_tree_cursor(id, p);
+                }
+                false
+            }
+            "right" => {
+                let node_expanded = t.node_at(&cursor).map(|n| n.expanded).unwrap_or(false);
+                let has_children = t
+                    .node_at(&cursor)
+                    .map(|n| {
+                        !matches!(
+                            n.state,
+                            naygo_core::tree::NodeState::Empty | naygo_core::tree::NodeState::Error
+                        )
+                    })
+                    .unwrap_or(false);
+                if !node_expanded && has_children {
+                    self.tree_expand(id, cursor); // expandir
+                } else if node_expanded {
+                    // Ya expandido: bajar al primer hijo (siguiente fila del flat).
+                    if let Some(p) = flat.get(pos + 1).cloned() {
+                        self.set_tree_cursor(id, p);
+                    }
+                }
+                false
+            }
+            "left" => {
+                let node_expanded = t.node_at(&cursor).map(|n| n.expanded).unwrap_or(false);
+                if node_expanded {
+                    self.tree_collapse(id, cursor); // colapsar
+                } else if let Some(parent) = t.parent_of(&cursor) {
+                    self.set_tree_cursor(id, parent); // subir al padre
+                }
+                false
+            }
+            "enter" => self.navigate_active_to(cursor),
+            _ => false,
+        }
+    }
+
+    /// Fija el cursor del árbol y resalta esa fila (sin navegar el panel Files).
+    fn set_tree_cursor(&mut self, id: PaneId, path: PathBuf) {
+        self.tree_cursor.insert(id, path.clone());
+        if let Some(t) = self.trees.get_mut(&id) {
+            // Resaltar la fila del cursor (reusa `active_path` como pista visual) y revelarla.
+            t.set_active(path);
+        }
+    }
+
     /// Drena los workers de árbol en vuelo (asocia hijos por path). Devuelve true si NO
     /// queda ninguno (para que el timer pueda apagarse). Quita los terminados.
     pub fn pump_tree(&mut self) -> bool {
@@ -3187,6 +3275,50 @@ mod tests {
         // Limpiar la plantilla.
         c.clear_default_table();
         assert!(c.config.settings.default_table.is_none());
+    }
+
+    /// Navegación por teclado del árbol: ↓ mueve el cursor, → expande, Enter navega el panel
+    /// Files a la carpeta del cursor.
+    #[test]
+    fn arbol_teclado_cursor_expande_y_navega() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Crear un panel Árbol cuya raíz sea `work` (insertamos un DirTree controlado).
+        let tree_id = c.ws.add_pane(PanePurpose::Tree, std::path::PathBuf::new());
+        let mut t = DirTree::from_drives(&[(
+            work.path().to_path_buf(),
+            "work".into(),
+            naygo_core::icon_kind::DriveKind::Fixed,
+        )]);
+        // Cargar el hijo `sub` bajo la raíz.
+        t.begin_loading(work.path());
+        t.push_child(work.path(), sub.clone());
+        t.finish_loading(work.path(), naygo_core::tree::NodeOutcome::Done);
+        t.collapse(work.path()); // arrancar colapsado
+        c.trees.insert(tree_id, t);
+
+        // Cursor inicial = primera raíz (work). → expande la raíz.
+        c.tree_key(tree_id, "right");
+        assert!(
+            c.trees
+                .get(&tree_id)
+                .unwrap()
+                .node_at(work.path())
+                .unwrap()
+                .expanded,
+            "→ expande la raíz"
+        );
+        // ↓ baja el cursor a `sub` (ya visible bajo la raíz expandida).
+        c.tree_key(tree_id, "down");
+        assert_eq!(c.tree_cursor_of(tree_id).as_deref(), Some(sub.as_path()));
+        // Enter navega el panel Files activo a `sub`.
+        assert!(c.tree_key(tree_id, "enter"));
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
     }
 
     /// La ayuda (F1) lista atajos activos (con chord no vacío) e incluye el propio F1.

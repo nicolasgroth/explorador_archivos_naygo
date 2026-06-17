@@ -1773,6 +1773,17 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+    // Navegación por teclado del árbol (↑↓←→/Enter): mueve el cursor, expande/colapsa o navega.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tree_key(move |id, key| {
+            ctrl.borrow_mut().tree_key(PaneId(id as u64), key.as_str());
+            start_timer();
+            sync_layout();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();

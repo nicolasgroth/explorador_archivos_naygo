@@ -17,11 +17,27 @@ export component TreePanel inherits Rectangle {
     callback toggle(string);    // expandir/colapsar la rama (por ruta)
     callback navigate(string);  // navegar el Files activo a esa carpeta
     callback focus-pane();
+    // Navegación por teclado del árbol (F6/teclado): "up"/"down"/"left"/"right"/"enter".
+    callback tree-key(string);
 
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
 
+    // Cuando el panel pasa a activo, tomar el foco para recibir las flechas sin un clic previo.
+    changed active => {
+        if (root.active) { fs.focus(); }
+    }
+
+    fs := FocusScope {
+        key-pressed(ev) => {
+            if (ev.text == Key.UpArrow) { root.tree-key("up"); return accept; }
+            if (ev.text == Key.DownArrow) { root.tree-key("down"); return accept; }
+            if (ev.text == Key.LeftArrow) { root.tree-key("left"); return accept; }
+            if (ev.text == Key.RightArrow) { root.tree-key("right"); return accept; }
+            if (ev.text == Key.Return) { root.tree-key("enter"); return accept; }
+            return reject;
+        }
     VerticalLayout {
         padding: 4px;
         Text {
@@ -116,5 +132,6 @@ export component TreePanel inherits Rectangle {
                 }
             }
         }
+    }
     }
 }
