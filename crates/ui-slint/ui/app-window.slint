@@ -510,6 +510,10 @@ export component AppWindow inherits Window {
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 Rectangle {
+                    // Stretchy: ocupa el espacio sobrante de la toolbar. Sin esto, TODOS los
+                    // hijos del HorizontalLayout tenían ancho finito, así que la fila (y por ende
+                    // la ventana) heredaba un max-width finito y no se podía ensanchar la ventana.
+                    horizontal-stretch: 1;
                     background: Theme.row-bg;
                     border-radius: 4px;
                     Text { text: root.active-path; color: Theme.text; vertical-alignment: center; x: 8px; }
