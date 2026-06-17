@@ -76,6 +76,9 @@ pub struct ActiveOp {
     pub request: Option<OpRequest>,
     /// Si el motor está esperando una decisión de conflicto, el prompt pendiente.
     pub awaiting_conflict: Option<ConflictPrompt>,
+    /// Cuántos orígenes se omitieron al RETOMAR porque cambiaron/desaparecieron desde el
+    /// journal (0 en una op normal). Se muestra en el estado para no perderlos en silencio.
+    pub resume_skipped: usize,
 }
 
 /// Modo de ejecución de operaciones múltiples.
@@ -199,6 +202,7 @@ impl OpsCtrl {
                 journal_id: None,
                 request: record_undo.then_some(req),
                 awaiting_conflict: None,
+                resume_skipped: 0,
             });
             return;
         }
@@ -246,6 +250,7 @@ impl OpsCtrl {
             journal_id,
             request,
             awaiting_conflict: None,
+            resume_skipped: 0,
         });
     }
 
@@ -451,12 +456,21 @@ impl OpsCtrl {
                 let status = if !o.started {
                     "en cola".to_string()
                 } else if let Some(s) = &o.summary {
-                    format!(
+                    let mut t = format!(
                         "hecho: {} copiados, {} saltados, {} fallidos",
                         s.count_done(),
                         s.count_skipped(),
                         s.count_failed()
-                    )
+                    );
+                    // Al RETOMAR: avisar los orígenes que cambiaron/desaparecieron y se omitieron
+                    // (antes se descartaban en silencio).
+                    if o.resume_skipped > 0 {
+                        t.push_str(&format!(
+                            " · {} omitidos por cambios al retomar",
+                            o.resume_skipped
+                        ));
+                    }
+                    t
                 } else if o.awaiting_conflict.is_some() {
                     "esperando decisión…".to_string()
                 } else {
@@ -562,6 +576,8 @@ impl OpsCtrl {
             self.drop_resume_item(id);
             return false;
         }
+        // Cuántos orígenes se omiten por haber cambiado/desaparecido (se reporta al usuario).
+        let resume_skipped = resume.skipped_changed.len();
         let label = journal.label();
         let token = CancellationToken::new();
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
@@ -594,6 +610,7 @@ impl OpsCtrl {
             journal_id: Some(journal.id.clone()),
             request: None,
             awaiting_conflict: None,
+            resume_skipped,
         });
         self.drop_resume_item(id);
         true

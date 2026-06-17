@@ -81,6 +81,9 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-terminal: false;
     // Si true, dibuja un "+" con Path (botón de dividir panel), en vez de un glifo de fuente.
     in property <bool> draw-plus: false;
+    // Si true, dibuja un ícono de LAYOUTS (grilla 2x2) con Path: distingue "Layouts" de "Tabs"
+    // (antes compartían el mismo PNG y eran indistinguibles).
+    in property <bool> draw-layouts: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -147,7 +150,34 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 12; y: 7; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus: Text {
+        // Ícono de layouts dibujado: grilla 2x2.
+        if root.draw-layouts: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: white;
+                stroke-width: 1.2px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Marco.
+                MoveTo { x: 1; y: 1; }
+                LineTo { x: 13; y: 1; }
+                LineTo { x: 13; y: 13; }
+                LineTo { x: 1; y: 13; }
+                Close { }
+                // Divisoria vertical y horizontal (grilla 2x2).
+                MoveTo { x: 7; y: 1; }
+                LineTo { x: 7; y: 13; }
+                MoveTo { x: 1; y: 7; }
+                LineTo { x: 13; y: 7; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -616,11 +646,12 @@ export component AppWindow inherits Window {
                     clicked => { root.stack-pane(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
-                // Menú de plantillas de disposición (F4).
+                // Menú de plantillas de disposición (F4). Ícono propio (grilla 2x2) para no
+                // confundirse con "Tabs".
                 ToolBtn {
                     label: Tr.toolbar-layouts;
                     tip: Tr.toolbar-layouts-tip;
-                    icon: root.ic-tabs;
+                    draw-layouts: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 84px;
                     highlight: root.layout-menu-open;

@@ -711,6 +711,44 @@ fn main() -> Result<(), slint::PlatformError> {
             .unwrap_or_else(|| std::path::PathBuf::from("C:/")),
     );
 
+    // Aplica un cambio de unidades (USB enchufado/quitado): drena el watcher, reubica paneles
+    // huérfanos y RECONSTRUYE la tira de discos de la toolbar. Se llama desde el timer Y desde
+    // `on_wake` para que un USB recién conectado aparezca EN VIVO aunque el timer esté dormido
+    // (antes el refresh solo ocurría en el tick, que se apaga en reposo, y el USB no salía hasta
+    // interactuar/reabrir). Idempotente: si no hubo cambios reales, no hace nada.
+    let apply_device_change: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let devices = devices.clone();
+        let home = home.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            if !devices.drives_changed() {
+                return;
+            }
+            let moved = ctrl.borrow_mut().relocate_orphans(&home);
+            for id in moved {
+                let dir = ctrl
+                    .borrow()
+                    .ws
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone());
+                if let Some(dir) = dir {
+                    ctrl.borrow_mut().start_listing(id, dir);
+                }
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                let drives: Vec<NavRow> = ctrl
+                    .borrow_mut()
+                    .drive_strip()
+                    .into_iter()
+                    .map(to_nav_row)
+                    .collect();
+                ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
+            }
+        })
+    };
+
     // Drag&drop OLE — RECIBIR (Fase 5D): canal de archivos soltados sobre la ventana. El
     // registro del IDropTarget se hace en el primer tick (cuando el HWND ya es válido) y el
     // guard vive toda la sesión. Por simplicidad el drop va al panel ACTIVO (fallback del
@@ -745,8 +783,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let timer = timer.clone();
-        let devices = devices.clone();
-        let home = home.clone();
+        let apply_device_change = apply_device_change.clone();
         let waker = waker.clone();
         let ui_weak = ui.as_weak();
         let drop_tx = drop_tx.clone();
@@ -758,8 +795,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let sync_rows = sync_rows.clone();
             let timer2 = timer.clone();
             let waker = waker.clone();
-            let devices = devices.clone();
-            let home = home.clone();
+            let apply_device_change = apply_device_change.clone();
             let ui_weak = ui_weak.clone();
             let drop_tx = drop_tx.clone();
             let drop_rx = drop_rx.clone();
@@ -811,31 +847,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     // Watcher de dispositivos (F5B): si cambiaron las unidades (USB), reubicar
-                    // los paneles cuya carpeta desapareció y re-listarlos.
-                    if devices.drives_changed() {
-                        let moved = ctrl.borrow_mut().relocate_orphans(&home);
-                        for id in moved {
-                            let dir = ctrl
-                                .borrow()
-                                .ws
-                                .pane(id)
-                                .and_then(|p| p.files.as_ref())
-                                .map(|f| f.current_dir.clone());
-                            if let Some(dir) = dir {
-                                ctrl.borrow_mut().start_listing(id, dir);
-                            }
-                        }
-                        // Refrescar la tira de unidades de la toolbar (se conectó/sacó un USB).
-                        if let Some(ui) = ui_weak.upgrade() {
-                            let drives: Vec<NavRow> = ctrl
-                                .borrow_mut()
-                                .drive_strip()
-                                .into_iter()
-                                .map(to_nav_row)
-                                .collect();
-                            ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
-                        }
-                    }
+                    // los paneles cuya carpeta desapareció, re-listarlos y refrescar la tira de
+                    // discos. La misma lógica corre en `on_wake` (refresh en vivo).
+                    apply_device_change();
                     // Asegurar que cada panel Files vigile su carpeta actual (barato si nada
                     // cambió). Arranca/re-arranca watchers tras navegar/agregar/cerrar paneles.
                     ctrl.borrow_mut().reconcile_watchers(waker.clone());
@@ -881,11 +895,17 @@ fn main() -> Result<(), slint::PlatformError> {
     };
     start_timer();
 
-    // `wake`: re-arranca el timer cuando un worker (watcher) despierta la UI. Corre en el hilo
-    // de UI (lo dispara invoke_from_event_loop), así que puede tocar el `start_timer` (Rc).
+    // `wake`: lo dispara un worker (watcher de carpeta/dispositivos) vía invoke_from_event_loop.
+    // Corre en el hilo de UI. Además de re-arrancar el timer, aplica YA un posible cambio de
+    // unidades: así un USB recién conectado refresca la tira de discos EN VIVO aunque el timer
+    // estuviera dormido (el refresh no depende de que llegue un tick).
     {
         let start_timer = start_timer.clone();
-        ui.on_wake(move || start_timer());
+        let apply_device_change = apply_device_change.clone();
+        ui.on_wake(move || {
+            apply_device_change();
+            start_timer();
+        });
     }
 
     {
