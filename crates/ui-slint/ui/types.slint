@@ -151,6 +151,19 @@ export struct ResumeRowVm {
     label: string,
 }
 
+// Una tarjeta de tema en la galería de selección (config → Apariencia). Trae el id estable,
+// el nombre legible, si es el activo, y cuatro muestras de color representativas.
+export struct ThemeCardVm {
+    id: string,
+    name: string,
+    active: bool,
+    sw-panel: color,
+    sw-accent: color,
+    sw-row: color,
+    sw-text: color,
+    sw-highlight: color,
+}
+
 // Estado del modal "nueva(s) carpeta(s)".
 export struct NewFolderVm {
     active: bool,

@@ -18,7 +18,7 @@ import { BatchRename } from "batch-rename.slint";
 import { NewFolder } from "new-folder.slint";
 import { Help } from "help.slint";
 import { BatchRenameVm, NewFolderVm, HelpRowVm } from "types.slint";
-import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { Splash } from "splash.slint";
@@ -74,6 +74,8 @@ component ToolBtn inherits Rectangle {
     in property <bool> highlight: false;
     // Ícono de acción cacheado (6B). Vacío = botón solo-texto (p. ej. el "+").
     in property <image> icon;
+    // Si true, dibuja un ícono de TERMINAL con Path (no hay PNG de terminal en los sets).
+    in property <bool> draw-terminal: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -88,13 +90,40 @@ component ToolBtn inherits Rectangle {
         y: (parent.height - self.preferred-height) / 2;
         width: self.preferred-width;
         height: self.preferred-height;
-        if root.icon.width > 0: Image {
+        if root.icon.width > 0 && !root.draw-terminal: Image {
             source: root.icon;
             width: 16px;
             height: 16px;
             image-rendering: smooth;
         }
-        if !root.icon-only || root.icon.width == 0: Text {
+        // Ícono de terminal dibujado: marco + prompt ">_".
+        if root.draw-terminal: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 16px;
+                height: 16px;
+                stroke: white;
+                stroke-width: 1.2px;
+                fill: transparent;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                // Marco de la consola.
+                MoveTo { x: 1.5; y: 2.5; }
+                LineTo { x: 14.5; y: 2.5; }
+                LineTo { x: 14.5; y: 13.5; }
+                LineTo { x: 1.5; y: 13.5; }
+                Close { }
+                // Prompt ">".
+                MoveTo { x: 4; y: 6; }
+                LineTo { x: 7; y: 8; }
+                LineTo { x: 4; y: 10; }
+                // Cursor "_".
+                MoveTo { x: 8.5; y: 10.5; }
+                LineTo { x: 12; y: 10.5; }
+            }
+        }
+        if !root.icon-only || (root.icon.width == 0 && !root.draw-terminal): Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -368,6 +397,7 @@ export component AppWindow inherits Window {
     in property <image> ic-clone;
     in property <image> ic-tabs;
     in property <image> ic-settings;
+    in property <image> ic-new-folder;
     // Tira de unidades de disco de la toolbar (6-fix): label = letra, icon = ícono de disco,
     // path = raíz. Clic navega el panel activo. Rust la rellena al arrancar y al cambiar de USB.
     in property <[NavRow]> drives;
@@ -377,6 +407,7 @@ export component AppWindow inherits Window {
     in-out property <bool> config-open: false;
     in property <SettingsVm> settings-vm;
     in property <[ShortcutRowVm]> shortcut-rows;
+    in property <[ThemeCardVm]> theme-cards;
     in property <string> config-dir;
     in property <string> app-version;
     callback cfg-set-ops-mode(int);
@@ -537,21 +568,22 @@ export component AppWindow inherits Window {
                     clicked => { root.layout-menu-open = !root.layout-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
-                // Nueva carpeta en el panel activo (abre el modal multilínea).
+                // Nueva carpeta en el panel activo (abre el modal multilínea). Ícono propio.
                 ToolBtn {
                     label: Tr.toolbar-new-folder;
                     tip: Tr.toolbar-new-folder-tip;
-                    icon: root.ic-panel;
+                    icon: root.ic-new-folder;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 110px;
                     clicked => { root.new-folder-toolbar(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
+                // Ícono de terminal dibujado (no hay PNG de terminal en los sets).
                 ToolBtn {
                     label: Tr.toolbar-terminal;
                     tip: Tr.toolbar-terminal-tip;
-                    icon: root.ic-tabs;
+                    draw-terminal: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     highlight: root.term-menu-open;
@@ -611,7 +643,8 @@ export component AppWindow inherits Window {
                     y: 0;
                     width: 100%;
                     height: parent.bar-h;
-                    background: p.active ? Theme.row-bg : Theme.row-bg;
+                    // Título del panel activo con fondo de acento, para marcar el foco claramente.
+                    background: p.active ? Theme.accent : Theme.row-bg;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 6px;
@@ -619,7 +652,7 @@ export component AppWindow inherits Window {
                         Text {
                             text: p.title;
                             color: p.active ? white : Theme.text-dim;
-                            font-weight: 600;
+                            font-weight: p.active ? 800 : 600;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                             overflow: elide;
@@ -947,6 +980,7 @@ export component AppWindow inherits Window {
         height: 100%;
         vm: root.settings-vm;
         shortcuts: root.shortcut-rows;
+        theme-cards: root.theme-cards;
         config-dir: root.config-dir;
         app-version: root.app-version;
         set-ops-mode(m) => { root.cfg-set-ops-mode(m); }

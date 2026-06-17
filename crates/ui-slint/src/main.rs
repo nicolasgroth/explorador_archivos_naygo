@@ -1326,6 +1326,30 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .collect();
             ui.set_cfg_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
+            // Tarjetas de tema para la galería de selección (config → Apariencia).
+            let active = c.config.settings.theme.clone();
+            let col =
+                |tc: naygo_core::theme::ThemeColor| slint::Color::from_rgb_u8(tc.r, tc.g, tc.b);
+            let cards: Vec<ThemeCardVm> = c
+                .config
+                .themes
+                .available()
+                .iter()
+                .map(|id| {
+                    let t = c.config.themes.get(id);
+                    ThemeCardVm {
+                        id: id.as_str().into(),
+                        name: t.name.clone().into(),
+                        active: id.as_str() == active.as_str(),
+                        sw_panel: col(t.panel_bg),
+                        sw_accent: col(t.accent),
+                        sw_row: col(t.row_bg),
+                        sw_text: col(t.text),
+                        sw_highlight: col(t.highlight),
+                    }
+                })
+                .collect();
+            ui.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
             ui.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
             ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         })
@@ -1351,6 +1375,7 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_ic_clone(ic(&mut c, ActionIcon::ClonePath));
             ui.set_ic_tabs(ic(&mut c, ActionIcon::AddPane));
             ui.set_ic_settings(ic(&mut c, ActionIcon::Settings));
+            ui.set_ic_new_folder(ic(&mut c, ActionIcon::NewFolder));
         })
     };
     refresh_toolbar_icons();

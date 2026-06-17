@@ -1,0 +1,15 @@
+{
+  "name": "Neon Retro",
+  "base": "dark",
+  "accent": "#ff39a8",
+  "panel_bg": "#140d22",
+  "row_bg": "#1e1438",
+  "row_alt_bg": "#281a48",
+  "text": "#ececff",
+  "text_dim": "#9a8fc4",
+  "selection_bg": "#3a2470",
+  "active_bar": "#ff39a8",
+  "error": "#ff5d73",
+  "highlight": "#2ee6c8",
+  "border": "#3a2a5e"
+}

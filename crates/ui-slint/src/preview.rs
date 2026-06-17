@@ -195,10 +195,65 @@ impl PreviewState {
 
 /// Construye el payload leyendo/decodificando en el hilo del worker.
 fn build_payload(path: &Path, rules: &[PreviewRule], token: &CancellationToken) -> Payload {
+    // Los .zip muestran su contenido (lista de entradas), antes de la clasificación normal.
+    if is_zip(path) {
+        return read_zip_listing(path);
+    }
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
         PreviewKind::Text => read_text(path),
         PreviewKind::Image => read_image(path, token),
+    }
+}
+
+/// `true` si la extensión (case-insensitive) es `zip`.
+fn is_zip(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+/// Cuántas entradas del zip listar como máximo (evita textos enormes en archivos con miles).
+const ZIP_MAX_ENTRIES: usize = 500;
+
+/// Lee la lista de archivos de un .zip y la devuelve como texto (una entrada por línea, con su
+/// tamaño descomprimido). Las carpetas se marcan con `/` final. No extrae contenido: solo el
+/// índice central del zip, así que es liviano.
+fn read_zip_listing(path: &Path) -> Payload {
+    let Ok(file) = std::fs::File::open(path) else {
+        return Payload::Message("No se pudo leer".to_string());
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return Payload::Message("ZIP inválido o dañado".to_string());
+    };
+    let total = archive.len();
+    let mut lines: Vec<String> = Vec::with_capacity(total.min(ZIP_MAX_ENTRIES) + 2);
+    lines.push(format!("{total} elemento(s) en el archivo:"));
+    lines.push(String::new());
+    let shown = total.min(ZIP_MAX_ENTRIES);
+    for i in 0..shown {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().to_string();
+        if entry.is_dir() {
+            lines.push(format!("  {name}"));
+        } else {
+            lines.push(format!(
+                "  {name}  ({})",
+                naygo_core::format::format_size(entry.size(), naygo_core::format::SizeFormat::Auto)
+            ));
+        }
+    }
+    let truncated = total > shown;
+    if truncated {
+        lines.push(String::new());
+        lines.push(format!("… y {} más", total - shown));
+    }
+    Payload::Text {
+        text: lines.join("\n"),
+        truncated,
     }
 }
 
@@ -294,6 +349,42 @@ mod tests {
         s.set_wanted(None, t0);
         assert!(!s.busy());
         assert!(!s.should_start(t0 + PREVIEW_DEBOUNCE));
+    }
+
+    #[test]
+    fn zip_lista_entradas() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("paquete.zip");
+        {
+            let f = std::fs::File::create(&p).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            zw.start_file("readme.txt", opts).unwrap();
+            zw.write_all(b"hola mundo").unwrap();
+            zw.start_file("src/main.rs", opts).unwrap();
+            zw.write_all(b"fn main() {}").unwrap();
+            zw.finish().unwrap();
+        }
+        match read_zip_listing(&p) {
+            Payload::Text { text, .. } => {
+                assert!(text.contains("readme.txt"), "lista readme: {text}");
+                assert!(text.contains("src/main.rs"), "lista main: {text}");
+                assert!(text.contains("2 elemento"), "cuenta entradas: {text}");
+            }
+            other => panic!("esperaba texto, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zip_invalido_da_mensaje() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("roto.zip");
+        std::fs::write(&p, b"esto no es un zip").unwrap();
+        match read_zip_listing(&p) {
+            Payload::Message(_) => {}
+            other => panic!("esperaba mensaje, fue {other:?}"),
+        }
     }
 
     #[test]

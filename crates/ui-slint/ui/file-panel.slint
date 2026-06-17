@@ -9,6 +9,87 @@ import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
+// Íconos dibujados con Path (no glifos de fuente): bajo render por software los emoji/★/✓
+// salían invisibles. `fill`/`stroke` los pinta el llamador según estado.
+
+// Estrella de 5 puntas. `filled` la rellena (favorito activo) o solo la contornea.
+component StarIcon inherits Rectangle {
+    in property <bool> filled: false;
+    in property <color> tint: Theme.highlight;
+    in property <length> size: 15px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        fill: root.filled ? root.tint : transparent;
+        stroke: root.tint;
+        stroke-width: 1.2px;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        MoveTo { x: 10; y: 1; }
+        LineTo { x: 12.6; y: 7.1; }
+        LineTo { x: 19; y: 7.6; }
+        LineTo { x: 14.2; y: 11.8; }
+        LineTo { x: 15.7; y: 18; }
+        LineTo { x: 10; y: 14.7; }
+        LineTo { x: 4.3; y: 18; }
+        LineTo { x: 5.8; y: 11.8; }
+        LineTo { x: 1; y: 7.6; }
+        LineTo { x: 7.4; y: 7.1; }
+        Close { }
+    }
+}
+
+// Portapapeles (copiar): hoja con una pestañita arriba.
+component ClipboardIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.2px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        // Hoja.
+        MoveTo { x: 3; y: 3; }
+        LineTo { x: 13; y: 3; }
+        LineTo { x: 13; y: 15; }
+        LineTo { x: 3; y: 15; }
+        Close { }
+        // Pestaña superior.
+        MoveTo { x: 6; y: 1.5; }
+        LineTo { x: 10; y: 1.5; }
+        LineTo { x: 10; y: 4; }
+        LineTo { x: 6; y: 4; }
+        Close { }
+    }
+}
+
+// Tilde (✓) para el feedback "copiado".
+component CheckIcon inherits Rectangle {
+    in property <color> tint: Theme.highlight;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.8px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        MoveTo { x: 2.5; y: 8.5; }
+        LineTo { x: 6.5; y: 12.5; }
+        LineTo { x: 13.5; y: 3.5; }
+    }
+}
+
 component HeaderCell inherits Rectangle {
     in property <string> text;
     in property <bool> align-right: false;
@@ -153,15 +234,20 @@ export component FilePanel inherits FocusScope {
         }
     }
 
-    // Borde de acento si es el panel activo.
+    // Marca del panel activo: borde de acento MÁS marcado (2px) + una sutil bruma de acento de
+    // fondo, para que se distinga claramente del panel inactivo de un vistazo.
     Rectangle {
-        border-width: root.active ? 1.5px : 0px;
-        border-color: Theme.accent;
+        border-width: root.active ? 2px : 1px;
+        border-color: root.active ? Theme.accent : Theme.border;
+        border-radius: 4px;
+        background: root.active ? Theme.accent.with-alpha(0.05) : transparent;
         VerticalLayout {
             // --- Barra de ruta: breadcrumbs (modo normal) o editor con autocompletado. ---
             Rectangle {
                 height: 26px;
-                background: Theme.row-bg;
+                // Cuando el panel está activo, la path-bar lleva un fondo de acento tenue para
+                // resaltar dónde está el foco.
+                background: root.active ? Theme.accent.with-alpha(0.18) : Theme.row-bg;
                 border-radius: 4px;
                 // Modo BREADCRUMB: segmentos clicables; clic en el hueco entra a edición.
                 if !root.editing: HorizontalLayout {
@@ -203,12 +289,11 @@ export component FilePanel inherits FocusScope {
                         width: 24px;
                         background: fav-touch.has-hover ? Theme.selection-bg : transparent;
                         border-radius: 3px;
-                        Text {
-                            text: root.is-favorite ? "★" : "☆";
-                            color: root.is-favorite ? Theme.highlight : Theme.text-dim;
-                            font-size: 14px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        StarIcon {
+                            width: 100%;
+                            height: 100%;
+                            filled: root.is-favorite;
+                            tint: root.is-favorite ? Theme.highlight : Theme.text-dim;
                         }
                         fav-touch := TouchArea {
                             pointer-event(ev) => {
@@ -224,29 +309,25 @@ export component FilePanel inherits FocusScope {
                     }
                     // 📋 copiar la ruta de la carpeta al portapapeles. Al copiar, el ícono cambia
                     // a ✓ por ~1s (feedback inmediato en el lugar del clic).
-                    Rectangle {
+                    copy-box := Rectangle {
                         width: 26px;
                         background: copy-touch.has-hover ? Theme.selection-bg : transparent;
                         border-radius: 3px;
                         property <bool> flashed: false;
-                        Text {
-                            text: parent.flashed ? "✓" : "📋";
-                            color: parent.flashed ? Theme.highlight : Theme.text;
-                            font-size: 13px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
+                        // ✓ al copiar, si no el portapapeles. Ambos dibujados con Path.
+                        if copy-box.flashed: CheckIcon { width: 100%; height: 100%; tint: Theme.highlight; }
+                        if !copy-box.flashed: ClipboardIcon { width: 100%; height: 100%; tint: Theme.text; }
                         // Apaga el ✓ tras ~1s.
                         flash-timer := Timer {
                             interval: 1s;
-                            running: parent.flashed;
-                            triggered => { parent.flashed = false; self.running = false; }
+                            running: copy-box.flashed;
+                            triggered => { copy-box.flashed = false; self.running = false; }
                         }
                         copy-touch := TouchArea {
                             pointer-event(ev) => {
                                 if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
                                     root.copy-path(root.pane-id);
-                                    parent.flashed = true;
+                                    copy-box.flashed = true;
                                 }
                             }
                             changed has-hover => {

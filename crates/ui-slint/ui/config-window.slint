@@ -3,7 +3,7 @@
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
-import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
@@ -99,6 +99,7 @@ component CfgBtn inherits Rectangle {
 export component ConfigWindow inherits Rectangle {
     in property <SettingsVm> vm;
     in property <[ShortcutRowVm]> shortcuts;
+    in property <[ThemeCardVm]> theme-cards;
     in property <string> config-dir;
     in property <string> app-version;
     // Categoría seleccionada (0..6).
@@ -402,29 +403,79 @@ export component ConfigWindow inherits Rectangle {
                             // === Apariencia (cat 3) ===
                             if root.cat == 3: VerticalLayout {
                                 spacing: 6px;
-                                Field {
-                                    label: Tr.cfg-theme;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: root.vm.themes;
-                                        current-value: root.vm.theme;
-                                        selected => { root.set-theme(self.current-value); }
-                                    }
-                                }
-                                // Muestras de los colores principales del tema ACTIVO (se
-                                // actualizan en caliente al cambiar el tema, así sirven de preview).
-                                Field {
-                                    label: Tr.cfg-theme-preview;
-                                    HorizontalLayout {
-                                        spacing: 4px;
-                                        alignment: start;
-                                        for c in [Theme.panel-bg, Theme.accent, Theme.text, Theme.highlight, Theme.selection-bg, Theme.error]: Rectangle {
-                                            width: 22px;
-                                            height: 18px;
-                                            background: c;
-                                            border-radius: 3px;
-                                            border-width: 1px;
-                                            border-color: Theme.border;
+                                // Galería de temas: cada tema es una tarjeta con muestras de color,
+                                // su nombre y una marca (borde de acento + ★) si es el activo. Un
+                                // clic lo aplica en caliente. Reemplaza al combo + swatches.
+                                Text { text: Tr.cfg-theme; color: Theme.text-dim; font-size: 12px; }
+                                Flickable {
+                                    height: 196px;
+                                    viewport-height: theme-grid.preferred-height;
+                                    theme-grid := VerticalLayout {
+                                        spacing: 8px;
+                                        // Filas de 3 tarjetas. `idx-base` es el primer índice de la fila.
+                                        for row-base in [0, 3, 6, 9, 12]: HorizontalLayout {
+                                            spacing: 8px;
+                                            for col in [0, 1, 2]: tcard := Rectangle {
+                                                property <int> idx: row-base + col;
+                                                property <ThemeCardVm> tc: root.theme-cards[self.idx];
+                                                visible: self.idx < root.theme-cards.length;
+                                                width: 150px;
+                                                height: 86px;
+                                                background: tcard.tc.sw-panel;
+                                                border-radius: 7px;
+                                                border-width: tcard.tc.active ? 2px : 1px;
+                                                border-color: tcard.tc.active ? Theme.accent : Theme.border;
+                                                VerticalLayout {
+                                                    padding: 8px;
+                                                    spacing: 7px;
+                                                    // Muestras de color del tema.
+                                                    HorizontalLayout {
+                                                        spacing: 4px;
+                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-accent; }
+                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-row; }
+                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-highlight; }
+                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-text; }
+                                                    }
+                                                    HorizontalLayout {
+                                                        spacing: 4px;
+                                                        Text {
+                                                            text: tcard.tc.name;
+                                                            color: tcard.tc.sw-text;
+                                                            font-size: 12px;
+                                                            font-weight: tcard.tc.active ? 800 : 500;
+                                                            vertical-alignment: center;
+                                                            horizontal-stretch: 1;
+                                                            overflow: elide;
+                                                        }
+                                                        if tcard.tc.active: Rectangle {
+                                                            width: 16px;
+                                                            height: 16px;
+                                                            Path {
+                                                                width: 14px; height: 14px;
+                                                                x: 1px; y: 1px;
+                                                                fill: Theme.accent;
+                                                                viewbox-width: 20; viewbox-height: 20;
+                                                                MoveTo { x: 10; y: 1; }
+                                                                LineTo { x: 12.6; y: 7.1; }
+                                                                LineTo { x: 19; y: 7.6; }
+                                                                LineTo { x: 14.2; y: 11.8; }
+                                                                LineTo { x: 15.7; y: 18; }
+                                                                LineTo { x: 10; y: 14.7; }
+                                                                LineTo { x: 4.3; y: 18; }
+                                                                LineTo { x: 5.8; y: 11.8; }
+                                                                LineTo { x: 1; y: 7.6; }
+                                                                LineTo { x: 7.4; y: 7.1; }
+                                                                Close { }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                TouchArea {
+                                                    enabled: tcard.idx < root.theme-cards.length;
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.set-theme(tcard.tc.id); }
+                                                }
+                                            }
                                         }
                                     }
                                 }

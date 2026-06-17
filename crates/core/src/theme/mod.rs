@@ -216,6 +216,11 @@ const DARK_BLUE_JSON: &str = include_str!("builtin/dark-blue.json");
 const DARK_TEAL_JSON: &str = include_str!("builtin/dark-teal.json");
 const LIGHT_JSON: &str = include_str!("builtin/light.json");
 const HIGH_CONTRAST_JSON: &str = include_str!("builtin/high-contrast.json");
+const CITRUS_GLOW_JSON: &str = include_str!("builtin/citrus-glow.json");
+const NEON_RETRO_JSON: &str = include_str!("builtin/neon-retro.json");
+const OCEAN_MIDNIGHT_JSON: &str = include_str!("builtin/ocean-midnight.json");
+const EMBER_FORGE_JSON: &str = include_str!("builtin/ember-forge.json");
+const POLAR_GRAPHITE_JSON: &str = include_str!("builtin/polar-graphite.json");
 
 impl ThemeCatalog {
     /// Id del tema por defecto (Dark Blue).
@@ -232,6 +237,11 @@ impl ThemeCatalog {
             ("dark-teal", DARK_TEAL_JSON),
             ("light", LIGHT_JSON),
             ("high-contrast", HIGH_CONTRAST_JSON),
+            ("citrus-glow", CITRUS_GLOW_JSON),
+            ("neon-retro", NEON_RETRO_JSON),
+            ("ocean-midnight", OCEAN_MIDNIGHT_JSON),
+            ("ember-forge", EMBER_FORGE_JSON),
+            ("polar-graphite", POLAR_GRAPHITE_JSON),
         ] {
             if let Some(t) = Theme::from_json(json) {
                 themes.insert(id.to_string(), t);
@@ -375,7 +385,17 @@ mod tests {
             &ThemeCatalog::default_id(),
         );
         let ids: Vec<&str> = cat.available().iter().map(|i| i.as_str()).collect();
-        for id in ["dark-blue", "dark-teal", "light", "high-contrast"] {
+        for id in [
+            "dark-blue",
+            "dark-teal",
+            "light",
+            "high-contrast",
+            "citrus-glow",
+            "neon-retro",
+            "ocean-midnight",
+            "ember-forge",
+            "polar-graphite",
+        ] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
         }
     }
