@@ -79,6 +79,8 @@ component ToolBtn inherits Rectangle {
     in property <image> icon;
     // Si true, dibuja un ícono de TERMINAL con Path (no hay PNG de terminal en los sets).
     in property <bool> draw-terminal: false;
+    // Si true, dibuja un "+" con Path (botón de dividir panel), en vez de un glifo de fuente.
+    in property <bool> draw-plus: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -126,7 +128,26 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 12; y: 10.5; }
             }
         }
-        if !root.icon-only || (root.icon.width == 0 && !root.draw-terminal): Text {
+        // "+" dibujado (botón de dividir panel).
+        if root.draw-plus: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: white;
+                stroke-width: 1.8px;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                MoveTo { x: 7; y: 2; }
+                LineTo { x: 7; y: 12; }
+                MoveTo { x: 2; y: 7; }
+                LineTo { x: 12; y: 7; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -173,6 +194,19 @@ component EjectIcon inherits Rectangle {
         LineTo { x: 9.5; y: 10.5; }
         LineTo { x: 2.5; y: 10.5; }
         Close { }
+    }
+}
+
+// Separador vertical entre grupos de la toolbar: una línea fina centrada con aire a los lados,
+// para agrupar visualmente (navegación / paneles / acciones / unidades) sin recargar.
+component ToolSep inherits Rectangle {
+    width: 9px;
+    Rectangle {
+        width: 1px;
+        height: 20px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.border;
     }
 }
 
@@ -523,6 +557,7 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding: 4px;
                 spacing: 6px;
+                // --- Grupo NAVEGACIÓN ---
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;
@@ -532,11 +567,15 @@ export component AppWindow inherits Window {
                     clicked => { root.go-up(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                ToolSep { }
+                // --- Grupo PANELES ---
                 ToolBtn {
-                    // El "+" se queda solo-texto: es un glifo, no una acción con ícono propio.
-                    label: "+";
+                    // Dividir el panel: nuevo panel de archivos. "+" dibujado (no glifo de fuente).
+                    label: "";
+                    draw-plus: true;
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
+                    btn-width: 34px;
                     clicked => { root.dir-menu-open = !root.dir-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
@@ -577,15 +616,6 @@ export component AppWindow inherits Window {
                     clicked => { root.stack-pane(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
-                ToolBtn {
-                    label: Tr.cfg-title;
-                    tip: Tr.cfg-title;
-                    icon: root.ic-settings;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
-                    clicked => { root.open-config(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
                 // Menú de plantillas de disposición (F4).
                 ToolBtn {
                     label: Tr.toolbar-layouts;
@@ -597,6 +627,8 @@ export component AppWindow inherits Window {
                     clicked => { root.layout-menu-open = !root.layout-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                ToolSep { }
+                // --- Grupo ACCIONES ---
                 // Nueva carpeta en el panel activo (abre el modal multilínea). Ícono propio.
                 ToolBtn {
                     label: Tr.toolbar-new-folder;
@@ -619,8 +651,19 @@ export component AppWindow inherits Window {
                     clicked => { root.term-menu-open = !root.term-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
-                // Separador antes de la tira de unidades.
-                Rectangle { width: 1px; background: Theme.selection-bg; }
+                ToolSep { }
+                // --- Grupo SISTEMA ---
+                ToolBtn {
+                    label: Tr.cfg-title;
+                    tip: Tr.cfg-title;
+                    icon: root.ic-settings;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
+                    clicked => { root.open-config(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                ToolSep { }
+                // --- Grupo UNIDADES (tira de discos) ---
                 // Tira de unidades de disco (paridad con egui): clic navega el panel activo.
                 for d in root.drives: DriveBtn {
                     label: d.label;
