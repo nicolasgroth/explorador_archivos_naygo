@@ -1269,6 +1269,13 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_cfg_set_date_format, i32, set_date_format);
     cfg_setter!(on_cfg_set_size_format, i32, set_size_format);
     cfg_setter!(on_cfg_set_row_density, i32, set_row_density);
+    // Avanzado (F3c).
+    cfg_setter!(on_cfg_set_ops_display, i32, set_ops_display);
+    cfg_setter!(on_cfg_set_paste_image_fmt, i32, set_paste_image_fmt);
+    cfg_setter!(on_cfg_set_low_power_mode, i32, set_low_power_mode);
+    cfg_setter!(on_cfg_set_new_items_at_end, bool, set_new_items_at_end);
+    cfg_setter!(on_cfg_set_tray_enabled, bool, set_tray_enabled);
+    cfg_setter!(on_cfg_set_close_to_tray, bool, set_close_to_tray);
     cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -1467,6 +1474,20 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 Err(e) => report(Err::<(), String>(e)),
             }
+        });
+    }
+    // Avanzado: factory reset. Restablece TODOS los ajustes y reaplica idioma/tema (cambian).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_cfg_factory_reset(move || {
+            ctrl.borrow_mut().config.factory_reset();
+            if let Some(ui) = ui_weak.upgrade() {
+                i18n_keys::apply(&ui, &ctrl.borrow().config);
+                theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+            }
+            refresh();
         });
     }
     // Acerca de: abrir el repositorio en el navegador por defecto.
@@ -2224,6 +2245,23 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             naygo_core::config::RowDensity::Comfortable => 1,
         },
         row_h: s.row_density.row_height(),
+        ops_display: match s.ops_display {
+            naygo_core::config::OpsDisplay::Panel => 0,
+            naygo_core::config::OpsDisplay::Modal => 1,
+            naygo_core::config::OpsDisplay::AlwaysVisible => 2,
+        },
+        paste_image_fmt: match s.paste_image_fmt {
+            naygo_core::clipboard::ImageFmt::Png => 0,
+            naygo_core::clipboard::ImageFmt::Jpg => 1,
+        },
+        tray_enabled: s.tray_enabled,
+        close_to_tray: s.close_to_tray,
+        new_items_at_end: s.new_items_at_end,
+        low_power_mode: match s.low_power_mode {
+            naygo_core::config::LowPowerMode::Auto => 0,
+            naygo_core::config::LowPowerMode::Always => 1,
+            naygo_core::config::LowPowerMode::Never => 2,
+        },
         paste_confirm: s.paste_confirm,
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),

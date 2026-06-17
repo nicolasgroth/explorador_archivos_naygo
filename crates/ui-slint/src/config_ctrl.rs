@@ -210,6 +210,63 @@ impl ConfigCtrl {
         self.save();
     }
 
+    // --- Avanzado ---
+
+    /// Cómo se muestra el progreso de operaciones: 0=Panel, 1=Modal, 2=Siempre visible.
+    pub fn set_ops_display(&mut self, idx: i32) {
+        use naygo_core::config::OpsDisplay::*;
+        self.settings.ops_display = match idx {
+            1 => Modal,
+            2 => AlwaysVisible,
+            _ => Panel,
+        };
+        self.save();
+    }
+
+    /// Formato de salida para imagen pegada: 0=PNG, 1=JPG.
+    pub fn set_paste_image_fmt(&mut self, idx: i32) {
+        use naygo_core::clipboard::ImageFmt::*;
+        self.settings.paste_image_fmt = if idx == 1 { Jpg } else { Png };
+        self.save();
+    }
+
+    /// Mostrar el ícono de Naygo en la bandeja del sistema.
+    pub fn set_tray_enabled(&mut self, v: bool) {
+        self.settings.tray_enabled = v;
+        self.save();
+    }
+
+    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir.
+    pub fn set_close_to_tray(&mut self, v: bool) {
+        self.settings.close_to_tray = v;
+        self.save();
+    }
+
+    /// Agrupar los archivos recién aparecidos al final del listado (en vez de insertarlos
+    /// ya ordenados).
+    pub fn set_new_items_at_end(&mut self, v: bool) {
+        self.settings.new_items_at_end = v;
+        self.save();
+    }
+
+    /// Modo de bajo consumo: 0=Auto, 1=Siempre, 2=Nunca.
+    pub fn set_low_power_mode(&mut self, idx: i32) {
+        use naygo_core::config::LowPowerMode::*;
+        self.settings.low_power_mode = match idx {
+            1 => Always,
+            2 => Never,
+            _ => Auto,
+        };
+        self.save();
+    }
+
+    /// Restablece TODOS los ajustes a sus valores por defecto (factory reset) y persiste.
+    /// El llamador debe reaplicar i18n/tema tras esto (cambian idioma/tema activos).
+    pub fn factory_reset(&mut self) {
+        self.settings = naygo_core::config::Settings::default();
+        self.save();
+    }
+
     // --- Editor de atajos ---
 
     /// Texto legible de un chord, p. ej. "Ctrl+C", "Supr", "Shift+↑". Sin i18n: los nombres de
@@ -359,6 +416,45 @@ mod tests {
         assert_eq!(c2.settings.ops_mode, OpsMode::Parallel);
         assert!(c2.settings.confirm_trash);
         assert_eq!(c2.settings.paste_text_ext, "md");
+    }
+
+    #[test]
+    fn avanzado_setters_persisten() {
+        use naygo_core::clipboard::ImageFmt;
+        use naygo_core::config::{LowPowerMode, OpsDisplay};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        {
+            let mut c = ConfigCtrl::new(dir.clone());
+            c.set_ops_display(2);
+            c.set_paste_image_fmt(1);
+            c.set_low_power_mode(1);
+            c.set_new_items_at_end(true);
+            c.set_tray_enabled(false);
+            c.set_close_to_tray(true);
+        }
+        let c2 = ConfigCtrl::new(dir);
+        assert_eq!(c2.settings.ops_display, OpsDisplay::AlwaysVisible);
+        assert_eq!(c2.settings.paste_image_fmt, ImageFmt::Jpg);
+        assert_eq!(c2.settings.low_power_mode, LowPowerMode::Always);
+        assert!(c2.settings.new_items_at_end);
+        assert!(!c2.settings.tray_enabled);
+        assert!(c2.settings.close_to_tray);
+    }
+
+    #[test]
+    fn factory_reset_vuelve_a_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut c = ConfigCtrl::new(dir.clone());
+        c.set_confirm_trash(true);
+        c.set_ops_mode(1);
+        c.factory_reset();
+        let defaults = naygo_core::config::Settings::default();
+        assert_eq!(c.settings, defaults, "factory reset = defaults exactos");
+        // Y persistió: reabrir da los defaults.
+        let c2 = ConfigCtrl::new(dir);
+        assert_eq!(c2.settings, defaults);
     }
 
     #[test]

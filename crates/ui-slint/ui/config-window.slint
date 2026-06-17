@@ -114,6 +114,16 @@ export component ConfigWindow inherits Rectangle {
     callback set-date-format(int);
     callback set-size-format(int);
     callback set-row-density(int);
+    // Avanzado:
+    callback set-ops-display(int);
+    callback set-paste-image-fmt(int);
+    callback set-low-power-mode(int);
+    callback set-new-items-at-end(bool);
+    callback set-tray-enabled(bool);
+    callback set-close-to-tray(bool);
+    callback factory-reset();
+    // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
+    property <bool> reset-armed: false;
     // Atajos:
     callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
     callback shortcut-reset(string);     // reset de una acción
@@ -226,12 +236,12 @@ export component ConfigWindow inherits Rectangle {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-about]: Rectangle {
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-about]: Rectangle {
                             height: 30px;
                             background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
                             Text { text: c; color: Theme.text; vertical-alignment: center; x: 10px; }
-                            cat-touch := TouchArea { clicked => { root.cat = i; root.capturing = ""; } }
+                            cat-touch := TouchArea { clicked => { root.cat = i; root.capturing = ""; root.reset-armed = false; } }
                         }
                     }
                 }
@@ -449,8 +459,70 @@ export component ConfigWindow inherits Rectangle {
                                 CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
                             }
 
-                            // === Acerca de (cat 6) ===
+                            // === Avanzado (cat 6) ===
                             if root.cat == 6: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-ops-display;
+                                    ComboBox {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-ops-display-panel, Tr.cfg-ops-display-modal, Tr.cfg-ops-display-always];
+                                        current-index: root.vm.ops-display;
+                                        selected => { root.set-ops-display(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-image-fmt;
+                                    ComboBox {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
+                                        current-index: root.vm.paste-image-fmt;
+                                        selected => { root.set-paste-image-fmt(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-low-power;
+                                    ComboBox {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-low-power-auto, Tr.cfg-low-power-always, Tr.cfg-low-power-never];
+                                        current-index: root.vm.low-power-mode;
+                                        selected => { root.set-low-power-mode(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-new-items-at-end;
+                                    Switch { checked: root.vm.new-items-at-end; toggled => { root.set-new-items-at-end(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-tray-enabled;
+                                    Switch { checked: root.vm.tray-enabled; toggled => { root.set-tray-enabled(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-close-to-tray;
+                                    Switch { checked: root.vm.close-to-tray; toggled => { root.set-close-to-tray(self.checked); } }
+                                }
+                                // Factory reset en dos pasos: el primer clic arma la confirmación.
+                                Rectangle { height: 8px; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    CfgBtn {
+                                        label: root.reset-armed ? Tr.cfg-factory-reset-confirm : Tr.cfg-factory-reset;
+                                        danger: root.reset-armed;
+                                        clicked => {
+                                            if (root.reset-armed) {
+                                                root.reset-armed = false;
+                                                root.factory-reset();
+                                            } else {
+                                                root.reset-armed = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Acerca de (cat 7) ===
+                            if root.cat == 7: VerticalLayout {
                                 spacing: 6px;
                                 alignment: start;
                                 HorizontalLayout {

@@ -338,6 +338,13 @@ export component AppWindow inherits Window {
     callback cfg-export-theme();
     callback cfg-export-config();
     callback cfg-import-pack();
+    callback cfg-set-ops-display(int);
+    callback cfg-set-paste-image-fmt(int);
+    callback cfg-set-low-power-mode(int);
+    callback cfg-set-new-items-at-end(bool);
+    callback cfg-set-tray-enabled(bool);
+    callback cfg-set-close-to-tray(bool);
+    callback cfg-factory-reset();
     callback cfg-open-repo();
     pure callback cfg-egg-prefix(int) -> string;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
@@ -797,6 +804,13 @@ export component AppWindow inherits Window {
         export-theme() => { root.cfg-export-theme(); }
         export-config() => { root.cfg-export-config(); }
         import-pack() => { root.cfg-import-pack(); }
+        set-ops-display(i) => { root.cfg-set-ops-display(i); }
+        set-paste-image-fmt(i) => { root.cfg-set-paste-image-fmt(i); }
+        set-low-power-mode(i) => { root.cfg-set-low-power-mode(i); }
+        set-new-items-at-end(v) => { root.cfg-set-new-items-at-end(v); }
+        set-tray-enabled(v) => { root.cfg-set-tray-enabled(v); }
+        set-close-to-tray(v) => { root.cfg-set-close-to-tray(v); }
+        factory-reset() => { root.cfg-factory-reset(); }
         open-repo() => { root.cfg-open-repo(); }
         egg-prefix(n) => { root.cfg-egg-prefix(n) }
         close() => { root.config-open = false; }

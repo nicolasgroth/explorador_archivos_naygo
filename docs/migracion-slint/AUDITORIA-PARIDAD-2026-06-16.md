@@ -112,9 +112,12 @@ Faltan respecto al contrato I:
    el menú en vez de arrastrar) — HECHO, commit dd66fb8. Incluye indicadores ▲/▼ + embudo +
    aviso "sin coincidencias". El arrastre-con-línea-de-inserción quedó pendiente (se prefirió
    "Mover ←/→" por robustez bajo render por software); reabrir si Nicolás quiere el gesto.
-3. **Config**: pulido U1–U3 (arrastrable, alto adaptable, combos parejos) + Acerca-de (C1) +
-   Avanzado (C2) + Previsualización (C3) + plantilla de tabla (C4). ← SIGUIENTE
-4. **Plantillas de layout** (P3) en la toolbar.
+3. **Config**: ✅ pulido U1–U3 (arrastrable + alto adaptable + combos parejos, commit 80543c2)
+   + ✅ Acerca-de C1 con easter egg (commit a2fe53f) + ✅ Avanzado C2 (ops display, formato de
+   imagen pegada, modo bajo consumo, tray, cerrar-a-bandeja, nuevos-al-final, factory reset en
+   2 pasos). PENDIENTE: Previsualización (C3, tabla editable de reglas) + plantilla de tabla por
+   defecto (C4); botón de cierre ✕ ya hecho en commit anterior.
+4. **Plantillas de layout** (P3) en la toolbar. ← SIGUIENTE
 5. **Batch-rename** (P4) — ventana modal.
 6. **Navegación por teclado** completa + verificación del keymap.
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

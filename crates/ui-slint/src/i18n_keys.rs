@@ -119,6 +119,23 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_cat_shortcuts(c.t("slint.cfg.cat_shortcuts").into());
     tr.set_cfg_cat_import(c.t("slint.cfg.cat_import").into());
     tr.set_cfg_cat_about(c.t("slint.cfg.cat_about").into());
+    tr.set_cfg_cat_advanced(c.t("slint.cfg.cat_advanced").into());
+    tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
+    tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
+    tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
+    tr.set_cfg_ops_display_always(c.t("slint.cfg.ops_display_always").into());
+    tr.set_cfg_paste_image_fmt(c.t("slint.cfg.paste_image_fmt").into());
+    tr.set_cfg_paste_fmt_png(c.t("slint.cfg.paste_fmt_png").into());
+    tr.set_cfg_paste_fmt_jpg(c.t("slint.cfg.paste_fmt_jpg").into());
+    tr.set_cfg_tray_enabled(c.t("slint.cfg.tray_enabled").into());
+    tr.set_cfg_close_to_tray(c.t("slint.cfg.close_to_tray").into());
+    tr.set_cfg_new_items_at_end(c.t("slint.cfg.new_items_at_end").into());
+    tr.set_cfg_low_power(c.t("slint.cfg.low_power").into());
+    tr.set_cfg_low_power_auto(c.t("slint.cfg.low_power_auto").into());
+    tr.set_cfg_low_power_always(c.t("slint.cfg.low_power_always").into());
+    tr.set_cfg_low_power_never(c.t("slint.cfg.low_power_never").into());
+    tr.set_cfg_factory_reset(c.t("slint.cfg.factory_reset").into());
+    tr.set_cfg_factory_reset_confirm(c.t("slint.cfg.factory_reset_confirm").into());
     // Sección "Acerca de".
     tr.set_about_version(c.t("slint.about.version").into());
     tr.set_about_author(c.t("about.author").into());

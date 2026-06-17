@@ -198,6 +198,13 @@ export struct SettingsVm {
     date-format: int,         // 0=ISO min, 1=ISO fecha, 2=DMY min, 3=DMY fecha
     size-format: int,         // 0=Auto, 1=Bytes, 2=KB, 3=MB
     row-density: int,         // 0=compacta, 1=cómoda
+    // Avanzado (F3c):
+    ops-display: int,         // 0=panel 1=modal 2=siempre visible
+    paste-image-fmt: int,     // 0=PNG 1=JPG
+    tray-enabled: bool,
+    close-to-tray: bool,
+    new-items-at-end: bool,
+    low-power-mode: int,      // 0=auto 1=siempre 2=nunca
     row-h: length,            // alto de fila resuelto (22/26px) — lo usan tabla y árbol
     language: string,         // código del idioma activo
     theme: string,            // id del tema activo
