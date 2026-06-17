@@ -8,6 +8,28 @@ import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
 
+// Ícono "✕" dibujado con un Path (dos aspas), no con un glifo de fuente: bajo render por
+// software el carácter ✕/× a veces no existe en la fuente base y salía invisible (botón "vacío").
+// `tint` es el color de las aspas; el llamador pone el fondo/hover y el TouchArea.
+component CloseIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        MoveTo { x: 1; y: 1; }
+        LineTo { x: 9; y: 9; }
+        MoveTo { x: 9; y: 1; }
+        LineTo { x: 1; y: 9; }
+    }
+}
+
 // Una fila etiqueta + control (layout consistente).
 component Field inherits HorizontalLayout {
     in property <string> label;
@@ -87,6 +109,10 @@ export component ConfigWindow inherits Rectangle {
     // encabezado). Se acumula con cada gesto de arrastre.
     property <length> offset-x: 0px;
     property <length> offset-y: 0px;
+    // Tamaño de la tarjeta, redimensionable arrastrando la esquina inferior derecha. Se acota a
+    // un mínimo y al tamaño de la ventana. Empieza en un default cómodo.
+    property <length> card-w: 720px;
+    property <length> card-h: 560px;
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
@@ -168,14 +194,11 @@ export component ConfigWindow inherits Rectangle {
         }
     }
 
-    // Tarjeta central. Arrastrable por el encabezado (offset acumulado), con alto que se adapta
-    // al contenido de la categoría (entre un mínimo y un máximo) para no dejar espacio vacío.
+    // Tarjeta central. Arrastrable por el encabezado (offset acumulado) y REDIMENSIONABLE por la
+    // esquina inferior derecha (grip). El tamaño se acota a un mínimo y al tamaño de la ventana.
     card := Rectangle {
-        width: 720px;
-        // Alto adaptativo: crece con el contenido, pero acotado entre un mínimo y el alto de la
-        // ventana menos un margen (antes el tope fijo de 560px dejaba secciones largas —p. ej.
-        // Previsualización— recortadas sin que se notara que había más abajo).
-        height: clamp(body.preferred-height + 28px, 240px, max(360px, root.height - 64px));
+        width: clamp(root.card-w, 520px, root.width - 24px);
+        height: clamp(root.card-h, 360px, root.height - 24px);
         x: (parent.width - self.width) / 2 + root.offset-x;
         y: (parent.height - self.height) / 2 + root.offset-y;
         background: Theme.panel-bg;
@@ -218,8 +241,8 @@ export component ConfigWindow inherits Rectangle {
                         x: 0px;
                     }
                 }
-                // Botón de cierre con ícono (✕). Con borde y fondo propio para que se lea SIEMPRE
-                // como botón (antes era un ✕ tenue sin fondo que en la VM no se distinguía).
+                // Botón de cierre: la ✕ se dibuja con un Path (CloseIcon), no con un glifo, para
+                // que se vea SIEMPRE bajo render por software (antes salía un botón "vacío").
                 Rectangle {
                     width: 30px;
                     height: 26px;
@@ -227,13 +250,11 @@ export component ConfigWindow inherits Rectangle {
                     border-radius: 4px;
                     border-width: 1px;
                     border-color: close-touch.has-hover ? Theme.error : Theme.border;
-                    Text {
-                        text: "✕";
-                        color: close-touch.has-hover ? white : Theme.text;
-                        font-size: 15px;
-                        font-weight: 700;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    CloseIcon {
+                        width: 100%;
+                        height: 100%;
+                        size: 13px;
+                        tint: close-touch.has-hover ? white : Theme.text;
                     }
                     close-touch := TouchArea {
                         mouse-cursor: pointer;
@@ -463,15 +484,30 @@ export component ConfigWindow inherits Rectangle {
                                     }
                                     CfgBtn { label: Tr.cfg-reset-all; clicked => { root.shortcuts-reset-all(); } }
                                 }
+                                // Encabezado de columnas: alinea con las celdas de ancho fijo de
+                                // abajo para que toda la tabla de atajos se lea ordenada.
+                                HorizontalLayout {
+                                    height: 22px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 8px;
+                                    Text { text: Tr.cfg-sc-action; color: Theme.text-dim; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Text { text: Tr.cfg-sc-combo; color: Theme.text-dim; font-size: 11px; vertical-alignment: center; horizontal-alignment: center; width: 140px; }
+                                    Rectangle { width: 90px; }
+                                    Rectangle { width: 80px; }
+                                }
                                 ListView {
-                                    height: 380px;
+                                    height: 360px;
                                     for s[i] in root.shortcuts: Rectangle {
-                                        height: 30px;
+                                        height: 32px;
                                         background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
+                                        border-radius: 4px;
                                         HorizontalLayout {
                                             padding-left: 6px;
                                             padding-right: 6px;
-                                            spacing: 6px;
+                                            spacing: 8px;
+                                            // Acción (estira). El combo y los botones van en celdas de
+                                            // ANCHO FIJO para que todas las filas queden alineadas.
                                             Text {
                                                 text: s.label;
                                                 color: Theme.text;
@@ -479,25 +515,44 @@ export component ConfigWindow inherits Rectangle {
                                                 horizontal-stretch: 1;
                                                 overflow: elide;
                                             }
+                                            // Combo actual (o "presioná…" al capturar). Celda fija.
                                             Rectangle {
-                                                width: 120px;
-                                                background: root.capturing == s.action-key ? Theme.selection-bg : Theme.row-bg;
-                                                border-radius: 4px;
-                                                Text {
-                                                    text: root.capturing == s.action-key ? Tr.cfg-press : (s.chord-text != "" ? s.chord-text : Tr.cfg-no-shortcut);
-                                                    color: Theme.text-dim;
-                                                    font-size: 11px;
-                                                    horizontal-alignment: center;
-                                                    vertical-alignment: center;
+                                                width: 140px;
+                                                Rectangle {
+                                                    width: 100%;
+                                                    height: 24px;
+                                                    y: (parent.height - self.height) / 2;
+                                                    background: root.capturing == s.action-key ? Theme.selection-bg : Theme.row-bg;
+                                                    border-radius: 4px;
+                                                    border-width: 1px;
+                                                    border-color: root.capturing == s.action-key ? Theme.accent : Theme.border;
+                                                    Text {
+                                                        text: root.capturing == s.action-key ? Tr.cfg-press : (s.chord-text != "" ? s.chord-text : Tr.cfg-no-shortcut);
+                                                        color: s.chord-text != "" ? Theme.text : Theme.text-dim;
+                                                        font-size: 11px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
                                                 }
                                             }
-                                            CfgBtn {
-                                                label: Tr.cfg-change;
-                                                clicked => { root.capturing = s.action-key; root.shortcut-capture(s.action-key); fs.focus(); }
+                                            // Botones en celdas fijas: mismo ancho en todas las filas.
+                                            Rectangle {
+                                                width: 90px;
+                                                CfgBtn {
+                                                    width: 100%;
+                                                    y: (parent.height - self.height) / 2;
+                                                    label: Tr.cfg-change;
+                                                    clicked => { root.capturing = s.action-key; root.shortcut-capture(s.action-key); fs.focus(); }
+                                                }
                                             }
-                                            CfgBtn {
-                                                label: Tr.cfg-reset;
-                                                clicked => { root.shortcut-reset(s.action-key); }
+                                            Rectangle {
+                                                width: 80px;
+                                                CfgBtn {
+                                                    width: 100%;
+                                                    y: (parent.height - self.height) / 2;
+                                                    label: Tr.cfg-reset;
+                                                    clicked => { root.shortcut-reset(s.action-key); }
+                                                }
                                             }
                                         }
                                     }
@@ -618,12 +673,25 @@ export component ConfigWindow inherits Rectangle {
                                                     placeholder-text: "—";
                                                     edited(t) => { root.preview-set-as(r.ext, t); }
                                                 }
+                                                // Quitar la regla: ✕ dibujada con Path (visible en
+                                                // software-render) + borde para que se lea como botón.
                                                 Rectangle {
-                                                    width: 24px;
-                                                    background: rm-touch.has-hover ? Theme.error : transparent;
+                                                    width: 26px;
+                                                    height: 24px;
+                                                    background: rm-touch.has-hover ? Theme.error : Theme.row-bg;
                                                     border-radius: 3px;
-                                                    Text { text: "✕"; color: Theme.text-dim; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-                                                    rm-touch := TouchArea { clicked => { root.preview-remove(r.ext); } }
+                                                    border-width: 1px;
+                                                    border-color: rm-touch.has-hover ? Theme.error : Theme.border;
+                                                    CloseIcon {
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        size: 11px;
+                                                        tint: rm-touch.has-hover ? white : Theme.text-dim;
+                                                    }
+                                                    rm-touch := TouchArea {
+                                                        mouse-cursor: pointer;
+                                                        clicked => { root.preview-remove(r.ext); }
+                                                    }
                                                 }
                                             }
                                         }
@@ -777,6 +845,44 @@ export component ConfigWindow inherits Rectangle {
                 vertical-alignment: center;
                 y: parent.height - 40px;
                 x: 0; width: parent.width;
+            }
+        }
+
+        // Grip de redimensión (esquina inferior derecha): arrastrar cambia card-w/card-h. Las
+        // rayitas se dibujan con Path (visibles en software-render). El tamaño se acota arriba.
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            x: parent.width - self.width - 2px;
+            y: parent.height - self.height - 2px;
+            Path {
+                width: 12px;
+                height: 12px;
+                x: 3px;
+                y: 3px;
+                stroke: grip-touch.has-hover ? Theme.accent : Theme.text-dim;
+                stroke-width: 1.4px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                MoveTo { x: 12; y: 2; }
+                LineTo { x: 2; y: 12; }
+                MoveTo { x: 12; y: 7; }
+                LineTo { x: 7; y: 12; }
+            }
+            grip-touch := TouchArea {
+                mouse-cursor: nwse-resize;
+                property <length> base-w;
+                property <length> base-h;
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                        self.base-w = root.card-w;
+                        self.base-h = root.card-h;
+                    }
+                    if (ev.kind == PointerEventKind.move && self.pressed) {
+                        root.card-w = self.base-w + self.mouse-x;
+                        root.card-h = self.base-h + self.mouse-y;
+                    }
+                }
             }
         }
     }

@@ -1325,6 +1325,16 @@ impl WorkspaceCtrl {
         // auxiliares (Árbol/Favoritos) vaya al panel que el usuario venía usando.
         if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Files) {
             self.last_active_files = Some(id);
+            // Al ganar foco un panel Files, expandir/resaltar el árbol hasta SU carpeta (antes el
+            // árbol se quedaba en la carpeta del panel anterior hasta navegar).
+            if let Some(dir) = self
+                .ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone())
+            {
+                self.sync_trees_active(dir);
+            }
         }
     }
 

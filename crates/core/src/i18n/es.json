@@ -527,6 +527,8 @@
   "slint.cfg.icon_set": "Set de íconos",
   "slint.cfg.shortcuts_hint": "Cambiá un atajo con «Cambiar» y presioná la nueva combinación.",
   "slint.cfg.press": "presioná…",
+  "slint.cfg.sc_action": "Acción",
+  "slint.cfg.sc_combo": "Atajo",
   "slint.cfg.change": "Cambiar",
   "slint.cfg.reset": "Reset",
   "slint.cfg.export_hint": "Exportá tu idioma, tema o configuración como un .zip, o importá un pack.",

@@ -244,6 +244,8 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_capturing(c.t("settings.shortcuts.capturing").into());
     tr.set_cfg_press(c.t("slint.cfg.press").into());
     tr.set_cfg_no_shortcut(c.t("settings.shortcuts.none").into());
+    tr.set_cfg_sc_action(c.t("slint.cfg.sc_action").into());
+    tr.set_cfg_sc_combo(c.t("slint.cfg.sc_combo").into());
     tr.set_cfg_change(c.t("slint.cfg.change").into());
     tr.set_cfg_reset(c.t("slint.cfg.reset").into());
     tr.set_cfg_reset_all(c.t("settings.shortcuts.reset_all").into());
