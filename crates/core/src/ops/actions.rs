@@ -41,6 +41,17 @@ pub fn rename(source: PathBuf, new_name: String) -> OpRequest {
     }
 }
 
+/// Renombrar en lote: `sources[i]` → `new_names[i]` (mismo directorio). El plan ordena por
+/// dependencia (shifts) y es una sola op deshacible. El preview del diálogo ya validó.
+pub fn batch_rename(sources: Vec<PathBuf>, new_names: Vec<String>) -> OpRequest {
+    OpRequest {
+        kind: OpKind::BatchRename { new_names },
+        sources,
+        dest_dir: None,
+        conflict: ConflictPolicy::Ask,
+    }
+}
+
 /// Crear carpeta/archivo en `dir`.
 pub fn create(dir: PathBuf, name: String, is_dir: bool) -> OpRequest {
     OpRequest {

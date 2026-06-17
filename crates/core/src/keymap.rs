@@ -115,6 +115,8 @@ pub enum Action {
     Delete,
     DeletePermanent,
     Rename,
+    /// Renombrado por lotes: abre la ventana de batch-rename con la selección (Shift+F2).
+    BatchRename,
     NewFile,
     NewDir,
     CopyToOther,
@@ -188,6 +190,7 @@ impl Action {
             Delete,
             DeletePermanent,
             Rename,
+            BatchRename,
             NewFile,
             NewDir,
             CopyToOther,
@@ -242,6 +245,7 @@ impl Action {
             Delete => "action.delete",
             DeletePermanent => "action.delete_permanent",
             Rename => "action.rename",
+            BatchRename => "action.batch_rename",
             NewFile => "action.new_file",
             NewDir => "action.new_dir",
             CopyToOther => "action.copy_to_other",
@@ -322,6 +326,7 @@ impl KeyMap {
             (Action::Delete, vec![Chord::plain(KeyCode::Delete)]),
             (DeletePermanent, vec![Chord::shift(KeyCode::Delete)]),
             (Rename, vec![Chord::plain(F2)]),
+            (BatchRename, vec![Chord::shift(F2)]),
             (NewFile, vec![Chord::ctrl(Char('n'))]),
             (NewDir, vec![Chord::ctrl_shift(Char('n'))]),
             (CopyToOther, vec![Chord::plain(F5)]),
@@ -478,13 +483,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_47_acciones_con_clave_i18n_unica() {
+    fn all_tiene_48_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 47);
+        assert_eq!(all.len(), 48);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 47, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 48, "cada acción tiene una clave i18n única");
     }
 
     #[test]

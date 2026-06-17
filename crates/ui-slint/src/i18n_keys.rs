@@ -67,6 +67,27 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_terminal_cmd(c.t("slint.ctx.terminal_cmd").into());
     tr.set_ctx_terminal_wt(c.t("slint.ctx.terminal_wt").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    // Ventana de renombrado por lotes (F5).
+    tr.set_batch_title(c.t("slint.batch.title").into());
+    tr.set_batch_template(c.t("slint.batch.template").into());
+    tr.set_batch_find(c.t("slint.batch.find").into());
+    tr.set_batch_replace(c.t("slint.batch.replace").into());
+    tr.set_batch_regex(c.t("slint.batch.regex").into());
+    tr.set_batch_include_ext(c.t("slint.batch.include_ext").into());
+    tr.set_batch_case(c.t("slint.batch.case").into());
+    tr.set_batch_case_none(c.t("slint.batch.case_none").into());
+    tr.set_batch_case_lower(c.t("slint.batch.case_lower").into());
+    tr.set_batch_case_upper(c.t("slint.batch.case_upper").into());
+    tr.set_batch_case_title(c.t("slint.batch.case_title").into());
+    tr.set_batch_counter(c.t("slint.batch.counter").into());
+    tr.set_batch_counter_start(c.t("slint.batch.counter_start").into());
+    tr.set_batch_counter_step(c.t("slint.batch.counter_step").into());
+    tr.set_batch_col_before(c.t("slint.batch.col_before").into());
+    tr.set_batch_col_after(c.t("slint.batch.col_after").into());
+    tr.set_batch_collision(c.t("slint.batch.collision").into());
+    tr.set_batch_invalid(c.t("slint.batch.invalid").into());
+    tr.set_batch_items(c.t("slint.batch.items").into());
+    tr.set_batch_apply(c.t("slint.batch.apply").into());
     // Menú/editor de columna (F2).
     tr.set_colmenu_sort_asc(c.t("slint.colmenu.sort_asc").into());
     tr.set_colmenu_sort_desc(c.t("slint.colmenu.sort_desc").into());

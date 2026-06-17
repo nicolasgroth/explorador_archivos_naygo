@@ -124,6 +124,9 @@ Faltan respecto al contrato I:
 4. ✅ **Plantillas de layout** (P3): botón "Layouts" en la toolbar con built-ins (minimalista/
    clásico/dual-pane/power-user) + plantillas de usuario (guardar disposición actual / borrar),
    persistidas en templates.json. Core: `Workspace::from_template`/`to_template`. ← HECHO
-5. **Batch-rename** (P4) — ventana modal. ← SIGUIENTE
-6. **Navegación por teclado** completa + verificación del keymap.
+5. ✅ **Batch-rename** (P4): modal con plantilla+comodines, buscar/reemplazar (+regex), mayúsculas,
+   contador (inicio/paso), incluir-extensión, preview Antes→Después con estado coloreado
+   (Ok/SinCambio/Inválido/Colisión) y Aplicar (deshab. si no aplicable). Trigger Shift+F2
+   (acción `BatchRename` en el keymap, editable en atajos). Una sola op deshacible.
+6. **Navegación por teclado** completa + verificación del keymap. ← SIGUIENTE
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

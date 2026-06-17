@@ -397,6 +397,61 @@ fn main() -> Result<(), slint::PlatformError> {
                 },
             };
             ui.set_column_menu(colmenu);
+
+            // Ventana de renombrado por lotes (F5): espejo del estado + preview en vivo.
+            let batch = match &c.batch {
+                Some(b) => {
+                    use naygo_core::batch_rename::{CaseTransform, RowStatus};
+                    let rows_src = c.batch_preview();
+                    let rows: Vec<BatchRowVm> = rows_src
+                        .iter()
+                        .map(|r| BatchRowVm {
+                            old_name: SharedString::from(r.old_name.as_str()),
+                            new_name: SharedString::from(r.new_name.as_str()),
+                            status: match r.status {
+                                RowStatus::Ok => 0,
+                                RowStatus::Unchanged => 1,
+                                RowStatus::Invalid(_) => 2,
+                                RowStatus::Collision => 3,
+                            },
+                        })
+                        .collect();
+                    BatchRenameVm {
+                        active: true,
+                        template: SharedString::from(b.spec.template.as_str()),
+                        find: SharedString::from(b.spec.find.as_str()),
+                        replace: SharedString::from(b.spec.replace.as_str()),
+                        use_regex: b.spec.use_regex,
+                        include_ext: b.spec.include_ext,
+                        case: match b.spec.case {
+                            CaseTransform::None => 0,
+                            CaseTransform::Lower => 1,
+                            CaseTransform::Upper => 2,
+                            CaseTransform::Title => 3,
+                        },
+                        counter_start: SharedString::from(b.spec.counter_start.to_string()),
+                        counter_step: SharedString::from(b.spec.counter_step.to_string()),
+                        count: b.items.len() as i32,
+                        can_apply: c.batch_can_apply(),
+                        rows: ModelRc::from(Rc::new(VecModel::from(rows))),
+                    }
+                }
+                None => BatchRenameVm {
+                    active: false,
+                    template: SharedString::new(),
+                    find: SharedString::new(),
+                    replace: SharedString::new(),
+                    use_regex: false,
+                    include_ext: false,
+                    case: 0,
+                    counter_start: SharedString::new(),
+                    counter_step: SharedString::new(),
+                    count: 0,
+                    can_apply: false,
+                    rows: ModelRc::from(Rc::new(VecModel::<BatchRowVm>::default())),
+                },
+            };
+            ui.set_batch(batch);
         }
     };
 
@@ -1298,6 +1353,62 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_delete_layout(move |name| {
             ctrl.borrow_mut().delete_template(name.as_str());
             refresh_layouts();
+        });
+    }
+    // --- Renombrado por lotes (F5): setters del spec (cada uno re-renderiza el preview) ---
+    macro_rules! batch_setter_str {
+        ($on:ident, $method:ident) => {{
+            let ctrl = ctrl.clone();
+            let sync_rows = sync_rows.clone();
+            ui.$on(move |v: slint::SharedString| {
+                ctrl.borrow_mut().$method(v.as_str());
+                sync_rows();
+            });
+        }};
+    }
+    macro_rules! batch_setter_bool {
+        ($on:ident, $method:ident) => {{
+            let ctrl = ctrl.clone();
+            let sync_rows = sync_rows.clone();
+            ui.$on(move |v: bool| {
+                ctrl.borrow_mut().$method(v);
+                sync_rows();
+            });
+        }};
+    }
+    batch_setter_str!(on_batch_set_template, batch_set_template);
+    batch_setter_str!(on_batch_set_find, batch_set_find);
+    batch_setter_str!(on_batch_set_replace, batch_set_replace);
+    batch_setter_str!(on_batch_set_counter_start, batch_set_counter_start);
+    batch_setter_str!(on_batch_set_counter_step, batch_set_counter_step);
+    batch_setter_bool!(on_batch_set_regex, batch_set_regex);
+    batch_setter_bool!(on_batch_set_include_ext, batch_set_include_ext);
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_batch_set_case(move |i| {
+            ctrl.borrow_mut().batch_set_case(i);
+            sync_rows();
+        });
+    }
+    // Aplicar: lanza la op de batch-rename (deshacible) y refresca el panel.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_batch_apply(move || {
+            ctrl.borrow_mut().batch_apply();
+            start_timer();
+            sync_layout();
+        });
+    }
+    // Cerrar sin aplicar.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_batch_close(move || {
+            ctrl.borrow_mut().batch_close();
+            sync_rows();
         });
     }
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).

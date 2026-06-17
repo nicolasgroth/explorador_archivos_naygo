@@ -14,6 +14,8 @@ import { OpDialogs } from "op-dialogs.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
+import { BatchRename } from "batch-rename.slint";
+import { BatchRenameVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -311,6 +313,18 @@ export component AppWindow inherits Window {
     callback apply-layout(string);      // aplicar la plantilla `name`
     callback delete-layout(string);     // borrar una plantilla de usuario `name`
     callback save-layout(string);       // guardar la disposición actual como plantilla `name`
+    // Renombrado por lotes (F5):
+    in property <BatchRenameVm> batch;
+    callback batch-set-template(string);
+    callback batch-set-find(string);
+    callback batch-set-replace(string);
+    callback batch-set-regex(bool);
+    callback batch-set-include-ext(bool);
+    callback batch-set-case(int);
+    callback batch-set-counter-start(string);
+    callback batch-set-counter-step(string);
+    callback batch-apply();
+    callback batch-close();
     // Modal para nombrar la plantilla al guardar la disposición actual.
     property <bool> layout-save-open: false;
     property <string> layout-save-name: "";
@@ -867,6 +881,23 @@ export component AppWindow inherits Window {
         open-repo() => { root.cfg-open-repo(); }
         egg-prefix(n) => { root.cfg-egg-prefix(n) }
         close() => { root.config-open = false; }
+    }
+
+    // Ventana de renombrado por lotes (F5). Visible solo si batch.active.
+    BatchRename {
+        width: 100%;
+        height: 100%;
+        vm: root.batch;
+        set-template(t) => { root.batch-set-template(t); }
+        set-find(t) => { root.batch-set-find(t); }
+        set-replace(t) => { root.batch-set-replace(t); }
+        set-regex(v) => { root.batch-set-regex(v); }
+        set-include-ext(v) => { root.batch-set-include-ext(v); }
+        set-case(i) => { root.batch-set-case(i); }
+        set-counter-start(t) => { root.batch-set-counter-start(t); }
+        set-counter-step(t) => { root.batch-set-counter-step(t); }
+        apply() => { root.batch-apply(); }
+        close() => { root.batch-close(); }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota

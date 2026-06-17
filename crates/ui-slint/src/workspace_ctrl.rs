@@ -102,6 +102,8 @@ pub struct WorkspaceCtrl {
     /// Plantillas de disposición del usuario + recientes (templates.json). Los built-in viven en
     /// código (`LayoutTemplate::builtins`). Fase 4.
     pub templates: naygo_core::workspace::TemplateStore,
+    /// Ventana de renombrado por lotes abierta (Fase 5): el spec en edición + los ítems objetivo.
+    pub batch: Option<BatchRenameState>,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -163,6 +165,17 @@ pub struct ColumnMenuState {
     pub ext_checked: std::collections::BTreeSet<String>,
 }
 
+/// Estado de la ventana de renombrado por lotes (Fase 5): el `BatchSpec` que el usuario edita en
+/// vivo + los ítems objetivo + los nombres existentes del directorio (para detectar colisiones).
+/// El preview se recalcula con `core::batch_rename::preview` cada vez que cambia el spec.
+#[derive(Clone, Debug)]
+pub struct BatchRenameState {
+    pub spec: naygo_core::batch_rename::BatchSpec,
+    pub items: Vec<naygo_core::batch_rename::BatchItem>,
+    pub existing: Vec<String>,
+    pub tz_offset_secs: i64,
+}
+
 impl WorkspaceCtrl {
     /// Arranca con UN panel Files en `start` (el usuario agrega más con el botón). Lanza
     /// su listado inicial. La configuración se carga del directorio portable.
@@ -206,6 +219,7 @@ impl WorkspaceCtrl {
             context_menu: None,
             column_menu: None,
             templates: naygo_core::config::load_templates(&config_dir),
+            batch: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -981,6 +995,143 @@ impl WorkspaceCtrl {
                 _ => {}
             }
         }
+    }
+
+    // --- Renombrado por lotes (Fase 5) ---
+
+    /// Abre la ventana de batch-rename con la selección del panel activo (o el foco si no hay
+    /// selección). Siembra los ítems (ruta + fecha de modificación) y los nombres existentes del
+    /// directorio (para detectar colisiones). No hace nada si no hay ningún ítem.
+    pub fn batch_open(&mut self) {
+        let targets = self.selected_paths();
+        if targets.is_empty() {
+            return;
+        }
+        let Some(f) = self.ws.active_files() else {
+            return;
+        };
+        let to_epoch = |t: Option<std::time::SystemTime>| -> Option<u64> {
+            t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        };
+        // Ítems: por cada ruta objetivo, su entry (para la fecha). Conserva el orden de la vista.
+        let items: Vec<naygo_core::batch_rename::BatchItem> = targets
+            .iter()
+            .map(|p| {
+                let modified = f
+                    .entries
+                    .iter()
+                    .find(|e| &e.path == p)
+                    .and_then(|e| to_epoch(e.modified));
+                naygo_core::batch_rename::BatchItem {
+                    path: p.clone(),
+                    modified_epoch_secs: modified,
+                }
+            })
+            .collect();
+        // Nombres existentes del directorio: TODOS los entries (incluye los del lote).
+        let existing: Vec<String> = f.entries.iter().map(|e| e.name.clone()).collect();
+        self.batch = Some(BatchRenameState {
+            spec: naygo_core::batch_rename::BatchSpec::default(),
+            items,
+            existing,
+            tz_offset_secs: self.tz_offset_secs(),
+        });
+    }
+
+    /// Cierra la ventana de batch-rename sin aplicar.
+    pub fn batch_close(&mut self) {
+        self.batch = None;
+    }
+
+    /// El preview actual (Antes→Después + estado) según el spec en edición. Vacío si no hay
+    /// ventana abierta.
+    pub fn batch_preview(&self) -> Vec<naygo_core::batch_rename::PreviewRow> {
+        match &self.batch {
+            Some(b) => {
+                naygo_core::batch_rename::preview(&b.items, &b.spec, &b.existing, b.tz_offset_secs)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Setters del spec (cada uno recalcula el preview en el siguiente render). `with` muta el
+    /// spec si la ventana está abierta.
+    fn batch_with<F: FnOnce(&mut naygo_core::batch_rename::BatchSpec)>(&mut self, f: F) {
+        if let Some(b) = self.batch.as_mut() {
+            f(&mut b.spec);
+        }
+    }
+    pub fn batch_set_template(&mut self, t: &str) {
+        let t = t.to_string();
+        self.batch_with(|s| s.template = t);
+    }
+    pub fn batch_set_find(&mut self, t: &str) {
+        let t = t.to_string();
+        self.batch_with(|s| s.find = t);
+    }
+    pub fn batch_set_replace(&mut self, t: &str) {
+        let t = t.to_string();
+        self.batch_with(|s| s.replace = t);
+    }
+    pub fn batch_set_regex(&mut self, v: bool) {
+        self.batch_with(|s| s.use_regex = v);
+    }
+    pub fn batch_set_include_ext(&mut self, v: bool) {
+        self.batch_with(|s| s.include_ext = v);
+    }
+    /// Mayúsculas: 0=ninguna 1=minúsculas 2=MAYÚSCULAS 3=Título.
+    pub fn batch_set_case(&mut self, idx: i32) {
+        use naygo_core::batch_rename::CaseTransform::*;
+        let case = match idx {
+            1 => Lower,
+            2 => Upper,
+            3 => Title,
+            _ => None,
+        };
+        self.batch_with(|s| s.case = case);
+    }
+    /// Contador: inicio y paso (parseados a i64; vacío/ inválido → se ignora ese campo).
+    pub fn batch_set_counter_start(&mut self, t: &str) {
+        if let Ok(v) = t.trim().parse::<i64>() {
+            self.batch_with(|s| s.counter_start = v);
+        }
+    }
+    pub fn batch_set_counter_step(&mut self, t: &str) {
+        if let Ok(v) = t.trim().parse::<i64>() {
+            self.batch_with(|s| s.counter_step = v);
+        }
+    }
+
+    /// `true` si el preview actual se puede aplicar (≥1 cambio, sin inválidos ni colisiones).
+    pub fn batch_can_apply(&self) -> bool {
+        naygo_core::batch_rename::can_apply(&self.batch_preview())
+    }
+
+    /// Aplica el lote: arma la `OpRequest` de BatchRename con los pares (origen, nombre nuevo) de
+    /// las filas `Ok`, la lanza como una sola op deshacible, y cierra la ventana. No hace nada si
+    /// el preview no es aplicable.
+    pub fn batch_apply(&mut self) {
+        let rows = self.batch_preview();
+        if !naygo_core::batch_rename::can_apply(&rows) {
+            return;
+        }
+        // Solo las filas con cambio real (Ok); Unchanged se omite.
+        let mut sources = Vec::new();
+        let mut new_names = Vec::new();
+        for r in &rows {
+            if r.status == naygo_core::batch_rename::RowStatus::Ok {
+                sources.push(r.path.clone());
+                new_names.push(r.new_name.clone());
+            }
+        }
+        if sources.is_empty() {
+            return;
+        }
+        let req = naygo_core::ops::batch_rename(sources, new_names);
+        self.ops
+            .start_op(req, "Renombrar por lotes".to_string(), true);
+        self.batch = None;
     }
 
     /// Carpeta actual del panel `id` (para su path-bar).
@@ -2425,6 +2576,7 @@ impl WorkspaceCtrl {
             Action::NewFile => self.op_new(false),
             Action::NewDir => self.op_new(true),
             Action::Rename => self.op_rename(),
+            Action::BatchRename => self.batch_open(),
             Action::Undo => return self.op_undo_last(),
             // Editar la ruta del panel activo (Ctrl+L / F4): la UI abre el editor de la path-bar.
             Action::EditPath => {
@@ -2695,6 +2847,57 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// El batch-rename: abrir con la selección, editar el spec (plantilla + contador) y aplicar.
+    /// La op renombra los archivos en disco (verificado tras drenar las ops).
+    #[test]
+    fn batch_rename_abre_edita_y_aplica() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("b.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Seleccionar todo y abrir el batch-rename.
+        c.ws.active_files_mut().unwrap().select_all();
+        c.batch_open();
+        assert!(c.batch.is_some(), "se abrió la ventana");
+
+        // Plantilla "foto{n}" con contador desde 1 → foto1.txt, foto2.txt.
+        c.batch_set_template("foto{n}");
+        let rows = c.batch_preview();
+        assert_eq!(rows.len(), 2);
+        let nuevos: Vec<&str> = rows.iter().map(|r| r.new_name.as_str()).collect();
+        assert!(nuevos.contains(&"foto1.txt") && nuevos.contains(&"foto2.txt"));
+        assert!(c.batch_can_apply());
+
+        // Aplicar y drenar la op; los archivos quedan renombrados en disco.
+        c.batch_apply();
+        assert!(c.batch.is_none(), "aplicar cierra la ventana");
+        for _ in 0..2000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(work.path().join("foto1.txt").exists() || work.path().join("foto2.txt").exists());
+        assert!(!work.path().join("a.txt").exists() && !work.path().join("b.txt").exists());
+    }
+
+    /// Una plantilla que produce el mismo nombre para todos marca colisión y no deja aplicar.
+    #[test]
+    fn batch_rename_colision_no_deja_aplicar() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("b.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        c.ws.active_files_mut().unwrap().select_all();
+        c.batch_open();
+        c.batch_set_template("igual"); // ambos → "igual.txt" → colisión
+        assert!(!c.batch_can_apply());
     }
 
     /// Aplicar una plantilla built-in reconstruye el workspace con sus paneles, y guardar la

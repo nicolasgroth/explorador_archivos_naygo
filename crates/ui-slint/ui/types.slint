@@ -67,6 +67,31 @@ export struct LayoutRow {
     builtin: bool,
 }
 
+// Una fila del preview de batch-rename (F5): nombre antes→después + estado.
+// status: 0=Ok 1=SinCambio 2=Inválido 3=Colisión.
+export struct BatchRowVm {
+    old-name: string,
+    new-name: string,
+    status: int,
+}
+
+// Estado de la ventana de batch-rename (F5). Los campos del spec son el espejo de BatchSpec;
+// `rows` es el preview en vivo; `can-apply` habilita el botón Aplicar.
+export struct BatchRenameVm {
+    active: bool,
+    template: string,
+    find: string,
+    replace: string,
+    use-regex: bool,
+    include-ext: bool,
+    case: int,              // 0=ninguna 1=minúsculas 2=MAYÚSCULAS 3=Título
+    counter-start: string,
+    counter-step: string,
+    rows: [BatchRowVm],
+    count: int,             // nº de ítems del lote
+    can-apply: bool,
+}
+
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
 export struct NavRow {
     label: string,

@@ -1,0 +1,239 @@
+// Naygo — ventana de renombrado por lotes (Fase 5). Copyright (c) 2026 Nicolás Groth / ISGroth.
+// MIT License.
+//
+// Modal: arriba los controles del `BatchSpec` (plantilla con comodines, buscar/reemplazar +
+// regex, mayúsculas, contador, incluir-extensión); abajo una tabla de preview Antes→Después con
+// el estado de cada fila coloreado. "Aplicar" se deshabilita si el preview no es aplicable
+// (filas inválidas/colisión o ningún cambio). Toda la lógica (preview, colisiones) vive en
+// core::batch_rename; aquí solo se emiten callbacks con los borradores y se pinta el resultado.
+import { LineEdit, CheckBox, ComboBox, ScrollView, ListView } from "std-widgets.slint";
+import { BatchRenameVm, BatchRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Fila etiqueta + control (alineación consistente).
+component BrField inherits HorizontalLayout {
+    in property <string> label;
+    height: 30px;
+    spacing: 8px;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        vertical-alignment: center;
+        width: 130px;
+    }
+    @children
+}
+
+export component BatchRename inherits Rectangle {
+    in property <BatchRenameVm> vm;
+    callback set-template(string);
+    callback set-find(string);
+    callback set-replace(string);
+    callback set-regex(bool);
+    callback set-include-ext(bool);
+    callback set-case(int);
+    callback set-counter-start(string);
+    callback set-counter-step(string);
+    callback apply();
+    callback close();
+
+    visible: root.vm.active;
+    // Velo modal: clic fuera cierra.
+    background: #000000aa;
+    veil := TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: 640px;
+        height: 540px;
+        background: Theme.panel-bg;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border;
+        TouchArea {} // tragar clics dentro
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            // Encabezado.
+            HorizontalLayout {
+                height: 26px;
+                Text {
+                    text: Tr.batch-title;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 28px;
+                    background: close-touch.has-hover ? Theme.error : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "✕";
+                        color: close-touch.has-hover ? white : Theme.text-dim;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+
+            // --- Controles del spec ---
+            BrField {
+                label: Tr.batch-template;
+                LineEdit {
+                    text: root.vm.template;
+                    placeholder-text: "{nombre}_{n:3}";
+                    horizontal-stretch: 1;
+                    edited(t) => { root.set-template(t); }
+                }
+            }
+            BrField {
+                label: Tr.batch-find;
+                LineEdit {
+                    text: root.vm.find;
+                    horizontal-stretch: 1;
+                    edited(t) => { root.set-find(t); }
+                }
+                LineEdit {
+                    text: root.vm.replace;
+                    placeholder-text: Tr.batch-replace;
+                    horizontal-stretch: 1;
+                    edited(t) => { root.set-replace(t); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 16px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    CheckBox {
+                        checked: root.vm.use-regex;
+                        toggled => { root.set-regex(self.checked); }
+                    }
+                    Text { text: Tr.batch-regex; color: Theme.text; vertical-alignment: center; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    CheckBox {
+                        checked: root.vm.include-ext;
+                        toggled => { root.set-include-ext(self.checked); }
+                    }
+                    Text { text: Tr.batch-include-ext; color: Theme.text; vertical-alignment: center; }
+                }
+            }
+            BrField {
+                label: Tr.batch-case;
+                ComboBox {
+                    width: 200px;
+                    model: [Tr.batch-case-none, Tr.batch-case-lower, Tr.batch-case-upper, Tr.batch-case-title];
+                    current-index: root.vm.case;
+                    selected => { root.set-case(self.current-index); }
+                }
+            }
+            BrField {
+                label: Tr.batch-counter;
+                LineEdit {
+                    text: root.vm.counter-start;
+                    placeholder-text: Tr.batch-counter-start;
+                    width: 90px;
+                    edited(t) => { root.set-counter-start(t); }
+                }
+                LineEdit {
+                    text: root.vm.counter-step;
+                    placeholder-text: Tr.batch-counter-step;
+                    width: 90px;
+                    edited(t) => { root.set-counter-step(t); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            // --- Tabla de preview Antes→Después ---
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.row-bg;
+                border-radius: 6px;
+                VerticalLayout {
+                    padding: 4px;
+                    // Encabezado de la tabla.
+                    HorizontalLayout {
+                        height: 22px;
+                        padding-left: 6px;
+                        Text { text: Tr.batch-col-before; color: Theme.text-dim; font-weight: 700; horizontal-stretch: 1; }
+                        Text { text: "→"; color: Theme.text-dim; width: 20px; }
+                        Text { text: Tr.batch-col-after; color: Theme.text-dim; font-weight: 700; horizontal-stretch: 1; }
+                    }
+                    ListView {
+                        for r in root.vm.rows: Rectangle {
+                            height: 24px;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                spacing: 4px;
+                                Text {
+                                    text: r.old-name;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text { text: "→"; color: Theme.text-dim; width: 20px; vertical-alignment: center; }
+                                // Color por estado: Ok=acento, SinCambio=atenuado, Inválido/Colisión=error.
+                                Text {
+                                    text: r.status == 3 ? Tr.batch-collision
+                                        : (r.status == 2 ? Tr.batch-invalid : r.new-name);
+                                    color: r.status == 0 ? Theme.highlight
+                                        : (r.status == 1 ? Theme.text-dim : Theme.error);
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Botonera ---
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.vm.count + " " + Tr.batch-items;
+                    color: Theme.text-dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 100px; height: 30px;
+                    background: cancel-t.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                    border-radius: 4px;
+                    Text { text: Tr.dlg-cancel; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                    cancel-t := TouchArea { clicked => { root.close(); } }
+                }
+                Rectangle {
+                    width: 100px; height: 30px;
+                    // Deshabilitado (atenuado) si el preview no es aplicable.
+                    background: !root.vm.can-apply ? Theme.row-bg
+                        : (apply-t.has-hover ? Theme.accent.darker(10%) : Theme.accent);
+                    border-radius: 4px;
+                    Text {
+                        text: Tr.batch-apply;
+                        color: root.vm.can-apply ? white : Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    apply-t := TouchArea {
+                        enabled: root.vm.can-apply;
+                        clicked => { root.apply(); }
+                    }
+                }
+            }
+        }
+    }
+}
