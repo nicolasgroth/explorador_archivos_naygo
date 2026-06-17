@@ -148,6 +148,26 @@ fn main() -> Result<(), slint::PlatformError> {
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
     theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
 
+    // Ventana de configuración: ahora es una ventana nativa propia (antes era un overlay dentro
+    // de la AppWindow). Se construye una sola vez y vive en el mismo bucle de eventos que la
+    // ventana principal (como el Splash). Se muestra/oculta con el botón del engranaje y se cierra
+    // con su callback `close` o con la X del sistema. Cada ventana Slint tiene su PROPIA copia de
+    // los globales `Theme`/`Tr`, así que hay que aplicarle el tema y el idioma por separado.
+    let cfg_win = Rc::new(ConfigWindow::new()?);
+    i18n_keys::apply(&*cfg_win, &ctrl.borrow().config);
+    theme_apply::apply(&*cfg_win, ctrl.borrow().config.active_theme());
+    // La X del sistema oculta la ventana (no cierra la app ni destruye la instancia): así se
+    // reabre con el estado intacto.
+    {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.window().on_close_requested(move || {
+            if let Some(w) = cfg_weak.upgrade() {
+                let _ = w.hide();
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
     // Splash de arranque (Fase 5F): solo en release. Ventana breve de bienvenida que se cierra
     // sola a ~1.2s. La ventana principal se construye por detrás (el splash no la bloquea). En
     // debug se omite (arranque directo). Se mantiene vivo en una variable de la función `main`.
@@ -1297,12 +1317,19 @@ fn main() -> Result<(), slint::PlatformError> {
     let refresh_config_vm: Rc<dyn Fn()> = {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
         Rc::new(move || {
-            let Some(ui) = ui_weak.upgrade() else {
+            let c = ctrl.borrow();
+            let settings_vm = build_settings_vm(&c.config);
+            // La AppWindow sigue usando `settings-vm` en la toolbar (icon-only, alto de fila),
+            // así que se mantiene actualizado ahí además de en la ventana de configuración.
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_settings_vm(settings_vm.clone());
+            }
+            let Some(cfg) = cfg_weak.upgrade() else {
                 return;
             };
-            let c = ctrl.borrow();
-            ui.set_settings_vm(build_settings_vm(&c.config));
+            cfg.set_vm(settings_vm);
             let rows: Vec<ShortcutRowVm> = c
                 .config
                 .shortcut_list()
@@ -1314,7 +1341,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     conflict: SharedString::new(),
                 })
                 .collect();
-            ui.set_shortcut_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+            cfg.set_shortcuts(ModelRc::from(Rc::new(VecModel::from(rows))));
             // Reglas de previsualización (C3).
             let prev: Vec<PreviewRuleVm> = c
                 .preview_rules()
@@ -1325,7 +1352,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     treat_as: treat_as.into(),
                 })
                 .collect();
-            ui.set_cfg_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
+            cfg.set_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
             // Tarjetas de tema para la galería de selección (config → Apariencia).
             let active = c.config.settings.theme.clone();
             let col =
@@ -1349,9 +1376,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 })
                 .collect();
-            ui.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
-            ui.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
-            ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+            cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
+            cfg.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
+            cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
         })
     };
     refresh_config_vm();
@@ -1525,39 +1552,41 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::new(RefCell::new(None));
 
     // Toggles/combos/text que solo persisten (no requieren refrescar la vista de paneles).
+    // Todos los handlers se registran ahora en la ventana de configuración (`cfg_win`), no en la
+    // AppWindow: los callbacks viven en ConfigWindow SIN el prefijo `cfg-`.
     macro_rules! cfg_setter {
         ($on:ident, $arg:ty, $method:ident) => {{
             let ctrl = ctrl.clone();
             let refresh = refresh_config_vm.clone();
-            ui.$on(move |v: $arg| {
+            cfg_win.$on(move |v: $arg| {
                 ctrl.borrow_mut().config.$method(v);
                 refresh();
             });
         }};
     }
-    cfg_setter!(on_cfg_set_ops_mode, i32, set_ops_mode);
-    cfg_setter!(on_cfg_set_confirm_trash, bool, set_confirm_trash);
-    cfg_setter!(on_cfg_set_show_op_summary, bool, set_show_op_summary);
-    cfg_setter!(on_cfg_set_show_parent, bool, set_show_parent);
-    cfg_setter!(on_cfg_set_icon_only, bool, set_icon_only);
-    cfg_setter!(on_cfg_set_bar_position, i32, set_bar_position);
-    cfg_setter!(on_cfg_set_size_no_subdirs, bool, set_size_no_subdirs);
-    cfg_setter!(on_cfg_set_autostart, bool, set_autostart);
-    cfg_setter!(on_cfg_set_date_format, i32, set_date_format);
-    cfg_setter!(on_cfg_set_size_format, i32, set_size_format);
-    cfg_setter!(on_cfg_set_row_density, i32, set_row_density);
+    cfg_setter!(on_set_ops_mode, i32, set_ops_mode);
+    cfg_setter!(on_set_confirm_trash, bool, set_confirm_trash);
+    cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
+    cfg_setter!(on_set_show_parent, bool, set_show_parent);
+    cfg_setter!(on_set_icon_only, bool, set_icon_only);
+    cfg_setter!(on_set_bar_position, i32, set_bar_position);
+    cfg_setter!(on_set_size_no_subdirs, bool, set_size_no_subdirs);
+    cfg_setter!(on_set_autostart, bool, set_autostart);
+    cfg_setter!(on_set_date_format, i32, set_date_format);
+    cfg_setter!(on_set_size_format, i32, set_size_format);
+    cfg_setter!(on_set_row_density, i32, set_row_density);
     // Avanzado (F3c).
-    cfg_setter!(on_cfg_set_ops_display, i32, set_ops_display);
-    cfg_setter!(on_cfg_set_paste_image_fmt, i32, set_paste_image_fmt);
-    cfg_setter!(on_cfg_set_low_power_mode, i32, set_low_power_mode);
-    cfg_setter!(on_cfg_set_new_items_at_end, bool, set_new_items_at_end);
-    cfg_setter!(on_cfg_set_tray_enabled, bool, set_tray_enabled);
-    cfg_setter!(on_cfg_set_close_to_tray, bool, set_close_to_tray);
-    cfg_setter!(on_cfg_set_paste_confirm, bool, set_paste_confirm);
+    cfg_setter!(on_set_ops_display, i32, set_ops_display);
+    cfg_setter!(on_set_paste_image_fmt, i32, set_paste_image_fmt);
+    cfg_setter!(on_set_low_power_mode, i32, set_low_power_mode);
+    cfg_setter!(on_set_new_items_at_end, bool, set_new_items_at_end);
+    cfg_setter!(on_set_tray_enabled, bool, set_tray_enabled);
+    cfg_setter!(on_set_close_to_tray, bool, set_close_to_tray);
+    cfg_setter!(on_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_set_paste_text_name(move |v| {
+        cfg_win.on_set_paste_text_name(move |v| {
             ctrl.borrow_mut().config.set_paste_text_name(v.to_string());
             refresh();
         });
@@ -1565,37 +1594,51 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_set_paste_text_ext(move |v| {
+        cfg_win.on_set_paste_text_ext(move |v| {
             ctrl.borrow_mut().config.set_paste_text_ext(v.to_string());
             refresh();
         });
     }
-    // Cambio de idioma en caliente: persiste + re-vuelca todos los textos a Tr.
+    // Cambio de idioma en caliente: persiste + re-vuelca todos los textos a Tr. Se aplica a
+    // AMBAS ventanas (principal y config), porque cada una tiene su propia copia del global Tr.
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        ui.on_cfg_set_language(move |code| {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_set_language(move |code| {
             let lang = naygo_core::i18n::LangId::new(&code);
             ctrl.borrow_mut().config.set_language(lang);
+            let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
-                i18n_keys::apply(&ui, &ctrl.borrow().config);
+                i18n_keys::apply(&ui, &c.config);
             }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                i18n_keys::apply(&cfg, &c.config);
+            }
+            drop(c);
             refresh();
         });
     }
-    // Cambio de tema en caliente: persiste + re-vuelca los colores a Theme.
+    // Cambio de tema en caliente: persiste + re-vuelca los colores a Theme. Se aplica a AMBAS
+    // ventanas (principal y config), porque cada una tiene su propia copia del global Theme.
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        ui.on_cfg_set_theme(move |id| {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_set_theme(move |id| {
             ctrl.borrow_mut()
                 .config
                 .set_theme(naygo_core::theme::ThemeId::new(&id));
+            let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
-                theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+                theme_apply::apply(&ui, c.config.active_theme());
             }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
             refresh();
         });
     }
@@ -1607,7 +1650,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         let refresh_icons = refresh_toolbar_icons.clone();
         let refresh_drives = refresh_drives.clone();
-        ui.on_cfg_set_icon_set(move |id| {
+        cfg_win.on_set_icon_set(move |id| {
             {
                 let mut c = ctrl.borrow_mut();
                 c.config.set_icon_set(id.to_string());
@@ -1624,7 +1667,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Editor de atajos: capturar la acción a reasignar.
     {
         let capturing = capturing_action.clone();
-        ui.on_cfg_shortcut_capture(move |key| {
+        cfg_win.on_shortcut_capture(move |key| {
             *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
         });
     }
@@ -1633,7 +1676,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let capturing = capturing_action.clone();
-        ui.on_cfg_capture_key(move |text, c, s, a| {
+        cfg_win.on_capture_key(move |text, c, s, a| {
             let action = match capturing.borrow_mut().take() {
                 Some(act) => act,
                 None => return,
@@ -1651,7 +1694,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_shortcut_reset(move |key| {
+        cfg_win.on_shortcut_reset(move |key| {
             if let Some(action) = config_ctrl::ConfigCtrl::action_from_key(&key) {
                 ctrl.borrow_mut().config.reset_shortcut(action);
                 refresh();
@@ -1661,7 +1704,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_shortcuts_reset_all(move || {
+        cfg_win.on_shortcuts_reset_all(move || {
             ctrl.borrow_mut().config.reset_all_shortcuts();
             refresh();
         });
@@ -1670,7 +1713,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // se informa con un MessageDialog (errores) sin bloquear el resto de la UI.
     {
         let ctrl = ctrl.clone();
-        ui.on_cfg_export_language(move || {
+        cfg_win.on_export_language(move || {
             let c = ctrl.borrow();
             let code = c.config.settings.language.as_str().to_string();
             if let Some(path) = rfd::FileDialog::new()
@@ -1684,7 +1727,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let ctrl = ctrl.clone();
-        ui.on_cfg_export_theme(move || {
+        cfg_win.on_export_theme(move || {
             let c = ctrl.borrow();
             let id = c.config.settings.theme.as_str().to_string();
             if let Some(path) = rfd::FileDialog::new()
@@ -1698,7 +1741,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let ctrl = ctrl.clone();
-        ui.on_cfg_export_config(move || {
+        cfg_win.on_export_config(move || {
             let c = ctrl.borrow();
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Pack Naygo (.zip)", &["zip"])
@@ -1713,7 +1756,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        ui.on_cfg_import_pack(move || {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_import_pack(move || {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("Pack Naygo (.zip)", &["zip"])
                 .pick_file()
@@ -1742,11 +1786,17 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
-                    // Reaplicar textos y colores por si cambió el catálogo activo.
+                    // Reaplicar textos y colores en AMBAS ventanas por si cambió el catálogo.
+                    let c = ctrl.borrow();
                     if let Some(ui) = ui_weak.upgrade() {
-                        i18n_keys::apply(&ui, &ctrl.borrow().config);
-                        theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+                        i18n_keys::apply(&ui, &c.config);
+                        theme_apply::apply(&ui, c.config.active_theme());
                     }
+                    if let Some(cfg) = cfg_weak.upgrade() {
+                        i18n_keys::apply(&cfg, &c.config);
+                        theme_apply::apply(&cfg, c.config.active_theme());
+                    }
+                    drop(c);
                     refresh();
                 }
                 Err(e) => report(Err::<(), String>(e)),
@@ -1758,12 +1808,19 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        ui.on_cfg_factory_reset(move || {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_factory_reset(move || {
             ctrl.borrow_mut().config.factory_reset();
+            let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
-                i18n_keys::apply(&ui, &ctrl.borrow().config);
-                theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
+                i18n_keys::apply(&ui, &c.config);
+                theme_apply::apply(&ui, c.config.active_theme());
             }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                i18n_keys::apply(&cfg, &c.config);
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
             refresh();
         });
     }
@@ -1771,7 +1828,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_save_default_table(move || {
+        cfg_win.on_save_default_table(move || {
             ctrl.borrow_mut().save_default_table_from_active();
             refresh();
         });
@@ -1780,7 +1837,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_clear_default_table(move || {
+        cfg_win.on_clear_default_table(move || {
             ctrl.borrow_mut().clear_default_table();
             refresh();
         });
@@ -1789,7 +1846,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_preview_toggle(move |ext| {
+        cfg_win.on_preview_toggle(move |ext| {
             ctrl.borrow_mut().preview_rule_toggle(ext.as_str());
             refresh();
         });
@@ -1797,7 +1854,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_preview_set_as(move |ext, as_| {
+        cfg_win.on_preview_set_as(move |ext, as_| {
             ctrl.borrow_mut()
                 .preview_rule_set_treat_as(ext.as_str(), as_.as_str());
             refresh();
@@ -1806,7 +1863,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_preview_remove(move |ext| {
+        cfg_win.on_preview_remove(move |ext| {
             ctrl.borrow_mut().preview_rule_remove(ext.as_str());
             refresh();
         });
@@ -1814,29 +1871,51 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        ui.on_cfg_preview_add(move |ext| {
+        cfg_win.on_preview_add(move |ext| {
             ctrl.borrow_mut().preview_rule_add(ext.as_str());
             refresh();
         });
     }
     // Acerca de: abrir el repositorio en el navegador por defecto.
     {
-        ui.on_cfg_open_repo(move || {
+        cfg_win.on_open_repo(move || {
             let _ = naygo_platform::open::open_default(std::path::Path::new(
                 "https://github.com/nicolasgroth/explorador_archivos_naygo",
             ));
         });
     }
     // Acerca de (easter egg): primeros `n` caracteres del mensaje (substring que Slint no ofrece).
+    // Lee el global Tr de la PROPIA ventana de config (donde se muestra el easter egg).
     {
-        let ui_weak = ui.as_weak();
-        ui.on_cfg_egg_prefix(move |n| {
-            let Some(ui) = ui_weak.upgrade() else {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_egg_prefix(move |n| {
+            let Some(cfg) = cfg_weak.upgrade() else {
                 return SharedString::new();
             };
-            let msg = ui.global::<Tr>().get_about_egg_message();
+            let msg = cfg.global::<Tr>().get_about_egg_message();
             let take = n.max(0) as usize;
             SharedString::from(msg.chars().take(take).collect::<String>())
+        });
+    }
+    // Cerrar la ventana de config (botón "cerrar" interno): la oculta (no destruye la instancia).
+    {
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_close(move || {
+            if let Some(cfg) = cfg_weak.upgrade() {
+                let _ = cfg.hide();
+            }
+        });
+    }
+    // Abrir la ventana de config desde el engranaje de la toolbar: refresca el VM (para que abra
+    // poblada) y la muestra.
+    {
+        let refresh = refresh_config_vm.clone();
+        let cfg_weak = cfg_win.as_weak();
+        ui.on_open_config(move || {
+            refresh();
+            if let Some(cfg) = cfg_weak.upgrade() {
+                let _ = cfg.show();
+            }
         });
     }
     {

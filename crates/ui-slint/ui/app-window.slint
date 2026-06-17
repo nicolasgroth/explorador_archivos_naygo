@@ -27,6 +27,9 @@ import { Splash } from "splash.slint";
 export { Tr }
 export { Theme }
 export { Splash }
+// La ventana de config es ahora una ventana nativa propia; se reexporta para que `include_modules!`
+// genere su tipo en Rust (su wiring vive en main.rs contra esa instancia).
+export { ConfigWindow }
 
 // Barra de pestañas de un grupo: una pestaña por miembro; la activa resaltada; cada una
 // con su × para cerrarla. Clic en una pestaña la activa.
@@ -405,53 +408,11 @@ export component AppWindow inherits Window {
     callback nav-drive(string);
 
     // --- Ventana de configuración (Fase 4) ---
-    in-out property <bool> config-open: false;
+    // La ventana de config es ahora una ventana nativa propia (ConfigWindow); su wiring vive en
+    // Rust contra esa instancia. La AppWindow solo conserva `settings-vm` (la toolbar lo usa para
+    // icon-only y el alto de fila) y emite `open-config` cuando se pulsa el engranaje.
     in property <SettingsVm> settings-vm;
-    in property <[ShortcutRowVm]> shortcut-rows;
-    in property <[ThemeCardVm]> theme-cards;
-    in property <string> config-dir;
-    in property <string> app-version;
-    callback cfg-set-ops-mode(int);
-    callback cfg-set-confirm-trash(bool);
-    callback cfg-set-show-op-summary(bool);
-    callback cfg-set-show-parent(bool);
-    callback cfg-set-icon-only(bool);
-    callback cfg-set-bar-position(int);
-    callback cfg-set-size-no-subdirs(bool);
-    callback cfg-set-autostart(bool);
-    callback cfg-set-paste-confirm(bool);
-    callback cfg-set-paste-text-name(string);
-    callback cfg-set-paste-text-ext(string);
-    callback cfg-set-language(string);
-    callback cfg-set-theme(string);
-    callback cfg-set-icon-set(string);
-    callback cfg-set-date-format(int);
-    callback cfg-set-size-format(int);
-    callback cfg-set-row-density(int);
-    callback cfg-shortcut-capture(string);
-    callback cfg-capture-key(string, bool, bool, bool);
-    callback cfg-shortcut-reset(string);
-    callback cfg-shortcuts-reset-all();
-    callback cfg-export-language();
-    callback cfg-export-theme();
-    callback cfg-export-config();
-    callback cfg-import-pack();
-    callback cfg-set-ops-display(int);
-    callback cfg-set-paste-image-fmt(int);
-    callback cfg-set-low-power-mode(int);
-    callback cfg-set-new-items-at-end(bool);
-    callback cfg-set-tray-enabled(bool);
-    callback cfg-set-close-to-tray(bool);
-    callback cfg-factory-reset();
-    callback cfg-save-default-table();
-    callback cfg-clear-default-table();
-    in property <[PreviewRuleVm]> cfg-preview-rules;
-    callback cfg-preview-toggle(string);
-    callback cfg-preview-set-as(string, string);
-    callback cfg-preview-remove(string);
-    callback cfg-preview-add(string);
-    callback cfg-open-repo();
-    pure callback cfg-egg-prefix(int) -> string;
+    callback open-config();
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
     // Rust reparta los paneles aun en reposo (con el timer apagado).
     callback content-resized();
@@ -555,7 +516,7 @@ export component AppWindow inherits Window {
                     icon: root.ic-settings;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
-                    clicked => { root.config-open = true; }
+                    clicked => { root.open-config(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 // Menú de plantillas de disposición (F4).
@@ -1007,58 +968,8 @@ export component AppWindow inherits Window {
         dismiss() => { root.colmenu-dismiss(); }
     }
 
-    // Ventana de configuración (overlay modal). Visible solo si config-open.
-    if root.config-open: ConfigWindow {
-        width: 100%;
-        height: 100%;
-        vm: root.settings-vm;
-        shortcuts: root.shortcut-rows;
-        theme-cards: root.theme-cards;
-        config-dir: root.config-dir;
-        app-version: root.app-version;
-        set-ops-mode(m) => { root.cfg-set-ops-mode(m); }
-        set-confirm-trash(v) => { root.cfg-set-confirm-trash(v); }
-        set-show-op-summary(v) => { root.cfg-set-show-op-summary(v); }
-        set-show-parent(v) => { root.cfg-set-show-parent(v); }
-        set-icon-only(v) => { root.cfg-set-icon-only(v); }
-        set-bar-position(p) => { root.cfg-set-bar-position(p); }
-        set-size-no-subdirs(v) => { root.cfg-set-size-no-subdirs(v); }
-        set-autostart(v) => { root.cfg-set-autostart(v); }
-        set-paste-confirm(v) => { root.cfg-set-paste-confirm(v); }
-        set-paste-text-name(n) => { root.cfg-set-paste-text-name(n); }
-        set-paste-text-ext(e) => { root.cfg-set-paste-text-ext(e); }
-        set-language(l) => { root.cfg-set-language(l); }
-        set-theme(t) => { root.cfg-set-theme(t); }
-        set-icon-set(s) => { root.cfg-set-icon-set(s); }
-        set-date-format(i) => { root.cfg-set-date-format(i); }
-        set-size-format(i) => { root.cfg-set-size-format(i); }
-        set-row-density(i) => { root.cfg-set-row-density(i); }
-        shortcut-capture(k) => { root.cfg-shortcut-capture(k); }
-        capture-key(txt, c, s, a) => { root.cfg-capture-key(txt, c, s, a); }
-        shortcut-reset(k) => { root.cfg-shortcut-reset(k); }
-        shortcuts-reset-all() => { root.cfg-shortcuts-reset-all(); }
-        export-language() => { root.cfg-export-language(); }
-        export-theme() => { root.cfg-export-theme(); }
-        export-config() => { root.cfg-export-config(); }
-        import-pack() => { root.cfg-import-pack(); }
-        set-ops-display(i) => { root.cfg-set-ops-display(i); }
-        set-paste-image-fmt(i) => { root.cfg-set-paste-image-fmt(i); }
-        set-low-power-mode(i) => { root.cfg-set-low-power-mode(i); }
-        set-new-items-at-end(v) => { root.cfg-set-new-items-at-end(v); }
-        set-tray-enabled(v) => { root.cfg-set-tray-enabled(v); }
-        set-close-to-tray(v) => { root.cfg-set-close-to-tray(v); }
-        factory-reset() => { root.cfg-factory-reset(); }
-        save-default-table() => { root.cfg-save-default-table(); }
-        clear-default-table() => { root.cfg-clear-default-table(); }
-        preview-rules: root.cfg-preview-rules;
-        preview-toggle(e) => { root.cfg-preview-toggle(e); }
-        preview-set-as(e, a) => { root.cfg-preview-set-as(e, a); }
-        preview-remove(e) => { root.cfg-preview-remove(e); }
-        preview-add(e) => { root.cfg-preview-add(e); }
-        open-repo() => { root.cfg-open-repo(); }
-        egg-prefix(n) => { root.cfg-egg-prefix(n) }
-        close() => { root.config-open = false; }
-    }
+    // La ventana de Configuración ya NO es un overlay: es una Window propia, instanciada y
+    // manejada desde Rust (main.rs), independiente de esta ventana.
 
     // Ventana de renombrado por lotes (F5). Visible solo si batch.active.
     BatchRename {

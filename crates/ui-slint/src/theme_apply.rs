@@ -2,9 +2,9 @@
 // Slint. Se llama al arrancar y cada vez que se cambia de tema en la configuración.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-use crate::{AppWindow, Theme};
+use crate::Theme;
 use naygo_core::theme::{Theme as CoreTheme, ThemeColor};
-use slint::{Color, ComponentHandle};
+use slint::{Color, ComponentHandle, Global};
 
 /// Convierte un color del core (RGB u8) a un `slint::Color` opaco.
 fn col(c: ThemeColor) -> Color {
@@ -12,7 +12,14 @@ fn col(c: ThemeColor) -> Color {
 }
 
 /// Aplica todos los colores del tema `t` al global `Theme` de la ventana `ui`.
-pub fn apply(ui: &AppWindow, t: &CoreTheme) {
+///
+/// Genérico sobre la ventana: cada ventana Slint (AppWindow, ConfigWindow) tiene su PROPIA
+/// copia del global `Theme`, así que hay que aplicarlo a cada instancia por separado.
+pub fn apply<'a, W>(ui: &'a W, t: &CoreTheme)
+where
+    W: ComponentHandle,
+    Theme<'a>: Global<'a, W>,
+{
     let theme = ui.global::<Theme>();
     theme.set_accent(col(t.accent));
     theme.set_panel_bg(col(t.panel_bg));

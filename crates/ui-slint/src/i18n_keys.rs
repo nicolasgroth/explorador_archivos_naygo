@@ -4,11 +4,18 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 use crate::config_ctrl::ConfigCtrl;
-use crate::{AppWindow, Tr};
-use slint::ComponentHandle;
+use crate::Tr;
+use slint::{ComponentHandle, Global};
 
 /// Aplica todos los textos del idioma activo al global `Tr` de la ventana `ui`.
-pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
+///
+/// Genérico sobre la ventana: cada ventana Slint (AppWindow, ConfigWindow) tiene su PROPIA
+/// copia del global `Tr`, así que hay que aplicarlo a cada instancia por separado.
+pub fn apply<'a, W>(ui: &'a W, c: &ConfigCtrl)
+where
+    W: ComponentHandle,
+    Tr<'a>: Global<'a, W>,
+{
     let tr = ui.global::<Tr>();
     // Barra de herramientas.
     tr.set_toolbar_up(c.t("slint.toolbar.up").into());

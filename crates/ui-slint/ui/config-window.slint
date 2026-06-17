@@ -96,7 +96,20 @@ component CfgBtn inherits Rectangle {
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
-export component ConfigWindow inherits Rectangle {
+// Ventana de configuración NATIVA e independiente del explorador (antes era un overlay dentro
+// de la ventana principal, que se "salía" al moverse y perdía foco). Ahora es su propia Window
+// del SO: se mueve, minimiza y cierra con su barra de título nativa, y vive en paralelo a la
+// ventana principal. Rust la muestra/oculta (show/hide) en vez del viejo `config-open`.
+export component ConfigWindow inherits Window {
+    title: Tr.cfg-title;
+    default-font-size: 13px;
+    icon: @image-url("../../../assets/icons/logo_naygo.png");
+    preferred-width: 760px;
+    preferred-height: 600px;
+    min-width: 560px;
+    min-height: 420px;
+    background: Theme.panel-bg;
+
     in property <SettingsVm> vm;
     in property <[ShortcutRowVm]> shortcuts;
     in property <[ThemeCardVm]> theme-cards;
@@ -106,17 +119,6 @@ export component ConfigWindow inherits Rectangle {
     property <int> cat: 3;        // arranca en Apariencia (lo más visible)
     // Acción cuyo atajo se está capturando (vacío = ninguna).
     property <string> capturing: "";
-    // Desplazamiento de la tarjeta respecto al centro (la ventana es arrastrable por su
-    // encabezado). Se acumula con cada gesto de arrastre.
-    property <length> offset-x: 0px;
-    property <length> offset-y: 0px;
-    // Tamaño de la tarjeta, redimensionable arrastrando la esquina inferior derecha. Se acota a
-    // un mínimo y al tamaño de la ventana. Empieza en un default cómodo.
-    property <length> card-w: 720px;
-    property <length> card-h: 560px;
-    // `true` cuando el usuario arrastró el grip para fijar el alto a mano; mientras es `false`,
-    // la tarjeta ajusta su alto al contenido de la sección (no deja espacio vacío).
-    property <bool> h-manual: false;
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
@@ -181,11 +183,8 @@ export component ConfigWindow inherits Rectangle {
     // Captura de tecla (la UI la enruta cuando `capturing` != "").
     callback capture-key(string, bool, bool, bool);
 
-    // Velo modal: clic fuera cierra.
-    background: #000000aa;
-    veil := TouchArea { clicked => { root.close(); } }
-
-    // FocusScope para capturar la combinación del atajo cuando corresponde.
+    // FocusScope para capturar la combinación del atajo cuando corresponde. Cubre toda la
+    // ventana; los controles internos siguen recibiendo sus clics.
     fs := FocusScope {
         enabled: root.capturing != "";
         key-pressed(ev) => {
@@ -198,86 +197,15 @@ export component ConfigWindow inherits Rectangle {
         }
     }
 
-    // Tarjeta central. Arrastrable por el encabezado (offset acumulado) y REDIMENSIONABLE por la
-    // esquina inferior derecha (grip). El tamaño se acota a un mínimo y al tamaño de la ventana.
-    card := Rectangle {
-        width: clamp(root.card-w, 520px, root.width - 24px);
-        // Alto: por defecto se ajusta al contenido de la sección (sin dejar vacío); si el usuario
-        // arrastró el grip (`h-manual`), respeta su alto. Siempre acotado al alto de la ventana.
-        height: root.h-manual
-            ? clamp(root.card-h, 360px, root.height - 24px)
-            : clamp(body.preferred-height, 360px, root.height - 24px);
-        x: (parent.width - self.width) / 2 + root.offset-x;
-        y: (parent.height - self.height) / 2 + root.offset-y;
-        background: Theme.panel-bg;
-        border-radius: 8px;
-        border-width: 1px;
-        border-color: Theme.border;
-        // Tragar clics dentro de la tarjeta (no cerrar).
-        TouchArea {}
+    // Contenido de la ventana: el SO provee la barra de título (mover/minimizar/cerrar), así que
+    // ya no hay velo, arrastre propio, grip ni alto manual.
+    body := VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
 
-        body := VerticalLayout {
-            // Llena la tarjeta a lo ancho; a lo alto reporta su alto preferido (la tarjeta se
-            // ajusta a él salvo que el usuario haya redimensionado a mano con el grip).
-            width: 100%;
-            height: 100%;
-            padding: 14px;
-            spacing: 10px;
-
-            // Encabezado: arrastrar aquí mueve la ventana.
-            HorizontalLayout {
-                height: 26px;
-                Rectangle {
-                    horizontal-stretch: 1;
-                    drag-area := TouchArea {
-                        mouse-cursor: move;
-                        property <length> press-x;
-                        property <length> press-y;
-                        pointer-event(ev) => {
-                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
-                                self.press-x = self.mouse-x;
-                                self.press-y = self.mouse-y;
-                            }
-                            if (ev.kind == PointerEventKind.move && self.pressed) {
-                                root.offset-x += self.mouse-x - self.press-x;
-                                root.offset-y += self.mouse-y - self.press-y;
-                            }
-                        }
-                    }
-                    Text {
-                        text: Tr.cfg-title;
-                        color: Theme.text;
-                        font-size: 16px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                        x: 0px;
-                    }
-                }
-                // Botón de cierre: la ✕ se dibuja con un Path (CloseIcon), no con un glifo, para
-                // que se vea SIEMPRE bajo render por software (antes salía un botón "vacío").
-                Rectangle {
-                    width: 30px;
-                    height: 26px;
-                    background: close-touch.has-hover ? Theme.error : Theme.row-bg;
-                    border-radius: 4px;
-                    border-width: 1px;
-                    border-color: close-touch.has-hover ? Theme.error : Theme.border;
-                    CloseIcon {
-                        width: 100%;
-                        height: 100%;
-                        size: 13px;
-                        tint: close-touch.has-hover ? white : Theme.text;
-                    }
-                    close-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.close(); }
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 12px;
-                vertical-stretch: 1;
+        HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 1;
 
                 // Barra lateral de categorías.
                 Rectangle {
@@ -914,48 +842,6 @@ export component ConfigWindow inherits Rectangle {
                 x: 0; width: parent.width;
             }
         }
-
-        // Grip de redimensión (esquina inferior derecha): arrastrar cambia card-w/card-h. Las
-        // rayitas se dibujan con Path (visibles en software-render). El tamaño se acota arriba.
-        Rectangle {
-            width: 18px;
-            height: 18px;
-            x: parent.width - self.width - 2px;
-            y: parent.height - self.height - 2px;
-            Path {
-                width: 12px;
-                height: 12px;
-                x: 3px;
-                y: 3px;
-                stroke: grip-touch.has-hover ? Theme.accent : Theme.text-dim;
-                stroke-width: 1.4px;
-                viewbox-width: 12;
-                viewbox-height: 12;
-                MoveTo { x: 12; y: 2; }
-                LineTo { x: 2; y: 12; }
-                MoveTo { x: 12; y: 7; }
-                LineTo { x: 7; y: 12; }
-            }
-            grip-touch := TouchArea {
-                mouse-cursor: nwse-resize;
-                property <length> base-w;
-                property <length> base-h;
-                pointer-event(ev) => {
-                    if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
-                        // Partir del tamaño REAL actual (en auto-alto, card.height = alto del
-                        // contenido). A partir de acá el alto pasa a ser manual.
-                        self.base-w = card.width;
-                        self.base-h = card.height;
-                        root.h-manual = true;
-                    }
-                    if (ev.kind == PointerEventKind.move && self.pressed) {
-                        root.card-w = self.base-w + self.mouse-x;
-                        root.card-h = self.base-h + self.mouse-y;
-                    }
-                }
-            }
-        }
-    }
 
     // Cuenta un clic del logo; 5 seguidos (con <2s entre clics) disparan el egg.
     function register-egg-click() {
