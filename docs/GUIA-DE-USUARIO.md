@@ -101,7 +101,20 @@ opción de deshacer. Pegar un **texto** o una **imagen** del portapapeles crea u
 archivo (formato y nombre configurables en *Configuración → Pegado / Avanzado*).
 
 **Abrir terminal aquí:** clic derecho → *Abrir PowerShell / CMD / Windows Terminal
-aquí* (abre en la carpeta seleccionada o, si no hay, la del panel).
+aquí* (abre en la carpeta seleccionada o, si no hay, la del panel). Desde la
+**barra de herramientas**, el botón **Terminal** abre el mismo combo
+(PowerShell / CMD y, si están instalados, Windows Terminal y WSL) en la carpeta
+del panel con foco.
+
+**Menú de carpeta (zona vacía):** clic derecho en el **espacio vacío** de un panel
+(donde no hay archivos) abre un menú de la *carpeta*: *Abrir en Explorador de
+Windows*, *Nueva carpeta…*, *Pegar* y las terminales. Un clic en esa zona también
+le da el **foco** al panel, así las acciones de la toolbar usan su carpeta.
+
+**Nueva(s) carpeta(s):** el botón **Carpeta** de la toolbar (o *Nueva carpeta…* del
+menú de carpeta) abre un cuadro donde podés crear **varias a la vez**: una carpeta
+por línea, y usando `\` se anidan (p. ej. `proyecto\src\bin` crea las tres). Las
+líneas inválidas se avisan y se omiten; las válidas se crean.
 
 ---
 
