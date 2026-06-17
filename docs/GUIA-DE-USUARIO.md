@@ -36,7 +36,7 @@ Cada panel puede ser de un **tipo**:
 | **Propiedades** | Datos del ítem enfocado (nombre, tipo, tamaño, fechas). |
 | **Historial de acciones** | Operaciones hechas, con botón de deshacer. |
 | **Favoritos** | Carpetas ancladas + recientes. |
-| **Vista previa** | Vista liviana del archivo enfocado (texto/imagen). |
+| **Vista previa** | Vista liviana del archivo enfocado: texto, imagen, o la lista de contenido de un `.zip`. |
 
 **Dividir y reorganizar:**
 
@@ -170,15 +170,19 @@ El botón **Layouts** de la toolbar guarda y aplica disposiciones de paneles:
 
 ## 9. Configuración
 
-Se abre desde la toolbar. Es arrastrable por su encabezado y se cierra con la **✕**.
-Secciones:
+Se abre desde la toolbar. Es **arrastrable** por su encabezado, **redimensionable**
+por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra con la
+**✕**. Secciones:
 
 - **General**: fila "..", botones solo-ícono, posición de la barra, tamaño sin
   subcarpetas, iniciar con Windows.
 - **Operaciones**: cola vs. paralelo, confirmar papelera, resumen al terminar.
 - **Pegado**: confirmar nombre al pegar, plantilla/extensión del texto pegado.
-- **Apariencia**: tema, idioma, set de íconos, formato de fecha y tamaño, densidad
-  de fila. Todo en caliente.
+- **Apariencia**: el **tema** se elige en una galería de tarjetas (cada una muestra
+  sus colores; la activa lleva borde de acento y ★). Hay temas claros y oscuros
+  (Citrus Glow, Neon Retro, Ocean Midnight, Ember Forge, Polar Graphite, y los
+  clásicos). También: idioma, set de íconos, formato de fecha y tamaño, densidad de
+  fila. Todo se aplica en caliente.
 - **Atajos**: editor de atajos por acción (cambiar / restablecer / restablecer todo),
   con detección de conflictos.
 - **Importar/Exportar**: packs `.zip` de idioma, tema o configuración.
