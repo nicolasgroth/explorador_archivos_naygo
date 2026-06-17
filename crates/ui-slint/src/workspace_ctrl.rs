@@ -65,6 +65,9 @@ pub struct WorkspaceCtrl {
     pub trees: HashMap<PaneId, DirTree>,
     /// Un worker solo-directorios por rama de árbol en vuelo (clave: panel + carpeta).
     pub tree_listings: HashMap<(PaneId, PathBuf), Listing>,
+    /// Destino a "revelar" en cada árbol: al navegar el Files activo, el árbol expande
+    /// progresivamente los ancestros hasta esta carpeta (reveal). Se limpia al llegar.
+    pub reveal_targets: HashMap<PaneId, PathBuf>,
     /// Favoritos (global). Persistencia real diferida a la fase de config (F4); en 2b
     /// vive en memoria de sesión (el modelo core ya serializa).
     pub favorites: Favorites,
@@ -149,6 +152,7 @@ impl WorkspaceCtrl {
             listings: HashMap::new(),
             trees: HashMap::new(),
             tree_listings: HashMap::new(),
+            reveal_targets: HashMap::new(),
             favorites: Favorites::new(),
             recents: RecentDirs::new(),
             ops: crate::ops_ctrl::OpsCtrl::new(config_dir),
@@ -715,11 +719,14 @@ impl WorkspaceCtrl {
         }
         if matches!(purpose, PanePurpose::Tree) {
             self.trees.insert(new_id, build_tree());
-            // Resalta de entrada la carpeta del panel Files activo, si la hay.
+            // Resalta de entrada la carpeta del panel Files activo y arranca el reveal hacia ella
+            // (el árbol nuevo aparece ya expandido hasta la carpeta donde está el usuario).
             if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
                 if let Some(t) = self.trees.get_mut(&new_id) {
-                    t.set_active(cur);
+                    t.set_active(cur.clone());
                 }
+                self.reveal_targets.insert(new_id, cur);
+                self.pump_reveal();
             }
         }
         // El panel nuevo queda activo. Vía self.set_active: si es auxiliar (Árbol…),
@@ -1523,10 +1530,64 @@ impl WorkspaceCtrl {
         self.close_context_menu();
     }
 
-    /// Resalta `dir` en todos los árboles (cuando cambia la carpeta del Files activo).
+    /// Resalta `dir` en todos los árboles (cuando cambia la carpeta del Files activo) y arranca
+    /// el REVEAL: cada árbol expandirá progresivamente los ancestros hasta `dir`.
     fn sync_trees_active(&mut self, dir: PathBuf) {
-        for t in self.trees.values_mut() {
-            t.set_active(dir.clone());
+        let ids: Vec<PaneId> = self.trees.keys().copied().collect();
+        for id in &ids {
+            if let Some(t) = self.trees.get_mut(id) {
+                t.set_active(dir.clone());
+            }
+            self.reveal_targets.insert(*id, dir.clone());
+        }
+        self.pump_reveal();
+    }
+
+    /// Avanza el "reveal" de cada árbol: expande el ancestro más profundo del destino que ya
+    /// exista como nodo y aún no esté expandido (los hijos de un nodo recién expandido aparecen
+    /// cuando su worker termina, y el siguiente tick vuelve a llamar aquí). Cuando el padre del
+    /// destino queda expandido (o el destino es una raíz), se limpia el target. Idempotente.
+    pub fn pump_reveal(&mut self) {
+        let targets: Vec<(PaneId, PathBuf)> = self
+            .reveal_targets
+            .iter()
+            .map(|(id, p)| (*id, p.clone()))
+            .collect();
+        for (id, target) in targets {
+            let Some(tree) = self.trees.get(&id) else {
+                self.reveal_targets.remove(&id);
+                continue;
+            };
+            // Cadena de ancestros root..parent(target). Si está vacía, el destino es una raíz
+            // (o fuera del árbol): no hay nada que expandir.
+            let chain = tree.reveal_chain(&target);
+            if chain.is_empty() {
+                self.reveal_targets.remove(&id);
+                continue;
+            }
+            // ¿Ya están todos los ancestros expandidos? Entonces el destino ya es visible: listo.
+            let all_expanded = chain.iter().all(|p| {
+                tree.node_at(p)
+                    .map(|n| n.expanded && n.children.is_some())
+                    .unwrap_or(false)
+            });
+            if all_expanded {
+                self.reveal_targets.remove(&id);
+                continue;
+            }
+            // Expandir el PRIMER ancestro (de la raíz hacia abajo) que exista pero no esté
+            // expandido/cargado. Los más profundos aún no existen como nodo hasta que su padre
+            // cargue; el próximo tick los alcanzará.
+            let next = chain.iter().find(|p| {
+                tree.node_at(p)
+                    .map(|n| !n.expanded || n.children.is_none())
+                    .unwrap_or(false)
+            });
+            if let Some(p) = next.cloned() {
+                self.tree_expand(id, p);
+            } else {
+                // Ningún ancestro pendiente existe aún (esperando que cargue un padre): no-op.
+            }
         }
     }
 
@@ -1602,7 +1663,14 @@ impl WorkspaceCtrl {
                 self.tree_listings.remove(&key);
             }
         }
-        self.tree_listings.is_empty()
+        // Tras drenar, avanzar el reveal: una rama recién cargada habilita expandir la siguiente
+        // hacia la carpeta objetivo.
+        if !self.reveal_targets.is_empty() {
+            self.pump_reveal();
+        }
+        // No dejar dormir el timer mientras haya workers en vuelo O un reveal pendiente (sus
+        // ramas se cargan en ticks sucesivos).
+        self.tree_listings.is_empty() && self.reveal_targets.is_empty()
     }
 
     /// ¿Hay algún panel de un `purpose` dado en el workspace?
@@ -2176,6 +2244,46 @@ mod tests {
         let moved = c.relocate_orphans(tmp.path());
         assert_eq!(moved.len(), 1);
         assert_eq!(c.ws.active_files().unwrap().current_dir, tmp.path());
+    }
+
+    /// REVEAL: al fijar un destino, el árbol expande progresivamente los ancestros hasta él.
+    #[test]
+    fn arbol_revela_la_carpeta_objetivo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = a.join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Árbol con raíz manual en tmp (no dependemos de las unidades reales).
+        let tree_id = c.ws.add_pane(PanePurpose::Tree, std::path::PathBuf::new());
+        let mut t = DirTree::default();
+        t.roots
+            .push(naygo_core::tree::TreeNode::folder(tmp.path().to_path_buf()));
+        c.trees.insert(tree_id, t);
+        // Pedir revelar tmp/a/b: debe expandir tmp (raíz) y luego tmp/a.
+        c.reveal_targets.insert(tree_id, b.clone());
+        c.pump_reveal();
+        // Drenar los workers de árbol + avanzar el reveal hasta que no quede target.
+        for _ in 0..4000 {
+            let done = c.pump_tree();
+            if done {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // tmp/a debe haber quedado expandido (su hijo "b" es el destino, queda visible).
+        let a_expanded = c
+            .trees
+            .get(&tree_id)
+            .and_then(|t| t.node_at(&a))
+            .map(|n| n.expanded && n.children.is_some())
+            .unwrap_or(false);
+        assert!(a_expanded, "el ancestro tmp/a quedó expandido (revela b)");
+        assert!(
+            c.reveal_targets.is_empty(),
+            "el target se limpió al completar el reveal"
+        );
     }
 
     /// REGRESIÓN (heredada de F1): navegar a una carpeta repuebla la vista del panel
