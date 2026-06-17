@@ -1224,8 +1224,7 @@ impl WorkspaceCtrl {
                 true
             }
             PastePlan::CreateText { path, body } => {
-                // Escritura chica y local: directa (no pasa por el engine de ops).
-                std::fs::write(&path, body.as_bytes()).is_ok()
+                self.paste_write_or_confirm(&dir, &path, body.into_bytes())
             }
             PastePlan::CreateImage { path, fmt, img } => {
                 match naygo_core::clipboard::encode::encode_image(
@@ -1233,11 +1232,40 @@ impl WorkspaceCtrl {
                     fmt,
                     self.config.settings.paste_jpg_quality,
                 ) {
-                    Ok(bytes) => std::fs::write(&path, &bytes).is_ok(),
+                    Ok(bytes) => self.paste_write_or_confirm(&dir, &path, bytes),
                     Err(_) => false,
                 }
             }
             PastePlan::Nothing => false,
+        }
+    }
+
+    /// Escribe el archivo pegado en `path`, o —si `Settings.paste_confirm` está activo— abre el
+    /// modal de confirmación de nombre (NameInput con purpose Paste) con el nombre propuesto
+    /// editable; al confirmar, `name_confirm` escribe los `bytes` con el nombre elegido.
+    fn paste_write_or_confirm(
+        &mut self,
+        dir: &std::path::Path,
+        path: &std::path::Path,
+        bytes: Vec<u8>,
+    ) -> bool {
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let ext = path
+            .extension()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.config.settings.paste_confirm {
+            self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
+                purpose: crate::ops_ctrl::NamePurpose::Paste { ext, bytes },
+                dir: dir.to_path_buf(),
+                buf: stem,
+            });
+            true
+        } else {
+            std::fs::write(path, &bytes).is_ok()
         }
     }
 

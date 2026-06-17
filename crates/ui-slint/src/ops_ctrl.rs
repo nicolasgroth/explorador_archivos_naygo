@@ -19,11 +19,18 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
-/// el modal queda solo para crear archivo/carpeta.)
+/// el modal queda para crear archivo/carpeta y para confirmar el nombre al pegar.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamePurpose {
     NewFile,
     NewDir,
+    /// Confirmar el nombre de un archivo pegado (texto/imagen). `ext` es la extensión a
+    /// concatenar (sin punto) y `bytes` el contenido ya codificado a escribir. Solo aparece si
+    /// `Settings.paste_confirm` está activo; si no, el pegado escribe directo.
+    Paste {
+        ext: String,
+        bytes: Vec<u8>,
+    },
 }
 
 /// El modal de operaciones activo (uno a la vez).
@@ -403,6 +410,7 @@ impl OpsCtrl {
                 name_title: match purpose {
                     NamePurpose::NewFile => "Nuevo archivo".to_string(),
                     NamePurpose::NewDir => "Nueva carpeta".to_string(),
+                    NamePurpose::Paste { ext, .. } => format!("Pegar como nombre.{ext}"),
                 },
                 name_value: buf.clone(),
                 name_valid: naygo_core::ops::names::is_valid_name(buf),
@@ -488,6 +496,13 @@ impl OpsCtrl {
         let (req, label) = match purpose {
             NamePurpose::NewFile => (naygo_core::ops::create(dir, buf, false), "Nuevo archivo"),
             NamePurpose::NewDir => (naygo_core::ops::create(dir, buf, true), "Nueva carpeta"),
+            NamePurpose::Paste { ext, bytes } => {
+                // El pegado escribe el archivo directo (escritura chica y local), igual que el
+                // camino sin confirmación. No pasa por el engine de ops.
+                let path = dir.join(format!("{buf}.{ext}"));
+                let _ = std::fs::write(&path, &bytes);
+                return true;
+            }
         };
         self.start_op(req, label.to_string(), true);
         true
@@ -681,6 +696,31 @@ mod tests {
         c.start_op(req, "Copiar".to_string(), true);
         drain(&mut c);
         assert!(dst.join("a.txt").exists());
+    }
+
+    #[test]
+    fn paste_confirm_escribe_con_el_nombre_elegido() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        // Modal de confirmación de pegado: nombre propuesto "pegado", ext "txt", bytes.
+        c.pending_dialog = Some(OpDialog::NameInput {
+            purpose: NamePurpose::Paste {
+                ext: "txt".into(),
+                bytes: b"hola pegado".to_vec(),
+            },
+            dir: tmp.path().to_path_buf(),
+            buf: "pegado".into(),
+        });
+        // El usuario edita el nombre y confirma.
+        c.name_changed("mi_nota".into());
+        assert!(c.name_confirm(), "el confirm escribe el archivo");
+        let dest = tmp.path().join("mi_nota.txt");
+        assert!(
+            dest.exists(),
+            "se creó con el nombre elegido + la extensión"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hola pegado");
+        assert!(c.pending_dialog.is_none(), "el modal se cerró");
     }
 
     #[test]
