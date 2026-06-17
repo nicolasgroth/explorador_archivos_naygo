@@ -210,6 +210,7 @@ export struct PaneVm {
     rows: [RowData],          // Files
     columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
     col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
+    is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)

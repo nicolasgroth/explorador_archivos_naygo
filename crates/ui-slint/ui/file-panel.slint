@@ -68,6 +68,9 @@ export component FilePanel inherits FocusScope {
     in property <bool> editing;              // este panel está editando su ruta
     in property <string> edit-text;          // texto del editor (lo controla Rust)
     in property <[string]> suggestions;      // autocompletado del editor
+    in property <bool> is-favorite;          // la carpeta actual está en favoritos (★ llena)
+    callback fav-toggle(int);                // (pane-id) anclar/quitar la carpeta de favoritos
+    callback copy-path(int);                 // (pane-id) copiar la ruta al portapapeles
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
     in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
     in property <string> rename-text;        // nombre inicial del editor
@@ -154,13 +157,62 @@ export component FilePanel inherits FocusScope {
                             }
                         }
                     }
+                    // ★ favorito (toggle): lleno si la carpeta ya está anclada.
+                    Rectangle {
+                        width: 24px;
+                        background: fav-touch.has-hover ? Theme.selection-bg : transparent;
+                        border-radius: 3px;
+                        Text {
+                            text: root.is-favorite ? "★" : "☆";
+                            color: root.is-favorite ? Theme.highlight : Theme.text-dim;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        fav-touch := TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                    root.fav-toggle(root.pane-id);
+                                }
+                            }
+                        }
+                    }
+                    // 📋 copiar la ruta de la carpeta al portapapeles.
+                    Rectangle {
+                        width: 26px;
+                        background: copy-touch.has-hover ? Theme.selection-bg : transparent;
+                        border-radius: 3px;
+                        Text {
+                            text: "📋";
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        copy-touch := TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                                    root.copy-path(root.pane-id);
+                                }
+                            }
+                        }
+                    }
                 }
-                // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela.
+                // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela, perder foco
+                // (clic afuera) vuelve a los breadcrumbs.
                 if root.editing: path-edit := LineEdit {
                     text: root.edit-text;
                     placeholder-text: "C:\\…";
+                    // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca el
+                    // LineEdit y el "perder foco" nunca tendría foco que perder).
+                    init => { self.focus(); }
                     edited(t) => { root.path-edit-changed(root.pane-id, t); }
                     accepted(t) => { root.path-edit-commit(root.pane-id, t); }
+                    // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
+                    changed has-focus => {
+                        if (!self.has-focus) {
+                            root.path-edit-cancel(root.pane-id);
+                        }
+                    }
                     key-pressed(ev) => {
                         if (ev.text == Key.Escape) {
                             root.path-edit-cancel(root.pane-id);

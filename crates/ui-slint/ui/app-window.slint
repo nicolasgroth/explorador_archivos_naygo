@@ -222,6 +222,8 @@ export component AppWindow inherits Window {
     callback path-edit-commit(int, string);
     callback path-edit-cancel(int);
     callback path-suggestion-clicked(int, string);
+    callback fav-toggle(int);             // (pane-id) ★ anclar/quitar favorito de la carpeta
+    callback copy-path(int);              // (pane-id) 📋 copiar la ruta al portapapeles
     callback sort-by(int, string);
     callback sort-by-kind(int, int);      // (pane-id, kind) ordenar por columna dinámica
     callback column-toggle(int, int);     // (pane-id, kind) mostrar/ocultar columna
@@ -285,6 +287,7 @@ export component AppWindow inherits Window {
     callback ctx-paste();
     callback ctx-rename();
     callback ctx-delete();
+    callback ctx-copy-names();
     callback ctx-copy-path();
     callback ctx-native();
     callback ctx-dismiss();
@@ -516,6 +519,9 @@ export component AppWindow inherits Window {
                         editing: root.edit-pane == p.id;
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";
                         suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
+                        is-favorite: p.is-favorite;
+                        fav-toggle(id) => { root.fav-toggle(id); }
+                        copy-path(id) => { root.copy-path(id); }
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
                         rename-text: root.rename-pane == p.id ? root.rename-text : "";
                         rename-commit(pos, name) => { root.rename-commit(p.id, pos, name); }
@@ -678,6 +684,7 @@ export component AppWindow inherits Window {
         paste() => { root.ctx-paste(); }
         rename() => { root.ctx-rename(); }
         delete() => { root.ctx-delete(); }
+        copy-names() => { root.ctx-copy-names(); }
         copy-path() => { root.ctx-copy-path(); }
         native() => { root.ctx-native(); }
         dismiss() => { root.ctx-dismiss(); }

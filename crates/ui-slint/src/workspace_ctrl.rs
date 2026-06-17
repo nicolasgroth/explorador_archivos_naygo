@@ -1090,6 +1090,39 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// ¿La carpeta del panel `id` está en favoritos? (para pintar la estrella llena/vacía).
+    pub fn is_pane_dir_favorite(&self, id: PaneId) -> bool {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| self.favorites.contains(&f.current_dir))
+            .unwrap_or(false)
+    }
+
+    /// Alterna el favorito de la carpeta del panel `id` (botón ★ de la path-bar de ese panel).
+    pub fn toggle_favorite_dir(&mut self, id: PaneId) {
+        if let Some(dir) = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        {
+            self.favorites.toggle(&dir);
+        }
+    }
+
+    /// Copia la ruta de la carpeta del panel `id` al portapapeles (botón 📋).
+    pub fn copy_pane_path(&self, id: PaneId) {
+        if let Some(dir) = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        {
+            let _ = naygo_platform::clipboard::write_text(&dir.display().to_string());
+        }
+    }
+
     /// El id del panel Files activo (o el primer Files), para dirigir navegaciones desde
     /// paneles auxiliares (un Tree/Favoritos activo no es un Files).
     fn active_files_id(&self) -> Option<PaneId> {
@@ -1395,12 +1428,35 @@ impl WorkspaceCtrl {
     }
 
     /// Copiar la ruta del primer objetivo al portapapeles (como texto).
+    /// Copia al portapapeles, como TEXTO, las rutas COMPLETAS de los ítems del menú contextual
+    /// (uno por línea). Antes esto pegaba los archivos al clipboard (no copiaba la ruta de
+    /// verdad); ahora escribe CF_UNICODETEXT con `clipboard::write_text`.
     pub fn ctx_copy_path(&mut self) {
-        if let Some(p) = self.context_targets().first() {
-            // Reusar write_files no aplica (es para CF_HDROP); copiar como texto: usamos el
-            // portapapeles de archivos igual para tener la ruta; el "copiar ruta" como texto
-            // se cubre escribiendo la ruta. Por simplicidad, copiamos el archivo al clipboard.
-            self.ops.set_copy(std::slice::from_ref(p));
+        let lines: Vec<String> = self
+            .context_targets()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        if !lines.is_empty() {
+            let _ = naygo_platform::clipboard::write_text(&lines.join("\r\n"));
+        }
+        self.close_context_menu();
+    }
+
+    /// Copia al portapapeles, como TEXTO, los NOMBRES de los ítems del menú contextual (uno por
+    /// línea, sin ruta).
+    pub fn ctx_copy_names(&mut self) {
+        let lines: Vec<String> = self
+            .context_targets()
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+            .collect();
+        if !lines.is_empty() {
+            let _ = naygo_platform::clipboard::write_text(&lines.join("\r\n"));
         }
         self.close_context_menu();
     }

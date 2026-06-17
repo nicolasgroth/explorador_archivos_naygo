@@ -25,6 +25,11 @@ pub fn write_files(_paths: &[PathBuf], _cut: bool) -> Result<(), ClipboardError>
     Err(ClipboardError::NotSupported)
 }
 
+#[cfg(not(windows))]
+pub fn write_text(_text: &str) -> Result<(), ClipboardError> {
+    Err(ClipboardError::NotSupported)
+}
+
 #[cfg(windows)]
 pub fn read() -> ClipboardContent {
     windows_impl::read()
@@ -33,6 +38,12 @@ pub fn read() -> ClipboardContent {
 #[cfg(windows)]
 pub fn write_files(paths: &[PathBuf], cut: bool) -> Result<(), ClipboardError> {
     windows_impl::write_files(paths, cut)
+}
+
+/// Copia `text` al portapapeles como CF_UNICODETEXT (copiar nombre(s)/ruta(s)).
+#[cfg(windows)]
+pub fn write_text(text: &str) -> Result<(), ClipboardError> {
+    windows_impl::write_text(text)
 }
 
 #[cfg(windows)]
@@ -420,6 +431,44 @@ pub(crate) mod windows_impl {
         }
 
         Ok(())
+    }
+
+    /// Copia un texto al portapapeles como CF_UNICODETEXT (UTF-16 + NUL).
+    pub fn write_text(text: &str) -> Result<(), ClipboardError> {
+        let _guard = open_clipboard()
+            .ok_or_else(|| ClipboardError::Failed("no se pudo abrir el portapapeles".into()))?;
+        // SAFETY: portapapeles abierto para este hilo mientras viva `_guard`.
+        unsafe {
+            EmptyClipboard().map_err(|e| ClipboardError::Failed(format!("EmptyClipboard: {e}")))?;
+            let hglobal = alloc_utf16_nul(text)?;
+            match SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hglobal.0))) {
+                Ok(_) => Ok(()), // el sistema es dueño del HGLOBAL.
+                Err(e) => {
+                    let _ = GlobalFree(Some(hglobal));
+                    Err(ClipboardError::Failed(format!(
+                        "SetClipboardData(CF_UNICODETEXT): {e}"
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Asigna un HGLOBAL con el texto en UTF-16 terminado en NUL. SAFETY: escribe en memoria
+    /// recién asignada por GlobalAlloc.
+    unsafe fn alloc_utf16_nul(text: &str) -> Result<HGLOBAL, ClipboardError> {
+        let mut units: Vec<u16> = text.encode_utf16().collect();
+        units.push(0);
+        let bytes = units.len() * std::mem::size_of::<u16>();
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes)
+            .map_err(|e| ClipboardError::Failed(format!("GlobalAlloc: {e}")))?;
+        let ptr = GlobalLock(hglobal) as *mut u16;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(hglobal));
+            return Err(ClipboardError::Failed("GlobalLock devolvió null".into()));
+        }
+        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+        let _ = GlobalUnlock(hglobal);
+        Ok(hglobal)
     }
 
     /// Construye el HGLOBAL con la estructura DROPFILES + rutas UTF-16 doble-NUL.

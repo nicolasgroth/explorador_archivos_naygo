@@ -32,7 +32,8 @@ export component ContextMenu inherits Rectangle {
     callback paste();
     callback rename();
     callback delete();
-    callback copy-path();
+    callback copy-names();   // copiar nombre(s) de la selección
+    callback copy-path();    // copiar ruta(s) completa(s)
     callback native();      // "Más opciones de Windows…"
     callback dismiss();
 
@@ -64,6 +65,8 @@ export component ContextMenu inherits Rectangle {
             Rectangle { height: 1px; background: Theme.border; }
             MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
             MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
+            Rectangle { height: 1px; background: Theme.border; }
+            MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
             MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
             if root.vm.has-native: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.has-native: MenuRow {

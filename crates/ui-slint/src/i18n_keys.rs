@@ -56,6 +56,7 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_paste(c.t("slint.ctx.paste").into());
     tr.set_ctx_rename(c.t("slint.ctx.rename").into());
     tr.set_ctx_delete(c.t("slint.ctx.delete").into());
+    tr.set_ctx_copy_names(c.t("slint.ctx.copy_names").into());
     tr.set_ctx_copy_path(c.t("slint.ctx.copy_path").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
     // Paneles especiales.

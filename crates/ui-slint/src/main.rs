@@ -264,7 +264,28 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                     if pv.path != path {
                         pv.path = path;
+                        // Los breadcrumbs y el título dependen de la carpeta: hay que
+                        // reconstruirlos al navegar (antes solo se armaban en sync_layout, así
+                        // que el contenido cambiaba pero los segmentos quedaban viejos).
+                        let segs: Vec<PathSeg> = c
+                            .path_segments_of(id)
+                            .into_iter()
+                            .map(|(label, path)| PathSeg {
+                                label: SharedString::from(label.as_str()),
+                                path: SharedString::from(path.as_str()),
+                            })
+                            .collect();
+                        pv.segments = ModelRc::from(Rc::new(VecModel::from(segs)));
+                        pv.title = SharedString::from(c.pane_label(id).as_str());
                         changed = true;
+                    }
+                    // La estrella de favorito puede cambiar al navegar o al togglear.
+                    if purpose == Some(PanePurpose::Files) {
+                        let fav = c.is_pane_dir_favorite(id);
+                        if pv.is_favorite != fav {
+                            pv.is_favorite = fav;
+                            changed = true;
+                        }
                     }
                     // Inspector/Preview son structs sueltas: se setean según el tipo.
                     if purpose == Some(PanePurpose::Inspector) {
@@ -392,6 +413,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             rows: ModelRc::from(pm.rows.clone()),
                             columns: ModelRc::from(pm.columns.clone()),
                             col_menu: ModelRc::from(pm.col_menu.clone()),
+                            is_favorite: ctrl.borrow().is_pane_dir_favorite(*id),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -1343,6 +1365,22 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    // ★ favorito de la path-bar: anclar/quitar la carpeta de ese panel.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_toggle(move |id| {
+            ctrl.borrow_mut().toggle_favorite_dir(PaneId(id as u64));
+            sync_rows();
+        });
+    }
+    // 📋 copiar la ruta de la carpeta de ese panel al portapapeles.
+    {
+        let ctrl = ctrl.clone();
+        ui.on_copy_path(move |id| {
+            ctrl.borrow().copy_pane_path(PaneId(id as u64));
+        });
+    }
     {
         // Clic en un candidato: completar el último segmento del editor y seguir editando.
         let ctrl = ctrl.clone();
@@ -1602,6 +1640,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_ctx_copy_path(move || {
             ctrl.borrow_mut().ctx_copy_path();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_copy_names(move || {
+            ctrl.borrow_mut().ctx_copy_names();
             sync_rows();
         });
     }
