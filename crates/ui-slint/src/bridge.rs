@@ -285,6 +285,9 @@ pub struct NavRow {
     pub label: String,
     pub path: String,
     pub icon: slint::Image,
+    /// Solo para la tira de unidades: `true` si la unidad es extraíble (USB), para
+    /// ofrecer la expulsión segura. Favoritos/recientes siempre van en `false`.
+    pub removable: bool,
 }
 
 /// Favoritos en orden de usuario (índice 0 = Ctrl+1). `folder_icon` es el ícono de carpeta
@@ -296,6 +299,7 @@ pub fn favorite_rows(favs: &Favorites, folder_icon: &slint::Image) -> Vec<NavRow
             label: f.label.clone(),
             path: f.path.display().to_string(),
             icon: folder_icon.clone(),
+            removable: false,
         })
         .collect()
 }
@@ -313,6 +317,7 @@ pub fn recent_rows(recents: &RecentDirs, folder_icon: &slint::Image) -> Vec<NavR
                 .unwrap_or_else(|| p.display().to_string()),
             path: p.display().to_string(),
             icon: folder_icon.clone(),
+            removable: false,
         })
         .collect()
 }

@@ -1983,6 +1983,34 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+    // Expulsar de forma segura una unidad extraíble (botón ⏏ o clic derecho sobre la unidad).
+    // Es una llamada de un solo disparo (desmontar+expulsar, sin sondeo); en la práctica retorna
+    // de inmediato. El resultado se anuncia con un toast localizado. NUNCA fuerza: si el volumen
+    // está en uso, el toast lo dice y la unidad queda intacta. En éxito refrescamos la tira (la
+    // unidad desaparece) — además el device_watch la detectará igual.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let refresh_drives = refresh_drives.clone();
+        ui.on_eject_drive(move |path| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let outcome = ctrl
+                .borrow()
+                .eject_drive(std::path::PathBuf::from(path.as_str()));
+            let tr = ui.global::<Tr>();
+            let msg = match outcome {
+                workspace_ctrl::EjectOutcome::Ok => {
+                    refresh_drives();
+                    tr.get_drive_eject_ok()
+                }
+                workspace_ctrl::EjectOutcome::InUse => tr.get_drive_eject_in_use(),
+                workspace_ctrl::EjectOutcome::Failed(_) => tr.get_drive_eject_failed(),
+            };
+            ui.invoke_show_toast(msg);
+        });
+    }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     {
         // Clic en un breadcrumb: navegar ese panel a la ruta del segmento.
@@ -2929,6 +2957,7 @@ fn to_nav_row(r: bridge::NavRow) -> NavRow {
         label: SharedString::from(r.label.as_str()),
         path: SharedString::from(r.path.as_str()),
         icon: r.icon,
+        removable: r.removable,
     }
 }
 

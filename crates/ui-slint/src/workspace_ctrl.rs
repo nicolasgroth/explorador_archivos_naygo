@@ -33,6 +33,19 @@ pub enum PaneTarget {
     NeedsSplit,
 }
 
+/// Resultado de un intento de expulsión segura de una unidad extraíble. La UI lo
+/// mapea a un toast localizado (éxito / en-uso / fallo). NUNCA se fuerza: `InUse`
+/// significa que se abortó limpio sin desmontar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EjectOutcome {
+    /// Desmontada y expulsada: ya se puede quitar con seguridad.
+    Ok,
+    /// Hay archivos abiertos (no se pudo bloquear el volumen). No se tocó nada.
+    InUse,
+    /// Otra falla (el mensaje describe el código).
+    Failed(String),
+}
+
 /// Una acción multi-panel pendiente de elegir destino (cuando hay 3+ paneles).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneAction {
@@ -1891,9 +1904,37 @@ impl WorkspaceCtrl {
                     label: d.label.trim_end_matches(['\\', '/']).to_string(),
                     path: d.path.display().to_string(),
                     icon,
+                    // Marca las extraíbles (USB) para ofrecer la expulsión segura.
+                    removable: d.kind == naygo_core::icon_kind::DriveKind::Removable,
                 }
             })
             .collect()
+    }
+
+    /// ¿La unidad cuya raíz es `root` es extraíble (USB)? Se usa para mostrar el
+    /// botón/menú de expulsión solo en unidades extraíbles. Consulta el tipo de
+    /// la unidad en caliente (barato: una llamada a GetDriveTypeW por unidad).
+    pub fn is_removable(&self, root: &Path) -> bool {
+        naygo_platform::drives::drives()
+            .into_iter()
+            .any(|d| d.path == root && d.kind == naygo_core::icon_kind::DriveKind::Removable)
+    }
+
+    /// Expulsa de forma segura la unidad extraíble cuya raíz es `root`. Devuelve
+    /// `Ok(())` si se desmontó y expulsó sin forzar. Si hay archivos abiertos
+    /// (volumen bloqueado) NO fuerza: devuelve [`EjectOutcome::InUse`]. La UI
+    /// mapea el resultado a un toast localizado.
+    pub fn eject_drive(&self, root: PathBuf) -> EjectOutcome {
+        // Guardia de seguridad: solo se expulsan unidades extraíbles. Nunca se debe
+        // intentar desmontar una fija/de red aunque la UI lo pidiera por error.
+        if !self.is_removable(&root) {
+            return EjectOutcome::Failed("not a removable drive".into());
+        }
+        match naygo_platform::eject::eject_drive(&root) {
+            Ok(()) => EjectOutcome::Ok,
+            Err(naygo_platform::eject::EjectError::InUse) => EjectOutcome::InUse,
+            Err(e) => EjectOutcome::Failed(e.to_string()),
+        }
     }
 
     /// Filas del historial de deshacer (validadas contra el disco).

@@ -98,11 +98,14 @@ export struct HelpRowVm {
     chord: string,
 }
 
-// Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
+// Fila de navegación (favorito, reciente o unidad de disco): etiqueta visible +
+// ruta completa. `removable` solo es relevante para la tira de unidades: marca las
+// unidades extraíbles (USB) para mostrar el botón/menú de expulsión segura.
 export struct NavRow {
     label: string,
     path: string,
-    icon: image,           // ícono de carpeta cacheado (6B)
+    icon: image,           // ícono de carpeta/disco cacheado (6B)
+    removable: bool,       // true para unidades extraíbles (USB) en la tira de discos
 }
 
 // Un segmento de la barra de ruta (breadcrumb): etiqueta visible + ruta acumulada a la que

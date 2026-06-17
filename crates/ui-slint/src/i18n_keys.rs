@@ -32,6 +32,10 @@ where
     tr.set_pathbar_fav_tip(c.t("slint.pathbar.fav_tip").into());
     tr.set_pathbar_copy_tip(c.t("slint.pathbar.copy_tip").into());
     tr.set_pathbar_copied(c.t("slint.pathbar.copied").into());
+    tr.set_drive_eject_tip(c.t("slint.drive.eject_tip").into());
+    tr.set_drive_eject_ok(c.t("slint.drive.eject_ok").into());
+    tr.set_drive_eject_in_use(c.t("slint.drive.eject_in_use").into());
+    tr.set_drive_eject_failed(c.t("slint.drive.eject_failed").into());
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
     tr.set_toolbar_new_folder(c.t("slint.toolbar.new_folder").into());

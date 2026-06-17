@@ -185,9 +185,11 @@ export component ConfigWindow inherits Window {
     // Captura de tecla (la UI la enruta cuando `capturing` != "").
     callback capture-key(string, bool, bool, bool);
 
-    // FocusScope para capturar la combinación del atajo cuando corresponde. Cubre toda la
-    // ventana; los controles internos siguen recibiendo sus clics.
+    // FocusScope que CUBRE toda la ventana (un único hijo que la llena), para capturar la
+    // combinación del atajo cuando corresponde y para que el contenido ocupe todo el alto/ancho.
     fs := FocusScope {
+        width: 100%;
+        height: 100%;
         enabled: root.capturing != "";
         key-pressed(ev) => {
             if (root.capturing != "") {
@@ -197,17 +199,19 @@ export component ConfigWindow inherits Window {
             }
             accept
         }
-    }
 
-    // Contenido de la ventana: el SO provee la barra de título (mover/minimizar/cerrar), así que
-    // ya no hay velo, arrastre propio, grip ni alto manual.
-    body := VerticalLayout {
-        padding: 14px;
-        spacing: 10px;
+        // Contenido de la ventana: el SO provee la barra de título (mover/minimizar/cerrar), así
+        // que ya no hay velo, arrastre propio, grip ni alto manual. El VerticalLayout llena el
+        // FocusScope (y por ende la ventana), así las secciones usan TODO el alto disponible.
+        body := VerticalLayout {
+            width: 100%;
+            height: 100%;
+            padding: 14px;
+            spacing: 10px;
 
-        HorizontalLayout {
-            spacing: 12px;
-            vertical-stretch: 1;
+            HorizontalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
 
                 // Barra lateral de categorías.
                 Rectangle {
@@ -816,10 +820,11 @@ export component ConfigWindow inherits Window {
                 }
             }
         }
+    }
 
-        // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
-        // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.
-        egg-timer := Timer {
+    // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
+    // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.
+    egg-timer := Timer {
             interval: 60ms;
             running: root.egg-active;
             triggered => {

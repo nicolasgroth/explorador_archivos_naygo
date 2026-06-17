@@ -145,13 +145,49 @@ component ToolBtn inherits Rectangle {
     }
 }
 
+// Glifo de "expulsar" (▲ sobre una barra) dibujado con Path para que el render por
+// software no lo descarte (los glifos de fuente sí se pierden). Se usa en la tira de
+// unidades, solo en las extraíbles (USB). Envuelve el Path en un Rectangle para poder
+// exponer un color propio sin chocar con las propiedades del Path base.
+component EjectIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 11px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.2px;
+        fill: root.tint;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        // Triángulo (la flecha hacia arriba).
+        MoveTo { x: 6; y: 1.5; }
+        LineTo { x: 10; y: 6.5; }
+        LineTo { x: 2; y: 6.5; }
+        Close { }
+        // Barra inferior (el "borde" del que se expulsa).
+        MoveTo { x: 2.5; y: 9; }
+        LineTo { x: 9.5; y: 9; }
+        LineTo { x: 9.5; y: 10.5; }
+        LineTo { x: 2.5; y: 10.5; }
+        Close { }
+    }
+}
+
 // Botón compacto de unidad de disco para la tira de la toolbar: ícono + letra (p. ej. "C:").
-// Clic navega el panel activo a la raíz. Tooltip con la ruta.
+// Clic navega el panel activo a la raíz. Tooltip con la ruta. Si la unidad es extraíble
+// (USB), aparece un botón ⏏ para expulsarla con seguridad; el clic derecho también ofrece
+// "Expulsar de forma segura".
 component DriveBtn inherits Rectangle {
     in property <string> label;
     in property <string> tip;
     in property <image> icon;
+    in property <bool> removable: false;
+    in property <string> eject-tip;
     callback clicked();
+    callback eject();
     width: drive-row.preferred-width + 10px;
     background: dtouch.has-hover ? Theme.selection-bg : Theme.row-bg;
     border-radius: 4px;
@@ -173,9 +209,37 @@ component DriveBtn inherits Rectangle {
             font-size: 12px;
             vertical-alignment: center;
         }
+        // Botón ⏏ de expulsión: solo en unidades extraíbles. Va dentro del layout
+        // para no solaparse con la letra; su propio TouchArea atrapa el clic antes
+        // que el de navegación del botón.
+        if root.removable: eject-btn := Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            background: etouch.has-hover ? Theme.accent : transparent;
+            EjectIcon {
+                tint: etouch.has-hover ? white : Theme.text-dim;
+            }
+            etouch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.eject(); }
+                changed has-hover => {
+                    root.hover-tip(self.has-hover ? root.eject-tip : "",
+                        root.absolute-position.x + root.width / 2);
+                }
+            }
+        }
     }
     callback hover-tip(string, length);
     dtouch := TouchArea {
+        // El clic-izquierdo navega; el clic-derecho expulsa si es extraíble (atajo
+        // sin menú: simple y robusto, lo que pidió la tarea).
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right
+                    && root.removable) {
+                root.eject();
+            }
+        }
         clicked => { root.clicked(); }
         changed has-hover => {
             root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
@@ -406,6 +470,9 @@ export component AppWindow inherits Window {
     // path = raíz. Clic navega el panel activo. Rust la rellena al arrancar y al cambiar de USB.
     in property <[NavRow]> drives;
     callback nav-drive(string);
+    // Expulsar de forma segura la unidad extraíble cuya raíz es el argumento (botón ⏏ o clic
+    // derecho sobre una unidad USB). Rust desmonta+expulsa y muestra un toast del resultado.
+    callback eject-drive(string);
 
     // --- Ventana de configuración (Fase 4) ---
     // La ventana de config es ahora una ventana nativa propia (ConfigWindow); su wiring vive en
@@ -559,7 +626,10 @@ export component AppWindow inherits Window {
                     label: d.label;
                     tip: d.path;
                     icon: d.icon;
+                    removable: d.removable;
+                    eject-tip: Tr.drive-eject-tip;
                     clicked => { root.nav-drive(d.path); }
+                    eject => { root.eject-drive(d.path); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 Rectangle {
