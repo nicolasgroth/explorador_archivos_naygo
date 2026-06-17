@@ -2174,25 +2174,51 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let ctrl = ctrl.clone();
+        let area_of = area_of.clone();
+        let ui_weak = ui.as_weak();
+        // ARRASTRE EN VIVO: NO reflowar el layout (eso no repinta bajo el render por software y
+        // se ve distorsionado). Solo calcular dónde quedaría el borde y pintar la barra-fantasma
+        // (un Rectangle por escalares, que sí repinta al instante). `px`/`py` = posición ABSOLUTA
+        // del puntero en coords de contenido.
+        ui.on_split_drag(move |index, px, py| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let area = area_of();
+            let c = ctrl.borrow();
+            let handles = c.split_handles(area);
+            if let Some(h) = handles.get(index as usize) {
+                if let Some((_f, bar)) = c.fraction_at(&h.path.clone(), area, px, py) {
+                    ui.set_splitpreview_x(bar.x);
+                    ui.set_splitpreview_y(bar.y);
+                    ui.set_splitpreview_w(bar.w);
+                    ui.set_splitpreview_h(bar.h);
+                }
+            }
+        });
+    }
+    // COMMIT (al soltar): aplicar la fraction de verdad, reflowar UNA vez, y limpiar la fantasma.
+    {
+        let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let area_of = area_of.clone();
-        // `px`/`py` son la posición ABSOLUTA del puntero en coords del contenido (no un delta).
-        ui.on_split_drag(move |index, px, py| {
+        let ui_weak = ui.as_weak();
+        ui.on_split_commit(move |index, px, py| {
             let area = area_of();
             {
                 let mut c = ctrl.borrow_mut();
                 let handles = c.split_handles(area);
                 if let Some(h) = handles.get(index as usize) {
-                    // La fraction es la posición del puntero sobre el largo del área del split.
-                    // (set_fraction la clampa a un rango sano para que ningún panel colapse.)
-                    let (pos, total) = if matches!(h.dir, SplitDir::Horizontal) {
-                        (px, area.w.max(1.0))
-                    } else {
-                        (py, area.h.max(1.0))
-                    };
                     let path = h.path.clone();
-                    c.set_fraction(&path, pos / total);
+                    if let Some((f, _bar)) = c.fraction_at(&path, area, px, py) {
+                        c.set_fraction(&path, f);
+                    }
                 }
+            }
+            // Ocultar la barra-fantasma (w/h = 0).
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_splitpreview_w(0.0);
+                ui.set_splitpreview_h(0.0);
             }
             sync_layout();
         });

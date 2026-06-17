@@ -471,6 +471,17 @@ impl WorkspaceCtrl {
         self.ws.layout.set_fraction(path, fraction);
     }
 
+    /// Fracción + rect de la barra-fantasma para un split dado el puntero (vista previa del drag).
+    pub fn fraction_at(
+        &self,
+        path: &[SplitStep],
+        area: Rect,
+        px: f32,
+        py: f32,
+    ) -> Option<(f32, Rect)> {
+        self.ws.layout.fraction_at(path, area, px, py)
+    }
+
     /// Segundos que dura el resaltado de archivos nuevos, según el ajuste. `FadeSeconds(n)`→n;
     /// `UntilInteract`/`UntilRefresh` se aproximan con un tope generoso (el resaltado es una
     /// pista transitoria; modelar "hasta interactuar" exactamente no aporta y complica).

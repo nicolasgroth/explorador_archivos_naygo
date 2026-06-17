@@ -227,7 +227,18 @@ export component AppWindow inherits Window {
     callback colmenu-dismiss();
     callback activate(int);
     callback key(string, bool, bool, bool);
+    // Arrastre de splitter (resize de paneles). `split-drag` pide a Rust la posición ACOTADA
+    // del borde para pintar la barra-fantasma EN VIVO (Rust setea splitpreview-*); `split-commit`
+    // (al soltar) aplica la fraction de verdad. Se separa porque reflowar todo el layout en cada
+    // `moved` no repinta bajo el render por software (solo tras un input) y se ve distorsionado;
+    // la barra-fantasma (un único Rectangle por escalares) sí repinta al instante.
     callback split-drag(int, length, length);
+    callback split-commit(int, length, length);
+    // Barra-fantasma del splitter en curso (rect en coords de contenido; w/h 0 = oculta).
+    in property <length> splitpreview-x;
+    in property <length> splitpreview-y;
+    in property <length> splitpreview-w;
+    in property <length> splitpreview-h;
     // Paneles especiales:
     callback tree-toggle(int, string);   // (pane-id, ruta) expandir/colapsar rama
     callback tree-navigate(string);      // navegar el Files activo a esa carpeta
@@ -653,13 +664,34 @@ export component AppWindow inherits Window {
                 }
                 sp-touch := TouchArea {
                     mouse-cursor: s.horizontal ? ew-resize : ns-resize;
-                    // Enviar la posición ABSOLUTA del puntero en coords del contenido. El handler
-                    // fija la fraction por la posición (no por delta, que oscilaba). `self.mouse-x`
-                    // es relativo a esta zona de agarre, cuyo origen es `s.x - 5px` (ver arriba).
+                    // Posición ABSOLUTA del puntero en coords de contenido. `self.mouse-x` es
+                    // relativo a la zona de agarre, cuyo origen es `s.x - 5px` (ver arriba).
+                    // Mientras se arrastra: pedir la barra-fantasma (no reflowar). Al soltar:
+                    // aplicar la fraction y limpiar la fantasma.
                     moved => {
                         root.split-drag(s.index, parent.x + self.mouse-x, parent.y + self.mouse-y);
                     }
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                            root.split-commit(s.index, parent.x + self.mouse-x, parent.y + self.mouse-y);
+                        }
+                        if (ev.kind == PointerEventKind.cancel) {
+                            root.split-commit(s.index, parent.x + self.mouse-x, parent.y + self.mouse-y);
+                        }
+                    }
                 }
+            }
+            // Barra-fantasma del splitter en curso: un único Rectangle posicionado por escalares,
+            // que repinta al instante (a diferencia del reflow completo del layout). Muestra
+            // dónde quedará el borde al soltar. Visible solo durante el arrastre (w/h > 0).
+            if root.splitpreview-w > 0 && root.splitpreview-h > 0: Rectangle {
+                x: root.splitpreview-x;
+                y: root.splitpreview-y;
+                width: root.splitpreview-w;
+                height: root.splitpreview-h;
+                background: Theme.accent;
+                border-radius: 2px;
+                opacity: 0.7;
             }
             // Vista previa de la zona de drop durante un arrastre (resaltado translúcido).
             if root.drop-w > 0 && root.drop-h > 0: Rectangle {

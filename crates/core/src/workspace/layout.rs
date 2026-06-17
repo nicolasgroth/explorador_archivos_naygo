@@ -244,6 +244,83 @@ impl SerializableDockLayout {
         }
     }
 
+    /// Dado el split en `path`, el `area` total y la posición del puntero `(px, py)` en coords de
+    /// contenido, calcula (fraction, bar_rect): la fracción CLAMP [0.05,0.95] que pondría el corte
+    /// bajo el puntero, y el rect de la barra resultante. La fracción se mide DENTRO del sub-rect
+    /// del split (no sobre el área total), que es lo correcto para splits anidados. Devuelve
+    /// `None` si la ruta no apunta a un split. Lo usan tanto la barra-fantasma del arrastre (vista
+    /// previa en vivo) como el commit al soltar, para que ambos coincidan.
+    pub fn fraction_at(
+        &self,
+        path: &[SplitStep],
+        area: Rect,
+        px: f32,
+        py: f32,
+    ) -> Option<(f32, Rect)> {
+        let root = self.root.as_ref()?;
+        // Bajar al split objetivo, recortando el sub-rect en cada paso.
+        let mut node = root;
+        let mut sub = area;
+        for step in path {
+            if let DockNode::Split {
+                dir,
+                fraction,
+                first,
+                second,
+            } = node
+            {
+                let (a, b) = split_area(sub, *dir, *fraction);
+                match step {
+                    SplitStep::First => {
+                        node = first;
+                        sub = a;
+                    }
+                    SplitStep::Second => {
+                        node = second;
+                        sub = b;
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
+        let DockNode::Split { dir, .. } = node else {
+            return None;
+        };
+        let half = SPLIT_BAR / 2.0;
+        let f = match dir {
+            SplitDir::Horizontal => {
+                if sub.w <= 0.0 {
+                    0.5
+                } else {
+                    ((px - sub.x) / sub.w).clamp(0.05, 0.95)
+                }
+            }
+            SplitDir::Vertical => {
+                if sub.h <= 0.0 {
+                    0.5
+                } else {
+                    ((py - sub.y) / sub.h).clamp(0.05, 0.95)
+                }
+            }
+        };
+        let bar = match dir {
+            SplitDir::Horizontal => Rect {
+                x: sub.x + sub.w * f - half,
+                y: sub.y,
+                w: SPLIT_BAR,
+                h: sub.h,
+            },
+            SplitDir::Vertical => Rect {
+                x: sub.x,
+                y: sub.y + sub.h * f - half,
+                w: sub.w,
+                h: SPLIT_BAR,
+            },
+        };
+        Some((f, bar))
+    }
+
     /// Divide la hoja `leaf` en un split: el lado nuevo lleva `new_id`. Si `leaf` no
     /// existe, no-op. El split nuevo arranca al 50%.
     pub fn split_leaf(&mut self, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
@@ -721,6 +798,55 @@ mod tests {
             .unwrap()
             .1;
         assert!((r1.w - 198.0).abs() < 2.0, "ahora el 1º ocupa ~25%");
+    }
+
+    #[test]
+    fn fraction_at_mide_dentro_del_subrect_del_split() {
+        // Layout: split horizontal raíz al 50%; el segundo hijo es OTRO split horizontal.
+        // El handle del split ANIDADO vive en la mitad derecha [400..800]. Poner el puntero en
+        // x=600 (el centro de esa mitad) debe dar fraction ~0.5 del SUB-rect, no ~0.75 del total.
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                fraction: 0.5,
+                first: Box::new(DockNode::Leaf(PaneId(1))),
+                second: Box::new(DockNode::Split {
+                    dir: SplitDir::Horizontal,
+                    fraction: 0.5,
+                    first: Box::new(DockNode::Leaf(PaneId(2))),
+                    second: Box::new(DockNode::Leaf(PaneId(3))),
+                }),
+            }),
+        };
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        // El handle anidado es el segundo (path = [Second]).
+        let handles = l.split_handles(area);
+        let nested = handles
+            .iter()
+            .find(|h| h.path == vec![SplitStep::Second])
+            .unwrap();
+        let (f, bar) = l.fraction_at(&nested.path, area, 600.0, 300.0).unwrap();
+        assert!(
+            (f - 0.5).abs() < 0.02,
+            "fraction relativa al sub-rect, no al total: {f}"
+        );
+        assert!(
+            (bar.x - 598.0).abs() < 3.0,
+            "la barra-fantasma cae en x~600: {}",
+            bar.x
+        );
+        // Clamp en los extremos.
+        let (fmin, _) = l.fraction_at(&nested.path, area, 0.0, 300.0).unwrap();
+        assert!((fmin - 0.05).abs() < 0.001, "clamp mínimo");
+        // Ruta a una hoja → None.
+        assert!(l
+            .fraction_at(&[SplitStep::First], area, 100.0, 100.0)
+            .is_none());
     }
 
     #[test]

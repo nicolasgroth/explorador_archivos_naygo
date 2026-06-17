@@ -106,8 +106,12 @@ Faltan respecto al contrato I:
 
 ## PLAN DE CIERRE (orden propuesto)
 
-1. ✅ **Bugs** B1 (resize, commit e9d1929) + B2 (reveal árbol, commit 34e99be) — HECHO.
-   (gestos verificados por Nicolás en la VM)
+1. ✅ **Bugs** B1 (resize) + B2 (reveal árbol, commit 34e99be) — HECHO.
+   B1 REHECHO: el primer intento (e9d1929, reflow del layout en cada `moved`) NO repintaba en
+   vivo bajo render por software (solo tras un clic) y se veía distorsionado. Fix definitivo:
+   barra-fantasma por escalares durante el arrastre (repinta al instante) + commit de la
+   fraction al soltar; `core::layout::fraction_at` calcula la fracción DENTRO del sub-rect del
+   split (corrige también el cálculo erróneo para splits anidados).
 2. ✅ **Menú de columna + filtros + clic derecho** (P1) + reordenar (P2, vía "Mover ←/→" en
    el menú en vez de arrastrar) — HECHO, commit dd66fb8. Incluye indicadores ▲/▼ + embudo +
    aviso "sin coincidencias". El arrastre-con-línea-de-inserción quedó pendiente (se prefirió
