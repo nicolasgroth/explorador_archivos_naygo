@@ -1124,6 +1124,35 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // Botones laterales del mouse: atrás/adelante en el panel donde se hizo clic.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_nav_back(move |id| {
+            let mut c = ctrl.borrow_mut();
+            c.set_active(PaneId(id as u64));
+            if c.on_go_back() {
+                drop(c);
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_nav_forward(move |id| {
+            let mut c = ctrl.borrow_mut();
+            c.set_active(PaneId(id as u64));
+            if c.on_go_forward() {
+                drop(c);
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();

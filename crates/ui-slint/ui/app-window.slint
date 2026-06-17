@@ -236,6 +236,9 @@ export component AppWindow inherits Window {
     callback colmenu-dismiss();
     callback activate(int);
     callback key(string, bool, bool, bool);
+    // Botones laterales del mouse (atrás/adelante) sobre un panel: navegan su historial.
+    callback nav-back(int);
+    callback nav-forward(int);
     // Arrastre de splitter (resize de paneles). `split-drag` pide a Rust la posición ACOTADA
     // del borde para pintar la barra-fantasma EN VIVO (Rust setea splitpreview-*); `split-commit`
     // (al soltar) aplica la fraction de verdad. Se separa porque reflowar todo el layout en cada
@@ -690,6 +693,8 @@ export component AppWindow inherits Window {
                         column-context(id, kind, cx, cy) => { root.column-context(id, kind, cx, cy); }
                         activate(id) => { root.activate(id); }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
+                        nav-back(id) => { root.nav-back(id); }
+                        nav-forward(id) => { root.nav-forward(id); }
                     }
                     if p.purpose == 1: TreePanel {
                         width: 100%;

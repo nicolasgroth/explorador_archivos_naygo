@@ -135,6 +135,9 @@ export component FilePanel inherits FocusScope {
     property <bool> col-menu-open: false;
     callback activate(int);                  // (pane-id) al interactuar
     callback key(string, bool, bool, bool);
+    // Botones laterales del mouse (atrás/adelante) sobre este panel: navegan su historial.
+    callback nav-back(int);                  // (pane-id)
+    callback nav-forward(int);               // (pane-id)
 
     key-pressed(event) => {
         root.activate(root.pane-id);
@@ -354,6 +357,13 @@ export component FilePanel inherits FocusScope {
                                 empty-touch.absolute-position.x + empty-touch.mouse-x,
                                 empty-touch.absolute-position.y + empty-touch.mouse-y);
                         }
+                        // Botones laterales del mouse: atrás/adelante en el historial del panel.
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.back) {
+                            root.nav-back(root.pane-id);
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
+                            root.nav-forward(root.pane-id);
+                        }
                     }
                 }
                 ListView {
@@ -478,6 +488,13 @@ export component FilePanel inherits FocusScope {
                                 // llegan al panel tras hacer clic en una fila. (Se hace en el
                                 // `up`, ya completado el gesto, para no robar el grab del clic.)
                                 root.focus();
+                            }
+                            // Botones laterales del mouse sobre una fila: atrás/adelante en el panel.
+                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.back) {
+                                root.nav-back(root.pane-id);
+                            }
+                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
+                                root.nav-forward(root.pane-id);
                             }
                             // Clic derecho: seleccionar la fila y abrir el menú contextual en
                             // coords de la ventana (absolute-position del TouchArea + puntero).

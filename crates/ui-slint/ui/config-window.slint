@@ -172,7 +172,10 @@ export component ConfigWindow inherits Rectangle {
     // al contenido de la categoría (entre un mínimo y un máximo) para no dejar espacio vacío.
     card := Rectangle {
         width: 720px;
-        height: clamp(body.preferred-height + 28px, 240px, 560px);
+        // Alto adaptativo: crece con el contenido, pero acotado entre un mínimo y el alto de la
+        // ventana menos un margen (antes el tope fijo de 560px dejaba secciones largas —p. ej.
+        // Previsualización— recortadas sin que se notara que había más abajo).
+        height: clamp(body.preferred-height + 28px, 240px, max(360px, root.height - 64px));
         x: (parent.width - self.width) / 2 + root.offset-x;
         y: (parent.height - self.height) / 2 + root.offset-y;
         background: Theme.panel-bg;
@@ -215,16 +218,20 @@ export component ConfigWindow inherits Rectangle {
                         x: 0px;
                     }
                 }
-                // Botón de cierre compacto con ícono (✕), no un texto grande.
+                // Botón de cierre con ícono (✕). Con borde y fondo propio para que se lea SIEMPRE
+                // como botón (antes era un ✕ tenue sin fondo que en la VM no se distinguía).
                 Rectangle {
-                    width: 28px;
+                    width: 30px;
                     height: 26px;
-                    background: close-touch.has-hover ? Theme.error : transparent;
+                    background: close-touch.has-hover ? Theme.error : Theme.row-bg;
                     border-radius: 4px;
+                    border-width: 1px;
+                    border-color: close-touch.has-hover ? Theme.error : Theme.border;
                     Text {
                         text: "✕";
-                        color: close-touch.has-hover ? white : Theme.text-dim;
+                        color: close-touch.has-hover ? white : Theme.text;
                         font-size: 15px;
+                        font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -263,6 +270,9 @@ export component ConfigWindow inherits Rectangle {
                     background: Theme.row-bg;
                     border-radius: 6px;
                     ScrollView {
+                        // Barra siempre visible: deja claro que hay más opciones abajo (antes el
+                        // scroll "fantasma" daba la ilusión de que no había más contenido).
+                        vertical-scrollbar-policy: always-on;
                         VerticalLayout {
                             padding: 12px;
                             spacing: 6px;

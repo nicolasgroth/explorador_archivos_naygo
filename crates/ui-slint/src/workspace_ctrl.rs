@@ -370,6 +370,12 @@ impl WorkspaceCtrl {
             .active_id()
             .filter(|a| self.ws.pane(*a).map(|p| p.purpose) == Some(PanePurpose::Files))
             .or_else(|| self.ws.files_panes().first().copied());
+        // Arrancar el REVEAL del árbol hasta la carpeta activa restaurada: antes solo se hacía
+        // `set_active` en cada árbol (fijaba el destino) pero no se sembraba `reveal_targets` ni
+        // se arrancaba `pump_reveal`, así que al iniciar el árbol no expandía hasta la carpeta.
+        if let Some(active_dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+            self.sync_trees_active(active_dir);
+        }
     }
 
     /// Huella barata del estado persistible (lo que cambia entre sesiones que vale la pena
