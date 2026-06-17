@@ -292,6 +292,7 @@ impl ConfigCtrl {
             KeyCode::Tab => "Tab".to_string(),
             KeyCode::Escape => "Esc".to_string(),
             KeyCode::Delete => "Supr".to_string(),
+            KeyCode::F1 => "F1".to_string(),
             KeyCode::F2 => "F2".to_string(),
             KeyCode::F3 => "F3".to_string(),
             KeyCode::F4 => "F4".to_string(),

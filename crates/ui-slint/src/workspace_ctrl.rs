@@ -110,6 +110,8 @@ pub struct WorkspaceCtrl {
     pub templates: naygo_core::workspace::TemplateStore,
     /// Ventana de renombrado por lotes abierta (Fase 5): el spec en edición + los ítems objetivo.
     pub batch: Option<BatchRenameState>,
+    /// La ayuda (F1) está abierta.
+    pub help_open: bool,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -227,6 +229,7 @@ impl WorkspaceCtrl {
             column_menu: None,
             templates: naygo_core::config::load_templates(&config_dir),
             batch: None,
+            help_open: false,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -2565,6 +2568,23 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Cierra la ayuda (Esc/clic fuera).
+    pub fn help_close(&mut self) {
+        self.help_open = false;
+    }
+
+    /// Atajos activos para la ayuda: pares (acción legible, chord) de las acciones que tienen
+    /// al menos un atajo asignado, en el orden de presentación del keymap. Lee el keymap EN VIVO,
+    /// así refleja lo que el usuario haya reasignado.
+    pub fn help_shortcuts(&self) -> Vec<(String, String)> {
+        self.config
+            .shortcut_list()
+            .into_iter()
+            .filter(|(_, _, chord)| !chord.is_empty())
+            .map(|(_, label, chord)| (label, chord))
+            .collect()
+    }
+
     /// Ordena el panel activo por la columna `kind_int` (0..4). Reusa `sort_key_of` para cubrir
     /// las 5 columnas (incluida Creado), a diferencia del `on_sort_by` por string. Alterna
     /// ascendente/descendente si ya estaba ordenado por esa clave.
@@ -2699,6 +2719,7 @@ impl WorkspaceCtrl {
             Action::EditPath => {
                 self.edit_path_requested = self.active_files_id();
             }
+            Action::Help => self.help_open = !self.help_open,
             _ => {}
         }
         false
@@ -2973,6 +2994,24 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// La ayuda (F1) lista atajos activos (con chord no vacío) e incluye el propio F1.
+    #[test]
+    fn ayuda_lista_atajos_activos() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        let rows = c.help_shortcuts();
+        assert!(!rows.is_empty(), "hay atajos");
+        assert!(
+            rows.iter().all(|(_, chord)| !chord.is_empty()),
+            "solo acciones con atajo asignado"
+        );
+        assert!(
+            rows.iter().any(|(_, chord)| chord == "F1"),
+            "F1 (ayuda) está en la lista"
+        );
     }
 
     /// Atrás/adelante de teclado: navegar a una subcarpeta, volver con go_back, re-avanzar con

@@ -20,6 +20,7 @@ pub enum KeyCode {
     Tab,
     Escape,
     Delete,
+    F1,
     F2,
     F3,
     F4,
@@ -159,6 +160,8 @@ pub enum Action {
     Undo,
     /// Abrir la edición del path del panel activo (path-bar, Ctrl+L / F4).
     EditPath,
+    /// Abrir/cerrar la ayuda (F1): overlay con las secciones y los atajos activos.
+    Help,
     /// Navegar el panel activo al favorito N (Ctrl+1..Ctrl+9).
     GoFavorite1,
     GoFavorite2,
@@ -216,6 +219,7 @@ impl Action {
             ToggleFocused,
             Undo,
             EditPath,
+            Help,
             GoFavorite1,
             GoFavorite2,
             GoFavorite3,
@@ -272,6 +276,7 @@ impl Action {
             FocusDownKeep => "action.focus_down_keep",
             ToggleFocused => "action.toggle_focused",
             EditPath => "action.edit_path",
+            Help => "action.help",
             GoFavorite1 => "action.go_favorite_1",
             GoFavorite2 => "action.go_favorite_2",
             GoFavorite3 => "action.go_favorite_3",
@@ -361,6 +366,7 @@ impl KeyMap {
             (Undo, vec![Chord::ctrl(Char('z'))]),
             // Path-bar: dos atajos (estilo navegador y estilo Explorer/Commander).
             (EditPath, vec![Chord::ctrl(Char('l')), Chord::plain(F4)]),
+            (Help, vec![Chord::plain(F1)]),
             // Favoritos: Ctrl+dígito salta al favorito N (orden del panel).
             (GoFavorite1, vec![Chord::ctrl(Char('1'))]),
             (GoFavorite2, vec![Chord::ctrl(Char('2'))]),
@@ -490,13 +496,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_49_acciones_con_clave_i18n_unica() {
+    fn all_tiene_50_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 49);
+        assert_eq!(all.len(), 50);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 49, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 50, "cada acción tiene una clave i18n única");
     }
 
     #[test]

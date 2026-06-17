@@ -1,0 +1,162 @@
+// Naygo — ayuda en pantalla (F1). Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Overlay modal con: una intro, las secciones de la app explicadas (texto i18n), y la tabla de
+// atajos ACTIVOS (leída del keymap en vivo). Se cierra con Esc, F1 (toggle) o clic fuera. El
+// contenido espeja docs/GUIA-DE-USUARIO.md.
+import { ScrollView, ListView } from "std-widgets.slint";
+import { HelpRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Un bloque "título + párrafo" de una sección.
+component HelpSection inherits VerticalLayout {
+    in property <string> heading;
+    in property <string> body;
+    spacing: 2px;
+    Text {
+        text: root.heading;
+        color: Theme.accent;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    Text {
+        text: root.body;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
+}
+
+export component Help inherits Rectangle {
+    in property <bool> active;
+    in property <[HelpRowVm]> shortcuts;
+    callback close();
+
+    visible: root.active;
+    background: #000000bb;
+    veil := TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: 760px;
+        height: 560px;
+        background: Theme.panel-bg;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border;
+        TouchArea {} // tragar clics dentro
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            // Encabezado.
+            HorizontalLayout {
+                height: 26px;
+                Text {
+                    text: Tr.help-title;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 28px;
+                    background: close-touch.has-hover ? Theme.error : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "✕";
+                        color: close-touch.has-hover ? white : Theme.text-dim;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+
+            Text {
+                text: Tr.help-intro;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            // Cuerpo: dos columnas — secciones (izq) + atajos (der).
+            HorizontalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
+
+                // Secciones explicadas (scroll).
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 10px;
+                            HelpSection { heading: Tr.help-sec-panels; body: Tr.help-panels; }
+                            HelpSection { heading: Tr.help-sec-nav; body: Tr.help-nav; }
+                            HelpSection { heading: Tr.help-sec-cols; body: Tr.help-cols; }
+                            HelpSection { heading: Tr.help-sec-ops; body: Tr.help-ops; }
+                            HelpSection { heading: Tr.help-sec-layouts; body: Tr.help-layouts; }
+                        }
+                    }
+                }
+
+                // Atajos activos (tabla).
+                Rectangle {
+                    width: 280px;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 4px;
+                        Text {
+                            text: Tr.help-shortcuts;
+                            color: Theme.accent;
+                            font-weight: 700;
+                            font-size: 13px;
+                        }
+                        ListView {
+                            vertical-stretch: 1;
+                            for r in root.shortcuts: Rectangle {
+                                height: 24px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: r.label;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: r.chord;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pie: botón cerrar.
+            HorizontalLayout {
+                alignment: end;
+                Rectangle {
+                    width: 120px; height: 30px;
+                    background: ok-touch.has-hover ? Theme.accent.darker(10%) : Theme.accent;
+                    border-radius: 4px;
+                    Text { text: Tr.help-close; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    ok-touch := TouchArea { clicked => { root.close(); } }
+                }
+            }
+        }
+    }
+}

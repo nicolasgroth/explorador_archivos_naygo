@@ -452,6 +452,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 },
             };
             ui.set_batch(batch);
+
+            // Ayuda (F1): estado + atajos activos (leídos del keymap en vivo).
+            ui.set_help_open(c.help_open);
+            let help_rows: Vec<HelpRowVm> = c
+                .help_shortcuts()
+                .into_iter()
+                .map(|(label, chord)| HelpRowVm {
+                    label: SharedString::from(label.as_str()),
+                    chord: SharedString::from(chord.as_str()),
+                })
+                .collect();
+            ui.set_help_shortcuts(ModelRc::from(Rc::new(VecModel::from(help_rows))));
         }
     };
 
@@ -1408,6 +1420,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_batch_close(move || {
             ctrl.borrow_mut().batch_close();
+            sync_rows();
+        });
+    }
+    // Cerrar la ayuda (Esc/clic fuera/✕).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_help_close(move || {
+            ctrl.borrow_mut().help_close();
             sync_rows();
         });
     }

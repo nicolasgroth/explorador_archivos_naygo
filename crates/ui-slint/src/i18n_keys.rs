@@ -67,6 +67,21 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_terminal_cmd(c.t("slint.ctx.terminal_cmd").into());
     tr.set_ctx_terminal_wt(c.t("slint.ctx.terminal_wt").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    // Ayuda (F1).
+    tr.set_help_title(c.t("slint.help.title").into());
+    tr.set_help_intro(c.t("slint.help.intro").into());
+    tr.set_help_sec_panels(c.t("slint.help.sec_panels").into());
+    tr.set_help_panels(c.t("slint.help.panels").into());
+    tr.set_help_sec_nav(c.t("slint.help.sec_nav").into());
+    tr.set_help_nav(c.t("slint.help.nav").into());
+    tr.set_help_sec_cols(c.t("slint.help.sec_cols").into());
+    tr.set_help_cols(c.t("slint.help.cols").into());
+    tr.set_help_sec_ops(c.t("slint.help.sec_ops").into());
+    tr.set_help_ops(c.t("slint.help.ops").into());
+    tr.set_help_sec_layouts(c.t("slint.help.sec_layouts").into());
+    tr.set_help_layouts(c.t("slint.help.layouts").into());
+    tr.set_help_shortcuts(c.t("slint.help.shortcuts").into());
+    tr.set_help_close(c.t("slint.help.close").into());
     // Ventana de renombrado por lotes (F5).
     tr.set_batch_title(c.t("slint.batch.title").into());
     tr.set_batch_template(c.t("slint.batch.template").into());

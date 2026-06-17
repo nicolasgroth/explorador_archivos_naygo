@@ -140,5 +140,11 @@ Faltan respecto al contrato I:
      el pipeline de UI: worker+pump+display). **Botones de mouse atrás/adelante**: NO factibles
      vía Slint (su `PointerEventButton` no expone back/forward y el backend por software no rutea
      esos botones) — se documenta como limitación.
-7. (Roadmap) **Paleta de comandos Ctrl+P.**
+7. ✅ **Ayuda en F1** (pedido de Nicolás): overlay con las secciones explicadas + los atajos
+   activos (leídos del keymap en vivo). Nueva `Action::Help` (F1). Cierra con Esc/F1/clic/✕.
+8. ✅ **Documentación**: `docs/GUIA-DE-USUARIO.md` (cada sección + atajos), README al día.
+9. (Roadmap) **Paleta de comandos Ctrl+P.**
+
+PENDIENTES restantes (tareas propias, no de paridad): teclado del árbol (#71), ComputeSize/F3
+(#72), config Previsualización C3 (#75) y plantilla de tabla C4 (#76).
 7. (Roadmap) **Paleta de comandos Ctrl+P.**

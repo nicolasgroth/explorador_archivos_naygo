@@ -60,6 +60,8 @@ fn keycode_from(text: &str) -> Option<KeyCode> {
         KeyCode::Home
     } else if first == special(Key::End) {
         KeyCode::End
+    } else if first == special(Key::F1) {
+        KeyCode::F1
     } else if first == special(Key::F2) {
         KeyCode::F2
     } else if first == special(Key::F3) {

@@ -92,6 +92,12 @@ export struct BatchRenameVm {
     can-apply: bool,
 }
 
+// Una fila de la tabla de atajos en la ayuda (F1): acción legible + su combinación.
+export struct HelpRowVm {
+    label: string,
+    chord: string,
+}
+
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
 export struct NavRow {
     label: string,

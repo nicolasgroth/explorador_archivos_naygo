@@ -15,7 +15,8 @@ import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
-import { BatchRenameVm } from "types.slint";
+import { Help } from "help.slint";
+import { BatchRenameVm, HelpRowVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -325,6 +326,10 @@ export component AppWindow inherits Window {
     callback batch-set-counter-step(string);
     callback batch-apply();
     callback batch-close();
+    // Ayuda (F1):
+    in property <bool> help-open;
+    in property <[HelpRowVm]> help-shortcuts;
+    callback help-close();
     // Modal para nombrar la plantilla al guardar la disposición actual.
     property <bool> layout-save-open: false;
     property <string> layout-save-name: "";
@@ -898,6 +903,15 @@ export component AppWindow inherits Window {
         set-counter-step(t) => { root.batch-set-counter-step(t); }
         apply() => { root.batch-apply(); }
         close() => { root.batch-close(); }
+    }
+
+    // Ayuda en pantalla (F1).
+    Help {
+        width: 100%;
+        height: 100%;
+        active: root.help-open;
+        shortcuts: root.help-shortcuts;
+        close() => { root.help-close(); }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota
