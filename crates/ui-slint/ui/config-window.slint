@@ -209,6 +209,10 @@ export component ConfigWindow inherits Rectangle {
         TouchArea {}
 
         body := VerticalLayout {
+            // Llenar la tarjeta para que el contenido use TODO el espacio cuando se agranda el
+            // popup (antes el layout quedaba a su alto preferido y dejaba el fondo vacío).
+            width: 100%;
+            height: 100%;
             padding: 14px;
             spacing: 10px;
 
@@ -496,8 +500,10 @@ export component ConfigWindow inherits Rectangle {
                                     Rectangle { width: 90px; }
                                     Rectangle { width: 80px; }
                                 }
+                                // La lista crece con el alto de la tarjeta (antes era fija en 360px
+                                // y dejaba vacío el resto al agrandar el popup).
                                 ListView {
-                                    height: 360px;
+                                    height: max(240px, root.card-h - 230px);
                                     for s[i] in root.shortcuts: Rectangle {
                                         height: 32px;
                                         background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
@@ -647,9 +653,9 @@ export component ConfigWindow inherits Rectangle {
                                     Text { text: Tr.cfg-preview-as; color: Theme.text-dim; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
                                     Rectangle { width: 24px; }
                                 }
-                                // Filas de reglas (scroll).
+                                // Filas de reglas (scroll). Crece con el alto de la tarjeta.
                                 Rectangle {
-                                    height: 320px;
+                                    height: max(200px, root.card-h - 290px);
                                     background: Theme.panel-bg;
                                     border-radius: 4px;
                                     ListView {
