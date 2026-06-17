@@ -456,6 +456,38 @@ fn main() -> Result<(), slint::PlatformError> {
                 m.pane_ids = new_ids;
                 m.groups = groups;
                 m.area = area;
+            } else {
+                // La estructura NO cambió (mismos paneles, misma área, mismos grupos), pero los
+                // RECTS pueden haber cambiado al arrastrar un splitter (cambia la fraction, no los
+                // ids). Antes esto quedaba fuera del rebuild y el resize "no hacía nada". Ahora se
+                // actualizan los x/y/w/h de cada PaneVm IN SITU (sin recrear modelos → conserva el
+                // scroll) y se reposicionan las barras de splitter.
+                for (id, r) in &visible {
+                    if let Some(i) = m.pane_ids.iter().position(|p| p == id) {
+                        if let Some(mut pv) = m.panes.row_data(i) {
+                            if pv.x != r.x || pv.y != r.y || pv.w != r.w || pv.h != r.h {
+                                pv.x = r.x;
+                                pv.y = r.y;
+                                pv.w = r.w;
+                                pv.h = r.h;
+                                m.panes.set_row_data(i, pv);
+                            }
+                        }
+                    }
+                }
+                let splits: Vec<SplitVm> = split_handles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| SplitVm {
+                        index: i as i32,
+                        x: h.rect.x,
+                        y: h.rect.y,
+                        w: h.rect.w,
+                        h: h.rect.h,
+                        horizontal: matches!(h.dir, SplitDir::Horizontal),
+                    })
+                    .collect();
+                m.splits.set_vec(splits);
             }
 
             // Selector de panel destino: rect de cada candidato (orden visual) + su número.
@@ -1821,16 +1853,19 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let area_of = area_of.clone();
-        ui.on_split_drag(move |index, dx, dy| {
+        // `px`/`py` son la posición ABSOLUTA del puntero en coords del contenido (no un delta).
+        ui.on_split_drag(move |index, px, py| {
             let area = area_of();
             {
                 let mut c = ctrl.borrow_mut();
                 let handles = c.split_handles(area);
                 if let Some(h) = handles.get(index as usize) {
+                    // La fraction es la posición del puntero sobre el largo del área del split.
+                    // (set_fraction la clampa a un rango sano para que ningún panel colapse.)
                     let (pos, total) = if matches!(h.dir, SplitDir::Horizontal) {
-                        (h.rect.x + h.rect.w / 2.0 + dx, area.w.max(1.0))
+                        (px, area.w.max(1.0))
                     } else {
-                        (h.rect.y + h.rect.h / 2.0 + dy, area.h.max(1.0))
+                        (py, area.h.max(1.0))
                     };
                     let path = h.path.clone();
                     c.set_fraction(&path, pos / total);

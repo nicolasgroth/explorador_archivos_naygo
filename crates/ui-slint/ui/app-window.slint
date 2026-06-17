@@ -581,17 +581,30 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            // Barras de splitter arrastrables.
+            // Barras de splitter arrastrables. La barra VISIBLE es fina (4px), pero la zona de
+            // agarre (TouchArea) se ENSANCHA ~5px a cada lado para que sea fácil de tomar con el
+            // mouse (4px era casi imposible de pinchar). La barra visible va centrada en la zona.
             for s in root.splits: Rectangle {
-                x: s.x;
-                y: s.y;
-                width: s.w;
-                height: s.h;
-                background: sp-touch.has-hover || sp-touch.pressed ? Theme.accent : Theme.border;
+                // Zona de agarre: el rect del handle expandido en el eje transversal.
+                x: s.horizontal ? s.x - 5px : s.x;
+                y: s.horizontal ? s.y : s.y - 5px;
+                width: s.horizontal ? s.w + 10px : s.w;
+                height: s.horizontal ? s.h : s.h + 10px;
+                // Barra visible (fina), centrada en la zona de agarre.
+                Rectangle {
+                    x: s.horizontal ? (parent.width - s.w) / 2 : 0;
+                    y: s.horizontal ? 0 : (parent.height - s.h) / 2;
+                    width: s.w;
+                    height: s.h;
+                    background: sp-touch.has-hover || sp-touch.pressed ? Theme.accent : Theme.border;
+                }
                 sp-touch := TouchArea {
                     mouse-cursor: s.horizontal ? ew-resize : ns-resize;
+                    // Enviar la posición ABSOLUTA del puntero en coords del contenido. El handler
+                    // fija la fraction por la posición (no por delta, que oscilaba). `self.mouse-x`
+                    // es relativo a esta zona de agarre, cuyo origen es `s.x - 5px` (ver arriba).
                     moved => {
-                        root.split-drag(s.index, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+                        root.split-drag(s.index, parent.x + self.mouse-x, parent.y + self.mouse-y);
                     }
                 }
             }
