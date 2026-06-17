@@ -102,6 +102,9 @@ export component FilePanel inherits FocusScope {
     in property <bool> no-matches;           // filtro activo que vació la vista → aviso (F2)
     callback fav-toggle(int);                // (pane-id) anclar/quitar la carpeta de favoritos
     callback copy-path(int);                 // (pane-id) copiar la ruta al portapapeles
+    // Tooltip de los íconos de la path-bar: (texto-o-vacío, x-centro en coords de ventana). La
+    // AppWindow lo pinta en su overlay (igual que la toolbar). Vacío al salir el mouse.
+    callback hover-tip(string, length);
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
     in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
     in property <string> rename-text;        // nombre inicial del editor
@@ -207,24 +210,42 @@ export component FilePanel inherits FocusScope {
                                     root.fav-toggle(root.pane-id);
                                 }
                             }
+                            changed has-hover => {
+                                root.hover-tip(self.has-hover ? Tr.pathbar-fav-tip : "",
+                                    self.absolute-position.x + self.width / 2);
+                            }
                         }
                     }
-                    // 📋 copiar la ruta de la carpeta al portapapeles.
+                    // 📋 copiar la ruta de la carpeta al portapapeles. Al copiar, el ícono cambia
+                    // a ✓ por ~1s (feedback inmediato en el lugar del clic).
                     Rectangle {
                         width: 26px;
                         background: copy-touch.has-hover ? Theme.selection-bg : transparent;
                         border-radius: 3px;
+                        property <bool> flashed: false;
                         Text {
-                            text: "📋";
+                            text: parent.flashed ? "✓" : "📋";
+                            color: parent.flashed ? Theme.highlight : Theme.text;
                             font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
+                        }
+                        // Apaga el ✓ tras ~1s.
+                        flash-timer := Timer {
+                            interval: 1s;
+                            running: parent.flashed;
+                            triggered => { parent.flashed = false; self.running = false; }
                         }
                         copy-touch := TouchArea {
                             pointer-event(ev) => {
                                 if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
                                     root.copy-path(root.pane-id);
+                                    parent.flashed = true;
                                 }
+                            }
+                            changed has-hover => {
+                                root.hover-tip(self.has-hover ? Tr.pathbar-copy-tip : "",
+                                    self.absolute-position.x + self.width / 2);
                             }
                         }
                     }

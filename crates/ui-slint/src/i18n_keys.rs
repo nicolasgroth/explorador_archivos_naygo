@@ -22,6 +22,9 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_toolbar_clone_tip(c.t("toolbar.clone_path").into());
     tr.set_toolbar_tabs(c.t("slint.toolbar.tabs").into());
     tr.set_toolbar_tabs_tip(c.t("slint.toolbar.tabs_tip").into());
+    tr.set_pathbar_fav_tip(c.t("slint.pathbar.fav_tip").into());
+    tr.set_pathbar_copy_tip(c.t("slint.pathbar.copy_tip").into());
+    tr.set_pathbar_copied(c.t("slint.pathbar.copied").into());
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
     tr.set_layout_save_current(c.t("slint.layout.save_current").into());
@@ -222,6 +225,7 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_paste_name(c.t("slint.cfg.paste_name").into());
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
     tr.set_cfg_theme(c.t("slint.cfg.theme").into());
+    tr.set_cfg_theme_preview(c.t("slint.cfg.theme_preview").into());
     tr.set_cfg_language(c.t("slint.cfg.language").into());
     tr.set_cfg_icon_set(c.t("slint.cfg.icon_set").into());
     tr.set_cfg_shortcuts_hint(c.t("slint.cfg.shortcuts_hint").into());

@@ -375,6 +375,23 @@ export component ConfigWindow inherits Rectangle {
                                         selected => { root.set-theme(self.current-value); }
                                     }
                                 }
+                                // Muestras de los colores principales del tema ACTIVO (se
+                                // actualizan en caliente al cambiar el tema, así sirven de preview).
+                                Field {
+                                    label: Tr.cfg-theme-preview;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        alignment: start;
+                                        for c in [Theme.panel-bg, Theme.accent, Theme.text, Theme.highlight, Theme.selection-bg, Theme.error]: Rectangle {
+                                            width: 22px;
+                                            height: 18px;
+                                            background: c;
+                                            border-radius: 3px;
+                                            border-width: 1px;
+                                            border-color: Theme.border;
+                                        }
+                                    }
+                                }
                                 Field {
                                     label: Tr.cfg-language;
                                     ComboBox {
@@ -729,6 +746,9 @@ export component ConfigWindow inherits Rectangle {
                 property <float> r2: self.s2 - Math.floor(self.s2);
                 property <float> ticks: animation-tick() / 1ms;
                 text: "📁";
+                // Color explícito de acento: bajo render por software el emoji se dibuja
+                // monocromo con el color del texto; sin fijarlo se perdía en el tema claro.
+                color: Theme.accent;
                 font-size: 18px + self.r2 * 16px;
                 x: self.r1 * (parent.width - 30px);
                 // Caída cíclica: alto + 40px de margen; la velocidad varía por r2.

@@ -413,6 +413,19 @@ export component AppWindow inherits Window {
     // al pasar el mouse; se pinta como overlay al FINAL de la AppWindow (encima del contenido).
     property <string> hovered-tip: "";
     property <length> hovered-tip-x: 0;
+    // Toast transitorio (aviso breve, p. ej. "Ruta copiada"). `show-toast(texto)` lo muestra y un
+    // Timer lo apaga a los ~1.5s. Reusable para otras confirmaciones.
+    property <string> toast-text: "";
+    public function show-toast(msg: string) {
+        root.toast-text = msg;
+        toast-timer.running = false;
+        toast-timer.running = true;
+    }
+    toast-timer := Timer {
+        interval: 1500ms;
+        running: false;
+        triggered => { root.toast-text = ""; self.running = false; }
+    }
     // Área de contenido que Rust usa para repartir los paneles (sin padding global aquí:
     // el contenido empieza en 0,0 dentro de `content`).
     out property <length> content-w: content.width;
@@ -612,7 +625,8 @@ export component AppWindow inherits Window {
                         is-favorite: p.is-favorite;
                         no-matches: p.no-matches;
                         fav-toggle(id) => { root.fav-toggle(id); }
-                        copy-path(id) => { root.copy-path(id); }
+                        copy-path(id) => { root.copy-path(id); root.show-toast(Tr.pathbar-copied); }
+                        hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
                         rename-text: root.rename-pane == p.id ? root.rename-text : "";
                         rename-commit(pos, name) => { root.rename-commit(p.id, pos, name); }
@@ -814,6 +828,26 @@ export component AppWindow inherits Window {
             text: root.hovered-tip;
             color: Theme.text;
             font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Toast transitorio (aviso breve, p. ej. "Ruta copiada"): centrado abajo, sobre la barra de
+    // estado. Aparece al copiar y se apaga solo (toast-timer).
+    if root.toast-text != "": Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - 56px;
+        width: toast-label.preferred-width + 24px;
+        height: 28px;
+        background: Theme.accent;
+        border-radius: 6px;
+        opacity: 0.95;
+        toast-label := Text {
+            text: root.toast-text;
+            color: white;
+            font-size: 12px;
+            font-weight: 700;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

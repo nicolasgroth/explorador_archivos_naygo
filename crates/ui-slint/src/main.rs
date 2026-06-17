@@ -1918,11 +1918,16 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
-    // 📋 copiar la ruta de la carpeta de ese panel al portapapeles.
+    // 📋 copiar la ruta de la carpeta de ese panel al portapapeles. Además del toast (Slint) y
+    // el ✓ del ícono, se anuncia en la barra de estado (se restaura en la próxima interacción).
     {
         let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
         ui.on_copy_path(move |id| {
             ctrl.borrow().copy_pane_path(PaneId(id as u64));
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_status(ui.global::<Tr>().get_pathbar_copied());
+            }
         });
     }
     {
