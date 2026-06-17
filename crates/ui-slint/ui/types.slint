@@ -139,12 +139,25 @@ export struct ContextMenuVm {
     y: length,
     has-native: bool,
     has-wt: bool,       // Windows Terminal (wt.exe) disponible → ofrecer "Abrir Windows Terminal aquí"
+    // Modo CARPETA: clic derecho en la zona vacía del panel. Oculta las acciones de archivo
+    // (copiar/cortar/renombrar/eliminar/copiar-nombre/ruta) y muestra "Abrir en Explorador" +
+    // "Nueva carpeta". Pegar y terminales siguen, que aplican a la carpeta.
+    folder-mode: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
 export struct ResumeRowVm {
     id: string,
     label: string,
+}
+
+// Estado del modal "nueva(s) carpeta(s)".
+export struct NewFolderVm {
+    active: bool,
+    dir: string,        // carpeta destino (encabezado)
+    text: string,       // texto multilínea en edición (una carpeta por línea)
+    status: string,     // resumen: cuántas se crearán / cuántas inválidas
+    can-create: bool,   // hay al menos una línea válida
 }
 
 // Fila del panel de progreso: una operación en curso/terminada.

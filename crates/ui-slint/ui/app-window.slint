@@ -15,8 +15,9 @@ import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
+import { NewFolder } from "new-folder.slint";
 import { Help } from "help.slint";
-import { BatchRenameVm, HelpRowVm } from "types.slint";
+import { BatchRenameVm, NewFolderVm, HelpRowVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -308,14 +309,25 @@ export component AppWindow inherits Window {
     callback ctx-terminal-ps();
     callback ctx-terminal-cmd();
     callback ctx-terminal-wt();
+    callback ctx-explorer();
+    callback ctx-new-folder();
     callback ctx-native();
     callback ctx-dismiss();
+    // Clic derecho en la zona vacía del panel → menú contextual de la carpeta (modo carpeta).
+    callback empty-context(int, length, length);  // (pane-id, x, y)
     // Estado del menú ▾ (desplegable de "agregar panel").
     property <bool> add-menu-open: false;
     // Estado del menú del botón "+" (elegir dirección de la división).
     property <bool> dir-menu-open: false;
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
+    // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
+    property <bool> term-menu-open: false;
+    // ¿WSL / Windows Terminal disponibles? Rust lo setea para mostrar u ocultar esas entradas.
+    in property <bool> has-wsl;
+    in property <bool> has-wt;
+    callback new-folder-toolbar();      // abrir el modal de nueva carpeta en el panel activo
+    callback toolbar-terminal(int);     // 0=PS, 1=CMD, 2=Win Terminal, 3=WSL — en el panel activo
     in property <[LayoutRow]> layout-rows;
     callback apply-layout(string);      // aplicar la plantilla `name`
     callback delete-layout(string);     // borrar una plantilla de usuario `name`
@@ -332,6 +344,11 @@ export component AppWindow inherits Window {
     callback batch-set-counter-step(string);
     callback batch-apply();
     callback batch-close();
+    // Modal "nueva(s) carpeta(s)":
+    in property <NewFolderVm> new-folder-vm;
+    callback new-folder-set-text(string);
+    callback new-folder-create();
+    callback new-folder-close();
     // Ayuda (F1):
     in property <bool> help-open;
     in property <[HelpRowVm]> help-shortcuts;
@@ -517,6 +534,27 @@ export component AppWindow inherits Window {
                     clicked => { root.layout-menu-open = !root.layout-menu-open; }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                // Nueva carpeta en el panel activo (abre el modal multilínea).
+                ToolBtn {
+                    label: Tr.toolbar-new-folder;
+                    tip: Tr.toolbar-new-folder-tip;
+                    icon: root.ic-panel;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 110px;
+                    clicked => { root.new-folder-toolbar(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
+                ToolBtn {
+                    label: Tr.toolbar-terminal;
+                    tip: Tr.toolbar-terminal-tip;
+                    icon: root.ic-tabs;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
+                    highlight: root.term-menu-open;
+                    clicked => { root.term-menu-open = !root.term-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 // Separador antes de la tira de unidades.
                 Rectangle { width: 1px; background: Theme.selection-bg; }
                 // Tira de unidades de disco (paridad con egui): clic navega el panel activo.
@@ -643,6 +681,7 @@ export component AppWindow inherits Window {
                         row-drag-out(id) => { root.row-drag-out(id); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
+                        empty-context(id, cx, cy) => { root.empty-context(id, cx, cy); }
                         sort-by(id, col) => { root.sort-by(id, col); }
                         sort-by-kind(id, kind) => { root.sort-by-kind(id, kind); }
                         column-toggle(id, kind) => { root.column-toggle(id, kind); }
@@ -870,6 +909,8 @@ export component AppWindow inherits Window {
         terminal-ps() => { root.ctx-terminal-ps(); }
         terminal-cmd() => { root.ctx-terminal-cmd(); }
         terminal-wt() => { root.ctx-terminal-wt(); }
+        explorer() => { root.ctx-explorer(); }
+        new-folder() => { root.ctx-new-folder(); }
         native() => { root.ctx-native(); }
         dismiss() => { root.ctx-dismiss(); }
     }
@@ -962,6 +1003,16 @@ export component AppWindow inherits Window {
         set-counter-step(t) => { root.batch-set-counter-step(t); }
         apply() => { root.batch-apply(); }
         close() => { root.batch-close(); }
+    }
+
+    // Modal "nueva(s) carpeta(s)".
+    NewFolder {
+        width: 100%;
+        height: 100%;
+        vm: root.new-folder-vm;
+        set-text(t) => { root.new-folder-set-text(t); }
+        create() => { root.new-folder-create(); }
+        close() => { root.new-folder-close(); }
     }
 
     // Ayuda en pantalla (F1).
@@ -1132,6 +1183,30 @@ export component AppWindow inherits Window {
             MenuItem { label: Tr.split-down; clicked => { root.add-pane-dir(1); root.dir-menu-open = false; } }
             MenuItem { label: Tr.split-left; clicked => { root.add-pane-dir(2); root.dir-menu-open = false; } }
             MenuItem { label: Tr.split-up; clicked => { root.add-pane-dir(3); root.dir-menu-open = false; } }
+        }
+    }
+
+    // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
+    if root.term-menu-open: TouchArea {
+        clicked => { root.term-menu-open = false; }
+    }
+    if root.term-menu-open: Rectangle {
+        // Alineado bajo el botón de terminales (a la derecha de Layouts). Acotado para no salirse.
+        x: min(root.width - self.width - 8px, 360px);
+        y: root.top-bar-h + 2px;
+        width: 200px;
+        height: term-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        term-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            MenuItem { label: Tr.ctx-terminal-ps; clicked => { root.toolbar-terminal(0); root.term-menu-open = false; } }
+            MenuItem { label: Tr.ctx-terminal-cmd; clicked => { root.toolbar-terminal(1); root.term-menu-open = false; } }
+            if root.has-wt: MenuItem { label: Tr.ctx-terminal-wt; clicked => { root.toolbar-terminal(2); root.term-menu-open = false; } }
+            if root.has-wsl: MenuItem { label: Tr.toolbar-terminal-wsl; clicked => { root.toolbar-terminal(3); root.term-menu-open = false; } }
         }
     }
 

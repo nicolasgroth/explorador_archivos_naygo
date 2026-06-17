@@ -21,6 +21,11 @@ export global Tr {
     in property <string> pathbar-copied: "Ruta copiada";
     in property <string> toolbar-layouts: "Layouts";
     in property <string> toolbar-layouts-tip: "Plantillas de disposición de paneles";
+    in property <string> toolbar-new-folder: "Carpeta";
+    in property <string> toolbar-new-folder-tip: "Nueva(s) carpeta(s) en la carpeta del panel activo";
+    in property <string> toolbar-terminal: "Terminal";
+    in property <string> toolbar-terminal-tip: "Abrir una terminal en la carpeta del panel activo";
+    in property <string> toolbar-terminal-wsl: "Abrir WSL aquí";
     in property <string> layout-save-current: "Guardar disposición actual…";
     in property <string> layout-save-title: "Guardar disposición como plantilla";
     in property <string> layout-save-placeholder: "Nombre de la plantilla";
@@ -67,7 +72,16 @@ export global Tr {
     in property <string> ctx-terminal-ps: "Abrir PowerShell aquí";
     in property <string> ctx-terminal-cmd: "Abrir CMD aquí";
     in property <string> ctx-terminal-wt: "Abrir Windows Terminal aquí";
+    in property <string> ctx-explorer: "Abrir en Explorador de Windows";
+    in property <string> ctx-new-folder: "Nueva carpeta…";
     in property <string> ctx-more-windows: "Más opciones de Windows…";
+
+    // Modal "nueva(s) carpeta(s)".
+    in property <string> newfolder-title: "Nueva(s) carpeta(s)";
+    in property <string> newfolder-in-dir: "En:";
+    in property <string> newfolder-hint: "Una carpeta por línea. Usa \\ para anidar (p. ej. proyecto\\src\\bin).";
+    in property <string> newfolder-create: "Crear";
+    in property <string> newfolder-cancel: "Cancelar";
 
     // Plantilla de tabla por defecto (C4).
     in property <string> cfg-default-table: "Plantilla de columnas para paneles nuevos";

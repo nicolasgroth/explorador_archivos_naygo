@@ -13,7 +13,9 @@ pub mod names;
 pub mod plan;
 pub mod undo;
 
-pub use actions::{batch_rename, create, delete, rename, transfer};
+pub use actions::{
+    batch_rename, create, delete, parse_new_folders, rename, transfer, FolderSpec, NewFolderError,
+};
 pub use engine::{run_plan, spawn};
 pub use journal::{
     journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan,

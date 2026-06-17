@@ -1,0 +1,119 @@
+// Naygo — modal "nueva(s) carpeta(s)" (multilínea, `\` anidado).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Modal simple: encabezado con la carpeta destino, una caja de texto multilínea (una carpeta por
+// línea; `\` la vuelve anidada), una pista de uso, un estado vivo (cuántas se crearán / cuántas
+// líneas inválidas se ignorarán) y los botones Crear/Cancelar. Toda la validación vive en
+// core::ops::parse_new_folders; aquí solo se emite el texto y se pinta el estado que arma Rust.
+import { TextEdit } from "std-widgets.slint";
+import { NewFolderVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+export component NewFolder inherits Rectangle {
+    in property <NewFolderVm> vm;
+    callback set-text(string);
+    callback create();
+    callback close();
+
+    visible: root.vm.active;
+    // Velo modal: clic fuera cierra.
+    background: #000000aa;
+    veil := TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: 480px;
+        height: 360px;
+        background: Theme.panel-bg;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border;
+        TouchArea {} // tragar clics dentro
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text: Tr.newfolder-title;
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            // Carpeta destino.
+            HorizontalLayout {
+                spacing: 6px;
+                Text { text: Tr.newfolder-in-dir; color: Theme.text-dim; vertical-alignment: center; }
+                Text {
+                    text: root.vm.dir;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+            // Caja de texto multilínea: una carpeta por línea.
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.row-bg;
+                editor := TextEdit {
+                    width: 100%;
+                    height: 100%;
+                    text: root.vm.text;
+                    wrap: no-wrap;
+                    edited(t) => { root.set-text(t); }
+                }
+            }
+            Text {
+                text: Tr.newfolder-hint;
+                color: Theme.text-dim;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            // Estado vivo (cuántas se crearán / inválidas).
+            Text {
+                text: root.vm.status;
+                color: root.vm.can-create ? Theme.accent : Theme.text-dim;
+                font-size: 12px;
+            }
+            // Botones.
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                // Cancelar.
+                Rectangle {
+                    width: 100px;
+                    height: 32px;
+                    border-radius: 4px;
+                    background: cancel-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    Text { text: Tr.newfolder-cancel; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                    cancel-touch := TouchArea { clicked => { root.close(); } }
+                }
+                // Crear (deshabilitado si no hay líneas válidas).
+                Rectangle {
+                    width: 100px;
+                    height: 32px;
+                    border-radius: 4px;
+                    background: root.vm.can-create
+                        ? (create-touch.has-hover ? Theme.selection-bg : Theme.accent)
+                        : Theme.row-bg;
+                    Text {
+                        text: Tr.newfolder-create;
+                        color: root.vm.can-create ? Theme.text : Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    create-touch := TouchArea {
+                        enabled: root.vm.can-create;
+                        clicked => { root.create(); }
+                    }
+                }
+            }
+        }
+    }
+}

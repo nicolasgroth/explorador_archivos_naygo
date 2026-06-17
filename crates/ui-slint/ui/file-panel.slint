@@ -122,6 +122,9 @@ export component FilePanel inherits FocusScope {
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
+    // Clic derecho en la ZONA VACÍA del panel: menú contextual de la CARPETA (Explorador,
+    // terminal, nueva carpeta…), no de un archivo. (pane-id, x-ventana, y-ventana)
+    callback empty-context(int, length, length);
     callback sort-by(int, string);           // (pane-id, columna) — legado (no usado por el header)
     callback sort-by-kind(int, int);         // (pane-id, kind) ordenar por columna dinámica
     callback column-toggle(int, int);        // (pane-id, kind) mostrar/ocultar columna
@@ -333,7 +336,27 @@ export component FilePanel inherits FocusScope {
                     }
                 }
             }
-            ListView {
+            // Cuerpo de la lista. La envoltura tiene, por DETRÁS del ListView, un TouchArea que
+            // cubre todo el cuerpo: al hacer clic en la ZONA VACÍA (cuando los archivos no llenan
+            // el panel) marca este panel como activo (para que terminal/Explorer usen su carpeta)
+            // y, con clic derecho, abre el menú contextual de la CARPETA (no de un archivo). Los
+            // clics sobre filas los atrapa el TouchArea de cada fila (que está delante).
+            Rectangle {
+                empty-touch := TouchArea {
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down) {
+                            root.activate(root.pane-id);
+                            root.focus();
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                            root.empty-context(
+                                root.pane-id,
+                                empty-touch.absolute-position.x + empty-touch.mouse-x,
+                                empty-touch.absolute-position.y + empty-touch.mouse-y);
+                        }
+                    }
+                }
+                ListView {
                 viewport-y: root.scroll-y;
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
@@ -478,6 +501,7 @@ export component FilePanel inherits FocusScope {
                             root.row-double-clicked(root.pane-id, i);
                         }
                     }
+                }
                 }
             }
         }

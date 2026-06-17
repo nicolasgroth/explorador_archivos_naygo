@@ -27,6 +27,7 @@ pub enum Terminal {
     PowerShell,
     Cmd,
     WindowsTerminal,
+    Wsl,
 }
 
 impl Terminal {
@@ -36,6 +37,7 @@ impl Terminal {
             Terminal::PowerShell => "powershell.exe",
             Terminal::Cmd => "cmd.exe",
             Terminal::WindowsTerminal => "wt.exe",
+            Terminal::Wsl => "wsl.exe",
         }
     }
 }
@@ -60,6 +62,11 @@ pub fn windows_terminal_available() -> bool {
     false
 }
 
+#[cfg(not(windows))]
+pub fn wsl_available() -> bool {
+    false
+}
+
 #[cfg(windows)]
 pub fn open_default(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "open")
@@ -78,8 +85,9 @@ pub fn open_terminal(dir: &Path, term: Terminal) -> Result<(), ShellError> {
     let params = match term {
         // `wt -d <dir>` abre una pestaña ya posicionada en la carpeta.
         Terminal::WindowsTerminal => Some(format!("-d \"{}\"", dir.display())),
-        // PowerShell/CMD arrancan en el `lpDirectory` que pasamos a ShellExecuteW.
-        Terminal::PowerShell | Terminal::Cmd => None,
+        // PowerShell/CMD/WSL arrancan en el `lpDirectory` que pasamos a ShellExecuteW (WSL mapea
+        // ese cwd de Windows a su `/mnt/...` automáticamente).
+        Terminal::PowerShell | Terminal::Cmd | Terminal::Wsl => None,
     };
     windows_impl::shell_execute_in(term.exe(), params.as_deref(), Some(dir))
 }
@@ -88,6 +96,12 @@ pub fn open_terminal(dir: &Path, term: Terminal) -> Result<(), ShellError> {
 #[cfg(windows)]
 pub fn windows_terminal_available() -> bool {
     windows_impl::exe_in_path("wt.exe")
+}
+
+/// `true` si `wsl.exe` (Subsistema de Windows para Linux) parece estar en el PATH del usuario.
+#[cfg(windows)]
+pub fn wsl_available() -> bool {
+    windows_impl::exe_in_path("wsl.exe")
 }
 
 #[cfg(windows)]

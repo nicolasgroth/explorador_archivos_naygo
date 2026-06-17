@@ -37,6 +37,8 @@ export component ContextMenu inherits Rectangle {
     callback terminal-ps();  // abrir PowerShell en la carpeta
     callback terminal-cmd(); // abrir CMD en la carpeta
     callback terminal-wt();  // abrir Windows Terminal en la carpeta
+    callback explorer();     // abrir el Explorador de Windows en la carpeta (modo carpeta)
+    callback new-folder();   // crear subcarpeta(s) en la carpeta (modo carpeta)
     callback native();      // "Más opciones de Windows…"
     callback dismiss();
 
@@ -59,19 +61,27 @@ export component ContextMenu inherits Rectangle {
         items := VerticalLayout {
             padding: 4px;
             spacing: 1px;
-            MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
-            MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
-            Rectangle { height: 1px; background: Theme.border; }
-            MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
-            MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
-            MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
-            Rectangle { height: 1px; background: Theme.border; }
-            MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
-            MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
-            Rectangle { height: 1px; background: Theme.border; }
-            MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
-            MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
-            Rectangle { height: 1px; background: Theme.border; }
+            // --- Modo CARPETA (clic derecho en zona vacía): acciones de la carpeta ---
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-new-folder; clicked => { root.new-folder(); } }
+            if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
+            if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            // --- Común a ambos modos: terminales + menú nativo de Windows ---
             MenuRow { label: Tr.ctx-terminal-ps; clicked => { root.terminal-ps(); } }
             MenuRow { label: Tr.ctx-terminal-cmd; clicked => { root.terminal-cmd(); } }
             if root.vm.has-wt: MenuRow { label: Tr.ctx-terminal-wt; clicked => { root.terminal-wt(); } }

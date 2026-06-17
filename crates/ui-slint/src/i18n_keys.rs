@@ -27,6 +27,11 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_pathbar_copied(c.t("slint.pathbar.copied").into());
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
+    tr.set_toolbar_new_folder(c.t("slint.toolbar.new_folder").into());
+    tr.set_toolbar_new_folder_tip(c.t("slint.toolbar.new_folder_tip").into());
+    tr.set_toolbar_terminal(c.t("slint.toolbar.terminal").into());
+    tr.set_toolbar_terminal_tip(c.t("slint.toolbar.terminal_tip").into());
+    tr.set_toolbar_terminal_wsl(c.t("slint.toolbar.terminal_wsl").into());
     tr.set_layout_save_current(c.t("slint.layout.save_current").into());
     tr.set_layout_save_title(c.t("slint.layout.save_title").into());
     tr.set_layout_save_placeholder(c.t("slint.layout.save_placeholder").into());
@@ -69,7 +74,14 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_terminal_ps(c.t("slint.ctx.terminal_ps").into());
     tr.set_ctx_terminal_cmd(c.t("slint.ctx.terminal_cmd").into());
     tr.set_ctx_terminal_wt(c.t("slint.ctx.terminal_wt").into());
+    tr.set_ctx_explorer(c.t("slint.ctx.explorer").into());
+    tr.set_ctx_new_folder(c.t("slint.ctx.new_folder").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    tr.set_newfolder_title(c.t("slint.newfolder.title").into());
+    tr.set_newfolder_in_dir(c.t("slint.newfolder.in_dir").into());
+    tr.set_newfolder_hint(c.t("slint.newfolder.hint").into());
+    tr.set_newfolder_create(c.t("slint.newfolder.create").into());
+    tr.set_newfolder_cancel(c.t("slint.newfolder.cancel").into());
     // Ayuda (F1).
     tr.set_help_title(c.t("slint.help.title").into());
     tr.set_help_intro(c.t("slint.help.intro").into());

@@ -66,6 +66,72 @@ pub fn create(dir: PathBuf, name: String, is_dir: bool) -> OpRequest {
     }
 }
 
+/// Una línea del cuadro "nueva(s) carpeta(s)" ya validada: el nombre relativo a crear
+/// (puede ser anidado, p. ej. `a\b\c`) o el motivo por el que se rechazó.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderSpec {
+    /// Ruta relativa válida (componentes separados por `\`). Lista para `create_dir_all`.
+    Valid(String),
+    /// Línea inválida: el texto original + el motivo (clave i18n) para avisar al usuario.
+    Invalid {
+        line: String,
+        reason: NewFolderError,
+    },
+}
+
+/// Por qué se rechazó una línea del cuadro de nuevas carpetas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewFolderError {
+    /// Algún componente quedó vacío (p. ej. `a\\b` o termina en `\`).
+    EmptyComponent,
+    /// Un componente tiene caracteres no permitidos en Windows (`<>:"|?*` o control).
+    InvalidChars,
+    /// Un componente es `.` o `..` (no se permite navegar fuera).
+    Traversal,
+}
+
+/// Parsea el texto multilínea del cuadro "nueva(s) carpeta(s)": cada línea no vacía es una
+/// carpeta; el separador `\` (o `/`) la vuelve anidada. Devuelve un `FolderSpec` por línea
+/// (válida o con motivo), preservando el orden. No toca el disco: es puro y testeable.
+pub fn parse_new_folders(text: &str) -> Vec<FolderSpec> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|line| match validate_folder_line(line) {
+            Ok(rel) => FolderSpec::Valid(rel),
+            Err(reason) => FolderSpec::Invalid {
+                line: line.to_string(),
+                reason,
+            },
+        })
+        .collect()
+}
+
+/// Valida una línea y devuelve la ruta relativa normalizada (componentes unidos por `\`).
+fn validate_folder_line(line: &str) -> Result<String, NewFolderError> {
+    // Aceptar tanto `\` (Windows) como `/` como separador de anidamiento.
+    let parts: Vec<&str> = line.split(['\\', '/']).collect();
+    let mut clean: Vec<String> = Vec::with_capacity(parts.len());
+    for raw in parts {
+        let part = raw.trim();
+        if part.is_empty() {
+            return Err(NewFolderError::EmptyComponent);
+        }
+        if part == "." || part == ".." {
+            return Err(NewFolderError::Traversal);
+        }
+        // Caracteres prohibidos por Windows en nombres de archivo/carpeta.
+        if part
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || (c as u32) < 0x20)
+        {
+            return Err(NewFolderError::InvalidChars);
+        }
+        clean.push(part.to_string());
+    }
+    Ok(clean.join("\\"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +177,62 @@ mod tests {
         assert_eq!(
             create(PathBuf::from("d"), "x".into(), false).kind,
             OpKind::CreateFile { name: "x".into() }
+        );
+    }
+
+    #[test]
+    fn parse_new_folders_simples_y_anidadas() {
+        let specs = parse_new_folders("uno\ndos\\tres\ncuatro/cinco");
+        assert_eq!(
+            specs,
+            vec![
+                FolderSpec::Valid("uno".into()),
+                FolderSpec::Valid("dos\\tres".into()),
+                // El separador `/` se normaliza a `\`.
+                FolderSpec::Valid("cuatro\\cinco".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_new_folders_ignora_vacias_y_recorta() {
+        let specs = parse_new_folders("\n  hola  \n\n   \n");
+        assert_eq!(specs, vec![FolderSpec::Valid("hola".into())]);
+    }
+
+    #[test]
+    fn parse_new_folders_rechaza_chars_invalidos() {
+        let specs = parse_new_folders("a:b");
+        assert_eq!(
+            specs,
+            vec![FolderSpec::Invalid {
+                line: "a:b".into(),
+                reason: NewFolderError::InvalidChars
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_new_folders_rechaza_componente_vacio() {
+        let specs = parse_new_folders("a\\\\b");
+        assert_eq!(
+            specs,
+            vec![FolderSpec::Invalid {
+                line: "a\\\\b".into(),
+                reason: NewFolderError::EmptyComponent
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_new_folders_rechaza_traversal() {
+        let specs = parse_new_folders("a\\..\\b");
+        assert_eq!(
+            specs,
+            vec![FolderSpec::Invalid {
+                line: "a\\..\\b".into(),
+                reason: NewFolderError::Traversal
+            }]
         );
     }
 }

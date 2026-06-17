@@ -114,6 +114,8 @@ pub struct WorkspaceCtrl {
     pub templates: naygo_core::workspace::TemplateStore,
     /// Ventana de renombrado por lotes abierta (Fase 5): el spec en edición + los ítems objetivo.
     pub batch: Option<BatchRenameState>,
+    /// Modal "nueva(s) carpeta(s)" abierto: carpeta destino + texto multilínea en edición.
+    pub new_folder: Option<NewFolderState>,
     /// La ayuda (F1) está abierta.
     pub help_open: bool,
     /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
@@ -150,6 +152,28 @@ pub struct ContextMenuState {
     pub x: f32,
     pub y: f32,
     pub targets: Vec<PathBuf>,
+    /// Modo CARPETA: el menú se abrió en la zona vacía del panel (no sobre un archivo). El
+    /// objetivo es la carpeta del panel; el menú muestra Explorador/Nueva carpeta/Pegar en vez
+    /// de las acciones de archivo.
+    pub folder_mode: bool,
+}
+
+/// Modal "nueva(s) carpeta(s)": cada línea del `text` es una subcarpeta a crear dentro de `dir`;
+/// `\` (o `/`) la vuelve anidada. La validación vive en core (`ops::parse_new_folders`).
+pub struct NewFolderState {
+    pub dir: PathBuf,
+    pub text: String,
+}
+
+/// Mapea el entero de la UI a una terminal: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL.
+fn term_from_int(term_int: i32) -> naygo_platform::open::Terminal {
+    use naygo_platform::open::Terminal;
+    match term_int {
+        1 => Terminal::Cmd,
+        2 => Terminal::WindowsTerminal,
+        3 => Terminal::Wsl,
+        _ => Terminal::PowerShell,
+    }
 }
 
 /// En qué fase está el menú de columna (clic derecho en el header, F2).
@@ -249,6 +273,7 @@ impl WorkspaceCtrl {
             column_menu: None,
             templates: naygo_core::config::load_templates(&config_dir),
             batch: None,
+            new_folder: None,
             help_open: false,
             size_job: None,
             last_saved_fingerprint: None,
@@ -2239,7 +2264,153 @@ impl WorkspaceCtrl {
         if targets.is_empty() {
             return;
         }
-        self.context_menu = Some(ContextMenuState { x, y, targets });
+        self.context_menu = Some(ContextMenuState {
+            x,
+            y,
+            targets,
+            folder_mode: false,
+        });
+    }
+
+    /// Abre el menú contextual de la CARPETA del panel `id` en (x,y): clic derecho en la zona
+    /// vacía del panel. Marca `id` como activo (para que terminal/Explorer usen su carpeta) y
+    /// fija el objetivo en la carpeta actual de ese panel.
+    pub fn open_folder_context_menu(&mut self, id: PaneId, x: f32, y: f32) {
+        self.set_active(id);
+        let dir = self
+            .ws
+            .pane(id)
+            .filter(|p| p.purpose == PanePurpose::Files)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone());
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            self.context_menu = Some(ContextMenuState {
+                x,
+                y,
+                targets: vec![dir],
+                folder_mode: true,
+            });
+        }
+    }
+
+    /// Abrir el Explorador de Windows en la carpeta objetivo del menú (modo carpeta).
+    pub fn ctx_open_explorer(&mut self) {
+        if let Some(dir) = self.terminal_dir() {
+            let _ = naygo_platform::open::open_default(&dir);
+        }
+        self.close_context_menu();
+    }
+
+    /// Desde el menú contextual de carpeta: abrir el modal "nueva(s) carpeta(s)" en la carpeta
+    /// objetivo. Cierra el menú.
+    pub fn ctx_new_folder(&mut self) {
+        if let Some(dir) = self.terminal_dir() {
+            self.new_folder = Some(NewFolderState {
+                dir,
+                text: String::new(),
+            });
+        }
+        self.close_context_menu();
+    }
+
+    // --- Modal "nueva(s) carpeta(s)" (multilínea, `\` anidado) ---
+
+    /// Abre el modal de nuevas carpetas en la carpeta del panel activo (p. ej. desde la toolbar).
+    pub fn new_folder_open_active(&mut self) {
+        if let Some(dir) = self
+            .ws
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .filter(|d| d.is_dir())
+        {
+            self.new_folder = Some(NewFolderState {
+                dir,
+                text: String::new(),
+            });
+        }
+    }
+
+    /// Cierra el modal de nuevas carpetas sin crear nada.
+    pub fn new_folder_close(&mut self) {
+        self.new_folder = None;
+    }
+
+    /// `true` si el modal de nuevas carpetas está abierto.
+    pub fn new_folder_open(&self) -> bool {
+        self.new_folder.is_some()
+    }
+
+    /// Texto multilínea en edición del modal.
+    pub fn new_folder_text(&self) -> String {
+        self.new_folder
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default()
+    }
+
+    /// Carpeta destino del modal (para mostrarla en el encabezado).
+    pub fn new_folder_dir(&self) -> String {
+        self.new_folder
+            .as_ref()
+            .map(|s| s.dir.display().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Actualiza el texto del modal mientras el usuario escribe.
+    pub fn new_folder_set_text(&mut self, text: &str) {
+        if let Some(s) = self.new_folder.as_mut() {
+            s.text = text.to_string();
+        }
+    }
+
+    /// Resumen del texto actual: (válidas, inválidas). Para el contador y el estado del botón.
+    pub fn new_folder_counts(&self) -> (usize, usize) {
+        let specs = naygo_core::ops::parse_new_folders(&self.new_folder_text());
+        let valid = specs
+            .iter()
+            .filter(|s| matches!(s, naygo_core::ops::FolderSpec::Valid(_)))
+            .count();
+        (valid, specs.len() - valid)
+    }
+
+    /// Mensaje de estado del modal: cuántas se crearán y cuántas líneas se ignorarán por inválidas.
+    pub fn new_folder_status(&self) -> String {
+        let (valid, invalid) = self.new_folder_counts();
+        let t = |k: &str| self.config.t(k);
+        if valid == 0 && invalid == 0 {
+            return t("slint.newfolder.empty");
+        }
+        let mut parts = Vec::new();
+        if valid > 0 {
+            parts.push(t("slint.newfolder.will_create").replace("{n}", &valid.to_string()));
+        }
+        if invalid > 0 {
+            parts.push(t("slint.newfolder.invalid").replace("{n}", &invalid.to_string()));
+        }
+        parts.join(" · ")
+    }
+
+    /// Crea las carpetas válidas dentro de la carpeta destino (las inválidas se ignoran, ya
+    /// avisadas en el estado). Cada línea válida es una `OpRequest` de `CreateDir` (el motor usa
+    /// `create_dir_all`, así que las anidadas se crean enteras). Cierra el modal y refresca.
+    pub fn new_folder_apply(&mut self) {
+        let (dir, text) = match self.new_folder.as_ref() {
+            Some(s) => (s.dir.clone(), s.text.clone()),
+            None => return,
+        };
+        let specs = naygo_core::ops::parse_new_folders(&text);
+        let mut created_any = false;
+        for spec in specs {
+            if let naygo_core::ops::FolderSpec::Valid(rel) = spec {
+                let req = naygo_core::ops::create(dir.clone(), rel, true);
+                self.ops.start_op(req, "Nueva carpeta".to_string(), true);
+                created_any = true;
+            }
+        }
+        self.new_folder = None;
+        if created_any {
+            self.refresh_active();
+        }
     }
 
     /// Cierra el menú contextual.
@@ -2288,22 +2459,34 @@ impl WorkspaceCtrl {
     /// Abre una terminal (`term_int`: 0=PowerShell, 1=CMD, 2=Windows Terminal) en la carpeta
     /// seleccionada o, si no hay, en la del panel activo. Cierra el menú contextual.
     pub fn ctx_open_terminal(&mut self, term_int: i32) {
-        use naygo_platform::open::Terminal;
-        let term = match term_int {
-            1 => Terminal::Cmd,
-            2 => Terminal::WindowsTerminal,
-            _ => Terminal::PowerShell,
-        };
         if let Some(dir) = self.terminal_dir() {
-            let _ = naygo_platform::open::open_terminal(&dir, term);
+            let _ = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
         }
         self.close_context_menu();
+    }
+
+    /// Abre una terminal (`term_int`: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL) en la
+    /// carpeta del panel ACTIVO. Lo usa el combo de terminales de la toolbar.
+    pub fn terminal_active(&mut self, term_int: i32) {
+        if let Some(dir) = self
+            .ws
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .filter(|d| d.is_dir())
+        {
+            let _ = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
+        }
     }
 
     /// `true` si Windows Terminal (`wt.exe`) está disponible, para decidir si ofrecer la entrada
     /// "Abrir Windows Terminal aquí" en el menú contextual.
     pub fn windows_terminal_available(&self) -> bool {
         naygo_platform::open::windows_terminal_available()
+    }
+
+    /// `true` si WSL (`wsl.exe`) está disponible, para ofrecer la entrada "Abrir WSL aquí".
+    pub fn wsl_available(&self) -> bool {
+        naygo_platform::open::wsl_available()
     }
 
     /// Copiar la ruta del primer objetivo al portapapeles (como texto).

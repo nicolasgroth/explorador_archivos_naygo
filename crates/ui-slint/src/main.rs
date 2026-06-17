@@ -139,6 +139,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada; si no, se
     // conserva el panel único del arranque por defecto.
     ctrl.borrow_mut().load_session();
+    // Disponibilidad de terminales opcionales (Windows Terminal / WSL): se consulta una vez al
+    // arranque (escanea el PATH) para decidir qué entradas mostrar en el combo de la toolbar.
+    ui.set_has_wt(ctrl.borrow().windows_terminal_available());
+    ui.set_has_wsl(ctrl.borrow().wsl_available());
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
@@ -333,6 +337,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     y: cm.y,
                     has_native: naygo_hwnd(&ui).is_some(),
                     has_wt: c.windows_terminal_available(),
+                    folder_mode: cm.folder_mode,
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -340,9 +345,19 @@ fn main() -> Result<(), slint::PlatformError> {
                     y: 0.0,
                     has_native: false,
                     has_wt: false,
+                    folder_mode: false,
                 },
             };
             ui.set_ctx_menu(ctx);
+            // Modal "nueva(s) carpeta(s)".
+            let (nf_valid, _nf_invalid) = c.new_folder_counts();
+            ui.set_new_folder_vm(NewFolderVm {
+                active: c.new_folder_open(),
+                dir: c.new_folder_dir().into(),
+                text: c.new_folder_text().into(),
+                status: c.new_folder_status().into(),
+                can_create: nf_valid > 0,
+            });
             // Menú/editor de columna (clic derecho en el header, F2).
             let colmenu = match c.column_menu_snapshot() {
                 Some(m) => {
@@ -2099,6 +2114,79 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_row_context(move |_id, _pos, x, y| {
             ctrl.borrow_mut().open_context_menu(x, y);
+            sync_rows();
+        });
+    }
+    // Clic derecho en la zona vacía del panel → menú contextual de la carpeta (modo carpeta).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_empty_context(move |id, x, y| {
+            ctrl.borrow_mut()
+                .open_folder_context_menu(PaneId(id as u64), x, y);
+            sync_rows();
+        });
+    }
+    // Modo carpeta: abrir el Explorador de Windows en la carpeta.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_explorer(move || {
+            ctrl.borrow_mut().ctx_open_explorer();
+            sync_rows();
+        });
+    }
+    // Modo carpeta: abrir el modal "nueva(s) carpeta(s)".
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_new_folder(move || {
+            ctrl.borrow_mut().ctx_new_folder();
+            sync_rows();
+        });
+    }
+    // Modal "nueva(s) carpeta(s)": editar texto / crear / cancelar.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_new_folder_set_text(move |t| {
+            ctrl.borrow_mut().new_folder_set_text(&t);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_new_folder_create(move || {
+            ctrl.borrow_mut().new_folder_apply();
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_new_folder_close(move || {
+            ctrl.borrow_mut().new_folder_close();
+            sync_rows();
+        });
+    }
+    // Toolbar: nueva carpeta en el panel activo (abre el modal).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_new_folder_toolbar(move || {
+            ctrl.borrow_mut().new_folder_open_active();
+            sync_rows();
+        });
+    }
+    // Toolbar: combo de terminales en el panel activo (0=PS,1=CMD,2=WT,3=WSL).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_toolbar_terminal(move |term| {
+            ctrl.borrow_mut().terminal_active(term);
             sync_rows();
         });
     }
