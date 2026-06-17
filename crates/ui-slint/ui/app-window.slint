@@ -172,6 +172,11 @@ export component AppWindow inherits Window {
     title: "Naygo";
     preferred-width: 1000px;
     preferred-height: 640px;
+    // Tope de tamaño explícito y amplio: sin esto, el max-width que Slint computa del árbol de
+    // layout (toolbar + paneles) terminaba acotando el ancho de la ventana y Windows no dejaba
+    // ensancharla más allá de ~600px. Forzar un max grande deja crecer libremente.
+    max-width: 6000px;
+    max-height: 4000px;
 
     in property <string> active-path;
     in property <[PaneVm]> panes;
