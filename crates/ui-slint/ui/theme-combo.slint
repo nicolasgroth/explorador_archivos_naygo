@@ -1,0 +1,155 @@
+// Naygo — ComboBox propio, pintado 100% con el global `Theme`. El ComboBox de std-widgets
+// usa la paleta interna del estilo (Fluent), que no sigue nuestros temas: en tema claro
+// quedaba texto/fondo sin contraste (invisible). Este reemplazo expone la misma API
+// (model / current-index / current-value / selected) para sustituir sin tocar los call sites.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { Theme } from "theme.slint";
+
+export component ThemeCombo {
+    in property <[string]> model;
+    in property <bool> enabled: true;
+    in-out property <int> current-index: 0;
+    // Igual que el ComboBox de std: si se setea current-value, manda ese; si no, deriva del índice.
+    in-out property <string> current-value: root.current-index >= 0 && root.current-index < root.model.length
+        ? root.model[root.current-index]
+        : "";
+
+    // Se emite tras elegir un valor; el llamador lee current-index / current-value como en std.
+    callback selected(current-value: string);
+
+    // Altura de cada fila del desplegable y cuántas se ven antes de hacer scroll.
+    property <length> item-height: 28px;
+    property <int> visible-items: min(8, root.model.length);
+
+    min-width: 120px;
+    min-height: 30px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    forward-focus: focus-scope;
+
+    // Selecciona por índice, sincroniza current-value y notifica.
+    function pick(index: int) {
+        root.current-index = index;
+        root.current-value = root.model[index];
+        root.selected(root.current-value);
+    }
+
+    focus-scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow && root.current-index > 0) {
+                root.pick(root.current-index - 1);
+                return accept;
+            }
+            if (event.text == Key.DownArrow && root.current-index < root.model.length - 1) {
+                root.pick(root.current-index + 1);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") {
+                popup.show();
+                return accept;
+            }
+            return reject;
+        }
+
+        box := Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            background: touch.has-hover ? Theme.selection-bg.with-alpha(0.35) : Theme.row-bg;
+            border-color: root.has-focus ? Theme.accent : Theme.border;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 8px;
+                spacing: 6px;
+
+                Text {
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    text: root.current-value;
+                    color: root.enabled ? Theme.text : Theme.text-dim;
+                    overflow: elide;
+                }
+
+                // Flecha del desplegable, dibujada con un Path para no depender de fuentes/emoji.
+                Rectangle {
+                    width: 14px;
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        alignment: center;
+                        Path {
+                            width: 10px;
+                            height: 6px;
+                            fill: root.enabled ? Theme.text-dim : Theme.border;
+                            viewbox-width: 10;
+                            viewbox-height: 6;
+                            MoveTo { x: 0; y: 0; }
+                            LineTo { x: 10; y: 0; }
+                            LineTo { x: 5; y: 6; }
+                            Close { }
+                        }
+                    }
+                }
+            }
+
+            touch := TouchArea {
+                enabled: root.enabled;
+                clicked => {
+                    root.focus();
+                    popup.show();
+                }
+            }
+        }
+    }
+
+    out property <bool> has-focus: focus-scope.has-focus;
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 2px;
+        width: root.width;
+        height: root.visible-items * root.item-height + 2px;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 4px;
+
+            Flickable {
+                viewport-height: root.model.length * root.item-height;
+
+                VerticalLayout {
+                    alignment: start;
+                    for value[index] in root.model: Rectangle {
+                        height: root.item-height;
+                        background: row-touch.has-hover
+                            ? Theme.selection-bg
+                            : (index == root.current-index ? Theme.selection-bg.with-alpha(0.5) : transparent);
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            Text {
+                                vertical-alignment: center;
+                                horizontal-alignment: left;
+                                text: value;
+                                color: Theme.text;
+                                overflow: elide;
+                            }
+                        }
+
+                        row-touch := TouchArea {
+                            clicked => {
+                                root.pick(index);
+                                popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

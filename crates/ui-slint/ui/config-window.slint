@@ -2,10 +2,11 @@
 // Pegado, Apariencia (tema+idioma en caliente), Atajos, Import/Export. Cada control emite un
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
-import { ListView, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
+import { ThemeCombo } from "theme-combo.slint";
 
 // Una fila etiqueta + control (layout consistente).
 component Field inherits HorizontalLayout {
@@ -279,7 +280,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-bar-position;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
                                         current-index: root.vm.bar-position;
@@ -321,7 +322,7 @@ export component ConfigWindow inherits Rectangle {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-ops-mode;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-ops-queue, Tr.cfg-ops-parallel];
                                         current-index: root.vm.ops-mode;
@@ -368,7 +369,7 @@ export component ConfigWindow inherits Rectangle {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-theme;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.themes;
                                         current-value: root.vm.theme;
@@ -394,7 +395,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-language;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.languages;
                                         current-value: root.vm.language;
@@ -403,7 +404,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-icon-set;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.icon-sets;
                                         current-value: root.vm.icon-set;
@@ -412,7 +413,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-date-format;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
                                         current-index: root.vm.date-format;
@@ -421,7 +422,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-size-format;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
                                         current-index: root.vm.size-format;
@@ -430,7 +431,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-row-density;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-density-compact, Tr.cfg-density-comfortable];
                                         current-index: root.vm.row-density;
@@ -511,7 +512,7 @@ export component ConfigWindow inherits Rectangle {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-ops-display;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-ops-display-panel, Tr.cfg-ops-display-modal, Tr.cfg-ops-display-always];
                                         current-index: root.vm.ops-display;
@@ -520,7 +521,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-paste-image-fmt;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
                                         current-index: root.vm.paste-image-fmt;
@@ -529,7 +530,7 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 Field {
                                     label: Tr.cfg-low-power;
-                                    ComboBox {
+                                    ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-low-power-auto, Tr.cfg-low-power-always, Tr.cfg-low-power-never];
                                         current-index: root.vm.low-power-mode;

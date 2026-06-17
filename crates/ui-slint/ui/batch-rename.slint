@@ -6,7 +6,8 @@
 // el estado de cada fila coloreado. "Aplicar" se deshabilita si el preview no es aplicable
 // (filas inválidas/colisión o ningún cambio). Toda la lógica (preview, colisiones) vive en
 // core::batch_rename; aquí solo se emiten callbacks con los borradores y se pinta el resultado.
-import { LineEdit, CheckBox, ComboBox, ScrollView, ListView } from "std-widgets.slint";
+import { LineEdit, CheckBox, ScrollView, ListView } from "std-widgets.slint";
+import { ThemeCombo } from "theme-combo.slint";
 import { BatchRenameVm, BatchRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -130,7 +131,7 @@ export component BatchRename inherits Rectangle {
             }
             BrField {
                 label: Tr.batch-case;
-                ComboBox {
+                ThemeCombo {
                     width: 200px;
                     model: [Tr.batch-case-none, Tr.batch-case-lower, Tr.batch-case-upper, Tr.batch-case-title];
                     current-index: root.vm.case;
