@@ -286,6 +286,12 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.is_favorite = fav;
                             changed = true;
                         }
+                        // Aviso "sin coincidencias": filtro activo que vació la vista (F2).
+                        let nm = c.no_matches(id);
+                        if pv.no_matches != nm {
+                            pv.no_matches = nm;
+                            changed = true;
+                        }
                     }
                     // Inspector/Preview son structs sueltas: se setean según el tipo.
                     if purpose == Some(PanePurpose::Inspector) {
@@ -335,6 +341,60 @@ fn main() -> Result<(), slint::PlatformError> {
                 },
             };
             ui.set_ctx_menu(ctx);
+            // Menú/editor de columna (clic derecho en el header, F2).
+            let colmenu = match c.column_menu_snapshot() {
+                Some(m) => {
+                    let no_ext = ui.global::<Tr>().get_colfilter_no_ext();
+                    let exts: Vec<ExtRowVm> = m
+                        .exts
+                        .into_iter()
+                        .map(|e| {
+                            let label = if e.ext.is_empty() {
+                                no_ext.clone()
+                            } else {
+                                SharedString::from(e.ext.as_str())
+                            };
+                            ExtRowVm {
+                                ext: SharedString::from(e.ext.as_str()),
+                                label,
+                                count: e.count as i32,
+                                checked: e.checked,
+                            }
+                        })
+                        .collect();
+                    ColumnMenuVm {
+                        active: true,
+                        x: m.x,
+                        y: m.y,
+                        kind: m.kind,
+                        label: SharedString::from(m.label.as_str()),
+                        mode: m.mode,
+                        has_filter: m.has_filter,
+                        can_hide: m.can_hide,
+                        text_draft: SharedString::from(m.text_draft.as_str()),
+                        text_case: m.text_case,
+                        min_draft: SharedString::from(m.min_draft.as_str()),
+                        max_draft: SharedString::from(m.max_draft.as_str()),
+                        exts: ModelRc::from(Rc::new(VecModel::from(exts))),
+                    }
+                }
+                None => ColumnMenuVm {
+                    active: false,
+                    x: 0.0,
+                    y: 0.0,
+                    kind: 0,
+                    label: SharedString::new(),
+                    mode: 0,
+                    has_filter: false,
+                    can_hide: false,
+                    text_draft: SharedString::new(),
+                    text_case: false,
+                    min_draft: SharedString::new(),
+                    max_draft: SharedString::new(),
+                    exts: ModelRc::from(Rc::new(VecModel::<ExtRowVm>::default())),
+                },
+            };
+            ui.set_column_menu(colmenu);
         }
     };
 
@@ -414,6 +474,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             columns: ModelRc::from(pm.columns.clone()),
                             col_menu: ModelRc::from(pm.col_menu.clone()),
                             is_favorite: ctrl.borrow().is_pane_dir_favorite(*id),
+                            no_matches: ctrl.borrow().no_matches(*id),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -821,6 +882,143 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_column_resize(move |id, kind, w| {
             ctrl.borrow_mut().column_resize(PaneId(id as u64), kind, w);
+            sync_rows();
+        });
+    }
+    // --- Menú/editor de columna (clic derecho en el header, F2) ---
+    // Abrir el menú en (x,y) para la columna `kind` del panel `id`.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_column_context(move |id, kind, x, y| {
+            ctrl.borrow_mut()
+                .column_menu_open(PaneId(id as u64), kind, x, y);
+            sync_rows();
+        });
+    }
+    // Ordenar ascendente desde el menú.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_sort_asc(move || {
+            ctrl.borrow_mut().column_menu_sort(true);
+            sync_rows();
+        });
+    }
+    // Ordenar descendente desde el menú.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_sort_desc(move || {
+            ctrl.borrow_mut().column_menu_sort(false);
+            sync_rows();
+        });
+    }
+    // Pasar el menú a modo editor de filtro.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_open_filter(move || {
+            ctrl.borrow_mut().column_menu_to_filter();
+            sync_rows();
+        });
+    }
+    // Quitar el filtro de la columna del menú.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_clear_filter(move || {
+            ctrl.borrow_mut().column_menu_clear_filter();
+            sync_rows();
+        });
+    }
+    // Ocultar la columna del menú.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_hide(move || {
+            ctrl.borrow_mut().column_menu_hide();
+            sync_rows();
+        });
+    }
+    // Mover la columna una posición a la izquierda.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_move_left(move || {
+            ctrl.borrow_mut().column_menu_move(-1);
+            sync_rows();
+        });
+    }
+    // Mover la columna una posición a la derecha.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_move_right(move || {
+            ctrl.borrow_mut().column_menu_move(1);
+            sync_rows();
+        });
+    }
+    // Editor de filtro: borrador de texto.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_set_text(move |t| {
+            ctrl.borrow_mut().column_filter_set_text(t.as_str());
+            sync_rows();
+        });
+    }
+    // Editor de filtro: alternar sensibilidad a mayúsculas.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_toggle_case(move || {
+            ctrl.borrow_mut().column_filter_toggle_case();
+            sync_rows();
+        });
+    }
+    // Editor de filtro: borrador del extremo mínimo (rango).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_set_min(move |t| {
+            ctrl.borrow_mut().column_filter_set_range(false, t.as_str());
+            sync_rows();
+        });
+    }
+    // Editor de filtro: borrador del extremo máximo (rango).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_set_max(move |t| {
+            ctrl.borrow_mut().column_filter_set_range(true, t.as_str());
+            sync_rows();
+        });
+    }
+    // Editor de filtro: marcar/desmarcar una extensión.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_toggle_ext(move |e| {
+            ctrl.borrow_mut().column_filter_toggle_ext(e.as_str());
+            sync_rows();
+        });
+    }
+    // Editor de filtro: aplicar (cierra el menú; la vista se refiltra sola).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colfilter_apply(move || {
+            ctrl.borrow_mut().column_filter_apply();
+            sync_rows();
+        });
+    }
+    // Cerrar el menú (clic fuera).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_colmenu_dismiss(move || {
+            ctrl.borrow_mut().column_menu_close();
             sync_rows();
         });
     }
@@ -2070,6 +2268,8 @@ fn to_column_vm(c: bridge::ColumnInfo) -> ColumnVm {
         label: SharedString::from(c.label.as_str()),
         width: c.width,
         align_right: c.align_right,
+        sort_dir: c.sort_dir,
+        has_filter: c.has_filter,
     }
 }
 

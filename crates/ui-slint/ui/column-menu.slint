@@ -1,0 +1,227 @@
+// Naygo — menú/editor de columna (clic derecho en el encabezado, F2). Copyright (c) 2026
+// Nicolás Groth / ISGroth. MIT License.
+//
+// Overlay a nivel AppWindow: un velo a pantalla completa cierra al clic fuera; una tarjeta
+// posicionada en el punto del clic muestra, según `vm.mode`, el MENÚ de acciones (ordenar /
+// filtrar / quitar filtro / ocultar) o el EDITOR DE FILTRO. El editor cambia de forma según
+// `vm.kind`: texto (Name), tipos con conteo (Extension), rango (Size/fechas). Toda la lógica
+// (parseo, aplicar) vive en el controlador; aquí solo se emiten callbacks con los borradores.
+import { LineEdit, CheckBox, ListView } from "std-widgets.slint";
+import { ColumnMenuVm, ExtRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 26px;
+    background: t.has-hover && root.enabled ? Theme.selection-bg : transparent;
+    border-radius: 3px;
+    Text {
+        text: root.label;
+        color: root.enabled ? Theme.text : Theme.text-dim;
+        vertical-alignment: center;
+        x: 10px;
+    }
+    t := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ColumnMenu inherits Rectangle {
+    in property <ColumnMenuVm> vm;
+    // Acciones del menú:
+    callback sort-asc();
+    callback sort-desc();
+    callback open-filter();
+    callback clear-filter();
+    callback hide-column();
+    callback move-left();
+    callback move-right();
+    // Editor de filtro:
+    callback set-text(string);
+    callback toggle-case();
+    callback set-min(string);
+    callback set-max(string);
+    callback toggle-ext(string);
+    callback apply();
+    callback dismiss();
+
+    visible: root.vm.active;
+    // Velo a pantalla completa: clic fuera cierra.
+    veil := TouchArea {
+        clicked => { root.dismiss(); }
+    }
+    // Tarjeta posicionada en el clic (acotada para no salirse por la derecha/abajo).
+    Rectangle {
+        x: min(root.vm.x, root.width - self.width - 4px);
+        y: min(root.vm.y, root.height - self.height - 4px);
+        width: 240px;
+        height: card.preferred-height + 12px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        TouchArea {} // captura clics dentro de la tarjeta (no cierra)
+        card := VerticalLayout {
+            padding: 6px;
+            spacing: 3px;
+
+            // --- MODO MENÚ (mode 0): lista de acciones ---
+            if root.vm.mode == 0: VerticalLayout {
+                spacing: 1px;
+                MenuRow { label: Tr.colmenu-sort-asc; clicked => { root.sort-asc(); } }
+                MenuRow { label: Tr.colmenu-sort-desc; clicked => { root.sort-desc(); } }
+                Rectangle { height: 1px; background: Theme.border; }
+                MenuRow { label: Tr.colmenu-filter; clicked => { root.open-filter(); } }
+                MenuRow {
+                    label: Tr.colmenu-clear-filter;
+                    enabled: root.vm.has-filter;
+                    clicked => { root.clear-filter(); }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                MenuRow { label: Tr.colmenu-move-left; clicked => { root.move-left(); } }
+                MenuRow { label: Tr.colmenu-move-right; clicked => { root.move-right(); } }
+                Rectangle { height: 1px; background: Theme.border; }
+                MenuRow {
+                    label: Tr.colmenu-hide;
+                    enabled: root.vm.can-hide;
+                    clicked => { root.hide-column(); }
+                }
+            }
+
+            // --- MODO FILTRO (mode 1): editor según el tipo de columna ---
+            if root.vm.mode == 1: VerticalLayout {
+                spacing: 5px;
+                // Título: nombre de la columna.
+                Text {
+                    text: root.vm.label;
+                    color: Theme.text-dim;
+                    font-weight: 700;
+                    font-size: 12px;
+                }
+
+                // Texto (Name, kind 0): contiene + distinguir mayúsculas.
+                if root.vm.kind == 0: VerticalLayout {
+                    spacing: 5px;
+                    LineEdit {
+                        placeholder-text: Tr.colfilter-contains;
+                        text: root.vm.text-draft;
+                        edited(t) => { root.set-text(t); }
+                        accepted => { root.apply(); }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        CheckBox {
+                            checked: root.vm.text-case;
+                            toggled => { root.toggle-case(); }
+                        }
+                        Text {
+                            text: Tr.colfilter-case;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Tipos (Extension, kind 1): lista marcable con conteo.
+                if root.vm.kind == 1: Rectangle {
+                    height: min(root.vm.exts.length * 24px + 4px, 180px);
+                    background: Theme.panel-bg;
+                    border-radius: 4px;
+                    ListView {
+                        for e[i] in root.vm.exts: Rectangle {
+                            height: 24px;
+                            background: ext-touch.has-hover ? Theme.selection-bg : transparent;
+                            border-radius: 3px;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                spacing: 6px;
+                                Text {
+                                    text: e.checked ? "✓" : "  ";
+                                    color: Theme.highlight;
+                                    width: 14px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: e.label;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: e.count;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            ext-touch := TouchArea {
+                                clicked => { root.toggle-ext(e.ext); }
+                            }
+                        }
+                    }
+                }
+
+                // Rango (Size kind 2, fechas kind 3/4): mínimo / máximo de texto.
+                if root.vm.kind >= 2: VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: Tr.colfilter-min;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                    }
+                    LineEdit {
+                        placeholder-text: root.vm.kind == 2 ? Tr.colfilter-size-hint : Tr.colfilter-date-hint;
+                        text: root.vm.min-draft;
+                        edited(t) => { root.set-min(t); }
+                        accepted => { root.apply(); }
+                    }
+                    Text {
+                        text: Tr.colfilter-max;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                    }
+                    LineEdit {
+                        placeholder-text: root.vm.kind == 2 ? Tr.colfilter-size-hint : Tr.colfilter-date-hint;
+                        text: root.vm.max-draft;
+                        edited(t) => { root.set-max(t); }
+                        accepted => { root.apply(); }
+                    }
+                }
+
+                // Botonera: Aplicar (acento) + Limpiar (quita el filtro).
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle {
+                        height: 28px;
+                        horizontal-stretch: 1;
+                        background: apply-touch.has-hover ? Theme.accent.darker(10%) : Theme.accent;
+                        border-radius: 4px;
+                        Text {
+                            text: Tr.colfilter-apply;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        apply-touch := TouchArea { clicked => { root.apply(); } }
+                    }
+                    Rectangle {
+                        height: 28px;
+                        width: 80px;
+                        background: clear-touch.has-hover ? Theme.row-alt-bg : Theme.panel-bg;
+                        border-radius: 4px;
+                        Text {
+                            text: Tr.colfilter-clear;
+                            color: Theme.text;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        clear-touch := TouchArea { clicked => { root.clear-filter(); } }
+                    }
+                }
+            }
+        }
+    }
+}

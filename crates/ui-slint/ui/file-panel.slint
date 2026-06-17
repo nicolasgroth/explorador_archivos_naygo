@@ -12,22 +12,52 @@ import { Theme } from "theme.slint";
 component HeaderCell inherits Rectangle {
     in property <string> text;
     in property <bool> align-right: false;
+    in property <int> sort-dir: 0;      // 0=ninguno 1=asc 2=desc (F2)
+    in property <bool> has-filter: false;// embudo si hay filtro activo (F2)
     callback clicked();
+    // Clic derecho → abre el menú de columna (ordenar/filtrar/ocultar) (F2).
+    callback context-menu(length, length);
     // Redimensionar: `delta` en px arrastrados sobre el asa del borde derecho (6C).
     callback resize(length);
     background: hcell-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
-    Text {
-        text: root.text;
-        color: Theme.text-dim;
-        font-weight: 700;
-        vertical-alignment: center;
-        horizontal-alignment: root.align-right ? right : left;
+    HorizontalLayout {
         x: 6px;
         width: parent.width - 12px;
+        spacing: 3px;
+        // Embudo a la izquierda cuando hay filtro activo en esta columna.
+        if root.has-filter: Text {
+            text: "⏷";
+            color: Theme.accent;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: Theme.text-dim;
+            font-weight: 700;
+            vertical-alignment: center;
+            horizontal-alignment: root.align-right ? right : left;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        // Indicador de orden ▲/▼ a la derecha de la etiqueta.
+        if root.sort-dir != 0: Text {
+            text: root.sort-dir == 1 ? "▲" : "▼";
+            color: Theme.accent;
+            font-size: 10px;
+            vertical-alignment: center;
+        }
     }
     hcell-touch := TouchArea {
         // El asa de resize ocupa los últimos 6px del borde derecho; el resto ordena al hacer clic.
         width: parent.width - 6px;
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                root.context-menu(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y);
+            }
+        }
         clicked => {
             root.clicked();
         }
@@ -69,6 +99,7 @@ export component FilePanel inherits FocusScope {
     in property <string> edit-text;          // texto del editor (lo controla Rust)
     in property <[string]> suggestions;      // autocompletado del editor
     in property <bool> is-favorite;          // la carpeta actual está en favoritos (★ llena)
+    in property <bool> no-matches;           // filtro activo que vació la vista → aviso (F2)
     callback fav-toggle(int);                // (pane-id) anclar/quitar la carpeta de favoritos
     callback copy-path(int);                 // (pane-id) copiar la ruta al portapapeles
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
@@ -93,6 +124,7 @@ export component FilePanel inherits FocusScope {
     callback column-toggle(int, int);        // (pane-id, kind) mostrar/ocultar columna
     callback column-move(int, int, int);     // (pane-id, from, to) reordenar columnas
     callback column-resize(int, int, length);// (pane-id, kind, ancho) redimensionar
+    callback column-context(int, int, length, length); // (pane-id, kind, x, y) clic derecho en header (F2)
     // Menú de columnas abierto (clic en "Columnas…"): muestra los toggles.
     property <bool> col-menu-open: false;
     callback activate(int);                  // (pane-id) al interactuar
@@ -258,8 +290,13 @@ export component FilePanel inherits FocusScope {
                     width: col.width;
                     text: col.label;
                     align-right: col.align-right;
+                    sort-dir: col.sort-dir;
+                    has-filter: col.has-filter;
                     clicked => {
                         root.sort-by-kind(root.pane-id, col.kind);
+                    }
+                    context-menu(x, y) => {
+                        root.column-context(root.pane-id, col.kind, x, y);
                     }
                     resize(delta) => {
                         root.column-resize(root.pane-id, col.kind, col.width + delta);
@@ -462,6 +499,17 @@ export component FilePanel inherits FocusScope {
                         clicked => { root.column-toggle(root.pane-id, item.kind); }
                     }
                 }
+            }
+        }
+        // Aviso "sin coincidencias" (F2): centrado sobre la lista cuando un filtro la vació.
+        if root.no-matches: Rectangle {
+            y: parent.height / 2;
+            height: 1px;
+            Text {
+                text: Tr.no-matches;
+                color: Theme.text-dim;
+                font-size: 13px;
+                horizontal-alignment: center;
             }
         }
     }

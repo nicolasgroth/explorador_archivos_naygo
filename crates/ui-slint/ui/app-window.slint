@@ -1,8 +1,9 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, NavRow } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
+import { ColumnMenu } from "column-menu.slint";
 import { TreePanel } from "tree-panel.slint";
 import { InspectorPanel } from "inspector-panel.slint";
 import { HistoryPanel } from "history-panel.slint";
@@ -206,6 +207,23 @@ export component AppWindow inherits Window {
     callback column-toggle(int, int);     // (pane-id, kind) mostrar/ocultar columna
     callback column-move(int, int, int);  // (pane-id, from, to) reordenar columnas
     callback column-resize(int, int, length); // (pane-id, kind, ancho) redimensionar
+    // Menú/editor de columna (clic derecho en el header, F2).
+    callback column-context(int, int, length, length); // (pane-id, kind, x, y) abrir menú
+    in property <ColumnMenuVm> column-menu;
+    callback colmenu-sort-asc();
+    callback colmenu-sort-desc();
+    callback colmenu-open-filter();
+    callback colmenu-clear-filter();
+    callback colmenu-hide();
+    callback colmenu-move-left();
+    callback colmenu-move-right();
+    callback colfilter-set-text(string);
+    callback colfilter-toggle-case();
+    callback colfilter-set-min(string);
+    callback colfilter-set-max(string);
+    callback colfilter-toggle-ext(string);
+    callback colfilter-apply();
+    callback colmenu-dismiss();
     callback activate(int);
     callback key(string, bool, bool, bool);
     callback split-drag(int, length, length);
@@ -512,6 +530,7 @@ export component AppWindow inherits Window {
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";
                         suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
                         is-favorite: p.is-favorite;
+                        no-matches: p.no-matches;
                         fav-toggle(id) => { root.fav-toggle(id); }
                         copy-path(id) => { root.copy-path(id); }
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
@@ -535,6 +554,7 @@ export component AppWindow inherits Window {
                         column-toggle(id, kind) => { root.column-toggle(id, kind); }
                         column-move(id, from, to) => { root.column-move(id, from, to); }
                         column-resize(id, kind, w) => { root.column-resize(id, kind, w); }
+                        column-context(id, kind, cx, cy) => { root.column-context(id, kind, cx, cy); }
                         activate(id) => { root.activate(id); }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
                     }
@@ -713,6 +733,27 @@ export component AppWindow inherits Window {
         copy-path() => { root.ctx-copy-path(); }
         native() => { root.ctx-native(); }
         dismiss() => { root.ctx-dismiss(); }
+    }
+
+    // Menú/editor de columna (clic derecho en el encabezado, F2).
+    ColumnMenu {
+        width: 100%;
+        height: 100%;
+        vm: root.column-menu;
+        sort-asc() => { root.colmenu-sort-asc(); }
+        sort-desc() => { root.colmenu-sort-desc(); }
+        open-filter() => { root.colmenu-open-filter(); }
+        clear-filter() => { root.colmenu-clear-filter(); }
+        hide-column() => { root.colmenu-hide(); }
+        move-left() => { root.colmenu-move-left(); }
+        move-right() => { root.colmenu-move-right(); }
+        set-text(t) => { root.colfilter-set-text(t); }
+        toggle-case() => { root.colfilter-toggle-case(); }
+        set-min(t) => { root.colfilter-set-min(t); }
+        set-max(t) => { root.colfilter-set-max(t); }
+        toggle-ext(e) => { root.colfilter-toggle-ext(e); }
+        apply() => { root.colfilter-apply(); }
+        dismiss() => { root.colmenu-dismiss(); }
     }
 
     // Ventana de configuración (overlay modal). Visible solo si config-open.

@@ -103,6 +103,10 @@ pub struct ColumnInfo {
     pub label: String,
     pub width: f32,
     pub align_right: bool,
+    /// Indicador de orden en esta columna: 0=ninguno, 1=ascendente (▲), 2=descendente (▼).
+    pub sort_dir: i32,
+    /// Esta columna tiene un filtro activo (se pinta un embudo en el header).
+    pub has_filter: bool,
 }
 
 /// Mapea `ColumnKind` a un entero estable para Slint (coincide con el orden del enum).
@@ -135,6 +139,9 @@ pub fn columns_info(
     label_of: &dyn Fn(naygo_core::columns::ColumnKind) -> String,
 ) -> Vec<ColumnInfo> {
     use naygo_core::columns::ColumnKind;
+    // Clave de orden activa del panel → para marcar la columna ordenada con ▲/▼.
+    let sort_key = f.sort.key;
+    let sort_asc = f.sort.ascending;
     f.table
         .visible_columns()
         .map(|c| ColumnInfo {
@@ -142,8 +149,43 @@ pub fn columns_info(
             label: label_of(c.kind),
             width: c.width,
             align_right: c.kind == ColumnKind::Size,
+            sort_dir: if naygo_core::columns::sort_key_of(c.kind) == sort_key {
+                if sort_asc {
+                    1
+                } else {
+                    2
+                }
+            } else {
+                0
+            },
+            has_filter: f.table.filters.contains_key(&c.kind),
         })
         .collect()
+}
+
+/// Una extensión marcable del editor de filtro de tipos (espejo de `ExtRowVm`, F2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExtRowInfo {
+    pub ext: String,
+    pub count: usize,
+    pub checked: bool,
+}
+
+/// Instantánea del menú/editor de columna para la UI (espejo de `ColumnMenuVm`, F2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnMenuInfo {
+    pub x: f32,
+    pub y: f32,
+    pub kind: i32,
+    pub label: String,
+    pub mode: i32,
+    pub has_filter: bool,
+    pub can_hide: bool,
+    pub text_draft: String,
+    pub text_case: bool,
+    pub min_draft: String,
+    pub max_draft: String,
+    pub exts: Vec<ExtRowInfo>,
 }
 
 /// Una entrada del menú "Columnas…" (espejo de `ColumnToggleVm`): TODAS las columnas con su
@@ -522,6 +564,32 @@ mod tests {
     #[test]
     fn historial_vacio_da_filas_vacias() {
         assert!(history_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn columns_info_marca_orden_y_filtro() {
+        use naygo_core::columns::ColumnKind;
+        use naygo_core::filter::ColumnFilter;
+        let mut f = FilePaneState::new(PathBuf::from("C:/x"));
+        // Orden por defecto: Name ascendente (dirs_first no cambia la clave).
+        f.sort.key = naygo_core::fs_model::SortKey::Size;
+        f.sort.ascending = false;
+        f.table.set_filter(
+            ColumnKind::Extension,
+            ColumnFilter::Text {
+                contains: "txt".into(),
+                case_sensitive: false,
+            },
+        );
+        let label_of = |k: ColumnKind| format!("{k:?}");
+        let cols = columns_info(&f, &label_of);
+        let size = cols.iter().find(|c| c.kind == 2).unwrap();
+        assert_eq!(size.sort_dir, 2, "Size ordenada descendente → ▼");
+        let ext = cols.iter().find(|c| c.kind == 1).unwrap();
+        assert_eq!(ext.sort_dir, 0, "Extension no es la columna de orden");
+        assert!(ext.has_filter, "Extension tiene filtro activo");
+        let name = cols.iter().find(|c| c.kind == 0).unwrap();
+        assert!(!name.has_filter, "Name sin filtro");
     }
 
     #[test]

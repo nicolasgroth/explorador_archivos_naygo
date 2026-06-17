@@ -59,6 +59,25 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_ctx_copy_names(c.t("slint.ctx.copy_names").into());
     tr.set_ctx_copy_path(c.t("slint.ctx.copy_path").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    // Menú/editor de columna (F2).
+    tr.set_colmenu_sort_asc(c.t("slint.colmenu.sort_asc").into());
+    tr.set_colmenu_sort_desc(c.t("slint.colmenu.sort_desc").into());
+    tr.set_colmenu_filter(c.t("slint.colmenu.filter").into());
+    tr.set_colmenu_clear_filter(c.t("slint.colmenu.clear_filter").into());
+    tr.set_colmenu_hide(c.t("slint.colmenu.hide").into());
+    tr.set_colmenu_move_left(c.t("slint.colmenu.move_left").into());
+    tr.set_colmenu_move_right(c.t("slint.colmenu.move_right").into());
+    tr.set_colfilter_contains(c.t("slint.colfilter.contains").into());
+    tr.set_colfilter_case(c.t("slint.colfilter.case").into());
+    tr.set_colfilter_min(c.t("slint.colfilter.min").into());
+    tr.set_colfilter_max(c.t("slint.colfilter.max").into());
+    tr.set_colfilter_types(c.t("slint.colfilter.types").into());
+    tr.set_colfilter_no_ext(c.t("slint.colfilter.no_ext").into());
+    tr.set_colfilter_apply(c.t("slint.colfilter.apply").into());
+    tr.set_colfilter_clear(c.t("slint.colfilter.clear").into());
+    tr.set_colfilter_size_hint(c.t("slint.colfilter.size_hint").into());
+    tr.set_colfilter_date_hint(c.t("slint.colfilter.date_hint").into());
+    tr.set_no_matches(c.t("slint.no_matches").into());
     // Paneles especiales.
     tr.set_tree_title(c.t("pane.tree.title").into());
     tr.set_inspector_title(c.t("pane.inspector.title").into());

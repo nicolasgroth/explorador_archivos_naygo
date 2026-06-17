@@ -20,6 +20,8 @@ export struct ColumnVm {
     label: string,
     width: length,
     align-right: bool,     // Size se alinea a la derecha
+    sort-dir: int,         // orden en esta columna: 0=ninguno 1=asc (▲) 2=desc (▼) (F2)
+    has-filter: bool,      // hay un filtro activo en esta columna → embudo (F2)
 }
 
 // Una entrada del menú "Columnas…" (6C): TODAS las columnas con su estado de visibilidad.
@@ -28,6 +30,35 @@ export struct ColumnToggleVm {
     label: string,
     visible: bool,
     fixed: bool,           // Name no se puede ocultar (toggle deshabilitado)
+}
+
+// Una extensión marcable en el editor de filtro de tipos (F2): la extensión ("" = sin
+// extensión, se muestra como "(sin extensión)"), su conteo en la carpeta, y si está marcada.
+export struct ExtRowVm {
+    ext: string,
+    label: string,
+    count: int,
+    checked: bool,
+}
+
+// Estado del menú/editor de columna (clic derecho en el header, F2). `mode`: 0=menú de acciones,
+// 1=editor de filtro. El `kind` elige qué editor de filtro mostrar. Los campos de borrador son
+// el espejo de ColumnMenuState del controlador.
+export struct ColumnMenuVm {
+    active: bool,
+    x: length,
+    y: length,
+    kind: int,             // 0=Name 1=Extension 2=Size 3=Modified 4=Created
+    label: string,         // etiqueta de la columna (para el título del editor)
+    mode: int,             // 0=menú 1=filtro
+    has-filter: bool,      // la columna ya tiene un filtro (habilita "quitar filtro")
+    can-hide: bool,        // Name no se puede ocultar
+    // Borradores del editor de filtro:
+    text-draft: string,    // filtro de texto (Name)
+    text-case: bool,       // sensible a mayúsculas
+    min-draft: string,     // extremo mínimo (Size/fecha)
+    max-draft: string,     // extremo máximo (Size/fecha)
+    exts: [ExtRowVm],      // extensiones marcables (Extension)
 }
 
 // Fila de navegación (favorito o reciente): etiqueta visible + ruta completa.
@@ -211,6 +242,7 @@ export struct PaneVm {
     columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
     col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
     is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)
+    no-matches: bool,         // Files: hay filtro activo pero la vista quedó vacía (F2)
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)

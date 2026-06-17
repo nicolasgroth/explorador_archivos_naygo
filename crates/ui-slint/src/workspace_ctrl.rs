@@ -18,6 +18,7 @@ use naygo_core::workspace::layout::{
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const PAGE_ROWS: usize = 20;
 
@@ -96,6 +97,8 @@ pub struct WorkspaceCtrl {
     pub shift_down: bool,
     /// Menú contextual abierto (clic derecho): posición (x,y en la ventana) y rutas objetivo.
     pub context_menu: Option<ContextMenuState>,
+    /// Menú/editor de columna abierto (clic derecho en el header, F2): panel, columna y posición.
+    pub column_menu: Option<ColumnMenuState>,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -127,6 +130,34 @@ pub struct ContextMenuState {
     pub x: f32,
     pub y: f32,
     pub targets: Vec<PathBuf>,
+}
+
+/// En qué fase está el menú de columna (clic derecho en el header, F2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColumnMenuMode {
+    /// Lista de acciones (ordenar asc/desc, filtrar…, quitar filtro, ocultar).
+    Menu,
+    /// Editor de filtro abierto para esta columna (su tipo lo decide el `ColumnKind`).
+    Filter,
+}
+
+/// Estado del menú/editor de columna abierto: a qué panel y columna pertenece, dónde se pinta
+/// y en qué fase está. El editor de filtro lee/escribe los campos de borrador de abajo.
+#[derive(Clone, Debug)]
+pub struct ColumnMenuState {
+    pub pane: PaneId,
+    pub kind: naygo_core::columns::ColumnKind,
+    pub x: f32,
+    pub y: f32,
+    pub mode: ColumnMenuMode,
+    /// Borrador del filtro de TEXTO (Name): subcadena + sensible a mayúsculas.
+    pub text_draft: String,
+    pub text_case: bool,
+    /// Borrador del filtro de RANGO (Size/fechas) como texto editable; se parsea al aplicar.
+    pub min_draft: String,
+    pub max_draft: String,
+    /// Borrador del filtro de EXTENSIONES: extensiones marcadas ("" = sin extensión).
+    pub ext_checked: std::collections::BTreeSet<String>,
 }
 
 impl WorkspaceCtrl {
@@ -170,6 +201,7 @@ impl WorkspaceCtrl {
             ctrl_down: false,
             shift_down: false,
             context_menu: None,
+            column_menu: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -539,6 +571,292 @@ impl WorkspaceCtrl {
             f.table.set_width(kind, width);
         }
         self.maybe_persist_session();
+    }
+
+    /// Huso local en segundos (para formatear/parsear fechas del filtro de fecha).
+    fn tz_offset_secs(&self) -> i64 {
+        naygo_platform::time::local_utc_offset_secs()
+    }
+
+    // --- Menú/editor de columna (clic derecho en el header, F2) ---
+
+    /// Abre el menú de columna en (x,y) para la columna `kind_int` del panel `id`. Siembra los
+    /// borradores del editor de filtro con el filtro YA activo de esa columna (si lo hay).
+    pub fn column_menu_open(&mut self, id: PaneId, kind_int: i32, x: f32, y: f32) {
+        use naygo_core::filter::ColumnFilter;
+        let kind = crate::bridge::column_kind_from_int(kind_int);
+        // Cerrar otros overlays para no apilarlos.
+        self.context_menu = None;
+        let mut st = ColumnMenuState {
+            pane: id,
+            kind,
+            x,
+            y,
+            mode: ColumnMenuMode::Menu,
+            text_draft: String::new(),
+            text_case: false,
+            min_draft: String::new(),
+            max_draft: String::new(),
+            ext_checked: std::collections::BTreeSet::new(),
+        };
+        // Sembrar desde el filtro activo (si existe) para editar en vez de empezar de cero.
+        if let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+            if let Some(filter) = f.table.filters.get(&kind) {
+                match filter {
+                    ColumnFilter::Text {
+                        contains,
+                        case_sensitive,
+                    } => {
+                        st.text_draft = contains.clone();
+                        st.text_case = *case_sensitive;
+                    }
+                    ColumnFilter::Extensions(set) => st.ext_checked = set.clone(),
+                    ColumnFilter::SizeRange { min, max } => {
+                        if let Some(m) = min {
+                            st.min_draft = m.to_string();
+                        }
+                        if let Some(m) = max {
+                            st.max_draft = m.to_string();
+                        }
+                    }
+                    ColumnFilter::DateRange { from, to } => {
+                        if let Some(t) = from {
+                            st.min_draft = fmt_date_ymd(*t, self.tz_offset_secs());
+                        }
+                        if let Some(t) = to {
+                            st.max_draft = fmt_date_ymd(*t, self.tz_offset_secs());
+                        }
+                    }
+                }
+            }
+        }
+        self.column_menu = Some(st);
+    }
+
+    /// Cierra el menú/editor de columna.
+    pub fn column_menu_close(&mut self) {
+        self.column_menu = None;
+    }
+
+    /// Instantánea del menú de columna para la UI (espejo de `ColumnMenuVm`). `None` si no hay
+    /// menú abierto. Incluye etiqueta, modo, si la columna tiene filtro, si se puede ocultar, los
+    /// borradores y —para Extension— las extensiones marcables con su conteo y estado.
+    pub fn column_menu_snapshot(&self) -> Option<crate::bridge::ColumnMenuInfo> {
+        let st = self.column_menu.as_ref()?;
+        let has_filter = self
+            .ws
+            .pane(st.pane)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.table.filters.contains_key(&st.kind))
+            .unwrap_or(false);
+        let exts = if st.kind == naygo_core::columns::ColumnKind::Extension {
+            self.column_filter_ext_counts()
+                .into_iter()
+                .map(|(ext, count)| crate::bridge::ExtRowInfo {
+                    checked: st.ext_checked.contains(&ext),
+                    ext,
+                    count,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some(crate::bridge::ColumnMenuInfo {
+            x: st.x,
+            y: st.y,
+            kind: crate::bridge::column_kind_to_int(st.kind),
+            label: self.column_label(st.kind),
+            mode: if st.mode == ColumnMenuMode::Filter {
+                1
+            } else {
+                0
+            },
+            has_filter,
+            can_hide: st.kind != naygo_core::columns::ColumnKind::Name,
+            text_draft: st.text_draft.clone(),
+            text_case: st.text_case,
+            min_draft: st.min_draft.clone(),
+            max_draft: st.max_draft.clone(),
+            exts,
+        })
+    }
+
+    /// Pasa el menú de columna a modo editor de filtro (siembra ya hecha al abrir).
+    pub fn column_menu_to_filter(&mut self) {
+        if let Some(st) = self.column_menu.as_mut() {
+            st.mode = ColumnMenuMode::Filter;
+        }
+    }
+
+    /// Ordena por la columna del menú en una dirección explícita (true = ascendente). Cierra.
+    pub fn column_menu_sort(&mut self, ascending: bool) {
+        let Some(st) = self.column_menu.clone() else {
+            return;
+        };
+        let key = naygo_core::columns::sort_key_of(st.kind);
+        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
+            f.sort.key = key;
+            f.sort.ascending = ascending;
+            let spec = f.sort;
+            naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        }
+        self.column_menu = None;
+    }
+
+    /// Quita el filtro de la columna del menú. Cierra.
+    pub fn column_menu_clear_filter(&mut self) {
+        let Some(st) = self.column_menu.clone() else {
+            return;
+        };
+        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
+            f.table.clear_filter(st.kind);
+        }
+        self.column_menu = None;
+        self.maybe_persist_session();
+    }
+
+    /// Mueve la columna del menú una posición a la izquierda (dir=-1) o derecha (dir=+1) en el
+    /// orden visual COMPLETO. Cierra el menú. Clampa en los extremos (no hace nada si no cabe).
+    pub fn column_menu_move(&mut self, dir: i32) {
+        let Some(st) = self.column_menu.clone() else {
+            return;
+        };
+        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
+            if let Some(from) = f.table.columns.iter().position(|c| c.kind == st.kind) {
+                let to = from as i32 + dir;
+                if to >= 0 && (to as usize) < f.table.columns.len() {
+                    f.table.move_column(from, to as usize);
+                }
+            }
+        }
+        self.column_menu = None;
+        self.maybe_persist_session();
+    }
+
+    /// Oculta la columna del menú (Name no se oculta). Cierra.
+    pub fn column_menu_hide(&mut self) {
+        let Some(st) = self.column_menu.clone() else {
+            return;
+        };
+        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
+            f.table.toggle_visible(st.kind);
+        }
+        self.column_menu = None;
+        self.maybe_persist_session();
+    }
+
+    /// Editor de filtro: fija el borrador de TEXTO (subcadena del filtro Name/Extension).
+    pub fn column_filter_set_text(&mut self, text: &str) {
+        if let Some(st) = self.column_menu.as_mut() {
+            st.text_draft = text.to_string();
+        }
+    }
+
+    /// Editor de filtro: alterna sensibilidad a mayúsculas del filtro de texto.
+    pub fn column_filter_toggle_case(&mut self) {
+        if let Some(st) = self.column_menu.as_mut() {
+            st.text_case = !st.text_case;
+        }
+    }
+
+    /// Editor de filtro: fija el borrador del rango (Size/fecha). `is_max` elige el extremo.
+    pub fn column_filter_set_range(&mut self, is_max: bool, text: &str) {
+        if let Some(st) = self.column_menu.as_mut() {
+            if is_max {
+                st.max_draft = text.to_string();
+            } else {
+                st.min_draft = text.to_string();
+            }
+        }
+    }
+
+    /// Editor de filtro: marca/desmarca una extensión en el filtro de tipos.
+    pub fn column_filter_toggle_ext(&mut self, ext: &str) {
+        if let Some(st) = self.column_menu.as_mut() {
+            if !st.ext_checked.remove(ext) {
+                st.ext_checked.insert(ext.to_string());
+            }
+        }
+    }
+
+    /// Cuenta de extensiones de la carpeta activa del panel del menú (para la lista del filtro de
+    /// tipos): pares (extensión, conteo) en orden alfabético; "" = sin extensión.
+    pub fn column_filter_ext_counts(&self) -> Vec<(String, usize)> {
+        let Some(st) = self.column_menu.as_ref() else {
+            return Vec::new();
+        };
+        match self.ws.pane(st.pane).and_then(|p| p.files.as_ref()) {
+            Some(f) => naygo_core::filter::extension_counts(&f.entries)
+                .into_iter()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Aplica el filtro del editor según el tipo de la columna. Borradores vacíos = sin filtro
+    /// (lo quita). Cierra el menú. La vista se refiltra sola (el caché se invalida por la firma).
+    pub fn column_filter_apply(&mut self) {
+        use naygo_core::filter::ColumnFilter;
+        let Some(st) = self.column_menu.clone() else {
+            return;
+        };
+        let filter = match st.kind {
+            naygo_core::columns::ColumnKind::Extension => {
+                if st.ext_checked.is_empty() {
+                    None
+                } else {
+                    Some(ColumnFilter::Extensions(st.ext_checked.clone()))
+                }
+            }
+            naygo_core::columns::ColumnKind::Size => {
+                let min = parse_size(&st.min_draft);
+                let max = parse_size(&st.max_draft);
+                if min.is_none() && max.is_none() {
+                    None
+                } else {
+                    Some(ColumnFilter::SizeRange { min, max })
+                }
+            }
+            naygo_core::columns::ColumnKind::Modified
+            | naygo_core::columns::ColumnKind::Created => {
+                let tz = self.tz_offset_secs();
+                let from = parse_date_ymd(&st.min_draft, tz, false);
+                let to = parse_date_ymd(&st.max_draft, tz, true);
+                if from.is_none() && to.is_none() {
+                    None
+                } else {
+                    Some(ColumnFilter::DateRange { from, to })
+                }
+            }
+            // Name (y cualquier otra): filtro de texto sobre el nombre.
+            _ => {
+                if st.text_draft.is_empty() {
+                    None
+                } else {
+                    Some(ColumnFilter::Text {
+                        contains: st.text_draft.clone(),
+                        case_sensitive: st.text_case,
+                    })
+                }
+            }
+        };
+        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
+            match filter {
+                Some(flt) => f.table.set_filter(st.kind, flt),
+                None => f.table.clear_filter(st.kind),
+            }
+        }
+        self.column_menu = None;
+        self.maybe_persist_session();
+    }
+
+    /// `true` si el panel `id` tiene filtros activos pero su vista quedó vacía (aviso "sin
+    /// coincidencias"). Distingue "carpeta vacía" (sin entries) de "filtro la vació".
+    pub fn no_matches(&self, id: PaneId) -> bool {
+        match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+            Some(f) => !f.table.filters.is_empty() && !f.entries.is_empty() && f.view_len() == 0,
+            None => false,
+        }
     }
 
     /// Carpeta actual del panel `id` (para su path-bar).
@@ -2012,6 +2330,100 @@ fn disk_percent(root: &Path) -> Option<u8> {
     Some(usage.percent_used())
 }
 
+// --- Parseo/formato para el editor de filtros de columna (F2) ---
+
+const SECS_PER_DAY: i64 = 86_400;
+
+/// Parsea un tamaño escrito por el usuario a bytes. Acepta dígitos con separadores y un sufijo
+/// opcional K/KB/M/MB/G/GB (base 1024, sin distinguir mayúsculas). Vacío o inválido → `None`
+/// (= sin límite ese extremo). Ej: "10" → 10, "2 KB" → 2048, "1.5M" → 1572864.
+fn parse_size(text: &str) -> Option<u64> {
+    let t = text
+        .trim()
+        .to_ascii_lowercase()
+        .replace([',', '_', ' '], "");
+    if t.is_empty() {
+        return None;
+    }
+    let (num, mult) = if let Some(n) = t.strip_suffix("gb").or_else(|| t.strip_suffix('g')) {
+        (n, 1024u64 * 1024 * 1024)
+    } else if let Some(n) = t.strip_suffix("mb").or_else(|| t.strip_suffix('m')) {
+        (n, 1024 * 1024)
+    } else if let Some(n) = t.strip_suffix("kb").or_else(|| t.strip_suffix('k')) {
+        (n, 1024)
+    } else {
+        (t.as_str(), 1)
+    };
+    let value: f64 = num.parse().ok()?;
+    if value < 0.0 {
+        return None;
+    }
+    Some((value * mult as f64) as u64)
+}
+
+/// Parsea una fecha `YYYY-MM-DD` (en hora local, `tz_offset_secs`) a `SystemTime`. Si `end_of_day`,
+/// apunta al final del día (23:59:59) para que el extremo "hasta" sea inclusivo. Vacío/ inválido →
+/// `None`. Cálculo propio (sin chrono): días desde la época civil (algoritmo de Howard Hinnant).
+fn parse_date_ymd(text: &str, tz_offset_secs: i64, end_of_day: bool) -> Option<SystemTime> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let mut parts = t.split('-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let days = days_from_civil(y, m, d);
+    let mut secs_local = days * SECS_PER_DAY;
+    if end_of_day {
+        secs_local += SECS_PER_DAY - 1;
+    }
+    // De hora local a UTC: restar el huso.
+    let secs_utc = secs_local - tz_offset_secs;
+    if secs_utc < 0 {
+        return Some(SystemTime::UNIX_EPOCH);
+    }
+    Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs_utc as u64))
+}
+
+/// Formatea un `SystemTime` como `YYYY-MM-DD` en hora local (para sembrar el editor de fecha).
+fn fmt_date_ymd(t: SystemTime, tz_offset_secs: i64) -> String {
+    let secs = t
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64 + tz_offset_secs)
+        .unwrap_or(0);
+    let days = secs.div_euclid(SECS_PER_DAY);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Días desde 1970-01-01 para una fecha civil (algoritmo de Howard Hinnant, dominio público).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// Inverso de `days_from_civil`: (año, mes, día) a partir de días desde la época.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2033,6 +2445,113 @@ mod tests {
         f.view_indices()
             .iter()
             .position(|&real| f.entries[real].name == name)
+    }
+
+    #[test]
+    fn parse_size_acepta_sufijos_y_vacio() {
+        assert_eq!(parse_size(""), None);
+        assert_eq!(parse_size("  "), None);
+        assert_eq!(parse_size("10"), Some(10));
+        assert_eq!(parse_size("2kb"), Some(2048));
+        assert_eq!(parse_size("2 KB"), Some(2048));
+        assert_eq!(parse_size("1m"), Some(1024 * 1024));
+        assert_eq!(parse_size("1.5M"), Some(1024 * 1024 + 512 * 1024));
+        assert_eq!(parse_size("3gb"), Some(3 * 1024 * 1024 * 1024));
+        assert_eq!(parse_size("1,024"), Some(1024));
+        assert_eq!(parse_size("no"), None);
+    }
+
+    #[test]
+    fn fecha_ymd_round_trip_en_utc() {
+        // En UTC (tz=0): 2026-06-16 al inicio del día, y de vuelta a la misma cadena.
+        let t = parse_date_ymd("2026-06-16", 0, false).unwrap();
+        assert_eq!(fmt_date_ymd(t, 0), "2026-06-16");
+        // Fin del día sigue siendo el mismo día (23:59:59).
+        let end = parse_date_ymd("2026-06-16", 0, true).unwrap();
+        assert_eq!(fmt_date_ymd(end, 0), "2026-06-16");
+        assert!(end > t, "fin de día es posterior al inicio");
+        // Inválidas y vacías → None.
+        assert_eq!(parse_date_ymd("", 0, false), None);
+        assert_eq!(parse_date_ymd("2026-13-01", 0, false), None);
+        assert_eq!(parse_date_ymd("nope", 0, false), None);
+    }
+
+    /// El menú de columna aplica un filtro de texto sobre Name y la vista se refiltra sola; al
+    /// quitarlo, vuelven todas las filas. Cubre column_menu_open → set_text → apply → clear.
+    #[test]
+    fn menu_de_columna_filtra_y_limpia_por_nombre() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("informe.pdf"), b"x").unwrap();
+        std::fs::write(work.path().join("notas.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.ws.active_id().unwrap();
+        assert_eq!(c.ws.active_files().unwrap().view_len(), 2);
+
+        // Abrir menú sobre la columna Name (kind 0), pasar a filtro, escribir y aplicar.
+        c.column_menu_open(id, 0, 0.0, 0.0);
+        c.column_menu_to_filter();
+        c.column_filter_set_text("informe");
+        c.column_filter_apply();
+        assert!(c.column_menu.is_none(), "aplicar cierra el menú");
+        assert_eq!(
+            c.ws.active_files().unwrap().view_len(),
+            1,
+            "el filtro deja solo informe.pdf"
+        );
+        assert!(!c.no_matches(id), "hay una coincidencia");
+
+        // Quitar el filtro: vuelven las dos filas.
+        c.column_menu_open(id, 0, 0.0, 0.0);
+        c.column_menu_clear_filter();
+        assert_eq!(c.ws.active_files().unwrap().view_len(), 2);
+    }
+
+    /// "Mover →" desde el menú reordena la columna en el orden visual completo.
+    #[test]
+    fn menu_de_columna_mueve_la_columna() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.ws.active_id().unwrap();
+        // Orden por defecto: Name, Extension, Size, Modified, Created. Mover Extension (índice 1)
+        // a la derecha → queda detrás de Size.
+        c.column_menu_open(id, 1, 0.0, 0.0); // kind 1 = Extension
+        c.column_menu_move(1);
+        let order: Vec<_> =
+            c.ws.pane(id)
+                .unwrap()
+                .files
+                .as_ref()
+                .unwrap()
+                .table
+                .columns
+                .iter()
+                .map(|col| col.kind)
+                .collect();
+        assert_eq!(order[1], naygo_core::columns::ColumnKind::Size);
+        assert_eq!(order[2], naygo_core::columns::ColumnKind::Extension);
+        assert!(c.column_menu.is_none(), "mover cierra el menú");
+    }
+
+    /// Un filtro que no coincide con nada marca `no_matches` (aviso "sin coincidencias"), sin
+    /// confundirlo con una carpeta vacía.
+    #[test]
+    fn filtro_sin_coincidencias_se_detecta() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.ws.active_id().unwrap();
+        c.column_menu_open(id, 0, 0.0, 0.0);
+        c.column_menu_to_filter();
+        c.column_filter_set_text("zzz-no-existe");
+        c.column_filter_apply();
+        assert_eq!(c.ws.active_files().unwrap().view_len(), 0);
+        assert!(c.no_matches(id), "filtro vació la vista → aviso");
     }
 
     /// F4: la sesión (paneles + carpetas + disposición) se guarda al cerrar y se restaura al
