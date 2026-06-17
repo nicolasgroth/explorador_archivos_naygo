@@ -114,6 +114,9 @@ export component ConfigWindow inherits Rectangle {
     // un mínimo y al tamaño de la ventana. Empieza en un default cómodo.
     property <length> card-w: 720px;
     property <length> card-h: 560px;
+    // `true` cuando el usuario arrastró el grip para fijar el alto a mano; mientras es `false`,
+    // la tarjeta ajusta su alto al contenido de la sección (no deja espacio vacío).
+    property <bool> h-manual: false;
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
@@ -199,7 +202,11 @@ export component ConfigWindow inherits Rectangle {
     // esquina inferior derecha (grip). El tamaño se acota a un mínimo y al tamaño de la ventana.
     card := Rectangle {
         width: clamp(root.card-w, 520px, root.width - 24px);
-        height: clamp(root.card-h, 360px, root.height - 24px);
+        // Alto: por defecto se ajusta al contenido de la sección (sin dejar vacío); si el usuario
+        // arrastró el grip (`h-manual`), respeta su alto. Siempre acotado al alto de la ventana.
+        height: root.h-manual
+            ? clamp(root.card-h, 360px, root.height - 24px)
+            : clamp(body.preferred-height, 360px, root.height - 24px);
         x: (parent.width - self.width) / 2 + root.offset-x;
         y: (parent.height - self.height) / 2 + root.offset-y;
         background: Theme.panel-bg;
@@ -210,8 +217,8 @@ export component ConfigWindow inherits Rectangle {
         TouchArea {}
 
         body := VerticalLayout {
-            // Llenar la tarjeta para que el contenido use TODO el espacio cuando se agranda el
-            // popup (antes el layout quedaba a su alto preferido y dejaba el fondo vacío).
+            // Llena la tarjeta a lo ancho; a lo alto reporta su alto preferido (la tarjeta se
+            // ajusta a él salvo que el usuario haya redimensionado a mano con el grip).
             width: 100%;
             height: 100%;
             padding: 14px;
@@ -554,7 +561,9 @@ export component ConfigWindow inherits Rectangle {
                                 // La lista crece con el alto de la tarjeta (antes era fija en 360px
                                 // y dejaba vacío el resto al agrandar el popup).
                                 ListView {
-                                    height: max(240px, root.card-h - 230px);
+                                    // Alto fijo y generoso (la lista tiene ~50 acciones, scrollea).
+                                    // La tarjeta se ajusta a este alto, así no queda espacio vacío.
+                                    height: 380px;
                                     for s[i] in root.shortcuts: Rectangle {
                                         height: 32px;
                                         background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
@@ -706,7 +715,8 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 // Filas de reglas (scroll). Crece con el alto de la tarjeta.
                                 Rectangle {
-                                    height: max(200px, root.card-h - 290px);
+                                    // Alto fijo (la lista de reglas scrollea); la tarjeta se ajusta.
+                                    height: 320px;
                                     background: Theme.panel-bg;
                                     border-radius: 4px;
                                     ListView {
@@ -932,8 +942,11 @@ export component ConfigWindow inherits Rectangle {
                 property <length> base-h;
                 pointer-event(ev) => {
                     if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
-                        self.base-w = root.card-w;
-                        self.base-h = root.card-h;
+                        // Partir del tamaño REAL actual (en auto-alto, card.height = alto del
+                        // contenido). A partir de acá el alto pasa a ser manual.
+                        self.base-w = card.width;
+                        self.base-h = card.height;
+                        root.h-manual = true;
                     }
                     if (ev.kind == PointerEventKind.move && self.pressed) {
                         root.card-w = self.base-w + self.mouse-x;
