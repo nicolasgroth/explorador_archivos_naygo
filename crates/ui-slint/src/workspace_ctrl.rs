@@ -1189,22 +1189,56 @@ impl WorkspaceCtrl {
     /// Pegar en la carpeta activa los archivos del portapapeles. Devuelve true si arrancó
     /// una operación (para reactivar el timer). El pegado de texto/imagen se cablea con el
     /// modal PastePreview (fase de diálogos); aquí solo archivos.
+    /// Pega el contenido del portapapeles en la carpeta activa. Reusa `core::clipboard::
+    /// decide_paste`, que decide según el contenido + Settings: archivos → transferencia;
+    /// TEXTO → crea un .txt (nombre/extensión configurables); IMAGEN → crea un .png/.jpg
+    /// (nombre/formato configurables). Antes solo manejaba archivos (el texto/imagen no hacían
+    /// nada). Por ahora escribe directo (sin el modal de confirmación de nombre de egui).
     pub fn op_paste(&mut self) -> bool {
         let Some(dir) = self.active_dir() else {
             return false;
         };
         let content = naygo_platform::clipboard::read();
-        if let naygo_core::clipboard::ClipboardContent::Files { paths, cut } = content {
-            if paths.is_empty() {
-                return false;
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let exists = |p: &std::path::Path| p.exists();
+        let plan = naygo_core::clipboard::decide_paste(
+            &content,
+            &dir,
+            &self.config.settings,
+            now_secs,
+            &exists,
+        );
+        use naygo_core::clipboard::PastePlan;
+        match plan {
+            PastePlan::Transfer { paths, cut } => {
+                if paths.is_empty() {
+                    return false;
+                }
+                let label = if cut { "Mover" } else { "Copiar" };
+                let req = naygo_core::ops::transfer(cut, paths, dir);
+                self.ops.start_op(req, label.to_string(), true);
+                self.ops.clear_cut();
+                true
             }
-            let label = if cut { "Mover" } else { "Copiar" };
-            let req = naygo_core::ops::transfer(cut, paths, dir);
-            self.ops.start_op(req, label.to_string(), true);
-            self.ops.clear_cut();
-            return true;
+            PastePlan::CreateText { path, body } => {
+                // Escritura chica y local: directa (no pasa por el engine de ops).
+                std::fs::write(&path, body.as_bytes()).is_ok()
+            }
+            PastePlan::CreateImage { path, fmt, img } => {
+                match naygo_core::clipboard::encode::encode_image(
+                    &img,
+                    fmt,
+                    self.config.settings.paste_jpg_quality,
+                ) {
+                    Ok(bytes) => std::fs::write(&path, &bytes).is_ok(),
+                    Err(_) => false,
+                }
+            }
+            PastePlan::Nothing => false,
         }
-        false
     }
 
     /// Recibe rutas externas soltadas (drag&drop OLE, Fase 5D) sobre el panel `dest`: copia

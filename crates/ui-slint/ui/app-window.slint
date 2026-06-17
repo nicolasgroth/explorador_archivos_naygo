@@ -73,46 +73,36 @@ component ToolBtn inherits Rectangle {
     callback clicked();
     width: root.btn-width;
     background: (touch.has-hover || root.highlight) ? Theme.selection-bg : Theme.row-bg;
-    border-radius: 4px;
-    HorizontalLayout {
-        alignment: center;
-        spacing: 4px;
-        padding-left: 4px;
-        padding-right: 4px;
+    border-radius: 7px;
+    // Contenido centrado por geometría (no por layout, que dejaba el ícono descentrado):
+    // ícono + texto juntos, centrados en el botón. En icon-only solo va el ícono.
+    content-row := HorizontalLayout {
+        spacing: 5px;
+        x: (parent.width - self.preferred-width) / 2;
+        y: (parent.height - self.preferred-height) / 2;
+        width: self.preferred-width;
+        height: self.preferred-height;
         if root.icon.width > 0: Image {
             source: root.icon;
             width: 16px;
             height: 16px;
-            vertical-alignment: center;
             image-rendering: smooth;
         }
         if !root.icon-only || root.icon.width == 0: Text {
             text: root.label;
             color: white;
             font-size: 12px;
-            horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
+    // Publica el tooltip y su posición X (centro del botón) al pasar el mouse, para que la
+    // AppWindow lo pinte ENCIMA del contenido (un tooltip anidado en la toolbar queda tapado
+    // por los paneles, que se pintan después en el VerticalLayout).
+    callback hover-tip(string, length);
     touch := TouchArea {
         clicked => { root.clicked(); }
-    }
-    // Tooltip flotante: aparece bajo el botón al pasar el mouse.
-    if touch.has-hover && root.tip != "": Rectangle {
-        x: 0;
-        y: parent.height + 3px;
-        width: tip-text.preferred-width + 12px;
-        height: 22px;
-        background: Theme.panel-bg;
-        border-color: Theme.selection-bg;
-        border-width: 1px;
-        border-radius: 4px;
-        tip-text := Text {
-            text: root.tip;
-            color: Theme.text;
-            font-size: 11px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
         }
     }
 }
@@ -146,24 +136,11 @@ component DriveBtn inherits Rectangle {
             vertical-alignment: center;
         }
     }
+    callback hover-tip(string, length);
     dtouch := TouchArea {
         clicked => { root.clicked(); }
-    }
-    if dtouch.has-hover && root.tip != "": Rectangle {
-        x: 0;
-        y: parent.height + 3px;
-        width: dtip.preferred-width + 12px;
-        height: 22px;
-        background: Theme.panel-bg;
-        border-color: Theme.selection-bg;
-        border-width: 1px;
-        border-radius: 4px;
-        dtip := Text {
-            text: root.tip;
-            color: Theme.text;
-            font-size: 11px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
         }
     }
 }
@@ -349,6 +326,10 @@ export component AppWindow inherits Window {
 
     // Alto de la barra superior (path-bar + botones). El área de contenido es el resto.
     property <length> top-bar-h: 34px;
+    // Tooltip de la toolbar (texto + X del centro del botón). Lo publican los ToolBtn/DriveBtn
+    // al pasar el mouse; se pinta como overlay al FINAL de la AppWindow (encima del contenido).
+    property <string> hovered-tip: "";
+    property <length> hovered-tip-x: 0;
     // Área de contenido que Rust usa para repartir los paneles (sin padding global aquí:
     // el contenido empieza en 0,0 dentro de `content`).
     out property <length> content-w: content.width;
@@ -373,6 +354,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 64px;
                     clicked => { root.go-up(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     // El "+" se queda solo-texto: es un glifo, no una acción con ícono propio.
@@ -380,6 +362,7 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
                     clicked => { root.dir-menu-open = !root.dir-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-panel;
@@ -389,6 +372,7 @@ export component AppWindow inherits Window {
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     highlight: root.add-menu-open;
                     clicked => { root.add-menu-open = !root.add-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-swap;
@@ -397,6 +381,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.swap-panes(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-clone;
@@ -405,6 +390,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 72px;
                     clicked => { root.clone-pane(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     label: Tr.toolbar-tabs;
@@ -413,6 +399,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.stack-pane(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
                     label: Tr.cfg-title;
@@ -421,6 +408,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.config-open = true; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 // Separador antes de la tira de unidades.
                 Rectangle { width: 1px; background: Theme.selection-bg; }
@@ -430,6 +418,7 @@ export component AppWindow inherits Window {
                     tip: d.path;
                     icon: d.icon;
                     clicked => { root.nav-drive(d.path); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 Rectangle {
                     background: Theme.row-bg;
@@ -449,6 +438,9 @@ export component AppWindow inherits Window {
                 y: p.y;
                 width: p.w;
                 height: p.h;
+                // Recortar el contenido al rect del panel: si no, en un panel chico el header
+                // de columnas o la path-bar se desbordan y se mezclan con el panel vecino.
+                clip: true;
                 // Todo panel lleva una barra de título de 24px arriba: muestra su nombre y
                 // sirve de ASA para arrastrarlo y reacomodar el layout. Si el panel es la
                 // pestaña activa de un grupo, en su lugar va la barra de pestañas.
@@ -670,6 +662,26 @@ export component AppWindow inherits Window {
         name-cancel() => { root.name-cancel(); }
         paste-confirm() => { root.paste-confirm(); }
         paste-cancel() => { root.paste-cancel(); }
+    }
+
+    // Tooltip de la toolbar: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido,
+    // así no queda tapado por los paneles). Aparece justo bajo la barra, centrado en el botón.
+    if root.hovered-tip != "": Rectangle {
+        x: min(max(root.hovered-tip-x - self.width / 2, 4px), root.width - self.width - 4px);
+        y: root.top-bar-h + 2px;
+        width: htip.preferred-width + 14px;
+        height: 22px;
+        background: Theme.panel-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 4px;
+        htip := Text {
+            text: root.hovered-tip;
+            color: Theme.text;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     // Menú contextual (clic derecho): acciones propias + nativo de Windows.
