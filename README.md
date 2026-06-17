@@ -4,10 +4,12 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado,
 multi-idioma y temas personalizables.
 
-> **Estado:** Drag & drop (interno entre paneles + con el SO: Explorer↔Naygo),
-> persistencia del layout del dock y varios pulidos agregados. Diseño en
-> [`docs/superpowers/specs/2026-06-09-naygo-dnd-pulidos-design.md`](docs/superpowers/specs/2026-06-09-naygo-dnd-pulidos-design.md).
-> Pendiente: "Acerca de…" (Entrega 2) y bandeja del sistema + iniciar con Windows (Entrega 3).
+> **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
+> redimensionado en vivo, árbol, columnas estilo Excel (orden + filtros), renombrado
+> por lotes, plantillas de disposición (Layouts), drag & drop (interno + con el SO),
+> abrir terminal en la carpeta, configuración completa (incl. Acerca de + Avanzado),
+> bandeja del sistema e iniciar con Windows, y navegación por teclado.
+> **Guía de uso:** [`docs/GUIA-DE-USUARIO.md`](docs/GUIA-DE-USUARIO.md) (o **F1** en la app).
 
 ## Objetivos
 
