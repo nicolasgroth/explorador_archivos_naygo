@@ -118,6 +118,15 @@ pub fn apply(ui: &AppWindow, c: &ConfigCtrl) {
     tr.set_cfg_cat_appearance(c.t("slint.cfg.cat_appearance").into());
     tr.set_cfg_cat_shortcuts(c.t("slint.cfg.cat_shortcuts").into());
     tr.set_cfg_cat_import(c.t("slint.cfg.cat_import").into());
+    tr.set_cfg_cat_about(c.t("slint.cfg.cat_about").into());
+    // Sección "Acerca de".
+    tr.set_about_version(c.t("slint.about.version").into());
+    tr.set_about_author(c.t("about.author").into());
+    tr.set_about_company(c.t("about.company").into());
+    tr.set_about_license(c.t("about.license").into());
+    tr.set_about_stack(c.t("slint.about.stack").into());
+    tr.set_about_repo(c.t("about.repo").into());
+    tr.set_about_egg_message(c.t("about.egg_message").into());
     tr.set_cfg_show_parent(c.t("settings.show_parent").into());
     tr.set_cfg_icon_only(c.t("settings.icon_only").into());
     tr.set_cfg_bar_position(c.t("settings.bar_position").into());

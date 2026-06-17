@@ -1469,6 +1469,26 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    // Acerca de: abrir el repositorio en el navegador por defecto.
+    {
+        ui.on_cfg_open_repo(move || {
+            let _ = naygo_platform::open::open_default(std::path::Path::new(
+                "https://github.com/nicolasgroth/explorador_archivos_naygo",
+            ));
+        });
+    }
+    // Acerca de (easter egg): primeros `n` caracteres del mensaje (substring que Slint no ofrece).
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_cfg_egg_prefix(move |n| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return SharedString::new();
+            };
+            let msg = ui.global::<Tr>().get_about_egg_message();
+            let take = n.max(0) as usize;
+            SharedString::from(msg.chars().take(take).collect::<String>())
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();

@@ -89,6 +89,12 @@ export component ConfigWindow inherits Rectangle {
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
+    // Easter egg de "Acerca de": 5 clics seguidos en el logo disparan ~8s de "lluvia de Naygo"
+    // con un mensaje que se escribe letra a letra. `egg-progress` (0..1) lo anima un Timer; el
+    // contador de clics se reinicia si pasan más de 2s entre clics (ventana de encadenado).
+    property <int> egg-clicks: 0;
+    property <bool> egg-active: false;
+    property <float> egg-progress: 0;   // 0..1 a lo largo de los 8s del egg
 
     // Settings (toggles/combos/text):
     callback set-ops-mode(int);
@@ -117,6 +123,8 @@ export component ConfigWindow inherits Rectangle {
     callback export-theme();
     callback export-config();
     callback import-pack();
+    // Acerca de: abrir el repositorio en el navegador.
+    callback open-repo();
     // Cerrar la ventana.
     callback close();
     // Captura de tecla (la UI la enruta cuando `capturing` != "").
@@ -218,7 +226,7 @@ export component ConfigWindow inherits Rectangle {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import]: Rectangle {
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-about]: Rectangle {
                             height: 30px;
                             background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
@@ -440,6 +448,58 @@ export component ConfigWindow inherits Rectangle {
                                 }
                                 CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
                             }
+
+                            // === Acerca de (cat 6) ===
+                            if root.cat == 6: VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    // Logo: 5 clics seguidos disparan el easter egg.
+                                    logo := Image {
+                                        source: @image-url("../../../assets/icons/logo_naygo.png");
+                                        width: 180px;
+                                        height: 180px;
+                                        image-fit: contain;
+                                        TouchArea {
+                                            clicked => { root.register-egg-click(); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: Tr.about-version + " " + root.app-version;
+                                    color: Theme.text;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: Tr.about-author;
+                                    color: Theme.text;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                }
+                                Text { text: Tr.about-company; color: Theme.text-dim; horizontal-alignment: center; }
+                                Text { text: Tr.about-license; color: Theme.text-dim; horizontal-alignment: center; }
+                                Text { text: Tr.about-stack; color: Theme.text-dim; horizontal-alignment: center; }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: repo-label.preferred-width + 12px;
+                                        height: 24px;
+                                        background: repo-touch.has-hover ? Theme.selection-bg : transparent;
+                                        border-radius: 4px;
+                                        repo-label := Text {
+                                            text: Tr.about-repo;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        repo-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.open-repo(); }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -464,5 +524,78 @@ export component ConfigWindow inherits Rectangle {
                 }
             }
         }
+
+        // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
+        // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.
+        egg-timer := Timer {
+            interval: 60ms;
+            running: root.egg-active;
+            triggered => {
+                root.egg-progress += 0.06s / 8s;   // 60ms / 8s por tick
+                if (root.egg-progress >= 1.0) {
+                    root.egg-active = false;
+                    root.egg-progress = 0;
+                }
+            }
+        }
+        // Timer de un disparo que reinicia el contador de clics si pasan >2s sin un nuevo clic.
+        egg-reset-timer := Timer {
+            interval: 2s;
+            running: false;
+            triggered => {
+                root.egg-clicks = 0;
+                self.running = false;
+            }
+        }
+
+        // Capa de lluvia: 24 carpetas cayendo, posicionadas por el reloj de animación. Solo
+        // visible (y por ende solo anima/repinta) mientras el egg está activo → bajo consumo.
+        if root.egg-active: Rectangle {
+            clip: true;
+            for i in 24: Text {
+                // Pseudoaleatorio determinista por índice (sin crate rand): fract(sin(i)*K).
+                property <float> s1: Math.sin(i * 12.9898 * 1rad) * 43758.547;
+                property <float> r1: self.s1 - Math.floor(self.s1);
+                property <float> s2: Math.sin(i * 78.233 * 1rad) * 12543.13;
+                property <float> r2: self.s2 - Math.floor(self.s2);
+                property <float> ticks: animation-tick() / 1ms;
+                text: "📁";
+                font-size: 18px + self.r2 * 16px;
+                x: self.r1 * (parent.width - 30px);
+                // Caída cíclica: alto + 40px de margen; la velocidad varía por r2.
+                y: Math.mod(self.ticks * (0.05 + self.r2 * 0.12) + self.r1 * 800, (parent.height / 1px) + 40) * 1px - 40px;
+                opacity: 0.85;
+            }
+            // Mensaje que se escribe letra a letra a lo largo del egg. El prefijo lo recorta
+            // Rust (Slint no tiene substring por índice); `egg-progress` decide cuántas letras.
+            Text {
+                text: root.egg-prefix(Math.round(root.egg-progress * root.egg-message-len));
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                y: parent.height - 40px;
+                x: 0; width: parent.width;
+            }
+        }
     }
+
+    // Cuenta un clic del logo; 5 seguidos (con <2s entre clics) disparan el egg.
+    function register-egg-click() {
+        root.egg-clicks += 1;
+        egg-reset-timer.running = false;
+        egg-reset-timer.running = true;
+        if (root.egg-clicks >= 5) {
+            root.egg-clicks = 0;
+            root.egg-progress = 0;
+            root.egg-active = true;
+        }
+    }
+
+    // Texto del mensaje del egg y su largo en caracteres (para el tipeo).
+    in property <string> egg-message: Tr.about-egg-message;
+    property <int> egg-message-len: root.egg-message.character-count;
+    // Rust devuelve los primeros `n` caracteres del mensaje (substring que Slint no ofrece).
+    pure callback egg-prefix(int) -> string;
 }

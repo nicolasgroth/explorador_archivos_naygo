@@ -338,6 +338,8 @@ export component AppWindow inherits Window {
     callback cfg-export-theme();
     callback cfg-export-config();
     callback cfg-import-pack();
+    callback cfg-open-repo();
+    pure callback cfg-egg-prefix(int) -> string;
     // Emitido cuando cambia el tamaño del área de contenido (resize de ventana) para que
     // Rust reparta los paneles aun en reposo (con el timer apagado).
     callback content-resized();
@@ -795,6 +797,8 @@ export component AppWindow inherits Window {
         export-theme() => { root.cfg-export-theme(); }
         export-config() => { root.cfg-export-config(); }
         import-pack() => { root.cfg-import-pack(); }
+        open-repo() => { root.cfg-open-repo(); }
+        egg-prefix(n) => { root.cfg-egg-prefix(n) }
         close() => { root.config-open = false; }
     }
 
