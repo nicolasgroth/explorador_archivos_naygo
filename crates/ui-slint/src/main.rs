@@ -2514,6 +2514,15 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+    // Cerrar/quitar un panel (X del título o clic derecho).
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_close_pane(move |id| {
+            ctrl.borrow_mut().close_pane(PaneId(id as u64));
+            sync_layout();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();

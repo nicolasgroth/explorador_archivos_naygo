@@ -298,6 +298,7 @@ export component AppWindow inherits Window {
     // Reacomodo por arrastre (drag-to-rearrange):
     callback pane-drag-move(int, length, length); // (PaneId, x, y) en coords de contenido
     callback pane-drag-drop(int, length, length); // soltar: recompone el layout
+    callback close-pane(int);                      // (PaneId) cerrar/quitar el panel
     // Vista previa de la zona de drop activa (rect en coords de contenido; w/h 0 = oculta).
     in property <length> drop-x;
     in property <length> drop-y;
@@ -663,6 +664,8 @@ export component AppWindow inherits Window {
                             font-size: 10px;
                             vertical-alignment: center;
                         }
+                        // Hueco para que el texto no quede bajo la X de cerrar (que va encima).
+                        Rectangle { width: 22px; }
                     }
                     title-touch := TouchArea {
                         mouse-cursor: move;
@@ -674,6 +677,36 @@ export component AppWindow inherits Window {
                             if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.up) {
                                 root.pane-drag-drop(p.id, p.x + self.mouse-x, p.y + self.mouse-y);
                             }
+                            // Clic derecho en el título: cerrar el panel (si no es el último).
+                            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                root.close-pane(p.id);
+                            }
+                        }
+                    }
+                    // Botón ✕ para cerrar el panel (arriba a la derecha de la barra de título).
+                    // Va DESPUÉS de title-touch para recibir el clic. ✕ dibujada con Path.
+                    if root.panes.length > 1: close-pane-btn := Rectangle {
+                        width: 20px;
+                        height: 20px;
+                        x: parent.width - self.width - 4px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 4px;
+                        background: closex-touch.has-hover ? Theme.error : transparent;
+                        Path {
+                            width: 9px; height: 9px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            stroke: closex-touch.has-hover ? white : (p.active ? white : Theme.text-dim);
+                            stroke-width: 1.5px;
+                            viewbox-width: 10; viewbox-height: 10;
+                            MoveTo { x: 1; y: 1; }
+                            LineTo { x: 9; y: 9; }
+                            MoveTo { x: 9; y: 1; }
+                            LineTo { x: 1; y: 9; }
+                        }
+                        closex-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.close-pane(p.id); }
                         }
                     }
                 }

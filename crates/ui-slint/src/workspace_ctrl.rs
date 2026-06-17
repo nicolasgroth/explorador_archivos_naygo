@@ -1409,6 +1409,38 @@ impl WorkspaceCtrl {
         self.set_active(new_id);
     }
 
+    /// `true` si el panel `id` se puede cerrar: hay más de uno (nunca dejamos la ventana sin
+    /// ningún panel).
+    pub fn can_close_pane(&self, id: PaneId) -> bool {
+        self.ws.panes().len() > 1 && self.ws.pane(id).is_some()
+    }
+
+    /// Cierra (quita) el panel `id`: cancela su listado en vuelo, suelta su árbol, lo saca del
+    /// layout y del workspace, y reasigna el activo. No-op si es el último panel. Tras cerrar,
+    /// re-sincroniza el árbol con la carpeta del nuevo panel activo.
+    pub fn close_pane(&mut self, id: PaneId) {
+        if !self.can_close_pane(id) {
+            return;
+        }
+        // Cancelar y soltar el listado/árbol del panel que se va (no dejar workers huérfanos).
+        if let Some(l) = self.listings.remove(&id) {
+            l.cancel();
+        }
+        self.trees.remove(&id);
+        self.reveal_targets.remove(&id);
+        // Sacarlo del layout (el split se colapsa en su hermano) y del workspace (reasigna activo).
+        self.ws.layout.remove_leaf(id);
+        self.ws.remove_pane(id);
+        // Si el último Files activo era este, recomputar.
+        if self.last_active_files == Some(id) {
+            self.last_active_files = self.ws.files_panes().first().copied();
+        }
+        // Re-resaltar el árbol hacia la carpeta del panel activo resultante.
+        if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+            self.sync_trees_active(dir);
+        }
+    }
+
     // --- Acciones multi-panel (abrir en otro / swap / clonar) + selector 1..9 ---
 
     /// Candidatos destino (paneles Files distintos de `origin`) en ORDEN VISUAL
@@ -3589,6 +3621,30 @@ mod tests {
         // Limpiar la plantilla.
         c.clear_default_table();
         assert!(c.config.settings.default_table.is_none());
+    }
+
+    /// Cerrar un panel: con dos paneles, `close_pane` quita uno y deja el otro; el último panel
+    /// NO se puede cerrar (can_close_pane = false) para no dejar la ventana vacía.
+    #[test]
+    fn cerrar_panel_quita_uno_y_protege_el_ultimo() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Un solo panel: no se puede cerrar.
+        let first = *c.ws.files_panes().first().unwrap();
+        assert!(!c.can_close_pane(first));
+        // Agregar un segundo panel y cerrarlo: vuelve a quedar uno.
+        c.add_pane_split();
+        assert!(drain(&mut c));
+        let second = *c.ws.files_panes().last().unwrap();
+        assert!(c.can_close_pane(second));
+        c.close_pane(second);
+        assert_eq!(c.ws.panes().len(), 1, "queda un solo panel tras cerrar");
+        assert!(c.ws.pane(second).is_none(), "el panel cerrado ya no existe");
+        // El que queda no se puede cerrar.
+        let remaining = *c.ws.files_panes().first().unwrap();
+        assert!(!c.can_close_pane(remaining));
     }
 
     /// F3 calcula el tamaño de la carpeta del panel: spawnea el worker, se drena hasta terminar,
