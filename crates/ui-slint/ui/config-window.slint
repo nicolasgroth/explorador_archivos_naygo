@@ -78,10 +78,17 @@ export component ConfigWindow inherits Rectangle {
     in property <[ShortcutRowVm]> shortcuts;
     in property <string> config-dir;
     in property <string> app-version;
-    // Categoría seleccionada (0..5).
+    // Categoría seleccionada (0..6).
     property <int> cat: 3;        // arranca en Apariencia (lo más visible)
     // Acción cuyo atajo se está capturando (vacío = ninguna).
     property <string> capturing: "";
+    // Desplazamiento de la tarjeta respecto al centro (la ventana es arrastrable por su
+    // encabezado). Se acumula con cada gesto de arrastre.
+    property <length> offset-x: 0px;
+    property <length> offset-y: 0px;
+    // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
+    // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
+    property <length> ctl-w: 240px;
 
     // Settings (toggles/combos/text):
     callback set-ops-mode(int);
@@ -132,10 +139,13 @@ export component ConfigWindow inherits Rectangle {
         }
     }
 
-    // Tarjeta central.
-    Rectangle {
+    // Tarjeta central. Arrastrable por el encabezado (offset acumulado), con alto que se adapta
+    // al contenido de la categoría (entre un mínimo y un máximo) para no dejar espacio vacío.
+    card := Rectangle {
         width: 720px;
-        height: 520px;
+        height: clamp(body.preferred-height + 28px, 240px, 560px);
+        x: (parent.width - self.width) / 2 + root.offset-x;
+        y: (parent.height - self.height) / 2 + root.offset-y;
         background: Theme.panel-bg;
         border-radius: 8px;
         border-width: 1px;
@@ -143,20 +153,38 @@ export component ConfigWindow inherits Rectangle {
         // Tragar clics dentro de la tarjeta (no cerrar).
         TouchArea {}
 
-        VerticalLayout {
+        body := VerticalLayout {
             padding: 14px;
             spacing: 10px;
 
-            // Encabezado.
+            // Encabezado: arrastrar aquí mueve la ventana.
             HorizontalLayout {
                 height: 26px;
-                Text {
-                    text: Tr.cfg-title;
-                    color: Theme.text;
-                    font-size: 16px;
-                    font-weight: 700;
-                    vertical-alignment: center;
+                Rectangle {
                     horizontal-stretch: 1;
+                    drag-area := TouchArea {
+                        mouse-cursor: move;
+                        property <length> press-x;
+                        property <length> press-y;
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                                self.press-x = self.mouse-x;
+                                self.press-y = self.mouse-y;
+                            }
+                            if (ev.kind == PointerEventKind.move && self.pressed) {
+                                root.offset-x += self.mouse-x - self.press-x;
+                                root.offset-y += self.mouse-y - self.press-y;
+                            }
+                        }
+                    }
+                    Text {
+                        text: Tr.cfg-title;
+                        color: Theme.text;
+                        font-size: 16px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        x: 0px;
+                    }
                 }
                 // Botón de cierre compacto con ícono (✕), no un texto grande.
                 Rectangle {
@@ -224,6 +252,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-bar-position;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
                                         current-index: root.vm.bar-position;
                                         selected => { root.set-bar-position(self.current-index); }
@@ -245,6 +274,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-ops-mode;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: [Tr.cfg-ops-queue, Tr.cfg-ops-parallel];
                                         current-index: root.vm.ops-mode;
                                         selected => { root.set-ops-mode(self.current-index); }
@@ -291,6 +321,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-theme;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: root.vm.themes;
                                         current-value: root.vm.theme;
                                         selected => { root.set-theme(self.current-value); }
@@ -299,6 +330,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-language;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: root.vm.languages;
                                         current-value: root.vm.language;
                                         selected => { root.set-language(self.current-value); }
@@ -307,6 +339,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-icon-set;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: root.vm.icon-sets;
                                         current-value: root.vm.icon-set;
                                         selected => { root.set-icon-set(self.current-value); }
@@ -315,6 +348,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-date-format;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
                                         current-index: root.vm.date-format;
                                         selected => { root.set-date-format(self.current-index); }
@@ -323,6 +357,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-size-format;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
                                         current-index: root.vm.size-format;
                                         selected => { root.set-size-format(self.current-index); }
@@ -331,6 +366,7 @@ export component ConfigWindow inherits Rectangle {
                                 Field {
                                     label: Tr.cfg-row-density;
                                     ComboBox {
+                                        width: root.ctl-w;
                                         model: [Tr.cfg-density-compact, Tr.cfg-density-comfortable];
                                         current-index: root.vm.row-density;
                                         selected => { root.set-row-density(self.current-index); }
@@ -352,7 +388,7 @@ export component ConfigWindow inherits Rectangle {
                                     CfgBtn { label: Tr.cfg-reset-all; clicked => { root.shortcuts-reset-all(); } }
                                 }
                                 ListView {
-                                    vertical-stretch: 1;
+                                    height: 380px;
                                     for s[i] in root.shortcuts: Rectangle {
                                         height: 30px;
                                         background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
