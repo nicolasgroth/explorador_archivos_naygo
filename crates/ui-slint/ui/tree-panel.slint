@@ -85,7 +85,11 @@ export component TreePanel inherits Rectangle {
                         image-rendering: smooth;
                     }
                     Text {
-                        text: " " + n.name + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
+                        // En las raíces de disco se anexa el espacio ("120 GB libre / 500 GB ·
+                        // 76%") junto al nombre; en carpetas, solo el nombre. Elide si no entra.
+                        text: " " + n.name
+                            + (n.is-drive && n.disk-detail != "" ? "   " + n.disk-detail : "")
+                            + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
                         color: n.is-drive ? Theme.text : (n.error ? Theme.error : Theme.text);
                         vertical-alignment: center;
                         horizontal-stretch: 1;

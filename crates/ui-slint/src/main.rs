@@ -382,11 +382,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 status: c.new_folder_status().into(),
                 can_create: nf_valid > 0,
             });
-            // Modal "carpeta no encontrada".
-            ui.set_missing_folder_vm(MissingFolderVm {
-                active: c.missing_folder_open(),
-                lost_path: c.missing_folder_path().into(),
-            });
+            // (El aviso "carpeta no encontrada" es ahora IN-PLACE por panel: se arma en el PaneVm
+            //  con `missing`/`missing-path`; ya no hay un VM de modal global.)
             // Panel de búsqueda recursiva (Ctrl+F / lupa).
             {
                 let open = c.search_open();
@@ -614,6 +611,9 @@ fn main() -> Result<(), slint::PlatformError> {
                             col_menu: ModelRc::from(pm.col_menu.clone()),
                             is_favorite: ctrl.borrow().is_pane_dir_favorite(*id),
                             no_matches: ctrl.borrow().no_matches(*id),
+                            // Carpeta no encontrada / ilegible: aviso in-place con opciones.
+                            missing: ctrl.borrow().pane_dir_missing(*id),
+                            missing_path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -2467,13 +2467,14 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
-    // Modal "carpeta no encontrada": reintentar / subir / elegir / cerrar panel.
+    // "Carpeta no encontrada" IN-PLACE por panel: reintentar / subir / elegir / cerrar. Cada
+    // handler recibe el pane-id del panel que muestra el aviso.
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_missing_retry(move || {
-            ctrl.borrow_mut().missing_folder_retry();
+        ui.on_missing_retry(move |id| {
+            ctrl.borrow_mut().missing_folder_retry(PaneId(id as u64));
             start_timer();
             sync_layout();
         });
@@ -2482,8 +2483,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_missing_ancestor(move || {
-            ctrl.borrow_mut().missing_folder_go_ancestor();
+        ui.on_missing_ancestor(move |id| {
+            ctrl.borrow_mut()
+                .missing_folder_go_ancestor(PaneId(id as u64));
             start_timer();
             sync_layout();
         });
@@ -2492,9 +2494,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_missing_choose(move || {
+        ui.on_missing_choose(move |id| {
             if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                ctrl.borrow_mut().missing_folder_choose(path);
+                ctrl.borrow_mut()
+                    .missing_folder_choose(PaneId(id as u64), path);
                 start_timer();
             }
             sync_layout();
@@ -2504,8 +2507,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_missing_close_pane(move || {
-            ctrl.borrow_mut().missing_folder_close_pane();
+        ui.on_missing_close_pane(move |id| {
+            ctrl.borrow_mut()
+                .missing_folder_close_pane(PaneId(id as u64));
             start_timer();
             sync_layout();
         });
@@ -3215,6 +3219,7 @@ fn to_tree_row(r: bridge::TreeRow) -> TreeRow {
         loading: r.loading,
         error: r.error,
         disk_percent: r.disk_percent,
+        disk_detail: SharedString::from(r.disk_detail.as_str()),
         icon: r.icon,
     }
 }

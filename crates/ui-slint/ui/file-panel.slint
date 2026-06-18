@@ -181,6 +181,13 @@ export component FilePanel inherits FocusScope {
     in property <[string]> suggestions;      // autocompletado del editor
     in property <bool> is-favorite;          // la carpeta actual está en favoritos (★ llena)
     in property <bool> no-matches;           // filtro activo que vació la vista → aviso (F2)
+    // Carpeta no encontrada / ilegible: muestra el aviso IN-PLACE con opciones.
+    in property <bool> missing;
+    in property <string> missing-path;       // la ruta perdida (para mostrarla)
+    callback missing-retry(int);             // (pane-id) reintentar
+    callback missing-ancestor(int);          // (pane-id) subir al ancestro existente
+    callback missing-choose(int);            // (pane-id) elegir otra carpeta (selector nativo)
+    callback missing-close(int);             // (pane-id) cerrar el panel
     callback fav-toggle(int);                // (pane-id) anclar/quitar la carpeta de favoritos
     callback copy-path(int);                 // (pane-id) copiar la ruta al portapapeles
     // Tooltip de los íconos de la path-bar: (texto-o-vacío, x-centro en coords de ventana). La
@@ -653,6 +660,77 @@ export component FilePanel inherits FocusScope {
                 color: Theme.text-dim;
                 font-size: 13px;
                 horizontal-alignment: center;
+            }
+        }
+        // Aviso "carpeta no encontrada" IN-PLACE: cubre el área del panel cuando su carpeta no
+        // existe/ilegible (USB sacado, red caída, ruta muerta). Trae la ruta perdida + las 4
+        // opciones (reintentar / subir / elegir otra / cerrar panel). Cada botón emite con el
+        // pane-id para que el controlador actúe sobre ESTE panel.
+        if root.missing: Rectangle {
+            background: Theme.panel-bg;
+            VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                padding: 20px;
+                Text {
+                    text: Tr.missing-title;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: Tr.missing-body;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    height: lost-txt.preferred-height + 12px;
+                    background: Theme.row-bg;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    lost-txt := Text {
+                        text: root.missing-path;
+                        color: Theme.highlight;
+                        font-size: 12px;
+                        x: 8px;
+                        width: parent.width - 16px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                // Opciones (una por fila): reintentar / subir / elegir / cerrar.
+                for opt in [
+                    { label: Tr.missing-retry, kind: 0 },
+                    { label: Tr.missing-ancestor, kind: 1 },
+                    { label: Tr.missing-choose, kind: 2 },
+                    { label: Tr.missing-close, kind: 3 },
+                ]: Rectangle {
+                    height: 32px;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: opt-touch.has-hover ? Theme.accent : Theme.border;
+                    background: opt-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+                    Text {
+                        text: opt.label;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        x: 12px;
+                    }
+                    opt-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (opt.kind == 0) { root.missing-retry(root.pane-id); }
+                            if (opt.kind == 1) { root.missing-ancestor(root.pane-id); }
+                            if (opt.kind == 2) { root.missing-choose(root.pane-id); }
+                            if (opt.kind == 3) { root.missing-close(root.pane-id); }
+                        }
+                    }
+                }
             }
         }
     }

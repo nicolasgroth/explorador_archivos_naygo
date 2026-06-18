@@ -236,6 +236,8 @@ export struct TreeRow {
     loading: bool,
     error: bool,
     disk-percent: int,
+    // Texto de espacio del disco ("120 GB libre / 500 GB · 76%"); vacío si no es disco / sin dato.
+    disk-detail: string,
     // Ícono de color cacheado (carpeta o disco) (6A).
     icon: image,
 }
@@ -354,6 +356,11 @@ export struct PaneVm {
     col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
     is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)
     no-matches: bool,         // Files: hay filtro activo pero la vista quedó vacía (F2)
+    // Files: la carpeta del panel NO existe / es ilegible (USB sacado, red caída, ruta muerta).
+    // Muestra el aviso "carpeta no encontrada" IN-PLACE con sus opciones. `missing-path` es la
+    // ruta perdida (para mostrarla).
+    missing: bool,
+    missing-path: string,
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)

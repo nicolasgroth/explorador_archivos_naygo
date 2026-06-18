@@ -381,16 +381,19 @@ pub struct TreeRow {
     pub loading: bool,
     pub error: bool,
     pub disk_percent: i32,
+    /// Texto de espacio para las raíces de disco ("120 GB / 500 GB · 76%"); vacío si no es
+    /// disco o no hay dato (red caída / óptico vacío). Acompaña a la barrita de `disk_percent`.
+    pub disk_detail: String,
     /// Ícono de color cacheado (6A): carpeta o disco según `is_drive`.
     pub icon: slint::Image,
 }
 
 /// Aplana el árbol visible (solo nodos expandidos descienden) a una lista con sangría.
-/// `disk` mapea ruta de raíz → porcentaje de uso (0..100); las raíces sin dato van con -1.
-/// `icon_of` resuelve el ícono de cada nodo (carpeta/disco) desde el cache.
+/// `disk` mapea ruta de raíz → uso del disco (total/libre); las raíces sin dato van a `None`
+/// (barrita en -1, texto vacío). `icon_of` resuelve el ícono de cada nodo desde el cache.
 pub fn tree_rows(
     tree: &DirTree,
-    disk: &dyn Fn(&std::path::Path) -> Option<u8>,
+    disk: &dyn Fn(&std::path::Path) -> Option<naygo_core::disk::DiskUsage>,
     icon_of: &mut dyn FnMut(naygo_core::icon_kind::IconKey) -> slint::Image,
 ) -> Vec<TreeRow> {
     let mut out = Vec::new();
@@ -401,11 +404,25 @@ pub fn tree_rows(
     out
 }
 
+/// Texto de espacio de un disco: "120 GB / 500 GB · 76%". Vacío si total es 0 (desconocido).
+fn disk_detail_text(usage: naygo_core::disk::DiskUsage) -> String {
+    use naygo_core::format::{format_size, SizeFormat};
+    if usage.total == 0 {
+        return String::new();
+    }
+    format!(
+        "{} libre / {} · {}%",
+        format_size(usage.free, SizeFormat::Auto),
+        format_size(usage.total, SizeFormat::Auto),
+        usage.percent_used()
+    )
+}
+
 fn push_tree_node(
     node: &TreeNode,
     depth: i32,
     active: Option<&std::path::Path>,
-    disk: &dyn Fn(&std::path::Path) -> Option<u8>,
+    disk: &dyn Fn(&std::path::Path) -> Option<naygo_core::disk::DiskUsage>,
     icon_of: &mut dyn FnMut(naygo_core::icon_kind::IconKey) -> slint::Image,
     out: &mut Vec<TreeRow>,
 ) {
@@ -424,9 +441,16 @@ fn push_tree_node(
         loading: node.state == NodeState::Loading,
         error: node.state == NodeState::Error,
         disk_percent: if is_drive {
-            disk(&node.path).map(|p| p as i32).unwrap_or(-1)
+            disk(&node.path)
+                .map(|u| u.percent_used() as i32)
+                .unwrap_or(-1)
         } else {
             -1
+        },
+        disk_detail: if is_drive {
+            disk(&node.path).map(disk_detail_text).unwrap_or_default()
+        } else {
+            String::new()
         },
         icon: icon_of(if is_drive {
             naygo_core::icon_kind::IconKey::Drive(
@@ -604,7 +628,7 @@ mod tests {
         let drives = vec![(PathBuf::from("C:\\"), "C:\\".to_string(), DriveKind::Fixed)];
         let mut t = DirTree::from_drives(&drives);
         // Sin expandir: solo la raíz, depth 0, con chevron (Collapsed).
-        let no_disk = |_: &std::path::Path| None;
+        let no_disk = |_: &std::path::Path| None::<naygo_core::disk::DiskUsage>;
         let rows = tree_rows(&t, &no_disk, &mut |_| slint::Image::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].depth, 0);
@@ -632,7 +656,11 @@ mod tests {
         t.set_active(PathBuf::from("C:\\"));
         let disk = |p: &std::path::Path| {
             if p == std::path::Path::new("C:\\") {
-                Some(42u8)
+                // 42% usado: total 1000, libre 580.
+                Some(naygo_core::disk::DiskUsage {
+                    total: 1000,
+                    free: 580,
+                })
             } else {
                 None
             }
@@ -640,5 +668,9 @@ mod tests {
         let rows = tree_rows(&t, &disk, &mut |_| slint::Image::default());
         assert!(rows[0].active, "la raíz activa está marcada");
         assert_eq!(rows[0].disk_percent, 42);
+        assert!(
+            rows[0].disk_detail.contains('%'),
+            "la raíz con dato trae texto de espacio"
+        );
     }
 }

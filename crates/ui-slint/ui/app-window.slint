@@ -16,10 +16,9 @@ import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
 import { NewFolder } from "new-folder.slint";
-import { MissingFolder } from "missing-folder.slint";
 import { SearchPanel } from "search-panel.slint";
 import { Help } from "help.slint";
-import { BatchRenameVm, NewFolderVm, MissingFolderVm, HelpRowVm, SearchVm } from "types.slint";
+import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -312,12 +311,40 @@ component DriveBtn inherits Rectangle {
         spacing: 3px;
         padding-left: 5px;
         padding-right: 5px;
-        Image {
+        // Unidad FIJA/red: ícono de disco del set. Unidad EXTRAÍBLE (USB): ícono propio dibujado
+        // con Path (un pendrive), para distinguir a simple vista cuáles se pueden expulsar.
+        if !root.removable: Image {
             source: root.icon;
             width: 15px;
             height: 15px;
             vertical-alignment: center;
             image-rendering: smooth;
+        }
+        if root.removable: Rectangle {
+            width: 15px;
+            height: 15px;
+            // Pendrive: cuerpo + conector. Dibujado con Path (el render por software no pinta
+            // glifos de fuente para íconos).
+            Path {
+                width: 15px;
+                height: 15px;
+                stroke: Theme.accent;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 15;
+                viewbox-height: 15;
+                // Cuerpo del pendrive (rectángulo vertical redondeado, parte de abajo).
+                MoveTo { x: 5; y: 5.5; }
+                LineTo { x: 10; y: 5.5; }
+                LineTo { x: 10; y: 13.5; }
+                LineTo { x: 5; y: 13.5; }
+                Close { }
+                // Conector metálico (arriba).
+                MoveTo { x: 6.5; y: 5.5; }
+                LineTo { x: 6.5; y: 2; }
+                LineTo { x: 8.5; y: 2; }
+                LineTo { x: 8.5; y: 5.5; }
+            }
         }
         Text {
             text: root.label;
@@ -565,12 +592,11 @@ export component AppWindow inherits Window {
     callback new-folder-set-text(string);
     callback new-folder-create();
     callback new-folder-close();
-    // Modal "carpeta no encontrada":
-    in property <MissingFolderVm> missing-folder-vm;
-    callback missing-retry();
-    callback missing-ancestor();
-    callback missing-choose();
-    callback missing-close-pane();
+    // "Carpeta no encontrada" IN-PLACE (aviso dentro del panel): cada acción trae el pane-id.
+    callback missing-retry(int);
+    callback missing-ancestor(int);
+    callback missing-choose(int);
+    callback missing-close-pane(int);
     // Búsqueda recursiva (Ctrl+F / lupa):
     in property <SearchVm> search-vm;
     callback search-run(string);   // lanzar búsqueda con el texto dado
@@ -924,6 +950,12 @@ export component AppWindow inherits Window {
                         suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
                         is-favorite: p.is-favorite;
                         no-matches: p.no-matches;
+                        missing: p.missing;
+                        missing-path: p.missing-path;
+                        missing-retry(id) => { root.missing-retry(id); }
+                        missing-ancestor(id) => { root.missing-ancestor(id); }
+                        missing-choose(id) => { root.missing-choose(id); }
+                        missing-close(id) => { root.missing-close-pane(id); }
                         fav-toggle(id) => { root.fav-toggle(id); }
                         copy-path(id) => { root.copy-path(id); root.show-toast(Tr.pathbar-copied); }
                         hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
@@ -1230,16 +1262,8 @@ export component AppWindow inherits Window {
         close() => { root.new-folder-close(); }
     }
 
-    // Modal "carpeta no encontrada".
-    MissingFolder {
-        width: 100%;
-        height: 100%;
-        vm: root.missing-folder-vm;
-        retry() => { root.missing-retry(); }
-        go-ancestor() => { root.missing-ancestor(); }
-        choose() => { root.missing-choose(); }
-        close-pane() => { root.missing-close-pane(); }
-    }
+    // (El aviso "carpeta no encontrada" ahora es IN-PLACE dentro de cada FilePanel; ya no hay
+    //  modal global.)
 
     // Ayuda en pantalla (F1).
     Help {
