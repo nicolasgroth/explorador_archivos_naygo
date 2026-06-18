@@ -69,6 +69,11 @@ cancela). A la derecha tienes **★** (anclar a favoritos) y **📋** (copiar la
 **Unidades de disco:** la tira C:/D:/… de la toolbar navega el panel activo a esa
 unidad.
 
+**Historial de carpetas:** el ícono de reloj en la barra de herramientas despliega un
+menú con las carpetas visitadas recientemente; al elegir una, el panel activo navega a
+ella. En **Configuración → Avanzado** puedes ajustar cuántas carpetas recordar (1–100,
+por defecto 50).
+
 **Vista profunda (recursiva):** el botón de la barra del panel (tres líneas
 escalonadas) activa un modo que muestra, en una sola lista, todo el contenido de la
 carpeta actual y de sus subcarpetas, a cualquier profundidad. Cada fila se sangra

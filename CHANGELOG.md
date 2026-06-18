@@ -11,6 +11,10 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   profundidad, todo el contenido de la carpeta actual y sus subcarpetas (recursivo).
   Se activa con el botón de la barra del panel; aparece por streaming y se puede
   cancelar. El doble clic en una carpeta sale del modo y navega a ella.
+- Ícono de historial de carpetas en la barra de herramientas: despliega un menú con
+  las carpetas visitadas recientemente y, al elegir una, navega el panel activo.
+- La cantidad de carpetas recientes recordadas ahora es configurable (1–100, por
+  defecto 50) en la sección Avanzado de la configuración.
 
 ## [0.1.0] — 2026-06-18
 ### Añadido
