@@ -161,5 +161,5 @@ if ($Push) {
     if ($LASTEXITCODE -ne 0) { throw "git push --tags fallo." }
     Write-Host "Push hecho (commit + tags)."
 } else {
-    Write-Host "Recuerda publicar:  git push && git push --tags"
+    Write-Host "Recuerda publicar:  git push ; git push --tags"
 }
