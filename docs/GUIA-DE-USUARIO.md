@@ -16,7 +16,7 @@ La ventana se divide en:
 
 - **Barra de herramientas** (arriba): botones de acciones + la tira de unidades de
   disco (C:, D:, …) + la ruta actual.
-- **Paneles**: el área principal. Empieza con un panel de archivos; podés dividir
+- **Paneles**: el área principal. Empieza con un panel de archivos; puedes dividir
   en varios (dual-pane y más).
 - **Barra de estado** (abajo): ruta del panel activo y conteo de elementos.
 
@@ -40,11 +40,11 @@ Cada panel puede ser de un **tipo**:
 
 **Dividir y reorganizar:**
 
-- El botón **＋** divide el panel activo (elegís dirección: derecha/abajo/izq/arriba).
+- El botón **＋** divide el panel activo (elige dirección: derecha/abajo/izq/arriba).
 - El botón **Panel ▾** agrega un panel especial (árbol, propiedades, etc.).
-- **Arrastrá la barra de título** de un panel sobre otro para reacomodar (los bordes
+- **Arrastra la barra de título** de un panel sobre otro para reacomodar (los bordes
   dividen; el centro apila como pestaña).
-- **Arrastrá las barras divisorias** para redimensionar: mientras arrastrás ves una
+- **Arrastra las barras divisorias** para redimensionar: mientras arrastras verás una
   barra-fantasma de acento que marca dónde quedará el borde; al soltar se aplica.
 - **Swap / Clonar / Tabs** (toolbar): intercambiar carpetas de dos paneles, abrir la
   carpeta actual en otro panel, o apilar el panel como pestaña sobre otro.
@@ -58,13 +58,13 @@ Cada panel puede ser de un **tipo**:
 - **Alt+←** / **Alt+→**: atrás / adelante en el historial (como un navegador).
 - **F5**: refresca (vuelve a leer la carpeta del disco).
 - **Tab**: cambia el panel de archivos activo.
-- **Tipeo rápido (typeahead):** escribí las primeras letras de un nombre y el foco
-  salta a ese ítem. Si hacés una pausa (~½ segundo), empieza una búsqueda nueva.
+- **Tipeo rápido (typeahead):** escribe las primeras letras de un nombre y el foco
+  salta a ese ítem. Si haces una pausa (~½ segundo), empieza una búsqueda nueva.
 - **Esc**: cancela un listado en curso (útil en discos de red lentos).
 
-**Barra de ruta (breadcrumbs):** mostrá la ruta como segmentos clicables. Clic en el
+**Barra de ruta (breadcrumbs):** muestra la ruta como segmentos clicables. Clic en el
 hueco vacío la convierte en un editor de texto con autocompletado (Enter navega, Esc
-cancela). A la derecha tenés **★** (anclar a favoritos) y **📋** (copiar la ruta).
+cancela). A la derecha tienes **★** (anclar a favoritos) y **📋** (copiar la ruta).
 
 **Unidades de disco:** la tira C:/D:/… de la toolbar navega el panel activo a esa
 unidad.
@@ -112,7 +112,7 @@ Windows*, *Nueva carpeta…*, *Pegar* y las terminales. Un clic en esa zona tamb
 le da el **foco** al panel, así las acciones de la toolbar usan su carpeta.
 
 **Nueva(s) carpeta(s):** el botón **Carpeta** de la toolbar (o *Nueva carpeta…* del
-menú de carpeta) abre un cuadro donde podés crear **varias a la vez**: una carpeta
+menú de carpeta) abre un cuadro donde puedes crear **varias a la vez**: una carpeta
 por línea, y usando `\` se anidan (p. ej. `proyecto\src\bin` crea las tres). Las
 líneas inválidas se avisan y se omiten; las válidas se crean.
 
@@ -123,7 +123,7 @@ líneas inválidas se avisan y se omiten; las válidas se crean.
 El encabezado de la tabla:
 
 - **Clic** en una columna ordena por ella; otro clic invierte (▲/▼).
-- **Arrastrá el borde derecho** de una columna para cambiar su ancho.
+- **Arrastra el borde derecho** de una columna para cambiar su ancho.
 - **Botón ≡** (al final del encabezado): mostrar/ocultar columnas.
 - **Clic derecho** en una columna abre su menú: **ordenar** asc/desc, **filtrar…**,
   **quitar filtro**, **mover ←/→**, **ocultar**.
@@ -131,7 +131,7 @@ El encabezado de la tabla:
 **Filtros por columna:**
 
 - **Nombre**: contiene un texto (con opción de distinguir mayúsculas).
-- **Extensión**: marcás los tipos a mostrar (con su conteo).
+- **Extensión**: marca los tipos a mostrar (con su conteo).
 - **Tamaño**: rango mínimo/máximo (acepta `2 KB`, `1.5 M`, `3 GB`, o bytes).
 - **Fecha** (modificado/creado): rango `AAAA-MM-DD`.
 
@@ -223,9 +223,9 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 
 ## 11. Personalización avanzada (packs)
 
-Naygo guarda su configuración junto al ejecutable (modo portable). Podés agregar:
+Naygo guarda su configuración junto al ejecutable (modo portable). Puedes agregar:
 
-- **Idiomas**: soltá un `.json` de traducción; aparece en el selector. ES y EN vienen
+- **Idiomas**: suelta un `.json` de traducción; aparece en el selector. ES y EN vienen
   de base.
 - **Temas**: *color sets* intercambiables en caliente.
 - **Sets de íconos**: empaquetados o propios.

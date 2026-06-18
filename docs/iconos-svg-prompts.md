@@ -1,10 +1,10 @@
 # Prompts para generar los íconos de Naygo (SVG)
 
-> Pasale estos prompts a una IA generadora de íconos (o a un diseñador). Generá **un SVG por
-> ícono**. Cuando los tengas, guardalos y avisale al asistente: él los integra (Slint carga SVG
+> Pasa estos prompts a una IA generadora de íconos (o a un diseñador). Genera **un SVG por
+> ícono**. Cuando los tengas, guárdalos y avísale al asistente: él los integra (Slint carga SVG
 > directo con `@image-url`, así escalan sin pérdida y reemplazan los íconos dibujados a mano).
 
-## Estilo (poné este encabezado al inicio de CADA pedido)
+## Estilo (pon este encabezado al inicio de CADA pedido)
 
 > Generate a single flat-style line icon as clean SVG, **24×24 viewBox**, **2px stroke**, rounded
 > line caps and joins, **stroke only** (no fill) using `currentColor` so it can be recolored,
@@ -13,7 +13,7 @@
 
 ## Íconos (uno por archivo)
 
-Completá el encabezado de arriba con cada descripción. El **nombre de archivo** es el que espera
+Completa el encabezado de arriba con cada descripción. El **nombre de archivo** es el que espera
 el código (carpeta `assets/icons/flat/`, formato final PNG 16×16 + 32×32 o SVG):
 
 | Archivo destino        | Descripción a agregar al prompt |
@@ -35,12 +35,12 @@ el código (carpeta `assets/icons/flat/`, formato final PNG 16×16 + 32×32 o SV
 
 ## Opcional: variante "rellena" del activo
 
-Si querés que el botón seleccionado se vea relleno, pedí además una variante con `fill` del mismo
+Si quieres que el botón seleccionado se vea relleno, pide además una variante con `fill` del mismo
 ícono. Igual con `currentColor` alcanza para recolorearlos según el tema activo.
 
 ## Notas de integración
 
-- Mantené el `viewBox="0 0 24 24"` y `currentColor` — así el asistente los tiñe con el color del
+- Mantén el `viewBox="0 0 24 24"` y `currentColor` — así el asistente los tiñe con el color del
   tema sin editar el SVG.
-- Evitá `<text>` o fuentes embebidas (no se rasterizan bien); todo con `<path>`/`<line>`/`<rect>`.
-- Si el generador te da `width`/`height` fijos, no importa: lo que vale es el `viewBox` y los paths.
+- Evita `<text>` o fuentes embebidas (no se rasterizan bien); todo con `<path>`/`<line>`/`<rect>`.
+- Si el generador da `width`/`height` fijos, no importa: lo que vale es el `viewBox` y los paths.

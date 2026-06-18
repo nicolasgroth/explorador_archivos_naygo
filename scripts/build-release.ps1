@@ -86,7 +86,7 @@ if ($null -eq $isccPath) {
     Write-Warning "Inno Setup (ISCC.exe) no encontrado (ni en PATH ni en las rutas estandar)."
     Write-Warning "Se genero solo el ZIP portable. Para el instalador, instala Inno Setup:"
     Write-Warning "  https://jrsoftware.org/isdl.php"
-    Write-Warning "y volve a correr este script."
+    Write-Warning "y vuelve a correr este script."
 } else {
     Write-Host "Generando instalador con Inno Setup ($isccPath)..."
     & $isccPath "/DMyAppVersion=$version" (Join-Path $repo "installer\naygo.iss")

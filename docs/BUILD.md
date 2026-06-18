@@ -7,7 +7,7 @@
   el `.exe` resultante corre en equipos limpios sin el "Visual C++ Redistributable".
 - **Inno Setup** (opcional, solo para generar el instalador): descargar de
   <https://jrsoftware.org/isdl.php>. Tras instalar, asegurate de que `ISCC.exe` esté
-  en el `PATH` (o ejecutá el script desde la consola "Inno Setup" / agregá su carpeta,
+  en el `PATH` (o ejecuta el script desde la consola "Inno Setup" / agrega su carpeta,
   típicamente `C:\Program Files (x86)\Inno Setup 6`, al `PATH`).
 
 ## Compilar (desarrollo)
@@ -47,11 +47,11 @@ Qué hace, en orden:
 ## Troubleshooting
 
 - **"ISCC.exe no encontrado"**: Inno Setup no está instalado o no está en el `PATH`.
-  Instalalo (link arriba) y reintentá; el ZIP portable se genera igual sin Inno.
-- **El `.exe` no muestra el ícono**: rehacé `cargo build --release` (el ícono se
-  embebe vía `crates/ui/app.rc`). Explorer cachea íconos; probá en otra carpeta.
+  Instálalo (link arriba) y vuelve a ejecutar el script; el ZIP portable se genera igual sin Inno.
+- **El `.exe` no muestra el ícono**: vuelve a ejecutar `cargo build --release` (el ícono se
+  embebe vía `crates/ui/app.rc`). Explorer cachea íconos; prueba en otra carpeta.
 - **Error al generar las BMP del asistente**: el script usa `System.Drawing` de .NET;
   en Windows 10/11 normal está disponible. En ediciones recortadas (Server Core),
-  generá las BMP a mano y volvé a correr.
+  genera las BMP a mano y vuelve a correr.
 - **Falla `cargo build`**: confirmá el toolchain MSVC (`rustup default
   stable-x86_64-pc-windows-msvc`).
