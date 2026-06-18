@@ -15,6 +15,11 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 pub enum TrayMsg {
     /// Mostrar + enfocar la ventana principal (clic en el ícono o menú "Abrir").
     Open,
+    /// Abrir un panel nuevo (divide el panel activo) y traer la ventana al frente.
+    NewPane,
+    /// Re-centrar la ventana en la pantalla y traerla al frente: rescata una ventana que el
+    /// usuario "perdió" (arrastrada fuera de la pantalla, minimizada, o tapada).
+    CenterWindow,
     /// Salir de verdad (menú "Salir"), aunque `close_to_tray` esté activo.
     Exit,
 }
@@ -28,12 +33,22 @@ pub struct Tray {
 /// Crea el ícono de bandeja con su menú. Tolerante: `None` si algo falla (la app sigue normal,
 /// solo sin tray). `waker` despierta la UI cuando llega un evento del tray. Re-instala los
 /// handlers globales para que apunten al canal de ESTA instancia.
-pub fn create(open_label: &str, exit_label: &str, waker: Waker) -> Option<Tray> {
+pub fn create(
+    open_label: &str,
+    new_pane_label: &str,
+    center_label: &str,
+    exit_label: &str,
+    waker: Waker,
+) -> Option<Tray> {
     let icon = load_icon()?;
     let menu = Menu::new();
     let open_item = MenuItem::new(open_label, true, None);
+    let new_pane_item = MenuItem::new(new_pane_label, true, None);
+    let center_item = MenuItem::new(center_label, true, None);
     let exit_item = MenuItem::new(exit_label, true, None);
     menu.append(&open_item).ok()?;
+    menu.append(&new_pane_item).ok()?;
+    menu.append(&center_item).ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&exit_item).ok()?;
 
@@ -62,12 +77,18 @@ pub fn create(open_label: &str, exit_label: &str, waker: Waker) -> Option<Tray> 
         }
     }));
 
-    // Menú contextual: Abrir / Salir.
+    // Menú contextual: Abrir / Nuevo panel / Centrar ventana / Salir.
     let open_id = open_item.id().clone();
+    let new_pane_id = new_pane_item.id().clone();
+    let center_id = center_item.id().clone();
     let exit_id = exit_item.id().clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let msg = if event.id == open_id {
             Some(TrayMsg::Open)
+        } else if event.id == new_pane_id {
+            Some(TrayMsg::NewPane)
+        } else if event.id == center_id {
+            Some(TrayMsg::CenterWindow)
         } else if event.id == exit_id {
             Some(TrayMsg::Exit)
         } else {

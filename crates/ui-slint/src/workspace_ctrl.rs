@@ -583,6 +583,26 @@ impl WorkspaceCtrl {
         Vec::new()
     }
 
+    /// ¿Se puede navegar a `dir`? Existe Y se puede abrir para listar (permiso). Una carpeta que
+    /// existe pero deniega lectura (permiso) NO es navegable → también abre el modal. `read_dir`
+    /// es la prueba real: `exists()` puede mentir en rutas de red/permiso.
+    fn dir_is_navigable(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir).is_ok()
+    }
+
+    /// Abre el modal "carpeta no encontrada" para `pane`/`lost`, si no hay otro modal ya abierto.
+    /// Punto único: lo usan tanto la detección por dispositivo como la navegación a una ruta
+    /// inexistente/ilegible.
+    fn set_missing_folder(&mut self, pane: PaneId, lost: PathBuf) {
+        if self.missing_folder.is_some() {
+            return;
+        }
+        self.missing_folder = Some(MissingFolder {
+            pane,
+            lost_path: lost,
+        });
+    }
+
     /// El ancestro existente más cercano de `path` (sube hasta encontrar uno que exista; si
     /// ninguno —p. ej. la unidad entera se fue—, devuelve None).
     fn nearest_existing_ancestor(path: &std::path::Path) -> Option<PathBuf> {
@@ -1663,6 +1683,11 @@ impl WorkspaceCtrl {
 
     /// Abre la carpeta `dir` en el panel `dest` (sin tocar el origen) y arranca su listado.
     pub fn open_in_pane(&mut self, dest: PaneId, dir: PathBuf) {
+        // Igual que navigate_active_to: una carpeta inexistente/ilegible abre el modal.
+        if !Self::dir_is_navigable(&dir) {
+            self.set_missing_folder(dest, dir);
+            return;
+        }
         if let Some(f) = self.ws.pane_mut(dest).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -2134,6 +2159,12 @@ impl WorkspaceCtrl {
         let Some(active_files_id) = self.active_files_id() else {
             return false;
         };
+        // Si la carpeta no existe o no se puede leer (favorito/reciente viejo, red caída, ruta
+        // tipeada que no existe), NO navegamos en silencio: abrimos el modal con opciones.
+        if !Self::dir_is_navigable(&dir) {
+            self.set_missing_folder(active_files_id, dir);
+            return false;
+        }
         if let Some(f) = self
             .ws
             .pane_mut(active_files_id)

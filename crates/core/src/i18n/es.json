@@ -570,6 +570,8 @@
   "slint.cfg.default_table_on": "Guardada",
   "slint.cfg.default_table_off": "Sin plantilla",
   "slint.tray.open": "Abrir",
+  "slint.tray.new_pane": "Nuevo panel",
+  "slint.tray.center": "Centrar ventana",
   "slint.tray.exit": "Salir",
   "slint.cfg.date_format": "Formato de fecha",
   "slint.cfg.size_format": "Formato de tamaño",

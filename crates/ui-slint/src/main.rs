@@ -27,6 +27,7 @@ mod i18n_keys;
 mod icons;
 mod keys;
 mod listing;
+mod logging;
 mod ops_ctrl;
 mod packs;
 mod preview;
@@ -131,6 +132,9 @@ fn purpose_to_int(p: PanePurpose) -> i32 {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
+    // diálogo, en vez de cerrarse en silencio (el log queda en naygo.log junto al ejecutable).
+    logging::init();
     let ui = AppWindow::new()?;
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
@@ -797,6 +801,8 @@ fn main() -> Result<(), slint::PlatformError> {
             let c = ctrl.borrow();
             tray::create(
                 &c.config.t("slint.tray.open"),
+                &c.config.t("slint.tray.new_pane"),
+                &c.config.t("slint.tray.center"),
                 &c.config.t("slint.tray.exit"),
                 waker.clone(),
             )
@@ -813,6 +819,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let start_timer: Rc<dyn Fn()> = {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let sync_layout = sync_layout.clone();
         let timer = timer.clone();
         let apply_device_change = apply_device_change.clone();
         let waker = waker.clone();
@@ -824,6 +831,7 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
+            let sync_layout = sync_layout.clone();
             let timer2 = timer.clone();
             let waker = waker.clone();
             let apply_device_change = apply_device_change.clone();
@@ -868,6 +876,25 @@ fn main() -> Result<(), slint::PlatformError> {
                                     if let Some(ui) = ui_weak.upgrade() {
                                         let _ = ui.show();
                                         ui.window().set_minimized(false);
+                                    }
+                                }
+                                tray::TrayMsg::NewPane => {
+                                    // Traer al frente y abrir un panel nuevo (divide el activo).
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        let _ = ui.show();
+                                        ui.window().set_minimized(false);
+                                    }
+                                    ctrl.borrow_mut().add_pane_split();
+                                    sync_layout();
+                                }
+                                tray::TrayMsg::CenterWindow => {
+                                    // Rescatar una ventana "perdida": mostrar, des-minimizar y
+                                    // reposicionar a una esquina segura siempre visible (80,80).
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        let _ = ui.show();
+                                        ui.window().set_minimized(false);
+                                        ui.window()
+                                            .set_position(slint::LogicalPosition::new(80.0, 80.0));
                                     }
                                 }
                                 tray::TrayMsg::Exit => {
@@ -1204,10 +1231,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_nav_back(move |id| {
-            let mut c = ctrl.borrow_mut();
-            c.set_active(PaneId(id as u64));
-            if c.on_go_back() {
-                drop(c);
+            // El borrow del controlador se LIBERA antes de start_timer()/sync_rows(): esos
+            // closures vuelven a tomar `ctrl`, y dejar `c` vivo causaba un doble-borrow del
+            // RefCell (panic → cierre abrupto) cuando on_go_back devolvía false (sin historial).
+            let moved = {
+                let mut c = ctrl.borrow_mut();
+                c.set_active(PaneId(id as u64));
+                c.on_go_back()
+            };
+            if moved {
                 start_timer();
             }
             sync_rows();
@@ -1218,10 +1250,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_nav_forward(move |id| {
-            let mut c = ctrl.borrow_mut();
-            c.set_active(PaneId(id as u64));
-            if c.on_go_forward() {
-                drop(c);
+            // Igual que nav_back: liberar el borrow antes de start_timer()/sync_rows().
+            let moved = {
+                let mut c = ctrl.borrow_mut();
+                c.set_active(PaneId(id as u64));
+                c.on_go_forward()
+            };
+            if moved {
                 start_timer();
             }
             sync_rows();

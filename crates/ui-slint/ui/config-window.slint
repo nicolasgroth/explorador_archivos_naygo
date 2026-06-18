@@ -190,9 +190,12 @@ export component ConfigWindow inherits Window {
     // Captura de tecla (la UI la enruta cuando `capturing` != "").
     callback capture-key(string, bool, bool, bool);
 
-    // FocusScope que CUBRE toda la ventana (un único hijo que la llena), para capturar la
-    // combinación del atajo cuando corresponde y para que el contenido ocupe todo el alto/ancho.
+    // FocusScope de captura de atajos: overlay transparente full-size, SOLO para leer la
+    // combinación cuando `capturing` != "". No envuelve al contenido (envolverlo hacía que el
+    // layout NO se estirara al alto de la ventana, dejando espacio muerto abajo). Va PRIMERO para
+    // quedar debajo del contenido en el z-order (no roba clics: enabled solo en modo captura).
     fs := FocusScope {
+        x: 0; y: 0;
         width: 100%;
         height: 100%;
         enabled: root.capturing != "";
@@ -204,11 +207,12 @@ export component ConfigWindow inherits Window {
             }
             accept
         }
+    }
 
-        // Contenido de la ventana: el SO provee la barra de título (mover/minimizar/cerrar), así
-        // que ya no hay velo, arrastre propio, grip ni alto manual. El VerticalLayout llena el
-        // FocusScope (y por ende la ventana), así las secciones usan TODO el alto disponible.
-        body := VerticalLayout {
+    // Contenido: VerticalLayout como HIJO DIRECTO de la Window → la Window lo estira para llenar
+    // TODO el alto y ancho (un layout raíz siempre se estira; un FocusScope no). Así las secciones
+    // ocupan toda la ventana al redimensionar, sin espacio muerto abajo.
+    body := VerticalLayout {
             width: 100%;
             height: 100%;
             padding: 14px;
@@ -826,7 +830,6 @@ export component ConfigWindow inherits Window {
                 }
             }
         }
-    }
 
     // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
     // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.
