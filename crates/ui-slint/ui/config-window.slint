@@ -807,24 +807,34 @@ export component ConfigWindow inherits Window {
                                     font-weight: 700;
                                     horizontal-alignment: center;
                                 }
-                                // Si no hay notas para esta versión, una línea discreta.
                                 if root.release-notes.length == 0: Text {
                                     text: Tr.about-no-notes;
                                     color: Theme.text-dim;
                                     horizontal-alignment: center;
                                 }
-                                // Una subsección por categoría, con sus viñetas.
-                                for sec in root.release-notes: VerticalLayout {
-                                    spacing: 2px;
-                                    Text {
-                                        text: sec.category;
-                                        color: Theme.accent;
-                                        font-weight: 700;
-                                    }
-                                    for it in sec.items: Text {
-                                        text: "• " + it;
-                                        color: Theme.text-dim;
-                                        wrap: word-wrap;
+                                // Contenido acotado y centrado: da a las viñetas un ancho de
+                                // referencia para que `word-wrap` envuelva en vez de estirarse.
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        max-width: 460px;
+                                        horizontal-stretch: 1;
+                                        VerticalLayout {
+                                            spacing: 6px;
+                                            for sec in root.release-notes: VerticalLayout {
+                                                spacing: 2px;
+                                                Text {
+                                                    text: sec.category;
+                                                    color: Theme.accent;
+                                                    font-weight: 700;
+                                                }
+                                                for it in sec.items: Text {
+                                                    text: "• " + it;
+                                                    color: Theme.text-dim;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
