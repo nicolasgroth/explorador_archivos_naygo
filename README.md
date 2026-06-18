@@ -33,17 +33,21 @@ source, sin dependencias de pago.
 
 ## Instalación / Build
 
-Para usar Naygo:
+### Descargar última versión
 
-- **Portable**: descargá `Naygo-<versión>-portable.zip`, descomprimí y ejecutá
-  `naygo.exe`. No instala nada.
-- **Instalador**: ejecutá `Naygo-<versión>-setup.exe` y seguí el asistente.
+**[⬇️ Descargar Naygo (versión portable)](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip)**
 
-La primera vez, Windows SmartScreen puede advertir "editor desconocido" (el `.exe` no
-está firmado): hacé clic en **"Más información" → "Ejecutar de todos modos"**.
+Descomprimí el ZIP y ejecutá `naygo.exe`. No requiere instalación.
 
-Para compilar y empaquetar desde el código, ver
-[`docs/BUILD.md`](docs/BUILD.md) y [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
+> **Nota:** La primera vez, Windows SmartScreen puede advertir "editor desconocido"
+> (el ejecutable no está firmado digitalmente). Hacé clic en **"Más información"**
+> y luego **"Ejecutar de todos modos"**.
+
+### Compilar desde el código
+
+Para compilar y empaquetar desde el código fuente, ver:
+- [`docs/BUILD.md`](docs/BUILD.md) — instrucciones de compilación
+- [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — proceso de empaquetado y releases
 
 ## Licencia
 

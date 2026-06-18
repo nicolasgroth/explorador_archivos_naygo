@@ -1,0 +1,67 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Run lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Extract version from tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "Building version: $version"
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          # Create dist directory
+          New-Item -ItemType Directory -Force -Path dist
+
+          # Copy files to dist
+          Copy-Item target\release\naygo.exe dist\
+          Copy-Item LICENSE dist\
+          Copy-Item installer\LEEME.txt dist\
+
+          # Create ZIP with fixed name (no version)
+          Compress-Archive -Path dist\* -DestinationPath Naygo-portable.zip -Force
+
+          echo "Created Naygo-portable.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "$env:VERSION" `
+            Naygo-portable.zip `
+            --title "Release $env:VERSION" `
+            --notes "Build automático de Naygo $env:VERSION`n`nDescarga el archivo ZIP, descomprimí y ejecutá naygo.exe.`n`n**Características principales:**`n- Explorador de archivos estilo Commander`n- Navegación ultra-rápida por teclado`n- Paneles dinámicos dockables`n- Multi-idioma (ES + EN)`n- Temas personalizables`n`n**Nota:** En la primera ejecución, Windows SmartScreen puede advertir 'editor desconocido' (el ejecutable no está firmado digitalmente). Hacé clic en 'Más información' y luego 'Ejecutar de todos modos'."
