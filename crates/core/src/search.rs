@@ -95,15 +95,15 @@ fn wildcard_match(name: &str, pattern: &str) -> bool {
 
 /// Una entrada cruda de un directorio para la búsqueda: ruta + tipo + si es symlink.
 /// (Reusa la idea de `sizing::WalkEntry` pero local a búsqueda para no acoplar módulos.)
-struct DirEntryRaw {
-    path: PathBuf,
-    is_dir: bool,
-    is_symlink: bool,
+pub(crate) struct DirEntryRaw {
+    pub(crate) path: PathBuf,
+    pub(crate) is_dir: bool,
+    pub(crate) is_symlink: bool,
 }
 
 /// Resultado de listar un directorio para la búsqueda: las entradas, o `None` si no se
 /// pudo leer (permiso/desaparición) → cuenta como "parcial".
-type ListResult = Option<Vec<DirEntryRaw>>;
+pub(crate) type ListResult = Option<Vec<DirEntryRaw>>;
 
 /// Lanza la búsqueda de `query` bajo `root` (recursiva) en un worker. Devuelve el receptor
 /// del canal (la UI lo drena frame a frame) y el `JoinHandle`. Cancelable vía `token`.
@@ -231,7 +231,7 @@ fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
 
 /// Lista un directorio del FS real para la búsqueda. `None` si no se puede leer (parcial).
 /// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles.
-fn fs_lister(dir: &Path) -> ListResult {
+pub(crate) fn fs_lister(dir: &Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
     for ent in rd.flatten() {
