@@ -324,6 +324,12 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.no_matches = nm;
                             changed = true;
                         }
+                        // Estado del botón de vista profunda: on/off según el job activo.
+                        let deep = c.is_deep_active(id);
+                        if pv.deep_active != deep {
+                            pv.deep_active = deep;
+                            changed = true;
+                        }
                     }
                     // Inspector/Preview son structs sueltas: se setean según el tipo.
                     if purpose == Some(PanePurpose::Inspector) {
@@ -618,6 +624,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             // Carpeta no encontrada / ilegible: aviso in-place con opciones.
                             missing: ctrl.borrow().pane_dir_missing(*id),
                             missing_path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
+                            deep_active: ctrl.borrow().is_deep_active(*id),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -936,6 +943,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     let size_done = ctrl.borrow_mut().pump_sizes();
                     // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
                     let search_done = ctrl.borrow_mut().pump_search();
+                    // Drenar el listado profundo en vuelo (vista profunda / toggle).
+                    let deep_changed = ctrl.borrow_mut().deep_poll();
                     // Watcher de carpeta (F5A): aplicar los cambios detectados a cada panel y
                     // marcar como nuevos los archivos recién aparecidos (para resaltarlos).
                     let batches = ctrl.borrow_mut().watchers.drain();
@@ -960,6 +969,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         && ops_done
                         && size_done
                         && search_done
+                        && !deep_changed
                         && !fresh_pending
                     {
                         timer2.stop();
@@ -1003,6 +1013,17 @@ fn main() -> Result<(), slint::PlatformError> {
             } else {
                 sync_rows();
             }
+        });
+    }
+    // Toggle de vista profunda (botón de la barra del panel Files).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_toggle_deep(move |id| {
+            ctrl.borrow_mut().deep_toggle(PaneId(id as u64));
+            start_timer();
+            sync_rows();
         });
     }
     {
@@ -3167,7 +3188,7 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         cut: r.cut,
         highlight: r.highlight,
         icon: r.icon,
-        depth: 0,
+        depth: r.depth as i32,
     }
 }
 

@@ -26,6 +26,9 @@ pub struct PlainRow {
     /// Ícono de color por tipo, ya decodificado y cacheado (6A). Lo resuelve el `icon_of`
     /// que pasa el controlador (consulta el `IconCache` por la clave del entry).
     pub icon: slint::Image,
+    /// Profundidad en la vista profunda (recursiva): 0 = nivel raíz, >0 sangra la fila.
+    /// En vista normal/búsqueda es 0 (sin efecto).
+    pub depth: u32,
 }
 
 /// Valor de texto de una celda para un entry y una columna (6C). Name se pinta aparte;
@@ -90,6 +93,7 @@ pub fn rows_from_view(
                 cut: is_cut(&e.path),
                 highlight: is_fresh(&e.path),
                 icon: icon_of(e),
+                depth: 0,
             })
         })
         .collect()

@@ -364,6 +364,7 @@ export struct PaneVm {
     // ruta perdida (para mostrarla).
     missing: bool,
     missing-path: string,
+    deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)

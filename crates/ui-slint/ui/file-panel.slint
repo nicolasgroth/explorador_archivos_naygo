@@ -226,6 +226,9 @@ export component FilePanel inherits FocusScope {
     // Botones laterales del mouse (atrás/adelante) sobre este panel: navegan su historial.
     callback nav-back(int);                  // (pane-id)
     callback nav-forward(int);               // (pane-id)
+    // Vista profunda (recursiva): toggle en la barra + estado on/off.
+    in property <bool> deep-active: false;
+    callback toggle-deep(int);               // (pane-id)
 
     key-pressed(event) => {
         root.activate(root.pane-id);
@@ -339,6 +342,36 @@ export component FilePanel inherits FocusScope {
                             }
                             changed has-hover => {
                                 root.hover-tip(self.has-hover ? Tr.pathbar-copy-tip : "",
+                                    self.absolute-position.x + self.width / 2);
+                            }
+                        }
+                    }
+                    // Botón toggle de vista profunda: tres líneas escalonadas. Se pinta con
+                    // fondo de acento cuando está activo o al pasar el cursor.
+                    Rectangle {
+                        width: 26px;
+                        height: 22px;
+                        border-radius: 4px;
+                        background: deep-touch.has-hover || root.deep-active ? Theme.accent : transparent;
+                        Path {
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            stroke: (deep-touch.has-hover || root.deep-active) ? white : Theme.text-dim;
+                            stroke-width: 1.3px;
+                            fill: transparent;
+                            viewbox-width: 14;
+                            viewbox-height: 14;
+                            MoveTo { x: 1; y: 3; }   LineTo { x: 9; y: 3; }
+                            MoveTo { x: 4; y: 7; }   LineTo { x: 12; y: 7; }
+                            MoveTo { x: 7; y: 11; }  LineTo { x: 13; y: 11; }
+                        }
+                        deep-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle-deep(root.pane-id); }
+                            changed has-hover => {
+                                root.hover-tip(self.has-hover ? Tr.deep-view-tip : "",
                                     self.absolute-position.x + self.width / 2);
                             }
                         }

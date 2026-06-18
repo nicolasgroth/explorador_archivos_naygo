@@ -259,7 +259,6 @@ pub struct SearchRow {
 /// Listado profundo (vista recursiva) en curso/terminado para un panel. Un solo job a la vez.
 /// Igual que SearchJob, pero las entradas se vuelcan en las filas NORMALES del panel (no en un
 /// overlay): cada una lleva su profundidad.
-#[allow(dead_code)]
 pub struct DeepJob {
     pub pane: PaneId,
     pub root: PathBuf,
@@ -761,8 +760,49 @@ impl WorkspaceCtrl {
         let date_format = self.config.settings.date_format;
         let size_format = self.config.settings.size_format;
         let tz = naygo_platform::time::local_utc_offset_secs();
-        // Préstamos disjuntos: `ops`/`watchers` (lectura) y `icons` (mutable para cachear) son
-        // campos distintos; al destructurar `self` el borrow checker los separa.
+
+        // Vista profunda activa: construir filas desde deep_items con depth real.
+        // Las columnas visibles (orden/formato) se leen del FilePaneState normal.
+        if self.is_deep_active(id) {
+            // Extraer los datos que necesitamos antes de los préstamos disjuntos.
+            let cell_kinds: Vec<naygo_core::columns::ColumnKind> = self
+                .ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.table.visible_columns().map(|c| c.kind).collect())
+                .unwrap_or_default();
+
+            // Clonar los items del job profundo (evita préstamos solapados con icons/ops).
+            let deep_items: Vec<(naygo_core::fs_model::Entry, u32)> = self
+                .deep_job
+                .as_ref()
+                .map(|d| d.items.clone())
+                .unwrap_or_default();
+
+            let WorkspaceCtrl { ops, icons, .. } = self;
+            return deep_items
+                .iter()
+                .map(|(e, depth)| {
+                    let cells = cell_kinds
+                        .iter()
+                        .map(|k| crate::bridge::cell_value(e, *k, size_format, date_format, tz))
+                        .collect();
+                    PlainRow {
+                        name: e.name.clone(),
+                        cells,
+                        is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
+                        selected: false,
+                        focused: false,
+                        cut: ops.is_cut(&e.path),
+                        highlight: false,
+                        icon: icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                        depth: *depth,
+                    }
+                })
+                .collect();
+        }
+
+        // Vista normal: préstamos disjuntos para ops/watchers/icons.
         let WorkspaceCtrl {
             ws,
             ops,
@@ -3132,8 +3172,38 @@ impl WorkspaceCtrl {
     /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
     /// Ctrl presionado y una CARPETA, la abre en OTRO panel (el origen no navega): resuelve
     /// el destino usando el último área conocida (directo / selector 1..9 / dividir).
+    /// En modo deep las filas vienen de `deep_items` (mismo orden que `rows_of` devuelve),
+    /// así que `pos` mapea directamente contra ese slice.
     pub fn on_row_double_clicked(&mut self, id: PaneId, pos: usize) -> bool {
         self.ws.set_active(id);
+
+        // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
+        if self.is_deep_active(id) {
+            let target = self
+                .deep_job
+                .as_ref()
+                .and_then(|d| d.items.get(pos))
+                .map(|(e, _depth)| e.clone());
+            let Some(e) = target else { return false };
+            if e.kind == naygo_core::fs_model::EntryKind::Directory {
+                if self.ctrl_down {
+                    return self.request_action(PaneAction::OpenDir(e.path), id, self.last_area);
+                }
+                // Navegar cancela la vista profunda (no es pegajosa).
+                self.cancel_deep_if_navigating(id);
+                if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                    f.navigate_to(e.path.clone());
+                }
+                self.recents.push(e.path.clone());
+                self.start_listing(id, e.path.clone());
+                self.sync_trees_active(e.path);
+                return true;
+            } else {
+                let _ = naygo_platform::open::open_default(&e.path);
+                return false;
+            }
+        }
+
         let target = {
             let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
                 return false;
@@ -3814,14 +3884,12 @@ impl WorkspaceCtrl {
     }
 
     /// ¿El panel `id` está en vista profunda ahora mismo?
-    #[allow(dead_code)]
     pub fn is_deep_active(&self, id: PaneId) -> bool {
         self.deep_job.as_ref().is_some_and(|d| d.pane == id)
     }
 
     /// Activa la vista profunda en el panel `id` sobre su carpeta actual. Cancela cualquier
     /// job profundo anterior. Si el panel no es Files o no tiene carpeta válida, no hace nada.
-    #[allow(dead_code)]
     pub fn deep_start(&mut self, id: PaneId) {
         let dir = self
             .ws
@@ -3849,7 +3917,6 @@ impl WorkspaceCtrl {
     }
 
     /// Apaga la vista profunda: cancela el worker y repuebla el panel con su listado normal.
-    #[allow(dead_code)]
     pub fn deep_cancel(&mut self) {
         if let Some(d) = self.deep_job.take() {
             d.token.cancel();
@@ -3858,7 +3925,6 @@ impl WorkspaceCtrl {
     }
 
     /// Alterna la vista profunda en el panel `id` (para el toggle de la barra).
-    #[allow(dead_code)]
     pub fn deep_toggle(&mut self, id: PaneId) {
         if self.is_deep_active(id) {
             self.deep_cancel();
@@ -3869,7 +3935,6 @@ impl WorkspaceCtrl {
 
     /// Drena los mensajes del worker profundo hacia las entradas acumuladas. Devuelve `true`
     /// si hubo cambios (la UI debe re-sincronizar las filas del panel). No bloquea.
-    #[allow(dead_code)]
     pub fn deep_poll(&mut self) -> bool {
         let Some(d) = self.deep_job.as_mut() else {
             return false;
@@ -3904,8 +3969,9 @@ impl WorkspaceCtrl {
         changed
     }
 
-    /// Las entradas profundas acumuladas (entrada + profundidad), para armar las filas.
-    #[allow(dead_code)]
+    /// Las entradas profundas acumuladas (entrada + profundidad). En producción las filas se
+    /// arman dentro de `rows_of`; este accesor lo usan los tests para verificar el acumulado.
+    #[cfg(test)]
     pub fn deep_items(&self) -> &[(naygo_core::fs_model::Entry, u32)] {
         self.deep_job
             .as_ref()

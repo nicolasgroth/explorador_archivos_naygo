@@ -412,6 +412,7 @@ export component AppWindow inherits Window {
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int);
     callback row-double-clicked(int, int);
+    callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
@@ -943,6 +944,8 @@ export component AppWindow inherits Window {
                         no-matches: p.no-matches;
                         missing: p.missing;
                         missing-path: p.missing-path;
+                        deep-active: p.deep-active;
+                        toggle-deep(id) => { root.toggle-deep(id); }
                         missing-retry(id) => { root.missing-retry(id); }
                         missing-ancestor(id) => { root.missing-ancestor(id); }
                         missing-choose(id) => { root.missing-choose(id); }
