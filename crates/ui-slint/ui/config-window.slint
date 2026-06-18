@@ -108,6 +108,11 @@ export component ConfigWindow inherits Window {
     preferred-height: 600px;
     min-width: 560px;
     min-height: 420px;
+    // Sin tope explícito, el SO toma como alto/ancho MÁXIMO el max-height/width COMPUTADO del
+    // contenido (que es finito) → la ventana no se podía alargar. Con un tope grande, se
+    // redimensiona libre en ambos ejes.
+    max-width: 4000px;
+    max-height: 4000px;
     background: Theme.panel-bg;
 
     in property <SettingsVm> vm;
@@ -344,79 +349,80 @@ export component ConfigWindow inherits Window {
                             // === Apariencia (cat 3) ===
                             if root.cat == 3: VerticalLayout {
                                 spacing: 6px;
-                                // Galería de temas: cada tema es una tarjeta con muestras de color,
-                                // su nombre y una marca (borde de acento + ★) si es el activo. Un
-                                // clic lo aplica en caliente. Reemplaza al combo + swatches.
+                                // Galería de temas RESPONSIVE: las tarjetas fluyen en N columnas según
+                                // el ancho disponible (no más una grilla fija de 3 que se encimaba). Cada
+                                // tarjeta se posiciona por índice (fila/columna calculadas). Un clic aplica
+                                // el tema en caliente; la activa lleva borde de acento + ★.
                                 Text { text: Tr.cfg-theme; color: Theme.text-dim; font-size: 12px; }
-                                Flickable {
-                                    height: 196px;
-                                    viewport-height: theme-grid.preferred-height;
-                                    theme-grid := VerticalLayout {
-                                        spacing: 8px;
-                                        // Filas de 3 tarjetas. `idx-base` es el primer índice de la fila.
-                                        for row-base in [0, 3, 6, 9, 12]: HorizontalLayout {
-                                            spacing: 8px;
-                                            for col in [0, 1, 2]: tcard := Rectangle {
-                                                property <int> idx: row-base + col;
-                                                property <ThemeCardVm> tc: root.theme-cards[self.idx];
-                                                visible: self.idx < root.theme-cards.length;
-                                                width: 150px;
-                                                height: 86px;
-                                                background: tcard.tc.sw-panel;
-                                                border-radius: 7px;
-                                                border-width: tcard.tc.active ? 2px : 1px;
-                                                border-color: tcard.tc.active ? Theme.accent : Theme.border;
-                                                VerticalLayout {
-                                                    padding: 8px;
-                                                    spacing: 7px;
-                                                    // Muestras de color del tema.
-                                                    HorizontalLayout {
-                                                        spacing: 4px;
-                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-accent; }
-                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-row; }
-                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-highlight; }
-                                                        Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tcard.tc.sw-text; }
-                                                    }
-                                                    HorizontalLayout {
-                                                        spacing: 4px;
-                                                        Text {
-                                                            text: tcard.tc.name;
-                                                            color: tcard.tc.sw-text;
-                                                            font-size: 12px;
-                                                            font-weight: tcard.tc.active ? 800 : 500;
-                                                            vertical-alignment: center;
-                                                            horizontal-stretch: 1;
-                                                            overflow: elide;
-                                                        }
-                                                        if tcard.tc.active: Rectangle {
-                                                            width: 16px;
-                                                            height: 16px;
-                                                            Path {
-                                                                width: 14px; height: 14px;
-                                                                x: 1px; y: 1px;
-                                                                fill: Theme.accent;
-                                                                viewbox-width: 20; viewbox-height: 20;
-                                                                MoveTo { x: 10; y: 1; }
-                                                                LineTo { x: 12.6; y: 7.1; }
-                                                                LineTo { x: 19; y: 7.6; }
-                                                                LineTo { x: 14.2; y: 11.8; }
-                                                                LineTo { x: 15.7; y: 18; }
-                                                                LineTo { x: 10; y: 14.7; }
-                                                                LineTo { x: 4.3; y: 18; }
-                                                                LineTo { x: 5.8; y: 11.8; }
-                                                                LineTo { x: 1; y: 7.6; }
-                                                                LineTo { x: 7.4; y: 7.1; }
-                                                                Close { }
-                                                            }
-                                                        }
-                                                    }
+                                gallery := Rectangle {
+                                    // Geometría de las tarjetas (en una sola fuente para alto/ancho).
+                                    property <length> gap: 8px;
+                                    property <length> card-w: 150px;
+                                    property <length> card-h: 86px;
+                                    // Columnas que entran en el ancho actual (mínimo 1).
+                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
+                                    property <int> rows: ceil(root.theme-cards.length / self.cols);
+                                    // Alto necesario para todas las filas (la galería crece con el contenido).
+                                    height: self.rows * (self.card-h + self.gap) - self.gap;
+
+                                    for tc[i] in root.theme-cards: tcard := Rectangle {
+                                        property <int> gcol: mod(i, gallery.cols);
+                                        property <int> grow: floor(i / gallery.cols);
+                                        x: tcard.gcol * (gallery.card-w + gallery.gap);
+                                        y: tcard.grow * (gallery.card-h + gallery.gap);
+                                        width: gallery.card-w;
+                                        height: gallery.card-h;
+                                        background: tc.sw-panel;
+                                        border-radius: 7px;
+                                        border-width: tc.active ? 2px : 1px;
+                                        border-color: tc.active ? Theme.accent : Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 7px;
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-accent; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-row; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-highlight; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-text; }
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: tc.name;
+                                                    color: tc.sw-text;
+                                                    font-size: 12px;
+                                                    font-weight: tc.active ? 800 : 500;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    overflow: elide;
                                                 }
-                                                TouchArea {
-                                                    enabled: tcard.idx < root.theme-cards.length;
-                                                    mouse-cursor: pointer;
-                                                    clicked => { root.set-theme(tcard.tc.id); }
+                                                if tc.active: Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    Path {
+                                                        width: 14px; height: 14px;
+                                                        x: 1px; y: 1px;
+                                                        fill: Theme.accent;
+                                                        viewbox-width: 20; viewbox-height: 20;
+                                                        MoveTo { x: 10; y: 1; }
+                                                        LineTo { x: 12.6; y: 7.1; }
+                                                        LineTo { x: 19; y: 7.6; }
+                                                        LineTo { x: 14.2; y: 11.8; }
+                                                        LineTo { x: 15.7; y: 18; }
+                                                        LineTo { x: 10; y: 14.7; }
+                                                        LineTo { x: 4.3; y: 18; }
+                                                        LineTo { x: 5.8; y: 11.8; }
+                                                        LineTo { x: 1; y: 7.6; }
+                                                        LineTo { x: 7.4; y: 7.1; }
+                                                        Close { }
+                                                    }
                                                 }
                                             }
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-theme(tc.id); }
                                         }
                                     }
                                 }
