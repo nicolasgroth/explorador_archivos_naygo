@@ -69,6 +69,14 @@ cancela). A la derecha tienes **★** (anclar a favoritos) y **📋** (copiar la
 **Unidades de disco:** la tira C:/D:/… de la toolbar navega el panel activo a esa
 unidad.
 
+**Vista profunda (recursiva):** el botón de la barra del panel (tres líneas
+escalonadas) activa un modo que muestra, en una sola lista, todo el contenido de la
+carpeta actual y de sus subcarpetas, a cualquier profundidad. Cada fila se sangra
+según su nivel para ver de dónde viene. Los resultados aparecen mientras se recorre el
+árbol (streaming) y puedes cancelar con **Esc** o volviendo a pulsar el botón. El orden
+y los filtros de columna funcionan sobre toda la lista. El doble clic en una carpeta
+sale de la vista profunda y navega a ella; en un archivo, lo abre.
+
 ---
 
 ## 4. Seleccionar
