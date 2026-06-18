@@ -3167,6 +3167,7 @@ fn to_row_data(r: bridge::PlainRow) -> RowData {
         cut: r.cut,
         highlight: r.highlight,
         icon: r.icon,
+        depth: 0,
     }
 }
 

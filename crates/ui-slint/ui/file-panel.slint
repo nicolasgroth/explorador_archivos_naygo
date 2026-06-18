@@ -480,6 +480,8 @@ export component FilePanel inherits FocusScope {
                         for col[ci] in root.columns: HorizontalLayout {
                             width: col.width;
                             spacing: 6px;
+                            // Sangría por profundidad (vista profunda). depth=0 => sin efecto.
+                            if col.kind == 0 && row.depth > 0: Rectangle { width: row.depth * 14px; }
                             if col.kind == 0: Image {
                                 source: row.icon;
                                 width: 16px;

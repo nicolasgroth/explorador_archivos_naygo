@@ -12,6 +12,9 @@ export struct RowData {
     highlight: bool,
     // Ícono de color por tipo, ya decodificado y cacheado en Rust (6A).
     icon: image,
+    // Profundidad en la vista profunda (recursiva): 0 = nivel raíz, >0 sangra la fila.
+    // En vista normal/búsqueda es 0 (sin efecto).
+    depth: int,
 }
 
 // Una columna visible de la tabla (6C): qué es, su etiqueta, ancho y alineación.
