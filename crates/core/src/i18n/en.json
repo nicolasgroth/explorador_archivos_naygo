@@ -585,5 +585,7 @@
   "slint.cfg.size_mb": "Megabytes",
   "slint.cfg.row_density": "Row density",
   "slint.cfg.density_compact": "Compact",
-  "slint.cfg.density_comfortable": "Comfortable"
+  "slint.cfg.density_comfortable": "Comfortable",
+  "slint.deep.view": "Deep view",
+  "slint.deep.view_tip": "Shows all contents of the folder and its subfolders (recursive)"
 }

@@ -259,6 +259,8 @@ where
     tr.set_cfg_row_density(c.t("slint.cfg.row_density").into());
     tr.set_cfg_density_compact(c.t("slint.cfg.density_compact").into());
     tr.set_cfg_density_comfortable(c.t("slint.cfg.density_comfortable").into());
+    tr.set_deep_view(c.t("slint.deep.view").into());
+    tr.set_deep_view_tip(c.t("slint.deep.view_tip").into());
     tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
     tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());

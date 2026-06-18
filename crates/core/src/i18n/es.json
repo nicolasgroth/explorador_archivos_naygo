@@ -585,5 +585,7 @@
   "slint.cfg.size_mb": "Megabytes",
   "slint.cfg.row_density": "Densidad de filas",
   "slint.cfg.density_compact": "Compacta",
-  "slint.cfg.density_comfortable": "Cómoda"
+  "slint.cfg.density_comfortable": "Cómoda",
+  "slint.deep.view": "Vista profunda",
+  "slint.deep.view_tip": "Muestra todo el contenido de la carpeta y sus subcarpetas (recursivo)"
 }
