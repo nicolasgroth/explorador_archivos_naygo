@@ -588,7 +588,7 @@ mod tests {
         assert!(rows[0].path.contains("ISGroth"));
 
         let mut recents = RecentDirs::new();
-        recents.push(PathBuf::from("C:/Users/ng/Documents"));
+        recents.push(PathBuf::from("C:/Users/ng/Documents"), 50);
         let r = recent_rows(&recents, &slint::Image::default());
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].label, "Documents");

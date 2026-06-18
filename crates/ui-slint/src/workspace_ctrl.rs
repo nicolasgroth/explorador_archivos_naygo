@@ -363,7 +363,7 @@ impl WorkspaceCtrl {
             rename_requested: None,
             icons,
         };
-        c.recents.push(start.clone());
+        c.push_recent(start.clone());
         c.start_listing(id, start);
         // Aplicar el modo de operaciones (cola/paralelo) guardado en Settings al motor de ops.
         c.sync_ops_mode();
@@ -379,6 +379,23 @@ impl WorkspaceCtrl {
             CfgMode::Queue => crate::ops_ctrl::OpsMode::Queue,
             CfgMode::Parallel => crate::ops_ctrl::OpsMode::Parallel,
         };
+    }
+
+    /// Registra una visita en el historial respetando el límite configurado
+    /// (`Settings.recent_limit`, clampeado a 1..=100). Centraliza el límite.
+    fn push_recent(&mut self, dir: std::path::PathBuf) {
+        let limit = self.config.settings.recent_limit.clamp(1, 100);
+        self.recents.push(dir, limit);
+    }
+
+    /// Fija el límite de carpetas recientes, persiste y trunca la lista al nuevo tope.
+    /// Lo usa el wiring de la Task 5 (on_recent_limit_changed en main.rs).
+    #[allow(dead_code)]
+    pub fn set_recent_limit(&mut self, n: usize) {
+        self.config.settings.recent_limit = n.clamp(1, 100);
+        self.config.save();
+        let limit = self.config.settings.recent_limit;
+        self.recents.truncate_to(limit);
     }
 
     /// Estado persistible del workspace (para guardar al cerrar la ventana): disposición,
@@ -444,7 +461,7 @@ impl WorkspaceCtrl {
             match purpose {
                 PanePurpose::Files => {
                     if let Some(dir) = dir {
-                        self.recents.push(dir.clone());
+                        self.push_recent(dir.clone());
                         self.start_listing(id, dir);
                     }
                 }
@@ -1268,7 +1285,7 @@ impl WorkspaceCtrl {
             match purpose {
                 PanePurpose::Files => {
                     if let Some(dir) = dir {
-                        self.recents.push(dir.clone());
+                        self.push_recent(dir.clone());
                         self.start_listing(id, dir);
                     }
                 }
@@ -1486,7 +1503,7 @@ impl WorkspaceCtrl {
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
-        self.recents.push(dir.clone());
+        self.push_recent(dir.clone());
         self.start_listing(id, dir.clone());
         self.sync_trees_active(dir);
         true
@@ -1711,7 +1728,7 @@ impl WorkspaceCtrl {
         if let Some(f) = self.ws.pane_mut(dest).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
-        self.recents.push(dir.clone());
+        self.push_recent(dir.clone());
         self.start_listing(dest, dir);
     }
 
@@ -2197,7 +2214,7 @@ impl WorkspaceCtrl {
             f.navigate_to(dir.clone());
         }
         if navigable {
-            self.recents.push(dir.clone());
+            self.push_recent(dir.clone());
         }
         self.start_listing(active_files_id, dir.clone());
         self.sync_trees_active(dir);
@@ -3194,7 +3211,7 @@ impl WorkspaceCtrl {
                 if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                     f.navigate_to(e.path.clone());
                 }
-                self.recents.push(e.path.clone());
+                self.push_recent(e.path.clone());
                 self.start_listing(id, e.path.clone());
                 self.sync_trees_active(e.path);
                 return true;
@@ -3225,7 +3242,7 @@ impl WorkspaceCtrl {
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(e.path.clone());
             }
-            self.recents.push(e.path.clone());
+            self.push_recent(e.path.clone());
             self.start_listing(id, e.path.clone());
             self.sync_trees_active(e.path);
             true
@@ -3246,7 +3263,7 @@ impl WorkspaceCtrl {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
-                self.recents.push(dir.clone());
+                self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
                 true
@@ -3270,7 +3287,7 @@ impl WorkspaceCtrl {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
-                self.recents.push(dir.clone());
+                self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
                 true
@@ -3293,7 +3310,7 @@ impl WorkspaceCtrl {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
-                self.recents.push(dir.clone());
+                self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
                 true
