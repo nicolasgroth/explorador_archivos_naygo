@@ -237,11 +237,20 @@ pub struct Settings {
     /// previos → Auto).
     #[serde(default = "default_low_power_mode")]
     pub low_power_mode: LowPowerMode,
+    /// Cuántas carpetas recientes recordar (1–100). `#[serde(default)]` por retro-compat
+    /// (settings viejo sin el campo → 50). El uso real lo clampa a 1..=100.
+    #[serde(default = "default_recent_limit")]
+    pub recent_limit: usize,
 }
 
 /// Default de `low_power_mode`: Auto (lo decide la app según el renderer).
 fn default_low_power_mode() -> LowPowerMode {
     LowPowerMode::Auto
+}
+
+/// Default de `recent_limit`: 50 carpetas recientes.
+fn default_recent_limit() -> usize {
+    50
 }
 
 /// Default de `preview_rules`: las reglas semilla (texto + imagen, habilitadas).
@@ -387,6 +396,7 @@ impl Default for Settings {
             preview_rules: default_preview_rules_cfg(),
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Auto,
+            recent_limit: 50,
         }
     }
 }
@@ -650,6 +660,7 @@ mod tests {
             ],
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Always,
+            recent_limit: 25,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -919,5 +930,20 @@ mod tests {
         std::fs::write(dir.path().join("keybindings.json"), b"{ no es json").unwrap();
         let km = load_keymap(dir.path());
         assert_eq!(km, crate::keymap::KeyMap::defaults());
+    }
+
+    #[test]
+    fn recent_limit_default_es_50() {
+        // (a) El default del struct es 50.
+        let s = Settings::default();
+        assert_eq!(s.recent_limit, 50);
+    }
+
+    #[test]
+    fn recent_limit_sin_campo_deserializa_a_50() {
+        // (b) Un JSON sin el campo (settings viejo) cae al default 50 vía #[serde(default)].
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.recent_limit, 50);
     }
 }
