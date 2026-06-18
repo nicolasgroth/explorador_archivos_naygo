@@ -33,6 +33,7 @@ where
     tr.set_pathbar_copy_tip(c.t("slint.pathbar.copy_tip").into());
     tr.set_pathbar_copied(c.t("slint.pathbar.copied").into());
     tr.set_drive_eject_tip(c.t("slint.drive.eject_tip").into());
+    tr.set_drive_eject(c.t("slint.drive.eject").into());
     tr.set_toolbar_refresh_drives(c.t("slint.toolbar.refresh_drives").into());
     tr.set_drive_eject_ok(c.t("slint.drive.eject_ok").into());
     tr.set_drive_eject_in_use(c.t("slint.drive.eject_in_use").into());

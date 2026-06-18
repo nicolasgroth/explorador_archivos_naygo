@@ -247,37 +247,6 @@ component ToolBtn inherits Rectangle {
     }
 }
 
-// Glifo de "expulsar" (▲ sobre una barra) dibujado con Path para que el render por
-// software no lo descarte (los glifos de fuente sí se pierden). Se usa en la tira de
-// unidades, solo en las extraíbles (USB). Envuelve el Path en un Rectangle para poder
-// exponer un color propio sin chocar con las propiedades del Path base.
-component EjectIcon inherits Rectangle {
-    in property <color> tint: Theme.text;
-    in property <length> size: 11px;
-    Path {
-        width: root.size;
-        height: root.size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        stroke: root.tint;
-        stroke-width: 1.2px;
-        fill: root.tint;
-        viewbox-width: 12;
-        viewbox-height: 12;
-        // Triángulo (la flecha hacia arriba).
-        MoveTo { x: 6; y: 1.5; }
-        LineTo { x: 10; y: 6.5; }
-        LineTo { x: 2; y: 6.5; }
-        Close { }
-        // Barra inferior (el "borde" del que se expulsa).
-        MoveTo { x: 2.5; y: 9; }
-        LineTo { x: 9.5; y: 9; }
-        LineTo { x: 9.5; y: 10.5; }
-        LineTo { x: 2.5; y: 10.5; }
-        Close { }
-    }
-}
-
 // Separador vertical entre grupos de la toolbar: una línea fina centrada con aire a los lados,
 // para agrupar visualmente (navegación / paneles / acciones / unidades) sin recargar.
 component ToolSep inherits Rectangle {
@@ -293,8 +262,8 @@ component ToolSep inherits Rectangle {
 
 // Botón compacto de unidad de disco para la tira de la toolbar: ícono + letra (p. ej. "C:").
 // Clic navega el panel activo a la raíz. Tooltip con la ruta. Si la unidad es extraíble
-// (USB), aparece un botón ⏏ para expulsarla con seguridad; el clic derecho también ofrece
-// "Expulsar de forma segura".
+// (USB), a la derecha aparece un triángulo ▾ (estilo combobox) que abre un menú con
+// "Expulsar"; el clic derecho sobre el botón abre ese mismo menú.
 component DriveBtn inherits Rectangle {
     in property <string> label;
     in property <string> tip;
@@ -302,7 +271,9 @@ component DriveBtn inherits Rectangle {
     in property <bool> removable: false;
     in property <string> eject-tip;
     callback clicked();
-    callback eject();
+    // El ▾ (o el clic derecho) pide abrir el menú de expulsión; pasa la x de anclaje (centro
+    // del ▾, en coords de ventana) para que la AppWindow posicione el menú flotante.
+    callback eject-menu(length);
     width: drive-row.preferred-width + 10px;
     background: dtouch.has-hover ? Theme.selection-bg : Theme.row-bg;
     border-radius: 4px;
@@ -352,20 +323,34 @@ component DriveBtn inherits Rectangle {
             font-size: 12px;
             vertical-alignment: center;
         }
-        // Botón ⏏ de expulsión: solo en unidades extraíbles. Va dentro del layout
-        // para no solaparse con la letra; su propio TouchArea atrapa el clic antes
-        // que el de navegación del botón.
-        if root.removable: eject-btn := Rectangle {
-            width: 16px;
+        // Triángulo ▾ (estilo combobox): solo en unidades extraíbles. Abre un menú
+        // ("Expulsar") en vez de expulsar directo. Su TouchArea atrapa el clic antes
+        // que el de navegación del botón. Emite la x de anclaje para el menú flotante.
+        if root.removable: chevron := Rectangle {
+            width: 14px;
             height: 16px;
             border-radius: 3px;
             background: etouch.has-hover ? Theme.accent : transparent;
-            EjectIcon {
-                tint: etouch.has-hover ? white : Theme.text-dim;
+            Path {
+                width: 8px;
+                height: 8px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                stroke: etouch.has-hover ? white : Theme.text-dim;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 8;
+                viewbox-height: 8;
+                // Chevron hacia abajo.
+                MoveTo { x: 1.5; y: 3; }
+                LineTo { x: 4; y: 5.5; }
+                LineTo { x: 6.5; y: 3; }
             }
             etouch := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { root.eject(); }
+                clicked => {
+                    root.eject-menu(chevron.absolute-position.x + chevron.width / 2);
+                }
                 changed has-hover => {
                     root.hover-tip(self.has-hover ? root.eject-tip : "",
                         root.absolute-position.x + root.width / 2);
@@ -375,12 +360,11 @@ component DriveBtn inherits Rectangle {
     }
     callback hover-tip(string, length);
     dtouch := TouchArea {
-        // El clic-izquierdo navega; el clic-derecho expulsa si es extraíble (atajo
-        // sin menú: simple y robusto, lo que pidió la tarea).
+        // Clic-izquierdo navega; clic-derecho abre el menú de expulsión si es extraíble.
         pointer-event(ev) => {
             if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right
                     && root.removable) {
-                root.eject();
+                root.eject-menu(root.absolute-position.x + root.width / 2);
             }
         }
         clicked => { root.clicked(); }
@@ -562,6 +546,9 @@ export component AppWindow inherits Window {
     property <bool> add-menu-open: false;
     // Estado del menú del botón "+" (elegir dirección de la división).
     property <bool> dir-menu-open: false;
+    // Menú ▾ de expulsión de un disco extraíble: raíz del disco (vacío = cerrado) + x de anclaje.
+    property <string> drive-menu-path: "";
+    property <length> drive-menu-x: 0;
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
     // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
@@ -817,7 +804,11 @@ export component AppWindow inherits Window {
                     removable: d.removable;
                     eject-tip: Tr.drive-eject-tip;
                     clicked => { root.nav-drive(d.path); }
-                    eject => { root.eject-drive(d.path); }
+                    eject-menu(x) => {
+                        // Abrir el menú flotante de expulsión anclado a este disco.
+                        root.drive-menu-path = d.path;
+                        root.drive-menu-x = x;
+                    }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 Rectangle {
@@ -1283,6 +1274,35 @@ export component AppWindow inherits Window {
         close() => { root.search-close(); }
         cancel() => { root.search-cancel(); }
         open(i) => { root.search-open(i); }
+    }
+
+    // Menú ▾ de expulsión de un disco extraíble (USB). Flota anclado al ▾ del disco. Un velo
+    // invisible lo cierra al clic afuera. El ítem "Expulsar" desmonta la unidad con seguridad.
+    if root.drive-menu-path != "": TouchArea {
+        clicked => { root.drive-menu-path = ""; }
+    }
+    if root.drive-menu-path != "": Rectangle {
+        // Anclado al ▾ (su x de centro), justo debajo de la barra de herramientas. Se mantiene
+        // dentro de la ventana con un clamp simple en x.
+        x: min(root.width - self.width - 4px, max(4px, root.drive-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 150px;
+        height: eject-menu-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        eject-menu-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            MenuItem {
+                label: Tr.drive-eject;
+                clicked => {
+                    root.eject-drive(root.drive-menu-path);
+                    root.drive-menu-path = "";
+                }
+            }
+        }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota

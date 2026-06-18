@@ -54,6 +54,12 @@ pub fn drives() -> Vec<DriveInfo> {
 }
 
 /// Clasifica el tipo de una unidad por su raíz (p. ej. "C:\\").
+///
+/// `GetDriveTypeW` sola NO basta para "se puede expulsar": Windows reporta los discos
+/// duros externos USB como `DRIVE_FIXED` (solo los pendrives suelen dar `DRIVE_REMOVABLE`).
+/// Por eso, cuando el tipo es `Fixed`, además consultamos el BUS del dispositivo
+/// (`IOCTL_STORAGE_QUERY_PROPERTY`): si está en bus USB, lo tratamos como `Removable` (el
+/// sentido que le importa al usuario: "conviene expulsarlo antes de quitarlo").
 #[cfg(windows)]
 fn drive_kind_of(root: &str) -> DriveKind {
     use windows::core::PCWSTR;
@@ -64,13 +70,101 @@ fn drive_kind_of(root: &str) -> DriveKind {
     let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
     let t = unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) };
     match t {
-        DRIVE_FIXED => DriveKind::Fixed,
+        // Un "fijo" en bus USB (disco externo) es, para el usuario, extraíble.
+        DRIVE_FIXED => {
+            if drive_letter_of(root).is_some_and(is_usb_bus) {
+                DriveKind::Removable
+            } else {
+                DriveKind::Fixed
+            }
+        }
         DRIVE_REMOVABLE => DriveKind::Removable,
         DRIVE_REMOTE => DriveKind::Network,
         DRIVE_CDROM => DriveKind::Optical,
         DRIVE_RAMDISK => DriveKind::Fixed,
         _ => DriveKind::Unknown,
     }
+}
+
+/// Letra de una raíz ("C:\\" → 'C'); `None` si no parece raíz con letra.
+#[cfg(windows)]
+fn drive_letter_of(root: &str) -> Option<char> {
+    let mut it = root.chars();
+    let a = it.next()?;
+    let b = it.next()?;
+    (a.is_ascii_alphabetic() && b == ':').then(|| a.to_ascii_uppercase())
+}
+
+/// ¿La unidad `letter` está conectada por bus USB? Abre el volumen `\\.\X:` en modo
+/// consulta (sin permisos de escritura → no requiere admin) y pide
+/// `IOCTL_STORAGE_QUERY_PROPERTY`/`StorageDeviceProperty`; mira `BusType`. Tolerante:
+/// cualquier fallo (no se pudo abrir, IOCTL no soportado) devuelve `false` (no es USB
+/// hasta que se demuestre lo contrario), sin afectar la enumeración.
+#[cfg(windows)]
+fn is_usb_bus(letter: char) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Storage::FileSystem::{
+        BusTypeUsb, CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
+    use windows::Win32::System::Ioctl::{
+        PropertyStandardQuery, StorageDeviceProperty, IOCTL_STORAGE_QUERY_PROPERTY,
+        STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+    };
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    let device = format!(r"\\.\{letter}:");
+    let device_w: Vec<u16> = device.encode_utf16().chain(std::iter::once(0)).collect();
+    // Abrir SIN GENERIC_READ/WRITE (acceso 0 = solo metadatos): así no pide admin ni
+    // bloquea el volumen. Suficiente para IOCTL_STORAGE_QUERY_PROPERTY.
+    // SAFETY: `device_w` es UTF-16 NUL-terminada viva durante la llamada.
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(device_w.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
+        )
+    };
+    let Ok(h) = handle else { return false };
+    // RAII para cerrar el handle pase lo que pase.
+    struct Guard(HANDLE);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+    let _guard = Guard(h);
+
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+    // El descriptor es de tamaño variable; con el struct base alcanza para leer `BusType`
+    // (está en la cabecera fija). Pedimos llenar lo que entre en el struct.
+    let mut desc = STORAGE_DEVICE_DESCRIPTOR::default();
+    let mut returned: u32 = 0;
+    // SAFETY: query/desc viven durante la llamada; tamaños correctos de entrada/salida.
+    let ok = unsafe {
+        DeviceIoControl(
+            h,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&query as *const _ as *const core::ffi::c_void),
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            Some(&mut desc as *mut _ as *mut core::ffi::c_void),
+            std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() as u32,
+            Some(&mut returned as *mut u32),
+            None,
+        )
+    };
+    ok.is_ok() && desc.BusType == BusTypeUsb
 }
 
 /// Stub para plataformas no-Windows: devuelve la raíz `/` como única "unidad".
