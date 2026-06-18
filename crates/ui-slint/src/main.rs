@@ -1454,6 +1454,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             };
             cfg.set_vm(settings_vm);
+            // Poblar el campo de límite de recientes (no está en SettingsVm).
+            cfg.set_recent_limit(c.config.settings.recent_limit as i32);
             let rows: Vec<ShortcutRowVm> = c
                 .config
                 .shortcut_list()
@@ -1758,6 +1760,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         cfg_win.on_set_paste_text_ext(move |v| {
             ctrl.borrow_mut().config.set_paste_text_ext(v.to_string());
+            refresh();
+        });
+    }
+    // Límite de carpetas recientes (Avanzado): persiste + trunca la lista al nuevo tope.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_recent_limit_changed(move |v| {
+            ctrl.borrow_mut().set_recent_limit(v as usize);
             refresh();
         });
     }
@@ -2128,6 +2139,40 @@ fn main() -> Result<(), slint::PlatformError> {
                 start_timer();
             }
             sync_layout();
+        });
+    }
+    // Ícono de historial de carpetas (reloj) en la toolbar: arma las filas y abre el menú flotante.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_history_open(move |x| {
+            let rows: Vec<NavRow> = {
+                let mut c = ctrl.borrow_mut();
+                c.recents.remove_missing();
+                c.recent_rows().into_iter().map(to_nav_row).collect()
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_history_rows(ModelRc::new(VecModel::from(rows)));
+                ui.set_history_menu_x(x);
+                ui.set_history_menu_open(true);
+            }
+        });
+    }
+    // Elegir una carpeta del menú de historial: navega el panel activo.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_history_pick(move |path| {
+            if ctrl
+                .borrow_mut()
+                .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+            sync_rows();
         });
     }
     // Clic en una unidad de la tira de discos de la toolbar: navega el panel activo a su raíz.

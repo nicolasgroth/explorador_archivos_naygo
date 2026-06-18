@@ -160,6 +160,9 @@ export component ConfigWindow inherits Window {
     callback set-tray-enabled(bool);
     callback set-close-to-tray(bool);
     callback factory-reset();
+    // Historial de carpetas recientes (límite 1–100).
+    in property <int> recent-limit: 50;
+    callback recent-limit-changed(int);
     // Plantilla de tabla por defecto (C4):
     callback save-default-table();
     callback clear-default-table();
@@ -617,6 +620,22 @@ export component ConfigWindow inherits Window {
                                 Field {
                                     label: Tr.cfg-close-to-tray;
                                     Switch { checked: root.vm.close-to-tray; toggled => { root.set-close-to-tray(self.checked); } }
+                                }
+                                // Historial de carpetas recientes: límite configurable (1–100).
+                                Field {
+                                    label: Tr.cfg-recent-limit;
+                                    LineEdit {
+                                        text: root.recent-limit + "";
+                                        width: root.ctl-w;
+                                        edited(t) => {
+                                            // Clampear al vuelo: acepta solo enteros 1–100.
+                                            // `to-float` devuelve 0 si no parsea, así que valores
+                                            // no numéricos o vacíos se ignoran.
+                                            if (t.to-float() >= 1 && t.to-float() <= 100) {
+                                                root.recent-limit-changed(Math.round(t.to-float()));
+                                            }
+                                        }
+                                    }
                                 }
                                 // Factory reset en dos pasos: el primer clic arma la confirmación.
                                 Rectangle { height: 8px; }

@@ -389,8 +389,7 @@ impl WorkspaceCtrl {
     }
 
     /// Fija el límite de carpetas recientes, persiste y trunca la lista al nuevo tope.
-    /// Lo usa el wiring de la Task 5 (on_recent_limit_changed en main.rs).
-    #[allow(dead_code)]
+    /// Cableado desde main.rs: on_recent_limit_changed en la ventana de configuración.
     pub fn set_recent_limit(&mut self, n: usize) {
         self.config.settings.recent_limit = n.clamp(1, 100);
         self.config.save();

@@ -89,6 +89,8 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-refresh: false;
     // Si true, dibuja una LUPA (búsqueda) con Path (no hay PNG de búsqueda en los sets).
     in property <bool> draw-search: false;
+    // Si true, dibuja un RELOJ (historial de carpetas) con Path: círculo + dos manecillas.
+    in property <bool> draw-history: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -228,7 +230,33 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 12.5; y: 12.5; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search: Text {
+        // Reloj dibujado: círculo (marco) + manecilla corta (hora) + manecilla larga (minutos).
+        if root.draw-history: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: white;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Círculo exterior (dos semiarcos = círculo completo).
+                MoveTo { x: 13; y: 7; }
+                ArcTo { radius-x: 6; radius-y: 6; x: 1; y: 7; sweep: false; large-arc: false; }
+                ArcTo { radius-x: 6; radius-y: 6; x: 13; y: 7; sweep: false; large-arc: false; }
+                // Manecilla larga (apunta arriba: 12 en punto).
+                MoveTo { x: 7; y: 7; }
+                LineTo { x: 7; y: 3; }
+                // Manecilla corta (apunta a las 3 en punto).
+                MoveTo { x: 7; y: 7; }
+                LineTo { x: 11; y: 7; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -550,6 +578,12 @@ export component AppWindow inherits Window {
     // Menú ▾ de expulsión de un disco extraíble: raíz del disco (vacío = cerrado) + x de anclaje.
     property <string> drive-menu-path: "";
     property <length> drive-menu-x: 0;
+    // Menú flotante del historial de carpetas recientes.
+    callback history-open(length);       // abre el menú anclado en la x dada
+    callback history-pick(string);       // (ruta) navegar a la carpeta elegida
+    in property <[NavRow]> history-rows;
+    in-out property <length> history-menu-x: 0;
+    in-out property <bool> history-menu-open: false;
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
     // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
@@ -775,6 +809,18 @@ export component AppWindow inherits Window {
                     tip: Tr.search-tip;
                     btn-width: 34px;
                     clicked => { root.search-toggle(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Historial de carpetas recientes: ícono de reloj abre menú flotante.
+                history-btn := ToolBtn {
+                    draw-history: true;
+                    icon-only: true;
+                    tip: Tr.history;
+                    btn-width: 34px;
+                    highlight: root.history-menu-open;
+                    clicked => {
+                        root.history-open(history-btn.absolute-position.x + history-btn.width / 2);
+                    }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
@@ -1277,6 +1323,43 @@ export component AppWindow inherits Window {
         close() => { root.search-close(); }
         cancel() => { root.search-cancel(); }
         open(i) => { root.search-open(i); }
+    }
+
+    // Menú flotante del historial de carpetas recientes. Velo invisible cierra al clic afuera.
+    if root.history-menu-open: TouchArea {
+        clicked => { root.history-menu-open = false; }
+    }
+    if root.history-menu-open: Rectangle {
+        // Anclado al botón de reloj (su x de centro), justo debajo de la barra de herramientas.
+        x: min(root.width - self.width - 4px, max(4px, root.history-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 260px;
+        height: history-menu-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        history-menu-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            // Lista vacía: mostrar aviso.
+            if root.history-rows.length == 0: Text {
+                text: Tr.history-recent-empty;
+                color: Theme.text-dim;
+                font-size: 12px;
+                x: 8px;
+                height: 26px;
+                vertical-alignment: center;
+            }
+            // Entradas de carpetas recientes.
+            for r in root.history-rows: MenuItem {
+                label: r.label;
+                clicked => {
+                    root.history-pick(r.path);
+                    root.history-menu-open = false;
+                }
+            }
+        }
     }
 
     // Menú ▾ de expulsión de un disco extraíble (USB). Flota anclado al ▾ del disco. Un velo
