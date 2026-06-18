@@ -562,6 +562,12 @@ export component AppWindow inherits Window {
     in property <image> ic-tabs;
     in property <image> ic-settings;
     in property <image> ic-new-folder;
+    // Íconos propios nuevos (reemplazan los dibujados con Path).
+    in property <image> ic-add-pane;   // "+" (dividir panel)
+    in property <image> ic-layouts;
+    in property <image> ic-terminal;
+    in property <image> ic-refresh;
+    in property <image> ic-eject;
     // Tira de unidades de disco de la toolbar (6-fix): label = letra, icon = ícono de disco,
     // path = raíz. Clic navega el panel activo. Rust la rellena al arrancar y al cambiar de USB.
     in property <[NavRow]> drives;
@@ -637,7 +643,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     // Dividir el panel: nuevo panel de archivos. "+" dibujado (no glifo de fuente).
                     label: "";
-                    draw-plus: true;
+                    icon: root.ic-add-pane;
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
                     btn-width: 34px;
@@ -686,7 +692,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-layouts;
                     tip: Tr.toolbar-layouts-tip;
-                    draw-layouts: true;
+                    icon: root.ic-layouts;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 84px;
                     highlight: root.layout-menu-open;
@@ -710,7 +716,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-terminal;
                     tip: Tr.toolbar-terminal-tip;
-                    draw-terminal: true;
+                    icon: root.ic-terminal;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     highlight: root.term-menu-open;
@@ -732,7 +738,8 @@ export component AppWindow inherits Window {
                 // --- Grupo UNIDADES (tira de discos) ---
                 // Refrescar unidades a mano (útil para unidades de red, que no avisan al SO).
                 ToolBtn {
-                    draw-refresh: true;
+                    icon: root.ic-refresh;
+                    icon-only: true;
                     tip: Tr.toolbar-refresh-drives;
                     btn-width: 30px;
                     clicked => { root.refresh-drives(); }

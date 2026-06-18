@@ -78,6 +78,11 @@ macro_rules! set_table {
             ("action_clone_path", png!($set, "action_clone_path")),
             ("action_new_window", png!($set, "action_new_window")),
             ("action_settings", png!($set, "action_settings")),
+            ("action_tabs", png!($set, "action_tabs")),
+            ("action_layouts", png!($set, "action_layouts")),
+            ("action_terminal", png!($set, "action_terminal")),
+            ("action_eject", png!($set, "action_eject")),
+            ("action_panel", png!($set, "action_panel")),
         ];
     };
 }

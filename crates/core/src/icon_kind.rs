@@ -72,6 +72,16 @@ pub enum ActionIcon {
     /// Abrir otra ventana de Naygo (nuevo proceso).
     NewWindow,
     Settings,
+    /// Apilar el panel como pestaña.
+    Tabs,
+    /// Plantillas de disposición (Layouts).
+    Layouts,
+    /// Abrir una terminal en la carpeta.
+    Terminal,
+    /// Expulsar una unidad extraíble (USB).
+    Eject,
+    /// Agregar un panel especial (árbol / propiedades / etc.).
+    Panel,
 }
 
 impl ActionIcon {
@@ -80,7 +90,7 @@ impl ActionIcon {
         use ActionIcon::*;
         &[
             Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder, AddPane,
-            SwapPanes, ClonePath, NewWindow, Settings,
+            SwapPanes, ClonePath, NewWindow, Settings, Tabs, Layouts, Terminal, Eject, Panel,
         ]
     }
 
@@ -103,6 +113,11 @@ impl ActionIcon {
             ClonePath => "action_clone_path",
             NewWindow => "action_new_window",
             Settings => "action_settings",
+            Tabs => "action_tabs",
+            Layouts => "action_layouts",
+            Terminal => "action_terminal",
+            Eject => "action_eject",
+            Panel => "action_panel",
         }
     }
 }
@@ -301,15 +316,15 @@ mod tests {
     }
 
     #[test]
-    fn action_icon_all_son_15_con_file_name_unico() {
+    fn action_icon_all_son_20_con_file_name_unico() {
         let all = ActionIcon::all();
-        assert_eq!(all.len(), 15);
+        assert_eq!(all.len(), 20);
         let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(
             names.len(),
-            15,
+            20,
             "cada acción tiene un nombre de archivo único"
         );
         assert!(all.iter().all(|a| a.file_name().starts_with("action_")));

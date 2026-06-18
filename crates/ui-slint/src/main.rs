@@ -1422,12 +1422,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 c.icons.get(IconKey::Action(a))
             };
             ui.set_ic_up(ic(&mut c, ActionIcon::Up));
-            ui.set_ic_panel(ic(&mut c, ActionIcon::NewWindow));
+            ui.set_ic_panel(ic(&mut c, ActionIcon::Panel));
             ui.set_ic_swap(ic(&mut c, ActionIcon::SwapPanes));
             ui.set_ic_clone(ic(&mut c, ActionIcon::ClonePath));
-            ui.set_ic_tabs(ic(&mut c, ActionIcon::AddPane));
+            ui.set_ic_tabs(ic(&mut c, ActionIcon::Tabs));
             ui.set_ic_settings(ic(&mut c, ActionIcon::Settings));
             ui.set_ic_new_folder(ic(&mut c, ActionIcon::NewFolder));
+            // Íconos propios nuevos (antes dibujados con Path o reusados).
+            ui.set_ic_add_pane(ic(&mut c, ActionIcon::AddPane));
+            ui.set_ic_layouts(ic(&mut c, ActionIcon::Layouts));
+            ui.set_ic_terminal(ic(&mut c, ActionIcon::Terminal));
+            ui.set_ic_refresh(ic(&mut c, ActionIcon::Refresh));
+            ui.set_ic_eject(ic(&mut c, ActionIcon::Eject));
         })
     };
     refresh_toolbar_icons();
