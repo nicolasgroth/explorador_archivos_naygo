@@ -2154,6 +2154,8 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_history_rows(ModelRc::new(VecModel::from(rows)));
                 ui.set_history_menu_x(x);
+                // Cerrar el menú de discos para que nunca haya dos menús abiertos a la vez.
+                ui.set_drive_menu_path("".into());
                 ui.set_history_menu_open(true);
             }
         });

@@ -576,7 +576,8 @@ export component AppWindow inherits Window {
     // Estado del menú del botón "+" (elegir dirección de la división).
     property <bool> dir-menu-open: false;
     // Menú ▾ de expulsión de un disco extraíble: raíz del disco (vacío = cerrado) + x de anclaje.
-    property <string> drive-menu-path: "";
+    // in-out para que Rust pueda cerrarlo (setearlo a "") al abrir el menú de historial.
+    in-out property <string> drive-menu-path: "";
     property <length> drive-menu-x: 0;
     // Menú flotante del historial de carpetas recientes.
     callback history-open(length);       // abre el menú anclado en la x dada
@@ -853,6 +854,8 @@ export component AppWindow inherits Window {
                     clicked => { root.nav-drive(d.path); }
                     eject-menu(x) => {
                         // Abrir el menú flotante de expulsión anclado a este disco.
+                        // Cerrar el menú de historial para que nunca haya dos menús abiertos a la vez.
+                        root.history-menu-open = false;
                         root.drive-menu-path = d.path;
                         root.drive-menu-x = x;
                     }

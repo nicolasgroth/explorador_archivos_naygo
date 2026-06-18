@@ -627,12 +627,16 @@ export component ConfigWindow inherits Window {
                                     LineEdit {
                                         text: root.recent-limit + "";
                                         width: root.ctl-w;
+                                        placeholder-text: "1–100";
                                         edited(t) => {
                                             // Clampear al vuelo: acepta solo enteros 1–100.
-                                            // `to-float` devuelve 0 si no parsea, así que valores
-                                            // no numéricos o vacíos se ignoran.
-                                            if (t.to-float() >= 1 && t.to-float() <= 100) {
-                                                root.recent-limit-changed(Math.round(t.to-float()));
+                                            // `to-float` devuelve 0 si no parsea; vacío/texto
+                                            // quedan en 0 < 1 y no entran al if (no se aplican).
+                                            // Si el valor está fuera de rango se clampa a 1-100
+                                            // y se reescribe el campo visualmente al valor corregido.
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(100, Math.round(t.to-float()))) + "";
+                                                root.recent-limit-changed(max(1, min(100, Math.round(t.to-float()))));
                                             }
                                         }
                                     }
