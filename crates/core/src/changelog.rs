@@ -33,6 +33,8 @@ pub struct ReleaseNotes {
 /// EXACTO entre corchetes). Devuelve `None` si no existe tal bloque. El bloque
 /// termina en el siguiente `## ` o al final del texto.
 pub fn release_notes(changelog: &str, version: &str) -> Option<ReleaseNotes> {
+    // Tolerar un BOM UTF-8 al inicio (común en archivos editados en Windows).
+    let changelog = changelog.trim_start_matches('\u{FEFF}');
     let mut lines = changelog.lines();
     // Encontrar el encabezado de la versión pedida.
     let header = lines
@@ -76,17 +78,21 @@ fn version_in_header(line: &str) -> Option<&str> {
     Some(inner[..end].trim())
 }
 
-/// Extrae la fecha de un encabezado de versión, si viene tras un guion
-/// (acepta "—" o "-"). Devuelve el texto tras el guion, recortado.
+/// Extrae la fecha de un encabezado de versión: el texto que viene tras un guion
+/// (em-dash `—` o guion normal `-`) después del `]`. Si no hay guion, devuelve
+/// `None` (así no se confunde texto suelto, p. ej. "(sin publicar)", con una fecha).
 fn date_in_header(line: &str) -> Option<String> {
     // Tomar lo que viene después del `]`.
     let after = line.split_once(']')?.1.trim();
-    // Quitar un guion inicial (em-dash o normal) y espacios.
-    let after = after.trim_start_matches('—').trim_start_matches('-').trim();
-    if after.is_empty() {
+    // Debe empezar por un guion para considerarse fecha.
+    let date = after
+        .strip_prefix('—')
+        .or_else(|| after.strip_prefix('-'))?
+        .trim();
+    if date.is_empty() {
         None
     } else {
-        Some(after.to_string())
+        Some(date.to_string())
     }
 }
 
@@ -161,5 +167,34 @@ mod tests {
             n.sections[0].items,
             vec!["Navegación tipo Commander.".to_string()]
         );
+    }
+
+    #[test]
+    fn tolera_bom_al_inicio() {
+        let cl = "\u{FEFF}## [1.0.0] — 2026-01-01\n### Añadido\n- algo\n";
+        let n = release_notes(cl, "1.0.0").expect("debe encontrar 1.0.0 pese al BOM");
+        assert_eq!(n.date.as_deref(), Some("2026-01-01"));
+        assert_eq!(n.sections.len(), 1);
+    }
+
+    #[test]
+    fn fecha_con_guion_normal_se_acepta() {
+        let cl = "## [1.0.0] - 2026-02-02\n### Añadido\n- x\n";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(n.date.as_deref(), Some("2026-02-02"));
+    }
+
+    #[test]
+    fn texto_sin_guion_tras_corchete_no_es_fecha() {
+        let cl = "## [1.0.0] (sin publicar)\n### Añadido\n- x\n";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(n.date, None);
+    }
+
+    #[test]
+    fn guion_sin_fecha_da_none() {
+        let cl = "## [1.0.0] —   \n### Añadido\n- x\n";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(n.date, None);
     }
 }
