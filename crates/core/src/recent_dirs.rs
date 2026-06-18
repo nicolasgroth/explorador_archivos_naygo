@@ -9,9 +9,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Tope de carpetas recordadas.
-const MAX_RECENTS: usize = 30;
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RecentDirs {
     /// La más reciente PRIMERO.
@@ -23,11 +20,19 @@ impl RecentDirs {
         Self::default()
     }
 
-    /// Registra una visita: `dir` pasa al frente (sin duplicados, tope MAX_RECENTS).
-    pub fn push(&mut self, dir: PathBuf) {
+    /// Registra una visita: `dir` pasa al frente (sin duplicados). Recorta a `limit`
+    /// (clampeado a >= 1: un push siempre deja al menos esa carpeta).
+    pub fn push(&mut self, dir: PathBuf, limit: usize) {
+        let limit = limit.max(1);
         self.dirs.retain(|d| d != &dir);
         self.dirs.insert(0, dir);
-        self.dirs.truncate(MAX_RECENTS);
+        self.dirs.truncate(limit);
+    }
+
+    /// Recorta la lista a los `n` más recientes (n=0 deja la lista vacía). Se usa cuando el
+    /// usuario BAJA el límite en la configuración.
+    pub fn truncate_to(&mut self, n: usize) {
+        self.dirs.truncate(n);
     }
 
     /// Las recientes, la más nueva primero.
@@ -68,27 +73,44 @@ mod tests {
     #[test]
     fn push_es_mru_sin_duplicados() {
         let mut r = RecentDirs::new();
-        r.push(p("D:/a"));
-        r.push(p("D:/b"));
-        r.push(p("D:/a")); // re-visita: sube al frente, sin duplicar
+        r.push(p("D:/a"), 50);
+        r.push(p("D:/b"), 50);
+        r.push(p("D:/a"), 50); // re-visita: sube al frente, sin duplicar
         assert_eq!(r.list(), &[p("D:/a"), p("D:/b")]);
     }
 
     #[test]
-    fn respeta_el_tope() {
+    fn push_respeta_el_limite() {
         let mut r = RecentDirs::new();
         for i in 0..40 {
-            r.push(p(&format!("D:/d{i}")));
+            r.push(p(&format!("D:/d{i}")), 10);
         }
-        assert_eq!(r.list().len(), MAX_RECENTS);
+        assert_eq!(r.list().len(), 10);
         assert_eq!(r.list()[0], p("D:/d39"));
+    }
+
+    #[test]
+    fn push_limite_cero_se_clampa_a_uno() {
+        let mut r = RecentDirs::new();
+        r.push(p("D:/a"), 0);
+        assert_eq!(r.list(), &[p("D:/a")]);
+    }
+
+    #[test]
+    fn truncate_to_recorta_a_los_mas_recientes() {
+        let mut r = RecentDirs::new();
+        for i in 0..5 {
+            r.push(p(&format!("D:/d{i}")), 50);
+        }
+        r.truncate_to(2);
+        assert_eq!(r.list(), &[p("D:/d4"), p("D:/d3")]);
     }
 
     #[test]
     fn json_round_trip_y_carga_tolerante() {
         let mut r = RecentDirs::new();
-        r.push(p("D:/uno"));
-        r.push(p("D:/dos"));
+        r.push(p("D:/uno"), 50);
+        r.push(p("D:/dos"), 50);
         let back = RecentDirs::from_json(&r.to_json());
         assert_eq!(back.list(), r.list());
         assert!(RecentDirs::from_json("{corrupto").list().is_empty());
@@ -100,8 +122,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().to_path_buf();
         let mut r = RecentDirs::new();
-        r.push(p("D:/no/existe/jamas"));
-        r.push(real.clone());
+        r.push(p("D:/no/existe/jamas"), 50);
+        r.push(real.clone(), 50);
         r.remove_missing();
         assert_eq!(r.list(), &[real]);
     }
