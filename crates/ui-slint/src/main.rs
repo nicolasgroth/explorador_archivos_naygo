@@ -46,6 +46,10 @@ use workspace_ctrl::WorkspaceCtrl;
 
 slint::include_modules!();
 
+/// CHANGELOG embebido en build time: fuente de la sección "Novedades" del Acerca de.
+/// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.
+const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
+
 /// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
 struct PaneModels {
     rows: Rc<VecModel<RowData>>,
@@ -1478,6 +1482,29 @@ fn main() -> Result<(), slint::PlatformError> {
             cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
             cfg.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
             cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
+            // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
+            // versión actual. Se setea una sola vez (no cambia en runtime).
+            {
+                let notes =
+                    naygo_core::changelog::release_notes(CHANGELOG, env!("CARGO_PKG_VERSION"));
+                let sections: Vec<NewsSection> = notes
+                    .map(|n| {
+                        n.sections
+                            .into_iter()
+                            .map(|s| NewsSection {
+                                category: s.category.into(),
+                                items: ModelRc::new(VecModel::from(
+                                    s.items
+                                        .into_iter()
+                                        .map(SharedString::from)
+                                        .collect::<Vec<_>>(),
+                                )),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                cfg.set_release_notes(ModelRc::new(VecModel::from(sections)));
+            }
         })
     };
     refresh_config_vm();

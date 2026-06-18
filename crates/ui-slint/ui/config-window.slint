@@ -3,7 +3,7 @@
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
-import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm, NewsSection } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
@@ -165,6 +165,8 @@ export component ConfigWindow inherits Window {
     callback clear-default-table();
     // Reglas de previsualización (C3):
     in property <[PreviewRuleVm]> preview-rules;
+    // Novedades de esta versión (Acerca de, cat 8):
+    in property <[NewsSection]> release-notes;
     callback preview-toggle(string);
     callback preview-set-as(string, string);
     callback preview-remove(string);
@@ -795,6 +797,34 @@ export component ConfigWindow inherits Window {
                                             mouse-cursor: pointer;
                                             clicked => { root.open-repo(); }
                                         }
+                                    }
+                                }
+                                // Separador y sección "Novedades de esta versión".
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.about-news-title;
+                                    color: Theme.text;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                }
+                                // Si no hay notas para esta versión, una línea discreta.
+                                if root.release-notes.length == 0: Text {
+                                    text: Tr.about-no-notes;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                }
+                                // Una subsección por categoría, con sus viñetas.
+                                for sec in root.release-notes: VerticalLayout {
+                                    spacing: 2px;
+                                    Text {
+                                        text: sec.category;
+                                        color: Theme.accent;
+                                        font-weight: 700;
+                                    }
+                                    for it in sec.items: Text {
+                                        text: "• " + it;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }

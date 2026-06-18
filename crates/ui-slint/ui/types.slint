@@ -372,3 +372,9 @@ export struct PaneVm {
     // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
     tabs: [TabVm],
 }
+
+// Una subsección de "Novedades" del Acerca de: una categoría y sus viñetas.
+export struct NewsSection {
+    category: string,
+    items: [string],
+}
