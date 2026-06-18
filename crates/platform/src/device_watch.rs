@@ -66,10 +66,12 @@ mod windows_impl {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
-        PostMessageW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, TranslateMessage,
-        CREATESTRUCTW, DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE, GWLP_USERDATA, HWND_MESSAGE,
-        MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_DESTROY, WM_DEVICECHANGE, WM_NCCREATE,
-        WNDCLASSW,
+        PostMessageW, PostQuitMessage, RegisterClassW, RegisterDeviceNotificationW,
+        SetWindowLongPtrW, TranslateMessage, UnregisterDeviceNotification, CREATESTRUCTW,
+        DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_DEVICEINTERFACE,
+        DEVICE_NOTIFY_ALL_INTERFACE_CLASSES, DEV_BROADCAST_DEVICEINTERFACE_W, GWLP_USERDATA,
+        HDEVNOTIFY, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_DESTROY,
+        WM_DEVICECHANGE, WM_NCCREATE, WNDCLASSW,
     };
 
     /// Nombre de la clase de ventana (wide, NUL-terminado). Único para Naygo para no
@@ -115,9 +117,15 @@ mod windows_impl {
         });
     }
 
-    /// Carga boxeada que vive en `GWLP_USERDATA`: el `Sender` para emitir el evento y el
-    /// `Waker` para despertar la UI tras emitirlo.
-    type Payload = (Sender<DeviceEvent>, Waker);
+    /// Carga boxeada que vive en `GWLP_USERDATA`: el `Sender` para emitir el evento, el `Waker`
+    /// para despertar la UI, y el handle de la suscripción a notificaciones de dispositivo
+    /// (`HDEVNOTIFY` como bits) para poder desregistrarlo en `WM_DESTROY`. La `Cell` se rellena en
+    /// `WM_NCCREATE` tras registrar; 0 = no registrado.
+    struct Payload {
+        tx: Sender<DeviceEvent>,
+        waker: Waker,
+        hdevnotify: std::cell::Cell<isize>,
+    }
 
     /// Procedimiento de ventana. Maneja el ciclo de vida del `Payload` boxeado (guardado
     /// en `GWLP_USERDATA`) y traduce `WM_DEVICECHANGE` en `DeviceEvent::DrivesChanged`.
@@ -139,6 +147,29 @@ mod windows_impl {
                 if !cs.is_null() {
                     let payload_ptr = (*cs).lpCreateParams as *mut Payload;
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, payload_ptr as isize);
+                    // CLAVE: una ventana message-only NO recibe los WM_DEVICECHANGE de VOLÚMENES
+                    // (USB) salvo que se suscriba explícitamente. Registramos la notificación de
+                    // interfaces de dispositivo (todas las clases) para que lleguen los
+                    // arrival/removecomplete de unidades extraíbles. Sin esto, el watcher nunca
+                    // se entera de un USB conectado/quitado (era el bug de "no detecta el USB").
+                    if !payload_ptr.is_null() {
+                        let mut filter = DEV_BROADCAST_DEVICEINTERFACE_W {
+                            dbcc_size: core::mem::size_of::<DEV_BROADCAST_DEVICEINTERFACE_W>()
+                                as u32,
+                            dbcc_devicetype: DBT_DEVTYP_DEVICEINTERFACE.0,
+                            ..Default::default()
+                        };
+                        match RegisterDeviceNotificationW(
+                            windows::Win32::Foundation::HANDLE(hwnd.0),
+                            &mut filter as *mut _ as *const core::ffi::c_void,
+                            DEVICE_NOTIFY_ALL_INTERFACE_CLASSES,
+                        ) {
+                            Ok(h) => (*payload_ptr).hdevnotify.set(h.0 as isize),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "device_watch: RegisterDeviceNotificationW falló");
+                            }
+                        }
+                    }
                 }
                 // Devolver TRUE explícito tras guardar el puntero: si DefWindowProcW
                 // devolviera FALSE aquí, la creación abortaría SIN enviar WM_DESTROY y el
@@ -155,11 +186,11 @@ mod windows_impl {
                 {
                     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Payload;
                     if !ptr.is_null() {
-                        let (tx, waker) = &*ptr;
+                        let payload = &*ptr;
                         // Si el receptor se cayó, ignorar (la app puede estar cerrando).
-                        let _ = tx.send(DeviceEvent::DrivesChanged);
+                        let _ = payload.tx.send(DeviceEvent::DrivesChanged);
                         // Despertar la UI: estaba dormida, debe re-escanear las unidades.
-                        waker();
+                        (payload.waker)();
                     }
                 }
                 // TRUE: concedemos el cambio (relevante para subeventos de query, no para
@@ -167,11 +198,17 @@ mod windows_impl {
                 LRESULT(1)
             }
             WM_DESTROY => {
-                // Liberar el Box<Sender> que guardamos en WM_NCCREATE y cerrar el bucle.
+                // Desregistrar la notificación de dispositivo y liberar el Box<Payload>.
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                    drop(Box::from_raw(ptr as *mut Payload));
+                    let payload = Box::from_raw(ptr as *mut Payload);
+                    let h = payload.hdevnotify.get();
+                    if h != 0 {
+                        let _ =
+                            UnregisterDeviceNotification(HDEVNOTIFY(h as *mut core::ffi::c_void));
+                    }
+                    drop(payload);
                 }
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -192,9 +229,13 @@ mod windows_impl {
             .spawn(move || {
                 ensure_class_registered();
 
-                // El Box<Payload> (Sender + Waker) viaja como lpCreateParams; WM_NCCREATE se
-                // hace dueño de él.
-                let payload_box: Box<Payload> = Box::new((tx, waker));
+                // El Box<Payload> (Sender + Waker + slot del HDEVNOTIFY) viaja como
+                // lpCreateParams; WM_NCCREATE se hace dueño de él y registra la notificación.
+                let payload_box: Box<Payload> = Box::new(Payload {
+                    tx,
+                    waker,
+                    hdevnotify: std::cell::Cell::new(0),
+                });
                 let create_params = Box::into_raw(payload_box) as *const c_void;
 
                 // SAFETY: clase ya registrada (o se reporta su falla); HWND_MESSAGE crea una
