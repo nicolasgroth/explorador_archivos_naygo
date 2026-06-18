@@ -137,6 +137,9 @@ pub struct WorkspaceCtrl {
     /// Búsqueda recursiva en curso/terminada (Ctrl+F / lupa), si la hay. Mientras esté presente
     /// la UI muestra el panel de resultados; `None` = sin búsqueda. Ver `SearchJob`.
     pub search_job: Option<SearchJob>,
+    /// Vista profunda (listado recursivo) en curso/terminada para un panel, si la hay. Un solo
+    /// job a la vez. `None` = ningún panel en modo profundo. Ver `DeepJob`.
+    pub deep_job: Option<DeepJob>,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -253,6 +256,23 @@ pub struct SearchRow {
     pub icon: slint::Image,
 }
 
+/// Listado profundo (vista recursiva) en curso/terminado para un panel. Un solo job a la vez.
+/// Igual que SearchJob, pero las entradas se vuelcan en las filas NORMALES del panel (no en un
+/// overlay): cada una lleva su profundidad.
+#[allow(dead_code)]
+pub struct DeepJob {
+    pub pane: PaneId,
+    pub root: PathBuf,
+    pub rx: std::sync::mpsc::Receiver<naygo_core::deep_listing::DeepMsg>,
+    pub token: naygo_core::CancellationToken,
+    /// Entradas acumuladas con su profundidad (orden de descubrimiento).
+    pub items: Vec<(naygo_core::fs_model::Entry, u32)>,
+    pub dirs_scanned: usize,
+    pub done: bool,
+    pub cancelled: bool,
+    pub partial: bool,
+}
+
 /// Búsqueda recursiva en curso/terminada (overlay de resultados). Un solo job a la vez: una
 /// búsqueda nueva cancela y reemplaza la anterior. Mientras `open`, la UI muestra el panel de
 /// resultados. Modelado igual que `SizeJob`: worker + canal + token + estado acumulado.
@@ -336,6 +356,7 @@ impl WorkspaceCtrl {
             help_open: false,
             size_job: None,
             search_job: None,
+            deep_job: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -1408,6 +1429,12 @@ impl WorkspaceCtrl {
         if self.ws.pane(id).and_then(|p| p.files.as_ref()).is_none() {
             return false;
         }
+        // Navegar cancela la vista profunda del panel (no es pegajosa).
+        if self.is_deep_active(id) {
+            if let Some(d) = self.deep_job.take() {
+                d.token.cancel();
+            }
+        }
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -1631,6 +1658,12 @@ impl WorkspaceCtrl {
     /// Si `dir` no existe/ilegible, igual navega ahí: el panel mostrará el aviso "carpeta no
     /// encontrada" IN-PLACE (con sus opciones), en vez de un popup global.
     pub fn open_in_pane(&mut self, dest: PaneId, dir: PathBuf) {
+        // Navegar cancela la vista profunda del panel (no es pegajosa).
+        if self.is_deep_active(dest) {
+            if let Some(d) = self.deep_job.take() {
+                d.token.cancel();
+            }
+        }
         if let Some(f) = self.ws.pane_mut(dest).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -2102,6 +2135,12 @@ impl WorkspaceCtrl {
         let Some(active_files_id) = self.active_files_id() else {
             return false;
         };
+        // Navegar cancela la vista profunda del panel (no es pegajosa).
+        if self.is_deep_active(active_files_id) {
+            if let Some(d) = self.deep_job.take() {
+                d.token.cancel();
+            }
+        }
         // Si la carpeta no existe/ilegible (favorito viejo, red caída, ruta tipeada), igual
         // navegamos: el panel mostrará el aviso "carpeta no encontrada" IN-PLACE con sus
         // opciones (reintentar/subir/elegir/cerrar), en vez de un popup global. No la metemos
@@ -3108,6 +3147,12 @@ impl WorkspaceCtrl {
             if self.ctrl_down {
                 return self.request_action(PaneAction::OpenDir(e.path), id, self.last_area);
             }
+            // Navegar cancela la vista profunda del panel (no es pegajosa).
+            if self.is_deep_active(id) {
+                if let Some(d) = self.deep_job.take() {
+                    d.token.cancel();
+                }
+            }
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(e.path.clone());
             }
@@ -3130,6 +3175,12 @@ impl WorkspaceCtrl {
         let moved = self.ws.active_files_mut().and_then(|f| f.go_up());
         match moved {
             Some(dir) => {
+                // Navegar cancela la vista profunda del panel (no es pegajosa).
+                if self.is_deep_active(active) {
+                    if let Some(d) = self.deep_job.take() {
+                        d.token.cancel();
+                    }
+                }
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3152,6 +3203,12 @@ impl WorkspaceCtrl {
             .and_then(|f| f.go_back());
         match moved {
             Some(dir) => {
+                // Navegar cancela la vista profunda del panel (no es pegajosa).
+                if self.is_deep_active(active) {
+                    if let Some(d) = self.deep_job.take() {
+                        d.token.cancel();
+                    }
+                }
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3173,6 +3230,12 @@ impl WorkspaceCtrl {
             .and_then(|f| f.go_forward());
         match moved {
             Some(dir) => {
+                // Navegar cancela la vista profunda del panel (no es pegajosa).
+                if self.is_deep_active(active) {
+                    if let Some(d) = self.deep_job.take() {
+                        d.token.cancel();
+                    }
+                }
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3746,6 +3809,108 @@ impl WorkspaceCtrl {
                 }
             }
         }
+    }
+
+    // --- Vista profunda (DeepJob) ---
+
+    /// ¿El panel `id` está en vista profunda ahora mismo?
+    #[allow(dead_code)]
+    pub fn is_deep_active(&self, id: PaneId) -> bool {
+        self.deep_job.as_ref().is_some_and(|d| d.pane == id)
+    }
+
+    /// Activa la vista profunda en el panel `id` sobre su carpeta actual. Cancela cualquier
+    /// job profundo anterior. Si el panel no es Files o no tiene carpeta válida, no hace nada.
+    #[allow(dead_code)]
+    pub fn deep_start(&mut self, id: PaneId) {
+        let dir = self
+            .ws
+            .pane(id)
+            .filter(|p| p.purpose == PanePurpose::Files)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+            .filter(|d| d.is_dir());
+        let Some(dir) = dir else { return };
+        self.deep_cancel();
+        let token = naygo_core::CancellationToken::new();
+        let (rx, _handle) =
+            naygo_core::deep_listing::spawn_deep_listing(dir.clone(), token.clone());
+        self.deep_job = Some(DeepJob {
+            pane: id,
+            root: dir,
+            rx,
+            token,
+            items: Vec::new(),
+            dirs_scanned: 0,
+            done: false,
+            cancelled: false,
+            partial: false,
+        });
+    }
+
+    /// Apaga la vista profunda: cancela el worker y repuebla el panel con su listado normal.
+    #[allow(dead_code)]
+    pub fn deep_cancel(&mut self) {
+        if let Some(d) = self.deep_job.take() {
+            d.token.cancel();
+            self.start_listing(d.pane, d.root);
+        }
+    }
+
+    /// Alterna la vista profunda en el panel `id` (para el toggle de la barra).
+    #[allow(dead_code)]
+    pub fn deep_toggle(&mut self, id: PaneId) {
+        if self.is_deep_active(id) {
+            self.deep_cancel();
+        } else {
+            self.deep_start(id);
+        }
+    }
+
+    /// Drena los mensajes del worker profundo hacia las entradas acumuladas. Devuelve `true`
+    /// si hubo cambios (la UI debe re-sincronizar las filas del panel). No bloquea.
+    #[allow(dead_code)]
+    pub fn deep_poll(&mut self) -> bool {
+        let Some(d) = self.deep_job.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        loop {
+            match d.rx.try_recv() {
+                Ok(naygo_core::deep_listing::DeepMsg::Entry(de)) => {
+                    d.items.push((de.entry, de.depth));
+                    changed = true;
+                }
+                Ok(naygo_core::deep_listing::DeepMsg::Progress { dirs_scanned }) => {
+                    d.dirs_scanned = dirs_scanned;
+                }
+                Ok(naygo_core::deep_listing::DeepMsg::Done { partial }) => {
+                    d.done = true;
+                    d.partial = partial;
+                    changed = true;
+                    break;
+                }
+                Ok(naygo_core::deep_listing::DeepMsg::Cancelled) => {
+                    d.cancelled = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    d.done = true;
+                    break;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Las entradas profundas acumuladas (entrada + profundidad), para armar las filas.
+    #[allow(dead_code)]
+    pub fn deep_items(&self) -> &[(naygo_core::fs_model::Entry, u32)] {
+        self.deep_job
+            .as_ref()
+            .map(|d| d.items.as_slice())
+            .unwrap_or(&[])
     }
 }
 
@@ -5035,5 +5200,47 @@ mod tests {
         assert!(c.pending_pick.is_some());
         c.pick_cancel();
         assert!(c.pending_pick.is_none());
+    }
+
+    /// Vista profunda: activar sobre un árbol temporal, drenar hasta completar y cancelar.
+    /// Verifica el ciclo completo: deep_start → is_deep_active → deep_poll → deep_items →
+    /// deep_cancel → ya no activo ni con ítems.
+    #[test]
+    fn vista_profunda_activa_acumula_y_cancela() {
+        use std::fs;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), b"x").unwrap();
+        fs::write(root.join("sub/b.txt"), b"y").unwrap();
+
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(root.to_path_buf(), cfg.path().to_path_buf());
+        let id = c.ws.active_id().unwrap();
+
+        c.deep_start(id);
+        assert!(c.is_deep_active(id));
+        let mut tries = 0;
+        while !c
+            .deep_job
+            .as_ref()
+            .map(|d| d.done || d.cancelled)
+            .unwrap_or(true)
+            && tries < 2000
+        {
+            c.deep_poll();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            tries += 1;
+        }
+        c.deep_poll();
+        // El árbol tiene 3 entradas: a.txt, sub, sub/b.txt
+        assert_eq!(
+            c.deep_items().len(),
+            3,
+            "deben llegar exactamente 3 entradas (a.txt, sub, sub/b.txt)"
+        );
+        c.deep_cancel();
+        assert!(!c.is_deep_active(id));
+        assert!(c.deep_items().is_empty());
     }
 }
