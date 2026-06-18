@@ -95,6 +95,7 @@ fn wildcard_match(name: &str, pattern: &str) -> bool {
 
 /// Una entrada cruda de un directorio para la búsqueda: ruta + tipo + si es symlink.
 /// (Reusa la idea de `sizing::WalkEntry` pero local a búsqueda para no acoplar módulos.)
+#[derive(Clone)]
 pub(crate) struct DirEntryRaw {
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
