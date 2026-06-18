@@ -15,6 +15,11 @@ pub enum PreviewKind {
     Text,
     /// Imagen liviana (se decodifica y se muestra escalada).
     Image,
+    /// SVG: imagen vectorial. Se rasteriza a RGBA en el worker y se muestra como imagen.
+    Svg,
+    /// PDF: se muestra el TEXTO extraído + metadatos (nº páginas). NO se renderiza la página
+    /// (preview liviano, sin DLLs): la salida es texto.
+    Pdf,
     /// Sin vista previa (video/audio/binario/desconocido): NUNCA se lee el archivo.
     None,
 }
@@ -22,6 +27,12 @@ pub enum PreviewKind {
 /// Extensiones de imagen previsualizables. Fijas en v1 (el decoder de `image` soporta
 /// todas: png/jpeg/bmp/gif/webp/ico).
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "webp", "ico"];
+
+/// Extensión de imagen vectorial: se rasteriza con resvg (no la decodifica `image`).
+pub const SVG_EXTENSIONS: &[&str] = &["svg"];
+
+/// Extensión de documento PDF: preview de texto + metadatos (sin render de página).
+pub const PDF_EXTENSIONS: &[&str] = &["pdf"];
 
 /// Extensiones de texto previsualizables por defecto. La UI permite editar la lista en
 /// Configuración; esta es la semilla.
@@ -80,6 +91,10 @@ pub fn classify_rules(path: &std::path::Path, rules: &[PreviewRule]) -> PreviewK
 fn kind_of_extension(ext: &str) -> PreviewKind {
     if IMAGE_EXTENSIONS.contains(&ext) {
         PreviewKind::Image
+    } else if SVG_EXTENSIONS.contains(&ext) {
+        PreviewKind::Svg
+    } else if PDF_EXTENSIONS.contains(&ext) {
+        PreviewKind::Pdf
     } else if DEFAULT_TEXT_EXTENSIONS.contains(&ext) {
         PreviewKind::Text
     } else {
@@ -98,6 +113,8 @@ pub fn default_preview_rules() -> Vec<PreviewRule> {
     DEFAULT_TEXT_EXTENSIONS
         .iter()
         .chain(IMAGE_EXTENSIONS.iter())
+        .chain(SVG_EXTENSIONS.iter())
+        .chain(PDF_EXTENSIONS.iter())
         .map(mk)
         .collect()
 }
@@ -113,11 +130,15 @@ pub fn rules_from_csv(csv: &str) -> Vec<PreviewRule> {
             treat_as: None,
         })
         .collect();
-    // Agregar las imágenes que falten (habilitadas).
-    for img in IMAGE_EXTENSIONS {
-        if !rules.iter().any(|r| r.ext == *img) {
+    // Agregar las imágenes + SVG + PDF que falten (habilitadas).
+    for ext in IMAGE_EXTENSIONS
+        .iter()
+        .chain(SVG_EXTENSIONS.iter())
+        .chain(PDF_EXTENSIONS.iter())
+    {
+        if !rules.iter().any(|r| r.ext == *ext) {
             rules.push(PreviewRule {
-                ext: (*img).to_string(),
+                ext: (*ext).to_string(),
                 enabled: true,
                 treat_as: None,
             });
@@ -143,6 +164,12 @@ pub fn classify(path: &std::path::Path, text_exts: &[String]) -> PreviewKind {
     }
     if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         return PreviewKind::Image;
+    }
+    if SVG_EXTENSIONS.contains(&ext.as_str()) {
+        return PreviewKind::Svg;
+    }
+    if PDF_EXTENSIONS.contains(&ext.as_str()) {
+        return PreviewKind::Pdf;
     }
     if text_exts.iter().any(|e| e == &ext) {
         return PreviewKind::Text;
@@ -214,6 +241,18 @@ mod tests {
         assert_eq!(classify(Path::new("a.exe"), &texts), PreviewKind::None);
         // Sin extensión → None.
         assert_eq!(classify(Path::new("LICENSE"), &texts), PreviewKind::None);
+    }
+
+    #[test]
+    fn clasifica_svg_y_pdf() {
+        let texts: Vec<String> = parse_text_extensions("txt");
+        // classify (lista de texto): svg/pdf tienen su propio tipo, no dependen de la lista.
+        assert_eq!(classify(Path::new("dibujo.SVG"), &texts), PreviewKind::Svg);
+        assert_eq!(classify(Path::new("doc.pdf"), &texts), PreviewKind::Pdf);
+        // classify_rules (reglas por defecto): idem, ambas habilitadas de fábrica.
+        let rules = default_preview_rules();
+        assert_eq!(classify_rules(Path::new("a.svg"), &rules), PreviewKind::Svg);
+        assert_eq!(classify_rules(Path::new("a.pdf"), &rules), PreviewKind::Pdf);
     }
 
     #[test]

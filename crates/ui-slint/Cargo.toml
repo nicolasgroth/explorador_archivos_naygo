@@ -40,6 +40,16 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
     "ico",
 ] }
+# Rasterización de SVG para el panel Preview (puro Rust, sin DLLs externas → sigue portable).
+# resvg pinta sobre un tiny_skia::Pixmap que convertimos a RGBA, igual que una imagen normal.
+# Con features por defecto (incluye `text`) para que los SVG con texto se vean bien.
+resvg = "0.47"
+usvg = "0.47"
+tiny-skia = "0.12"
+# Extracción de TEXTO y metadatos de PDF (puro Rust, sin DLLs). Preview liviano: NO renderiza
+# la página, solo muestra el texto y el nº de páginas. Mantiene la app portable.
+pdf-extract = "0.10"
+lopdf = "0.41"
 
 [build-dependencies]
 slint-build = "1.16"

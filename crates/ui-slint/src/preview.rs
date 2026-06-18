@@ -203,6 +203,8 @@ fn build_payload(path: &Path, rules: &[PreviewRule], token: &CancellationToken) 
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
         PreviewKind::Text => read_text(path),
         PreviewKind::Image => read_image(path, token),
+        PreviewKind::Svg => read_svg(path, token),
+        PreviewKind::Pdf => read_pdf(path),
     }
 }
 
@@ -316,6 +318,121 @@ fn read_image(path: &Path, token: &CancellationToken) -> Payload {
         width: rgba.width(),
         height: rgba.height(),
         rgba: rgba.into_raw(),
+    }
+}
+
+/// Rasteriza un SVG a RGBA con resvg (puro Rust, sin DLLs). Lo escala para que el lado mayor
+/// quede en ~`IMAGE_MAX_SIDE` px (nítido pero acotado). Como el SVG es vectorial, se respeta el
+/// tope de bytes del ARCHIVO fuente (no del bitmap resultante). Cancelable entre etapas.
+fn read_svg(path: &Path, token: &CancellationToken) -> Payload {
+    use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
+    let bytes = match std::fs::metadata(path) {
+        Ok(m) if m.len() > IMAGE_MAX_BYTES => {
+            return Payload::Message("SVG muy grande".to_string())
+        }
+        Ok(_) => match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return Payload::Message("No se pudo leer".to_string()),
+        },
+        Err(_) => return Payload::Message("No se pudo leer".to_string()),
+    };
+    if token.is_cancelled() {
+        return Payload::Message("Cancelado".to_string());
+    }
+    // usvg parsea el SVG a un árbol simplificado. Opciones por defecto (sin fuentes externas:
+    // el texto del SVG usa la BD de fuentes por defecto, suficiente para un preview).
+    let opt = usvg::Options::default();
+    let tree = match usvg::Tree::from_data(&bytes, &opt) {
+        Ok(t) => t,
+        Err(_) => return Payload::Message("SVG inválido".to_string()),
+    };
+    if token.is_cancelled() {
+        return Payload::Message("Cancelado".to_string());
+    }
+    // Escala para encajar el lado mayor en IMAGE_MAX_SIDE (sin agrandar SVGs ya pequeños).
+    let size = tree.size();
+    let (sw, sh) = (size.width(), size.height());
+    let longest = sw.max(sh).max(1.0);
+    let scale = (IMAGE_MAX_SIDE as f32 / longest).clamp(0.01, 1.0);
+    let pw = (sw * scale).ceil().max(1.0) as u32;
+    let ph = (sh * scale).ceil().max(1.0) as u32;
+    let mut pixmap = match tiny_skia::Pixmap::new(pw, ph) {
+        Some(p) => p,
+        None => return Payload::Message("No se pudo rasterizar".to_string()),
+    };
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    if token.is_cancelled() {
+        return Payload::Message("Cancelado".to_string());
+    }
+    // El pixmap de tiny-skia ya es RGBA8 (alpha premultiplicado). Para el preview sobre el panel
+    // es aceptable mostrarlo tal cual; lo des-premultiplicamos a RGBA recto para que los bordes
+    // semitransparentes no se vean oscurecidos.
+    let rgba = unpremultiply_rgba(pixmap.data(), pw, ph);
+    Payload::Image {
+        width: pw,
+        height: ph,
+        rgba,
+    }
+}
+
+/// Convierte RGBA premultiplicado (tiny-skia) a RGBA recto (lo que espera el panel). Divide cada
+/// canal de color por el alpha. Píxeles totalmente transparentes quedan en 0.
+fn unpremultiply_rgba(data: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in data.chunks_exact(4) {
+        let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
+        if a == 0 {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+        } else {
+            let unp = |c: u8| ((c as u16 * 255 + a as u16 / 2) / a as u16).min(255) as u8;
+            out.extend_from_slice(&[unp(r), unp(g), unp(b), a]);
+        }
+    }
+    out
+}
+
+/// Cuántos caracteres de texto del PDF mostrar como máximo (preview liviano).
+const PDF_TEXT_MAX_CHARS: usize = 8000;
+/// Tope de bytes del PDF a abrir (archivos enormes se evitan).
+const PDF_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Preview LIVIANO de un PDF: extrae el texto (puro Rust, sin DLLs) y un encabezado con el nº de
+/// páginas. NO renderiza la página (eso requeriría una DLL nativa). Devuelve `Payload::Text`.
+fn read_pdf(path: &Path) -> Payload {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > PDF_MAX_BYTES => return Payload::Message("PDF muy grande".to_string()),
+        Ok(_) => {}
+        Err(_) => return Payload::Message("No se pudo leer".to_string()),
+    }
+    // Nº de páginas vía lopdf (barato: solo recorre el árbol de páginas).
+    let pages = lopdf::Document::load(path)
+        .ok()
+        .map(|d| d.get_pages().len());
+    // Texto vía pdf-extract (puede fallar en PDFs escaneados/protegidos → se avisa).
+    let text = match pdf_extract::extract_text(path) {
+        Ok(t) => t,
+        Err(_) => {
+            let head = match pages {
+                Some(n) => format!("PDF de {n} página(s).\n\n"),
+                None => String::new(),
+            };
+            return Payload::Text {
+                text: format!("{head}(No se pudo extraer el texto: puede ser un PDF escaneado, protegido o con solo imágenes.)"),
+                truncated: false,
+            };
+        }
+    };
+    let header = match pages {
+        Some(n) => format!("PDF de {n} página(s):\n\n"),
+        None => "PDF:\n\n".to_string(),
+    };
+    let trimmed = text.trim();
+    let truncated = trimmed.chars().count() > PDF_TEXT_MAX_CHARS;
+    let body: String = trimmed.chars().take(PDF_TEXT_MAX_CHARS).collect();
+    Payload::Text {
+        text: format!("{header}{body}"),
+        truncated,
     }
 }
 
