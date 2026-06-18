@@ -503,7 +503,7 @@ export component AppWindow inherits Window {
     in property <bool> drop-is-tab;
     // Selector numérico de panel destino (overlay 1..9):
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
-    callback pick-resolve(int);          // elegí el panel número N (clic)
+    callback pick-resolve(int);          // elige el panel número N (clic)
     callback pick-cancel();              // cancelar (clic fuera)
     // Texto de la barra de estado (carpeta activa + recuento de ítems/selección).
     in property <string> status;
