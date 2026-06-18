@@ -477,6 +477,7 @@
   "slint.pathbar.copy_tip": "Copy the path to the clipboard",
   "slint.pathbar.copied": "Path copied",
   "slint.drive.eject_tip": "Safely eject",
+  "slint.toolbar.refresh_drives": "Refresh drives",
   "slint.drive.eject_ok": "Drive ejected, you can remove it now",
   "slint.drive.eject_in_use": "Couldn't eject: files are in use",
   "slint.drive.eject_failed": "Couldn't eject the drive",

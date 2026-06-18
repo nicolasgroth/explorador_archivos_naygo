@@ -298,7 +298,20 @@ impl WorkspaceCtrl {
         };
         c.recents.push(start.clone());
         c.start_listing(id, start);
+        // Aplicar el modo de operaciones (cola/paralelo) guardado en Settings al motor de ops.
+        c.sync_ops_mode();
         c
+    }
+
+    /// Propaga el modo de operaciones de Settings (cola/paralelo) al controlador de ops. Antes
+    /// el motor de cola existía pero arrancaba SIEMPRE en paralelo (el campo de Settings no se
+    /// aplicaba), así que la cola era inalcanzable. Se llama al arrancar y al cambiarlo en config.
+    pub fn sync_ops_mode(&mut self) {
+        use naygo_core::config::OpsMode as CfgMode;
+        self.ops.ops_mode = match self.config.settings.ops_mode {
+            CfgMode::Queue => crate::ops_ctrl::OpsMode::Queue,
+            CfgMode::Parallel => crate::ops_ctrl::OpsMode::Parallel,
+        };
     }
 
     /// Estado persistible del workspace (para guardar al cerrar la ventana): disposición,

@@ -477,6 +477,7 @@
   "slint.pathbar.copy_tip": "Copiar la ruta al portapapeles",
   "slint.pathbar.copied": "Ruta copiada",
   "slint.drive.eject_tip": "Expulsar de forma segura",
+  "slint.toolbar.refresh_drives": "Refrescar unidades",
   "slint.drive.eject_ok": "Unidad expulsada, ya podés quitarla",
   "slint.drive.eject_in_use": "No se pudo expulsar: hay archivos en uso",
   "slint.drive.eject_failed": "No se pudo expulsar la unidad",

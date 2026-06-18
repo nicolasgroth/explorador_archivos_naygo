@@ -84,6 +84,8 @@ component ToolBtn inherits Rectangle {
     // Si true, dibuja un ícono de LAYOUTS (grilla 2x2) con Path: distingue "Layouts" de "Tabs"
     // (antes compartían el mismo PNG y eran indistinguibles).
     in property <bool> draw-layouts: false;
+    // Si true, dibuja un ícono de REFRESCAR (flecha circular) con Path.
+    in property <bool> draw-refresh: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -177,7 +179,30 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 13; y: 7; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts: Text {
+        // Ícono de refrescar dibujado: flecha circular (arco + punta).
+        if root.draw-refresh: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: white;
+                stroke-width: 1.4px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Arco (casi círculo, abierto arriba a la derecha).
+                MoveTo { x: 11.5; y: 4; }
+                ArcTo { radius-x: 5; radius-y: 5; x: 3; y: 5; sweep: false; large-arc: true; }
+                // Punta de flecha en el extremo del arco.
+                MoveTo { x: 11.5; y: 1.5; }
+                LineTo { x: 11.5; y: 4; }
+                LineTo { x: 9; y: 4; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -537,6 +562,9 @@ export component AppWindow inherits Window {
     // Expulsar de forma segura la unidad extraíble cuya raíz es el argumento (botón ⏏ o clic
     // derecho sobre una unidad USB). Rust desmonta+expulsa y muestra un toast del resultado.
     callback eject-drive(string);
+    // Re-escanear las unidades manualmente (las de red no disparan WM_DEVICECHANGE, así que un
+    // botón explícito las refresca). Rust reconstruye la tira de discos.
+    callback refresh-drives();
 
     // --- Ventana de configuración (Fase 4) ---
     // La ventana de config es ahora una ventana nativa propia (ConfigWindow); su wiring vive en
@@ -695,6 +723,14 @@ export component AppWindow inherits Window {
                 }
                 ToolSep { }
                 // --- Grupo UNIDADES (tira de discos) ---
+                // Refrescar unidades a mano (útil para unidades de red, que no avisan al SO).
+                ToolBtn {
+                    draw-refresh: true;
+                    tip: Tr.toolbar-refresh-drives;
+                    btn-width: 30px;
+                    clicked => { root.refresh-drives(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 // Tira de unidades de disco (paridad con egui): clic navega el panel activo.
                 for d in root.drives: DriveBtn {
                     label: d.label;

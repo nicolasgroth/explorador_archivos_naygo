@@ -1584,7 +1584,20 @@ fn main() -> Result<(), slint::PlatformError> {
             });
         }};
     }
-    cfg_setter!(on_set_ops_mode, i32, set_ops_mode);
+    // ops_mode no usa el macro: además de persistir, hay que aplicar el modo al motor de ops
+    // (cola/paralelo) en caliente vía sync_ops_mode.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_ops_mode(move |v| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_ops_mode(v);
+                c.sync_ops_mode();
+            }
+            refresh();
+        });
+    }
     cfg_setter!(on_set_confirm_trash, bool, set_confirm_trash);
     cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
     cfg_setter!(on_set_show_parent, bool, set_show_parent);
@@ -2030,6 +2043,12 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             ui.invoke_show_toast(msg);
         });
+    }
+    // Refrescar unidades a mano (botón ⟳): re-escanea y reconstruye la tira. Útil para unidades
+    // de red, que no disparan WM_DEVICECHANGE.
+    {
+        let refresh_drives = refresh_drives.clone();
+        ui.on_refresh_drives(move || refresh_drives());
     }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     {
