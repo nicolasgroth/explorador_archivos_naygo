@@ -242,6 +242,8 @@
   "about.license": "MIT License — free and open source",
   "about.stack": "Built with Rust + egui",
   "about.repo": "Source code on GitHub",
+  "slint.about.news_title": "What's new in this version",
+  "slint.about.no_notes": "No notes for this version.",
   "about.egg_message": "Made with ♥ in Chile — Nicolás Groth / ISGroth",
   "status.config_recovered": "Settings were corrupted: backed up as .bad and defaults restored",
   "status.factory_done": "Factory defaults restored",

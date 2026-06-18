@@ -242,6 +242,8 @@
   "about.license": "Licencia MIT — libre y de código abierto",
   "about.stack": "Hecho con Rust + egui",
   "about.repo": "Código fuente en GitHub",
+  "slint.about.news_title": "Novedades de esta versión",
+  "slint.about.no_notes": "Sin notas para esta versión.",
   "about.egg_message": "Hecho con ♥ en Chile — Nicolás Groth / ISGroth",
   "status.config_recovered": "La configuración estaba dañada: se respaldó como .bad y se restauraron los valores por defecto",
   "status.factory_done": "Valores de fábrica restaurados",

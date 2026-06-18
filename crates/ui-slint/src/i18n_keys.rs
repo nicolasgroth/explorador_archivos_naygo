@@ -235,6 +235,8 @@ where
     tr.set_about_license(c.t("about.license").into());
     tr.set_about_stack(c.t("slint.about.stack").into());
     tr.set_about_repo(c.t("about.repo").into());
+    tr.set_about_news_title(c.t("slint.about.news_title").into());
+    tr.set_about_no_notes(c.t("slint.about.no_notes").into());
     tr.set_about_egg_message(c.t("about.egg_message").into());
     tr.set_cfg_show_parent(c.t("settings.show_parent").into());
     tr.set_cfg_icon_only(c.t("settings.icon_only").into());
