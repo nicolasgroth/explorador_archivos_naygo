@@ -17,6 +17,8 @@ pub enum TrayMsg {
     Open,
     /// Abrir un panel nuevo (divide el panel activo) y traer la ventana al frente.
     NewPane,
+    /// Abrir la ventana de configuración.
+    OpenConfig,
     /// Re-centrar la ventana en la pantalla y traerla al frente: rescata una ventana que el
     /// usuario "perdió" (arrastrada fuera de la pantalla, minimizada, o tapada).
     CenterWindow,
@@ -36,6 +38,7 @@ pub struct Tray {
 pub fn create(
     open_label: &str,
     new_pane_label: &str,
+    config_label: &str,
     center_label: &str,
     exit_label: &str,
     waker: Waker,
@@ -44,10 +47,12 @@ pub fn create(
     let menu = Menu::new();
     let open_item = MenuItem::new(open_label, true, None);
     let new_pane_item = MenuItem::new(new_pane_label, true, None);
+    let config_item = MenuItem::new(config_label, true, None);
     let center_item = MenuItem::new(center_label, true, None);
     let exit_item = MenuItem::new(exit_label, true, None);
     menu.append(&open_item).ok()?;
     menu.append(&new_pane_item).ok()?;
+    menu.append(&config_item).ok()?;
     menu.append(&center_item).ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&exit_item).ok()?;
@@ -80,6 +85,7 @@ pub fn create(
     // Menú contextual: Abrir / Nuevo panel / Centrar ventana / Salir.
     let open_id = open_item.id().clone();
     let new_pane_id = new_pane_item.id().clone();
+    let config_id = config_item.id().clone();
     let center_id = center_item.id().clone();
     let exit_id = exit_item.id().clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -87,6 +93,8 @@ pub fn create(
             Some(TrayMsg::Open)
         } else if event.id == new_pane_id {
             Some(TrayMsg::NewPane)
+        } else if event.id == config_id {
+            Some(TrayMsg::OpenConfig)
         } else if event.id == center_id {
             Some(TrayMsg::CenterWindow)
         } else if event.id == exit_id {

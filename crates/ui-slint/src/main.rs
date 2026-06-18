@@ -802,6 +802,7 @@ fn main() -> Result<(), slint::PlatformError> {
             tray::create(
                 &c.config.t("slint.tray.open"),
                 &c.config.t("slint.tray.new_pane"),
+                &c.config.t("slint.tray.config"),
                 &c.config.t("slint.tray.center"),
                 &c.config.t("slint.tray.exit"),
                 waker.clone(),
@@ -886,6 +887,15 @@ fn main() -> Result<(), slint::PlatformError> {
                                     }
                                     ctrl.borrow_mut().add_pane_split();
                                     sync_layout();
+                                }
+                                tray::TrayMsg::OpenConfig => {
+                                    // Reusa el handler del engranaje de la toolbar (refresca el VM
+                                    // y muestra la ventana de config), así no duplicamos lógica.
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        let _ = ui.show();
+                                        ui.window().set_minimized(false);
+                                        ui.invoke_open_config();
+                                    }
                                 }
                                 tray::TrayMsg::CenterWindow => {
                                     // Rescatar una ventana "perdida": mostrar, des-minimizar y
@@ -1492,12 +1502,8 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_ic_tabs(ic(&mut c, ActionIcon::Tabs));
             ui.set_ic_settings(ic(&mut c, ActionIcon::Settings));
             ui.set_ic_new_folder(ic(&mut c, ActionIcon::NewFolder));
-            // Íconos propios nuevos (antes dibujados con Path o reusados).
-            ui.set_ic_add_pane(ic(&mut c, ActionIcon::AddPane));
-            ui.set_ic_layouts(ic(&mut c, ActionIcon::Layouts));
-            ui.set_ic_terminal(ic(&mut c, ActionIcon::Terminal));
-            ui.set_ic_refresh(ic(&mut c, ActionIcon::Refresh));
-            ui.set_ic_eject(ic(&mut c, ActionIcon::Eject));
+            // (add-pane / layouts / terminal / refresh / eject: la toolbar volvió a íconos
+            //  dibujados con Path —modelo flat—, así que ya no se vuelcan PNG para esos botones.)
         })
     };
     refresh_toolbar_icons();

@@ -190,31 +190,15 @@ export component ConfigWindow inherits Window {
     // Captura de tecla (la UI la enruta cuando `capturing` != "").
     callback capture-key(string, bool, bool, bool);
 
-    // FocusScope de captura de atajos: overlay transparente full-size, SOLO para leer la
-    // combinación cuando `capturing` != "". No envuelve al contenido (envolverlo hacía que el
-    // layout NO se estirara al alto de la ventana, dejando espacio muerto abajo). Va PRIMERO para
-    // quedar debajo del contenido en el z-order (no roba clics: enabled solo en modo captura).
-    fs := FocusScope {
-        x: 0; y: 0;
+    // Contenido. Va en un Rectangle a `100%` de la Window (el shorthand de tamaño relativo de
+    // Slint, que SÍ sigue el tamaño real de la ventana al maximizar/redimensionar). Dentro, un
+    // VerticalLayout llena el Rectangle, y su fila de contenido (vertical-stretch) toma el alto
+    // sobrante. (Probado: anclar el layout con root.width/height NO bastaba porque un layout se
+    // auto-dimensiona; el Rectangle a 100% es el contenedor con tamaño concreto que necesitaba.)
+    body := Rectangle {
         width: 100%;
         height: 100%;
-        enabled: root.capturing != "";
-        key-pressed(ev) => {
-            if (root.capturing != "") {
-                root.capture-key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
-                // Rust reasigna (o cancela con Esc); en cualquier caso salimos del modo captura.
-                root.capturing = "";
-            }
-            accept
-        }
-    }
-
-    // Contenido: VerticalLayout como HIJO DIRECTO de la Window → la Window lo estira para llenar
-    // TODO el alto y ancho (un layout raíz siempre se estira; un FocusScope no). Así las secciones
-    // ocupan toda la ventana al redimensionar, sin espacio muerto abajo.
-    body := VerticalLayout {
-            width: 100%;
-            height: 100%;
+        VerticalLayout {
             padding: 14px;
             spacing: 10px;
 
@@ -237,6 +221,11 @@ export component ConfigWindow inherits Window {
                             Text { text: c; color: Theme.text; vertical-alignment: center; x: 10px; }
                             cat-touch := TouchArea { clicked => { root.cat = i; root.capturing = ""; root.reset-armed = false; } }
                         }
+                        // Espaciador estirable: da a esta columna max-height infinito. Sin él, la
+                        // suma de los ítems fijos (9×30px) le ponía un tope finito a la FILA, y la
+                        // fila —aun con vertical-stretch— no podía crecer al alto de la ventana
+                        // (dejaba espacio muerto abajo). Con el spacer, la fila estira a fondo.
+                        Rectangle { vertical-stretch: 1; }
                     }
                 }
 
@@ -250,6 +239,9 @@ export component ConfigWindow inherits Window {
                         // scroll "fantasma" daba la ilusión de que no había más contenido).
                         vertical-scrollbar-policy: always-on;
                         VerticalLayout {
+                            // Anclar arriba: con la ventana alta, el contenido se queda pegado al
+                            // tope (espacio sobrante abajo) en vez de repartirse y "flotar" al medio.
+                            alignment: start;
                             padding: 12px;
                             spacing: 6px;
 
@@ -830,6 +822,25 @@ export component ConfigWindow inherits Window {
                 }
             }
         }
+    }
+
+    // FocusScope de captura de atajos: overlay full-size DESPUÉS del contenido (así el contenido
+    // —primer hijo— recibe el estiramiento de la Window; ver nota arriba). Solo activo en modo
+    // captura; el resto del tiempo está deshabilitado y no roba foco ni clics.
+    fs := FocusScope {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        enabled: root.capturing != "";
+        key-pressed(ev) => {
+            if (root.capturing != "") {
+                root.capture-key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                root.capturing = "";
+            }
+            accept
+        }
+    }
 
     // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
     // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.

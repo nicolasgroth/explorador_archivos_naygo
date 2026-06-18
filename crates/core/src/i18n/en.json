@@ -571,6 +571,7 @@
   "slint.cfg.default_table_off": "No template",
   "slint.tray.open": "Open",
   "slint.tray.new_pane": "New panel",
+  "slint.tray.config": "Settings",
   "slint.tray.center": "Center window",
   "slint.tray.exit": "Exit",
   "slint.cfg.date_format": "Date format",
