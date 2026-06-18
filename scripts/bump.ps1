@@ -123,7 +123,9 @@ $cargoNew = [regex]::Replace(
     "`${1}$new`${2}",
     1
 )
-Set-Content -Path $cargoPath -Value $cargoNew -Encoding utf8 -NoNewline
+# UTF-8 SIN BOM (Set-Content -Encoding utf8 en PS 5.1 mete BOM). WriteAllText no
+# agrega salto final, equivalente al -NoNewline anterior.
+[System.IO.File]::WriteAllText($cargoPath, $cargoNew, (New-Object System.Text.UTF8Encoding($false)))
 
 # 6) Mover "## [Sin publicar]" -> "## [X.Y.Z] - fecha" y crear un "Sin publicar" vacio.
 $cl = Get-Content $changelogPath -Raw
@@ -131,8 +133,9 @@ if ($cl -notmatch '## \[Sin publicar\]') {
     throw "No encontre '## [Sin publicar]' en el CHANGELOG."
 }
 $replacement = "## [Sin publicar]`r`n`r`n## [$new] - $today"
-$cl = $cl -replace '## \[Sin publicar\]', $replacement
-Set-Content -Path $changelogPath -Value $cl -Encoding utf8
+$cl = [regex]::Replace($cl, '## \[Sin publicar\]', $replacement, 1)
+# UTF-8 SIN BOM (el parser de core tolera BOM, pero evitamos cambiarlo en cada run).
+[System.IO.File]::WriteAllText($changelogPath, $cl, (New-Object System.Text.UTF8Encoding($false)))
 
 # 7) Refrescar el lock (los crates naygo-* heredan la version del workspace).
 try {
@@ -141,16 +144,21 @@ try {
     Write-Warning "cargo update fallo (offline); el lock se regenerara al compilar."
 }
 
-# 8) Commit + tag.
+# 8) Commit + tag. (ErrorActionPreference=Stop no cubre exes nativos: chequear $LASTEXITCODE.)
 git -C $repo add Cargo.toml Cargo.lock CHANGELOG.md
+if ($LASTEXITCODE -ne 0) { throw "git add fallo." }
 git -C $repo commit -m "chore(release): $newTag"
+if ($LASTEXITCODE -ne 0) { throw "git commit fallo (revisa hooks pre-commit)." }
 git -C $repo tag $newTag
+if ($LASTEXITCODE -ne 0) { throw "git tag fallo." }
 Write-Host "Commit y tag $newTag creados."
 
 # 9) Push solo con -Push.
 if ($Push) {
     git -C $repo push
+    if ($LASTEXITCODE -ne 0) { throw "git push fallo." }
     git -C $repo push --tags
+    if ($LASTEXITCODE -ne 0) { throw "git push --tags fallo." }
     Write-Host "Push hecho (commit + tags)."
 } else {
     Write-Host "Recuerda publicar:  git push && git push --tags"

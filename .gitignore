@@ -30,3 +30,7 @@ installer/*.bmp
 
 # Estado transitorio del harness (locks de sesión, etc.). No versionar.
 .claude/
+
+# Salida del knowledge graph (graphify) y assets de trabajo locales — no versionar.
+/graphify-out/
+/assets/icons/otros/
