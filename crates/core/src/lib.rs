@@ -7,6 +7,7 @@
 
 pub mod batch_rename;
 pub mod cancel;
+pub mod changelog;
 pub mod cli;
 pub mod clipboard;
 pub mod columns;
