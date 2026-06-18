@@ -89,6 +89,12 @@ where
     tr.set_ctx_explorer(c.t("slint.ctx.explorer").into());
     tr.set_ctx_new_folder(c.t("slint.ctx.new_folder").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    tr.set_missing_title(c.t("slint.missing.title").into());
+    tr.set_missing_body(c.t("slint.missing.body").into());
+    tr.set_missing_retry(c.t("slint.missing.retry").into());
+    tr.set_missing_ancestor(c.t("slint.missing.ancestor").into());
+    tr.set_missing_choose(c.t("slint.missing.choose").into());
+    tr.set_missing_close(c.t("slint.missing.close").into());
     tr.set_newfolder_title(c.t("slint.newfolder.title").into());
     tr.set_newfolder_in_dir(c.t("slint.newfolder.in_dir").into());
     tr.set_newfolder_hint(c.t("slint.newfolder.hint").into());

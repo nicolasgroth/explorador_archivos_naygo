@@ -167,6 +167,12 @@ export struct ThemeCardVm {
     sw-highlight: color,
 }
 
+// Estado del modal "carpeta no encontrada" (USB desconectado / red caída / carpeta borrada).
+export struct MissingFolderVm {
+    active: bool,
+    lost-path: string,   // la ruta que dejó de existir
+}
+
 // Estado del modal "nueva(s) carpeta(s)".
 export struct NewFolderVm {
     active: bool,

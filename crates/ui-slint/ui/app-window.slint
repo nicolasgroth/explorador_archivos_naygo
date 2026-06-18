@@ -16,8 +16,9 @@ import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
 import { NewFolder } from "new-folder.slint";
+import { MissingFolder } from "missing-folder.slint";
 import { Help } from "help.slint";
-import { BatchRenameVm, NewFolderVm, HelpRowVm } from "types.slint";
+import { BatchRenameVm, NewFolderVm, MissingFolderVm, HelpRowVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -538,6 +539,12 @@ export component AppWindow inherits Window {
     callback new-folder-set-text(string);
     callback new-folder-create();
     callback new-folder-close();
+    // Modal "carpeta no encontrada":
+    in property <MissingFolderVm> missing-folder-vm;
+    callback missing-retry();
+    callback missing-ancestor();
+    callback missing-choose();
+    callback missing-close-pane();
     // Ayuda (F1):
     in property <bool> help-open;
     in property <[HelpRowVm]> help-shortcuts;
@@ -1176,6 +1183,17 @@ export component AppWindow inherits Window {
         set-text(t) => { root.new-folder-set-text(t); }
         create() => { root.new-folder-create(); }
         close() => { root.new-folder-close(); }
+    }
+
+    // Modal "carpeta no encontrada".
+    MissingFolder {
+        width: 100%;
+        height: 100%;
+        vm: root.missing-folder-vm;
+        retry() => { root.missing-retry(); }
+        go-ancestor() => { root.missing-ancestor(); }
+        choose() => { root.missing-choose(); }
+        close-pane() => { root.missing-close-pane(); }
     }
 
     // Ayuda en pantalla (F1).

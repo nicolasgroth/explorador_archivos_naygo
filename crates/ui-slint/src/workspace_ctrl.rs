@@ -129,6 +129,10 @@ pub struct WorkspaceCtrl {
     pub batch: Option<BatchRenameState>,
     /// Modal "nueva(s) carpeta(s)" abierto: carpeta destino + texto multilínea en edición.
     pub new_folder: Option<NewFolderState>,
+    /// Carpeta de un panel que dejó de existir (USB desconectado, red caída, carpeta borrada).
+    /// Mientras esté presente, se muestra el modal con opciones (reintentar / subir / elegir /
+    /// cerrar) en vez de mandar el panel a HOME en silencio.
+    pub missing_folder: Option<MissingFolder>,
     /// La ayuda (F1) está abierta.
     pub help_open: bool,
     /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
@@ -176,6 +180,13 @@ pub struct ContextMenuState {
 pub struct NewFolderState {
     pub dir: PathBuf,
     pub text: String,
+}
+
+/// La carpeta de un panel dejó de existir: el panel `pane` apuntaba a `lost_path`. El modal
+/// ofrece reintentar, subir al ancestro existente, elegir otra carpeta o cerrar el panel.
+pub struct MissingFolder {
+    pub pane: PaneId,
+    pub lost_path: PathBuf,
 }
 
 /// Mapea el entero de la UI a una terminal: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL.
@@ -287,6 +298,7 @@ impl WorkspaceCtrl {
             templates: naygo_core::config::load_templates(&config_dir),
             batch: None,
             new_folder: None,
+            missing_folder: None,
             help_open: false,
             size_job: None,
             last_saved_fingerprint: None,
@@ -496,24 +508,125 @@ impl WorkspaceCtrl {
     /// Tras un cambio de unidades (USB enchufado/quitado), reubica a `home` los paneles Files
     /// cuya carpeta ya no existe (p. ej. el USB se sacó). Devuelve los panes reubicados para
     /// que la UI re-liste su contenido. No crashea: "el filesystem es hostil".
-    pub fn relocate_orphans(&mut self, home: &std::path::Path) -> Vec<PaneId> {
-        let mut moved = Vec::new();
+    pub fn relocate_orphans(&mut self, _home: &std::path::Path) -> Vec<PaneId> {
+        // Ya no reubicamos en silencio: si la carpeta de un panel desapareció, abrimos el modal
+        // "carpeta no encontrada" para que el usuario elija (reintentar / subir / elegir / cerrar).
+        // Solo el PRIMER panel huérfano abre el modal (uno por vez); si hay otro, reaparecerá al
+        // resolver este. No re-lista nada (devuelve vacío): el panel se queda mostrando su última
+        // vista hasta que el usuario decida.
+        if self.missing_folder.is_some() {
+            return Vec::new(); // ya hay un modal abierto
+        }
         let ids: Vec<PaneId> = self.ws.files_panes();
         for id in ids {
-            let gone = self
+            let lost = self
                 .ws
                 .pane(id)
                 .and_then(|p| p.files.as_ref())
-                .map(|f| !f.current_dir.exists())
-                .unwrap_or(false);
-            if gone {
-                if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
-                    f.navigate_to(home.to_path_buf());
-                }
-                moved.push(id);
+                .filter(|f| !f.current_dir.exists())
+                .map(|f| f.current_dir.clone());
+            if let Some(lost_path) = lost {
+                self.missing_folder = Some(MissingFolder {
+                    pane: id,
+                    lost_path,
+                });
+                break;
             }
         }
-        moved
+        Vec::new()
+    }
+
+    /// El ancestro existente más cercano de `path` (sube hasta encontrar uno que exista; si
+    /// ninguno —p. ej. la unidad entera se fue—, devuelve None).
+    fn nearest_existing_ancestor(path: &std::path::Path) -> Option<PathBuf> {
+        let mut cur = path.parent();
+        while let Some(p) = cur {
+            if p.exists() {
+                return Some(p.to_path_buf());
+            }
+            cur = p.parent();
+        }
+        None
+    }
+
+    /// `true` si el modal "carpeta no encontrada" está abierto.
+    pub fn missing_folder_open(&self) -> bool {
+        self.missing_folder.is_some()
+    }
+
+    /// La ruta perdida del modal (para mostrarla).
+    pub fn missing_folder_path(&self) -> String {
+        self.missing_folder
+            .as_ref()
+            .map(|m| m.lost_path.display().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Reintentar: si la carpeta ya volvió a existir (USB reconectado), re-listar y cerrar el
+    /// modal; si sigue sin existir, dejar el modal abierto (no hace nada). Devuelve true si se
+    /// resolvió (re-listó), para que el llamador refresque.
+    pub fn missing_folder_retry(&mut self) -> bool {
+        let Some(m) = self.missing_folder.as_ref() else {
+            return false;
+        };
+        if m.lost_path.exists() {
+            let (pane, dir) = (m.pane, m.lost_path.clone());
+            self.missing_folder = None;
+            self.start_listing(pane, dir.clone());
+            self.sync_trees_active(dir);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Subir al ancestro existente más cercano (o, si la unidad entera se fue, al HOME). Navega el
+    /// panel ahí, re-lista y cierra el modal.
+    pub fn missing_folder_go_ancestor(&mut self) {
+        let Some(m) = self.missing_folder.take() else {
+            return;
+        };
+        let dest = Self::nearest_existing_ancestor(&m.lost_path).unwrap_or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:/"))
+        });
+        if let Some(f) = self.ws.pane_mut(m.pane).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dest.clone());
+        }
+        self.start_listing(m.pane, dest.clone());
+        self.sync_trees_active(dest);
+    }
+
+    /// Navegar el panel del modal a `dir` (elegido en el selector nativo) y cerrar el modal.
+    pub fn missing_folder_choose(&mut self, dir: PathBuf) {
+        let Some(m) = self.missing_folder.take() else {
+            return;
+        };
+        if let Some(f) = self.ws.pane_mut(m.pane).and_then(|p| p.files.as_mut()) {
+            f.navigate_to(dir.clone());
+        }
+        self.start_listing(m.pane, dir.clone());
+        self.sync_trees_active(dir);
+    }
+
+    /// Cerrar el panel del modal (si se puede; si es el último, navega al HOME en su lugar).
+    pub fn missing_folder_close_pane(&mut self) {
+        let Some(m) = self.missing_folder.take() else {
+            return;
+        };
+        if self.can_close_pane(m.pane) {
+            self.close_pane(m.pane);
+        } else {
+            // Es el último panel: no se puede cerrar; lo mandamos al HOME para que sea usable.
+            let home = std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:/"));
+            if let Some(f) = self.ws.pane_mut(m.pane).and_then(|p| p.files.as_mut()) {
+                f.navigate_to(home.clone());
+            }
+            self.start_listing(m.pane, home);
+        }
     }
 
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
@@ -4194,17 +4307,27 @@ mod tests {
     }
 
     /// F5B: si un panel quedó parado en una carpeta que desapareció (p. ej. se sacó el USB),
-    /// relocate_orphans lo reubica a HOME y lo reporta como reubicado.
+    /// relocate_orphans ya NO lo manda a HOME en silencio: abre el modal "carpeta no encontrada".
+    /// Elegir "subir al ancestro existente" lo reubica a la carpeta superior que exista.
     #[test]
-    fn relocate_reubica_panel_huerfano() {
+    fn carpeta_perdida_abre_modal_y_sube_al_ancestro() {
         let tmp = tempfile::tempdir().unwrap();
         let sub = tmp.path().join("usb");
         std::fs::create_dir(&sub).unwrap();
         let mut c = WorkspaceCtrl::new_in(sub.clone(), tmp.path().to_path_buf());
         assert!(drain(&mut c));
         std::fs::remove_dir_all(&sub).unwrap(); // "sacar el USB"
+                                                // No reubica en silencio: abre el modal y NO mueve el panel todavía.
         let moved = c.relocate_orphans(tmp.path());
-        assert_eq!(moved.len(), 1);
+        assert!(moved.is_empty(), "ya no reubica en silencio");
+        assert!(
+            c.missing_folder_open(),
+            "se abrió el modal de carpeta perdida"
+        );
+        assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
+        // Elegir "subir al ancestro existente": el panel queda en tmp (el padre que sigue vivo).
+        c.missing_folder_go_ancestor();
+        assert!(!c.missing_folder_open(), "el modal se cerró");
         assert_eq!(c.ws.active_files().unwrap().current_dir, tmp.path());
     }
 

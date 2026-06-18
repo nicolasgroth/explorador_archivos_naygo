@@ -378,6 +378,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 status: c.new_folder_status().into(),
                 can_create: nf_valid > 0,
             });
+            // Modal "carpeta no encontrada".
+            ui.set_missing_folder_vm(MissingFolderVm {
+                active: c.missing_folder_open(),
+                lost_path: c.missing_folder_path().into(),
+            });
             // Menú/editor de columna (clic derecho en el header, F2).
             let colmenu = match c.column_menu_snapshot() {
                 Some(m) => {
@@ -2370,6 +2375,49 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_new_folder_close(move || {
             ctrl.borrow_mut().new_folder_close();
             sync_rows();
+        });
+    }
+    // Modal "carpeta no encontrada": reintentar / subir / elegir / cerrar panel.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_missing_retry(move || {
+            ctrl.borrow_mut().missing_folder_retry();
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_missing_ancestor(move || {
+            ctrl.borrow_mut().missing_folder_go_ancestor();
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_missing_choose(move || {
+            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                ctrl.borrow_mut().missing_folder_choose(path);
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_missing_close_pane(move || {
+            ctrl.borrow_mut().missing_folder_close_pane();
+            start_timer();
+            sync_layout();
         });
     }
     // Toolbar: nueva carpeta en el panel activo (abre el modal).
