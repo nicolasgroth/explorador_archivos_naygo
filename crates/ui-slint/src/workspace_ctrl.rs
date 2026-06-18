@@ -423,6 +423,10 @@ impl WorkspaceCtrl {
         }
         self.listings.clear();
         self.trees.clear();
+        // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
+        if let Some(d) = self.deep_job.take() {
+            d.token.cancel();
+        }
         self.ws = restored;
         // Relanzar el contenido de cada panel restaurado.
         let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
@@ -614,6 +618,7 @@ impl WorkspaceCtrl {
     pub fn missing_folder_retry(&mut self, id: PaneId) {
         if let Some(dir) = self.pane_current_dir(id) {
             if std::fs::read_dir(&dir).is_ok() {
+                self.cancel_deep_if_navigating(id);
                 self.start_listing(id, dir.clone());
                 self.sync_trees_active(dir);
             }
@@ -631,6 +636,7 @@ impl WorkspaceCtrl {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("C:/"))
         });
+        self.cancel_deep_if_navigating(id);
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dest.clone());
         }
@@ -640,6 +646,7 @@ impl WorkspaceCtrl {
 
     /// Navegar el panel `id` a `dir` (elegido en el selector nativo) y re-listar.
     pub fn missing_folder_choose(&mut self, id: PaneId, dir: PathBuf) {
+        self.cancel_deep_if_navigating(id);
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -656,6 +663,7 @@ impl WorkspaceCtrl {
             let home = std::env::var_os("USERPROFILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("C:/"));
+            self.cancel_deep_if_navigating(id);
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(home.clone());
             }
@@ -1171,6 +1179,10 @@ impl WorkspaceCtrl {
         self.trees.clear();
         self.tree_listings.clear();
         self.reveal_targets.clear();
+        // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
+        if let Some(d) = self.deep_job.take() {
+            d.token.cancel();
+        }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
         self.relaunch_all_panes();
         self.last_active_files = self.ws.files_panes().first().copied();
@@ -1430,11 +1442,7 @@ impl WorkspaceCtrl {
             return false;
         }
         // Navegar cancela la vista profunda del panel (no es pegajosa).
-        if self.is_deep_active(id) {
-            if let Some(d) = self.deep_job.take() {
-                d.token.cancel();
-            }
-        }
+        self.cancel_deep_if_navigating(id);
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -1659,11 +1667,7 @@ impl WorkspaceCtrl {
     /// encontrada" IN-PLACE (con sus opciones), en vez de un popup global.
     pub fn open_in_pane(&mut self, dest: PaneId, dir: PathBuf) {
         // Navegar cancela la vista profunda del panel (no es pegajosa).
-        if self.is_deep_active(dest) {
-            if let Some(d) = self.deep_job.take() {
-                d.token.cancel();
-            }
-        }
+        self.cancel_deep_if_navigating(dest);
         if let Some(f) = self.ws.pane_mut(dest).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir.clone());
         }
@@ -1687,6 +1691,9 @@ impl WorkspaceCtrl {
         let (Some(dir_a), Some(dir_b)) = (dir_a, dir_b) else {
             return;
         };
+        // El swap cambia la carpeta de ambos paneles: cancelar el deep de cada uno.
+        self.cancel_deep_if_navigating(a);
+        self.cancel_deep_if_navigating(b);
         if let Some(f) = self.ws.pane_mut(a).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dir_b.clone());
         }
@@ -2136,11 +2143,7 @@ impl WorkspaceCtrl {
             return false;
         };
         // Navegar cancela la vista profunda del panel (no es pegajosa).
-        if self.is_deep_active(active_files_id) {
-            if let Some(d) = self.deep_job.take() {
-                d.token.cancel();
-            }
-        }
+        self.cancel_deep_if_navigating(active_files_id);
         // Si la carpeta no existe/ilegible (favorito viejo, red caída, ruta tipeada), igual
         // navegamos: el panel mostrará el aviso "carpeta no encontrada" IN-PLACE con sus
         // opciones (reintentar/subir/elegir/cerrar), en vez de un popup global. No la metemos
@@ -3148,11 +3151,7 @@ impl WorkspaceCtrl {
                 return self.request_action(PaneAction::OpenDir(e.path), id, self.last_area);
             }
             // Navegar cancela la vista profunda del panel (no es pegajosa).
-            if self.is_deep_active(id) {
-                if let Some(d) = self.deep_job.take() {
-                    d.token.cancel();
-                }
-            }
+            self.cancel_deep_if_navigating(id);
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(e.path.clone());
             }
@@ -3176,11 +3175,7 @@ impl WorkspaceCtrl {
         match moved {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
-                if self.is_deep_active(active) {
-                    if let Some(d) = self.deep_job.take() {
-                        d.token.cancel();
-                    }
-                }
+                self.cancel_deep_if_navigating(active);
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3204,11 +3199,7 @@ impl WorkspaceCtrl {
         match moved {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
-                if self.is_deep_active(active) {
-                    if let Some(d) = self.deep_job.take() {
-                        d.token.cancel();
-                    }
-                }
+                self.cancel_deep_if_navigating(active);
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3231,11 +3222,7 @@ impl WorkspaceCtrl {
         match moved {
             Some(dir) => {
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
-                if self.is_deep_active(active) {
-                    if let Some(d) = self.deep_job.take() {
-                        d.token.cancel();
-                    }
-                }
+                self.cancel_deep_if_navigating(active);
                 self.recents.push(dir.clone());
                 self.start_listing(active, dir.clone());
                 self.sync_trees_active(dir);
@@ -3259,6 +3246,8 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
+        // F5 re-lista en el mismo sitio: cancela el deep para no mezclar filas.
+        self.cancel_deep_if_navigating(active);
         self.start_listing(active, dir);
         true
     }
@@ -3812,6 +3801,17 @@ impl WorkspaceCtrl {
     }
 
     // --- Vista profunda (DeepJob) ---
+
+    /// Cancela la vista profunda del panel `id` si está activa. Llamar en CUALQUIER camino
+    /// que cambie la carpeta de un panel Files (la vista profunda no es pegajosa). No relista:
+    /// el camino que navega ya repuebla el panel con su listado normal.
+    fn cancel_deep_if_navigating(&mut self, id: PaneId) {
+        if self.is_deep_active(id) {
+            if let Some(d) = self.deep_job.take() {
+                d.token.cancel();
+            }
+        }
+    }
 
     /// ¿El panel `id` está en vista profunda ahora mismo?
     #[allow(dead_code)]
