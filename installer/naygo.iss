@@ -37,6 +37,10 @@ WizardSmallImageFile=wizard-small.bmp
 LicenseFile=..\LICENSE
 SetupIconFile=..\assets\icons\naygo_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
+; Si Naygo está corriendo durante un update, ofrecer cerrarlo antes de reemplazar
+; el .exe (evita el error "archivo en uso"). No reiniciar la app automáticamente.
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
