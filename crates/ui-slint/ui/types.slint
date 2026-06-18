@@ -173,6 +173,29 @@ export struct MissingFolderVm {
     lost-path: string,   // la ruta que dejó de existir
 }
 
+// Una coincidencia del panel de búsqueda recursiva: nombre del archivo/carpeta, su carpeta
+// contenedora relativa a la raíz de búsqueda (dónde está), tamaño/fecha ya formateados, si es
+// carpeta, y el ícono cacheado. La acción "abrir" se hace por índice, no por ruta.
+export struct SearchHitVm {
+    name: string,
+    rel-dir: string,     // carpeta contenedora relativa a la raíz ("" = en la raíz)
+    detail: string,      // tamaño + fecha ya formateados (columna secundaria)
+    is-dir: bool,
+    icon: image,
+}
+
+// Estado del panel de búsqueda recursiva (Ctrl+F / lupa). `active` lo muestra; `query` es el
+// texto buscado; `root-label` la carpeta raíz (para el encabezado); `hits` las coincidencias en
+// vivo; `status` el resumen ("Buscando…", "N resultados", "parcial", "tope alcanzado").
+export struct SearchVm {
+    active: bool,
+    query: string,
+    root-label: string,
+    running: bool,       // worker aún en vuelo (muestra el spinner/Detener)
+    hits: [SearchHitVm],
+    status: string,
+}
+
 // Estado del modal "nueva(s) carpeta(s)".
 export struct NewFolderVm {
     active: bool,

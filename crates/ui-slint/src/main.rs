@@ -383,6 +383,32 @@ fn main() -> Result<(), slint::PlatformError> {
                 active: c.missing_folder_open(),
                 lost_path: c.missing_folder_path().into(),
             });
+            // Panel de búsqueda recursiva (Ctrl+F / lupa).
+            {
+                let open = c.search_open();
+                let (status, running) = c.search_status_text();
+                let root_label = c.search_root_label();
+                let query = c.search_query();
+                let hits: Vec<SearchHitVm> = c
+                    .search_rows()
+                    .into_iter()
+                    .map(|r| SearchHitVm {
+                        name: r.name.into(),
+                        rel_dir: r.rel_dir.into(),
+                        detail: r.detail.into(),
+                        is_dir: r.is_dir,
+                        icon: r.icon,
+                    })
+                    .collect();
+                ui.set_search_vm(SearchVm {
+                    active: open,
+                    query: query.into(),
+                    root_label: root_label.into(),
+                    running,
+                    hits: ModelRc::new(VecModel::from(hits)),
+                    status: status.into(),
+                });
+            }
             // Menú/editor de columna (clic derecho en el header, F2).
             let colmenu = match c.column_menu_snapshot() {
                 Some(m) => {
@@ -867,6 +893,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
                     // Drenar el cálculo de tamaño de carpeta (F3 «calcular tamaño»).
                     let size_done = ctrl.borrow_mut().pump_sizes();
+                    // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
+                    let search_done = ctrl.borrow_mut().pump_search();
                     // Watcher de carpeta (F5A): aplicar los cambios detectados a cada panel y
                     // marcar como nuevos los archivos recién aparecidos (para resaltarlos).
                     let batches = ctrl.borrow_mut().watchers.drain();
@@ -890,6 +918,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         && !preview_busy
                         && ops_done
                         && size_done
+                        && search_done
                         && !fresh_pending
                     {
                         timer2.stop();
@@ -2040,6 +2069,20 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
+            // Confirmación nativa antes de expulsar (evita sacar una unidad por un clic accidental).
+            let tr0 = ui.global::<Tr>();
+            let confirm_msg = tr0
+                .get_drive_eject_confirm()
+                .replace("{drive}", path.as_str());
+            let confirmed = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(tr0.get_drive_eject_confirm_title().to_string())
+                .set_description(confirm_msg)
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show();
+            if confirmed != rfd::MessageDialogResult::Ok {
+                return;
+            }
             let outcome = ctrl
                 .borrow()
                 .eject_drive(std::path::PathBuf::from(path.as_str()));
@@ -2424,6 +2467,60 @@ fn main() -> Result<(), slint::PlatformError> {
             ctrl.borrow_mut().missing_folder_close_pane();
             start_timer();
             sync_layout();
+        });
+    }
+    // Búsqueda recursiva (Ctrl+F / lupa): lanzar / cerrar / detener / abrir resultado / alternar.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_search_run(move |q| {
+            ctrl.borrow_mut().start_search(q.to_string());
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_search_close(move || {
+            ctrl.borrow_mut().close_search();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_search_cancel(move || {
+            ctrl.borrow_mut().cancel_search();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_search_open(move |i| {
+            ctrl.borrow_mut().open_search_hit(i.max(0) as usize);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_search_toggle(move || {
+            // La lupa alterna: si hay panel abierto, lo cierra; si no, lo abre vacío (sin lanzar
+            // todavía — el usuario escribe y pulsa Enter/Buscar). Abrir = sembrar un job inactivo
+            // mostrando el panel; lo modelamos arrancando una búsqueda con query vacía no sirve
+            // (no abre), así que abrimos con un marcador: reusamos open_empty_search.
+            let open = ctrl.borrow().search_open();
+            if open {
+                ctrl.borrow_mut().close_search();
+            } else {
+                ctrl.borrow_mut().open_empty_search();
+            }
+            sync_rows();
         });
     }
     // Toolbar: nueva carpeta en el panel activo (abre el modal).

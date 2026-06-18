@@ -124,6 +124,8 @@ pub enum Action {
     MoveToOther,
     /// Refrescar (re-listar) la carpeta del panel activo — estilo navegador (F5).
     Refresh,
+    /// Buscar archivos por nombre en la carpeta del panel activo y todas sus subcarpetas (Ctrl+F).
+    Find,
     /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing).
     ComputeSize,
     /// Seleccionar todos los ítems de la vista (fase multi-selección).
@@ -201,6 +203,7 @@ impl Action {
             CopyToOther,
             MoveToOther,
             Refresh,
+            Find,
             ComputeSize,
             SelectAll,
             ExtendUp,
@@ -258,6 +261,7 @@ impl Action {
             CopyToOther => "action.copy_to_other",
             MoveToOther => "action.move_to_other",
             Refresh => "action.refresh",
+            Find => "action.find",
             ComputeSize => "action.compute_size",
             SelectAll => "action.select_all",
             ExtendUp => "action.extend_up",
@@ -343,6 +347,7 @@ impl KeyMap {
             (CopyToOther, vec![]),
             (MoveToOther, vec![Chord::plain(F6)]),
             (Refresh, vec![Chord::plain(F5)]),
+            (Find, vec![Chord::ctrl(Char('f'))]),
             (ComputeSize, vec![Chord::plain(F3)]),
             (SelectAll, vec![Chord::ctrl(Char('a'))]),
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
@@ -496,13 +501,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_50_acciones_con_clave_i18n_unica() {
+    fn all_tiene_51_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 50);
+        assert_eq!(all.len(), 51);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 50, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 51, "cada acción tiene una clave i18n única");
     }
 
     #[test]

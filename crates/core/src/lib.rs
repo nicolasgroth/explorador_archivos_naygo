@@ -30,6 +30,7 @@ pub mod preview;
 pub mod recent_dirs;
 pub mod rename;
 pub mod render_hint;
+pub mod search;
 pub mod sizing;
 pub mod sort;
 pub mod theme;

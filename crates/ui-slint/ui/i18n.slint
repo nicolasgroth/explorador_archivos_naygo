@@ -21,6 +21,8 @@ export global Tr {
     in property <string> pathbar-copied: "Ruta copiada";
     // Expulsión segura de unidades extraíbles (USB).
     in property <string> drive-eject-tip: "Expulsar de forma segura";
+    in property <string> drive-eject-confirm-title: "Expulsar unidad";
+    in property <string> drive-eject-confirm: "¿Seguro que querés expulsar {drive}? Asegurate de que no haya archivos en uso.";
     in property <string> toolbar-refresh-drives: "Refrescar unidades";
     in property <string> drive-eject-ok: "Unidad expulsada, ya podés quitarla";
     in property <string> drive-eject-in-use: "No se pudo expulsar: hay archivos en uso";
@@ -89,6 +91,14 @@ export global Tr {
     in property <string> missing-ancestor: "Ir a la carpeta superior que exista";
     in property <string> missing-choose: "Elegir otra carpeta…";
     in property <string> missing-close: "Cerrar este panel";
+
+    // Panel de búsqueda recursiva (Ctrl+F / lupa).
+    in property <string> search-title: "Buscar en la carpeta y subcarpetas";
+    in property <string> search-tip: "Buscar archivos (Ctrl+F)";
+    in property <string> search-placeholder: "Nombre o parte del nombre (admite *)";
+    in property <string> search-go: "Buscar";
+    in property <string> search-stop: "Detener";
+    in property <string> search-empty: "Sin coincidencias";
 
     // Modal "nueva(s) carpeta(s)".
     in property <string> newfolder-title: "Nueva(s) carpeta(s)";

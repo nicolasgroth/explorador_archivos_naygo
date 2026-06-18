@@ -138,6 +138,9 @@ pub struct WorkspaceCtrl {
     /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
     /// cancela y reemplaza el anterior. El resultado se muestra en la barra de estado.
     pub size_job: Option<SizeJob>,
+    /// Búsqueda recursiva en curso/terminada (Ctrl+F / lupa), si la hay. Mientras esté presente
+    /// la UI muestra el panel de resultados; `None` = sin búsqueda. Ver `SearchJob`.
+    pub search_job: Option<SearchJob>,
     /// Huella de la última sesión persistida (paneles + carpetas + disposición). El bucle de
     /// UI compara contra `session_fingerprint()` en cada tick y, si cambió, guarda. Así la
     /// sesión en disco queda siempre al día sin depender del evento de cierre de ventana (que
@@ -240,6 +243,49 @@ pub struct SizeJob {
     pub cancelled: bool,
 }
 
+/// Una coincidencia de búsqueda lista para la UI: el `Entry` y su ruta relativa a la raíz
+/// de la búsqueda (para mostrar dónde está sin repetir la raíz en cada fila).
+#[derive(Clone, Debug)]
+pub struct SearchHit {
+    pub entry: naygo_core::fs_model::Entry,
+    /// Ruta de la CARPETA que contiene la coincidencia, relativa a la raíz de búsqueda
+    /// (vacía si está en la raíz misma). Solo para mostrar; la acción usa `entry.path`.
+    pub rel_dir: String,
+}
+
+/// Una fila del panel de resultados, ya formateada y con el ícono resuelto (lo arma el
+/// controlador para que main.rs solo la copie al `SearchHitVm` de Slint).
+pub struct SearchRow {
+    pub name: String,
+    pub rel_dir: String,
+    /// Tamaño + fecha ya formateados ("12 KB · 2026-06-17").
+    pub detail: String,
+    pub is_dir: bool,
+    pub icon: slint::Image,
+}
+
+/// Búsqueda recursiva en curso/terminada (overlay de resultados). Un solo job a la vez: una
+/// búsqueda nueva cancela y reemplaza la anterior. Mientras `open`, la UI muestra el panel de
+/// resultados. Modelado igual que `SizeJob`: worker + canal + token + estado acumulado.
+pub struct SearchJob {
+    /// Carpeta raíz bajo la que se busca (la del panel activo al disparar).
+    pub root: PathBuf,
+    /// Texto buscado (lo que el usuario tipeó; se muestra en el encabezado).
+    pub query: String,
+    pub rx: std::sync::mpsc::Receiver<naygo_core::search::SearchMsg>,
+    pub token: naygo_core::CancellationToken,
+    /// Coincidencias acumuladas (en el orden en que el worker las descubrió).
+    pub hits: Vec<SearchHit>,
+    /// Cuántas carpetas se han recorrido (para el indicador de avance).
+    pub dirs_scanned: usize,
+    pub done: bool,
+    pub cancelled: bool,
+    /// Hubo carpetas ilegibles (permiso/desaparición): resultado parcial.
+    pub partial: bool,
+    /// Se cortó por alcanzar el tope `MAX_HITS`.
+    pub hit_cap: bool,
+}
+
 /// Estado de la ventana de renombrado por lotes (Fase 5): el `BatchSpec` que el usuario edita en
 /// vivo + los ítems objetivo + los nombres existentes del directorio (para detectar colisiones).
 /// El preview se recalcula con `core::batch_rename::preview` cada vez que cambia el spec.
@@ -301,6 +347,7 @@ impl WorkspaceCtrl {
             missing_folder: None,
             help_open: false,
             size_job: None,
+            search_job: None,
             last_saved_fingerprint: None,
             watchers: crate::watch::Watchers::new(),
             last_active_files: Some(id),
@@ -3277,6 +3324,236 @@ impl WorkspaceCtrl {
         })
     }
 
+    // ----- Búsqueda recursiva (Ctrl+F / lupa) ----------------------------------------------
+
+    /// Lanza una búsqueda recursiva de `query` bajo la carpeta del panel Files activo. Cancela y
+    /// reemplaza cualquier búsqueda anterior. Una `query` vacía no hace nada (no abre el panel).
+    /// El panel de resultados queda abierto (`search_job` presente) y se llena en vivo vía
+    /// `pump_search`.
+    pub fn start_search(&mut self, query: String) {
+        let q = query.trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        let Some(root) = self.ws.active_files().map(|f| f.current_dir.clone()) else {
+            return;
+        };
+        // Cancelar el job anterior.
+        if let Some(job) = self.search_job.take() {
+            job.token.cancel();
+        }
+        let token = naygo_core::CancellationToken::new();
+        let (rx, _handle) =
+            naygo_core::search::spawn_search(root.clone(), q.clone(), token.clone());
+        self.search_job = Some(SearchJob {
+            root,
+            query: q,
+            rx,
+            token,
+            hits: Vec::new(),
+            dirs_scanned: 0,
+            done: false,
+            cancelled: false,
+            partial: false,
+            hit_cap: false,
+        });
+    }
+
+    /// Abre el panel de búsqueda SIN lanzar nada (la lupa de la toolbar): un job vacío, ya
+    /// "terminado", con la carpeta activa como raíz. El usuario escribe y pulsa Enter/Buscar para
+    /// que `start_search` reemplace este job por uno real. No hace nada si ya hay un job.
+    pub fn open_empty_search(&mut self) {
+        if self.search_job.is_some() {
+            return;
+        }
+        let Some(root) = self.ws.active_files().map(|f| f.current_dir.clone()) else {
+            return;
+        };
+        // Canal/token muertos (nunca se usan: el job nace `done`). Se descartan al primer Buscar.
+        let token = naygo_core::CancellationToken::new();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        self.search_job = Some(SearchJob {
+            root,
+            query: String::new(),
+            rx,
+            token,
+            hits: Vec::new(),
+            dirs_scanned: 0,
+            done: true,
+            cancelled: false,
+            partial: false,
+            hit_cap: false,
+        });
+    }
+
+    /// ¿Hay un panel de resultados de búsqueda abierto? (la UI muestra/oculta el overlay).
+    pub fn search_open(&self) -> bool {
+        self.search_job.is_some()
+    }
+
+    /// El texto buscado del job actual (para precargar el campo al reabrir), vacío si no hay.
+    pub fn search_query(&self) -> String {
+        self.search_job
+            .as_ref()
+            .map(|j| j.query.clone())
+            .unwrap_or_default()
+    }
+
+    /// Cierra el panel de resultados y cancela el worker en vuelo (si lo hay).
+    pub fn close_search(&mut self) {
+        if let Some(job) = self.search_job.take() {
+            job.token.cancel();
+        }
+    }
+
+    /// Cancela el worker en vuelo SIN cerrar el panel (Esc dentro del campo o botón Detener): las
+    /// coincidencias ya halladas quedan visibles, marcadas como "cancelado".
+    pub fn cancel_search(&mut self) {
+        if let Some(job) = self.search_job.as_mut() {
+            if !job.done {
+                job.token.cancel();
+            }
+        }
+    }
+
+    /// Drena el worker de búsqueda en vuelo (si lo hay), acumulando coincidencias y avance.
+    /// Devuelve true si NO queda búsqueda activa pendiente (para que el timer pueda apagarse).
+    /// El job terminado se conserva (el panel sigue mostrando los resultados hasta cerrarlo).
+    pub fn pump_search(&mut self) -> bool {
+        let Some(job) = self.search_job.as_mut() else {
+            return true;
+        };
+        if job.done {
+            return true;
+        }
+        use naygo_core::search::SearchMsg;
+        let root = job.root.clone();
+        while let Ok(msg) = job.rx.try_recv() {
+            match msg {
+                SearchMsg::Hit(entry) => {
+                    let rel_dir = entry
+                        .path
+                        .parent()
+                        .and_then(|p| p.strip_prefix(&root).ok())
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    job.hits.push(SearchHit { entry, rel_dir });
+                }
+                SearchMsg::Progress { dirs_scanned } => job.dirs_scanned = dirs_scanned,
+                SearchMsg::Done { partial, hit_cap } => {
+                    job.partial = partial;
+                    job.hit_cap = hit_cap;
+                    job.done = true;
+                }
+                SearchMsg::Cancelled => {
+                    job.cancelled = true;
+                    job.done = true;
+                }
+            }
+        }
+        job.done
+    }
+
+    /// Abre la coincidencia `idx` del panel de resultados: si es carpeta, navega el panel activo a
+    /// ella (y cierra el panel de búsqueda, porque el contexto cambió); si es archivo, lo abre con
+    /// su programa por defecto (el panel sigue abierto para abrir más). No falla si `idx` es inválido.
+    pub fn open_search_hit(&mut self, idx: usize) {
+        let Some(hit) = self
+            .search_job
+            .as_ref()
+            .and_then(|j| j.hits.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        if hit.entry.kind == EntryKind::Directory {
+            self.navigate_active_to(hit.entry.path);
+            self.close_search();
+        } else {
+            let _ = naygo_platform::open::open_default(&hit.entry.path);
+        }
+    }
+
+    /// Filas del panel de resultados, ya formateadas y con el ícono resuelto. Vacío si no hay
+    /// búsqueda. Mismo patrón que `rows_of`: préstamo disjunto de `icons` (mutable, cachea).
+    pub fn search_rows(&mut self) -> Vec<SearchRow> {
+        let date_format = self.config.settings.date_format;
+        let size_format = self.config.settings.size_format;
+        let tz = naygo_platform::time::local_utc_offset_secs();
+        let WorkspaceCtrl {
+            search_job, icons, ..
+        } = self;
+        let Some(job) = search_job.as_ref() else {
+            return Vec::new();
+        };
+        job.hits
+            .iter()
+            .map(|h| {
+                let is_dir = h.entry.kind == EntryKind::Directory;
+                // Detalle: tamaño (si archivo) + fecha de modificación, separados por "·".
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(b) = h.entry.size {
+                    parts.push(naygo_core::format::format_size(b, size_format));
+                }
+                if let Some(t) = h.entry.modified {
+                    use std::time::UNIX_EPOCH;
+                    let local = t
+                        .duration_since(UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_secs() as i64 + tz);
+                    let s = naygo_core::format::format_time(local, date_format);
+                    if !s.is_empty() {
+                        parts.push(s);
+                    }
+                }
+                SearchRow {
+                    name: h.entry.name.clone(),
+                    rel_dir: h.rel_dir.clone(),
+                    detail: parts.join(" · "),
+                    is_dir,
+                    icon: icons.get(naygo_core::icon_kind::icon_key_for(&h.entry)),
+                }
+            })
+            .collect()
+    }
+
+    /// Texto de estado del panel de búsqueda: "Buscando… N", "N resultados", con sufijos
+    /// "(parcial)" si hubo carpetas ilegibles y "(tope)" si se cortó por `MAX_HITS`. Vacío si no
+    /// hay búsqueda. `running` indica si el worker sigue en vuelo.
+    pub fn search_status_text(&self) -> (String, bool) {
+        let Some(job) = self.search_job.as_ref() else {
+            return (String::new(), false);
+        };
+        // Panel recién abierto (query vacía, sin búsqueda aún): sin estado.
+        if job.query.is_empty() {
+            return (String::new(), false);
+        }
+        let n = job.hits.len();
+        let running = !job.done;
+        let mut s = if running {
+            format!("Buscando… {n}")
+        } else if job.cancelled {
+            format!("Cancelado · {n} resultado(s)")
+        } else {
+            format!("{n} resultado(s)")
+        };
+        if job.partial {
+            s.push_str(" (parcial)");
+        }
+        if job.hit_cap {
+            s.push_str(&format!(" (tope {})", naygo_core::search::MAX_HITS));
+        }
+        (s, running)
+    }
+
+    /// Etiqueta de la carpeta raíz de la búsqueda (para el encabezado del panel). Vacío si no hay.
+    pub fn search_root_label(&self) -> String {
+        self.search_job
+            .as_ref()
+            .map(|j| j.root.display().to_string())
+            .unwrap_or_default()
+    }
+
     /// Atajos activos para la ayuda: pares (acción legible, chord) de las acciones que tienen
     /// al menos un atajo asignado, en el orden de presentación del keymap. Lee el keymap EN VIVO,
     /// así refleja lo que el usuario haya reasignado.
@@ -3389,8 +3666,21 @@ impl WorkspaceCtrl {
             Action::GoBack => return self.on_go_back(),
             Action::GoForward => return self.on_go_forward(),
             Action::Refresh => return self.refresh_active(),
+            // Ctrl+F: alterna el panel de búsqueda recursiva (abre vacío / cierra).
+            Action::Find => {
+                if self.search_open() {
+                    self.close_search();
+                } else {
+                    self.open_empty_search();
+                }
+            }
             Action::ComputeSize => self.compute_size_active(),
             Action::CancelListing => {
+                // Esc cierra primero el panel de búsqueda si está abierto (caso más común).
+                if self.search_open() {
+                    self.close_search();
+                    return false;
+                }
                 self.cancel_active_listing();
                 // Esc también cancela un cálculo de tamaño en curso.
                 if let Some(job) = self.size_job.as_ref() {

@@ -37,6 +37,8 @@ where
     tr.set_drive_eject_ok(c.t("slint.drive.eject_ok").into());
     tr.set_drive_eject_in_use(c.t("slint.drive.eject_in_use").into());
     tr.set_drive_eject_failed(c.t("slint.drive.eject_failed").into());
+    tr.set_drive_eject_confirm_title(c.t("slint.drive.eject_confirm_title").into());
+    tr.set_drive_eject_confirm(c.t("slint.drive.eject_confirm").into());
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
     tr.set_toolbar_new_folder(c.t("slint.toolbar.new_folder").into());
@@ -95,6 +97,12 @@ where
     tr.set_missing_ancestor(c.t("slint.missing.ancestor").into());
     tr.set_missing_choose(c.t("slint.missing.choose").into());
     tr.set_missing_close(c.t("slint.missing.close").into());
+    tr.set_search_title(c.t("slint.search.title").into());
+    tr.set_search_tip(c.t("slint.search.tip").into());
+    tr.set_search_placeholder(c.t("slint.search.placeholder").into());
+    tr.set_search_go(c.t("slint.search.go").into());
+    tr.set_search_stop(c.t("slint.search.stop").into());
+    tr.set_search_empty(c.t("slint.search.empty").into());
     tr.set_newfolder_title(c.t("slint.newfolder.title").into());
     tr.set_newfolder_in_dir(c.t("slint.newfolder.in_dir").into());
     tr.set_newfolder_hint(c.t("slint.newfolder.hint").into());

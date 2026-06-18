@@ -1,0 +1,196 @@
+// Naygo — panel de búsqueda recursiva (Ctrl+F / lupa): busca por nombre en la carpeta del panel
+// activo y TODAS sus subcarpetas, mostrando los resultados en vivo. Es un overlay dentro de la
+// ventana principal (no una Window aparte), con la carpeta visible detrás (velo translúcido).
+// Hacer clic en un resultado lo abre con su programa por defecto (o entra si es carpeta).
+//
+// Regla de render por software: los íconos (lupa, ✕) se dibujan con `Path`, NUNCA con glifos de
+// fuente (los emojis salen invisibles/monocromos con el renderizador por software de Slint).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { LineEdit, ListView } from "std-widgets.slint";
+import { SearchVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+export component SearchPanel inherits Rectangle {
+    in property <SearchVm> vm;
+    // Lanza la búsqueda con el texto actual del campo.
+    callback run(string);
+    // Cierra el panel (✕ / Esc / clic en el velo).
+    callback close();
+    // Cancela el worker en vuelo sin cerrar (botón Detener).
+    callback cancel();
+    // Abre la coincidencia de índice `i` (archivo → programa por defecto; carpeta → navegar).
+    callback open(int);
+
+    // Texto en edición del campo (espejo local; al lanzar se manda por `run`).
+    property <string> draft: root.vm.query;
+
+    visible: root.vm.active;
+    background: #00000088;
+    // Clic en el velo cierra.
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    // Tarjeta central.
+    Rectangle {
+        width: min(720px, parent.width - 80px);
+        height: min(560px, parent.height - 80px);
+        background: Theme.panel-bg;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border;
+        // Tragar clics dentro (no cerrar al interactuar con la tarjeta).
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            // --- Encabezado: título + carpeta raíz + cerrar ✕ ---
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Text {
+                        text: Tr.search-title;
+                        color: Theme.text;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.vm.root-label;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        overflow: elide;
+                    }
+                }
+                // Botón cerrar ✕ (dibujado con Path).
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 5px;
+                    background: close-touch.has-hover ? Theme.selection-bg : transparent;
+                    Path {
+                        width: 14px;
+                        height: 14px;
+                        stroke: Theme.text;
+                        stroke-width: 1.6px;
+                        viewbox-width: 14;
+                        viewbox-height: 14;
+                        MoveTo { x: 3; y: 3; }
+                        LineTo { x: 11; y: 11; }
+                        MoveTo { x: 11; y: 3; }
+                        LineTo { x: 3; y: 11; }
+                    }
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+
+            // --- Fila de búsqueda: campo + botón Buscar/Detener ---
+            HorizontalLayout {
+                spacing: 8px;
+                height: 32px;
+                input := LineEdit {
+                    horizontal-stretch: 1;
+                    placeholder-text: Tr.search-placeholder;
+                    text <=> root.draft;
+                    // Enter lanza la búsqueda.
+                    accepted(t) => { root.run(t); }
+                }
+                Rectangle {
+                    width: 96px;
+                    border-radius: 5px;
+                    background: btn-touch.has-hover ? Theme.accent : Theme.selection-bg;
+                    Text {
+                        text: root.vm.running ? Tr.search-stop : Tr.search-go;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    btn-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (root.vm.running) { root.cancel(); }
+                            else { root.run(root.draft); }
+                        }
+                    }
+                }
+            }
+
+            // --- Estado: "Buscando…", "N resultados", "parcial / tope" ---
+            Text {
+                text: root.vm.status;
+                color: Theme.text-dim;
+                font-size: 11px;
+            }
+
+            // --- Resultados (lista scrollable) ---
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.row-bg;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                // Aviso "sin coincidencias" cuando terminó y no hubo resultados.
+                if root.vm.hits.length == 0: Text {
+                    text: root.vm.running ? "" : Tr.search-empty;
+                    color: Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                ListView {
+                    for hit[i] in root.vm.hits: Rectangle {
+                        height: 30px;
+                        background: row-touch.has-hover ? Theme.selection-bg : transparent;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 8px;
+                            Image {
+                                source: hit.icon;
+                                width: 18px;
+                                height: 18px;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                Text {
+                                    text: hit.name;
+                                    color: Theme.text;
+                                    font-size: 12px;
+                                    overflow: elide;
+                                }
+                                // Carpeta contenedora (relativa) — dónde está.
+                                Text {
+                                    text: hit.rel-dir;
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    overflow: elide;
+                                    visible: hit.rel-dir != "";
+                                }
+                            }
+                            Text {
+                                text: hit.detail;
+                                color: Theme.text-dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.open(i); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

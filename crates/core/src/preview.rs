@@ -27,7 +27,8 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "web
 /// Configuración; esta es la semilla.
 pub const DEFAULT_TEXT_EXTENSIONS: &[&str] = &[
     "txt", "log", "md", "json", "xml", "csv", "toml", "yaml", "yml", "ini", "rs", "py", "js",
-    "html",
+    "html", "java", "ts", "c", "cpp", "h", "css", "sh", "bat", "cfg", "conf", "go", "rb", "php",
+    "sql", "kt", "swift", "lua",
 ];
 
 /// Tope de líneas que se muestran de un archivo de texto.

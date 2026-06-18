@@ -17,8 +17,9 @@ import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
 import { NewFolder } from "new-folder.slint";
 import { MissingFolder } from "missing-folder.slint";
+import { SearchPanel } from "search-panel.slint";
 import { Help } from "help.slint";
-import { BatchRenameVm, NewFolderVm, MissingFolderVm, HelpRowVm } from "types.slint";
+import { BatchRenameVm, NewFolderVm, MissingFolderVm, HelpRowVm, SearchVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -87,6 +88,8 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-layouts: false;
     // Si true, dibuja un ícono de REFRESCAR (flecha circular) con Path.
     in property <bool> draw-refresh: false;
+    // Si true, dibuja una LUPA (búsqueda) con Path (no hay PNG de búsqueda en los sets).
+    in property <bool> draw-search: false;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -203,7 +206,30 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 9; y: 4; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh: Text {
+        // Lupa dibujada: círculo (la lente) + mango diagonal.
+        if root.draw-search: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: white;
+                stroke-width: 1.4px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Lente (círculo, dos semiarcos).
+                MoveTo { x: 9.5; y: 6; }
+                ArcTo { radius-x: 3.5; radius-y: 3.5; x: 2.5; y: 6; sweep: false; large-arc: false; }
+                ArcTo { radius-x: 3.5; radius-y: 3.5; x: 9.5; y: 6; sweep: false; large-arc: false; }
+                // Mango.
+                MoveTo { x: 8.5; y: 8.5; }
+                LineTo { x: 12.5; y: 12.5; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -545,6 +571,13 @@ export component AppWindow inherits Window {
     callback missing-ancestor();
     callback missing-choose();
     callback missing-close-pane();
+    // Búsqueda recursiva (Ctrl+F / lupa):
+    in property <SearchVm> search-vm;
+    callback search-run(string);   // lanzar búsqueda con el texto dado
+    callback search-close();       // cerrar el panel (✕ / Esc / velo)
+    callback search-cancel();      // detener el worker sin cerrar
+    callback search-open(int);     // abrir la coincidencia de índice i
+    callback search-toggle();      // abrir/cerrar desde la lupa de la toolbar
     // Ayuda (F1):
     in property <bool> help-open;
     in property <[HelpRowVm]> help-shortcuts;
@@ -725,6 +758,15 @@ export component AppWindow inherits Window {
                 }
                 ToolSep { }
                 // --- Grupo SISTEMA ---
+                // Buscar en la carpeta y subcarpetas (Ctrl+F). La lupa abre/cierra el panel.
+                ToolBtn {
+                    draw-search: true;
+                    icon-only: true;
+                    tip: Tr.search-tip;
+                    btn-width: 34px;
+                    clicked => { root.search-toggle(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.cfg-title;
@@ -1210,6 +1252,17 @@ export component AppWindow inherits Window {
         active: root.help-open;
         shortcuts: root.help-shortcuts;
         close() => { root.help-close(); }
+    }
+
+    // Panel de búsqueda recursiva (Ctrl+F / lupa).
+    SearchPanel {
+        width: 100%;
+        height: 100%;
+        vm: root.search-vm;
+        run(t) => { root.search-run(t); }
+        close() => { root.search-close(); }
+        cancel() => { root.search-cancel(); }
+        open(i) => { root.search-open(i); }
     }
 
     // Desplegable ▾: agregar un panel del tipo elegido (divide el leaf activo). Flota
