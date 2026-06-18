@@ -589,6 +589,6 @@
   "slint.deep.view": "Vista profunda",
   "slint.deep.view_tip": "Muestra todo el contenido de la carpeta y sus subcarpetas (recursivo)",
   "slint.history.label": "Historial de carpetas",
-  "slint.history.empty": "Sin carpetas recientes",
+  "slint.history.recent_empty": "Sin carpetas recientes",
   "slint.cfg.recent_limit": "Carpetas recientes a recordar"
 }

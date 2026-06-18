@@ -589,6 +589,6 @@
   "slint.deep.view": "Deep view",
   "slint.deep.view_tip": "Shows all contents of the folder and its subfolders (recursive)",
   "slint.history.label": "Folder history",
-  "slint.history.empty": "No recent folders",
+  "slint.history.recent_empty": "No recent folders",
   "slint.cfg.recent_limit": "Recent folders to remember"
 }

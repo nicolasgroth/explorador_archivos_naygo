@@ -262,7 +262,7 @@ where
     tr.set_deep_view(c.t("slint.deep.view").into());
     tr.set_deep_view_tip(c.t("slint.deep.view_tip").into());
     tr.set_history(c.t("slint.history.label").into());
-    tr.set_history_empty(c.t("slint.history.empty").into());
+    tr.set_history_recent_empty(c.t("slint.history.recent_empty").into());
     tr.set_cfg_recent_limit(c.t("slint.cfg.recent_limit").into());
     tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
