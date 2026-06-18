@@ -587,5 +587,8 @@
   "slint.cfg.density_compact": "Compacta",
   "slint.cfg.density_comfortable": "Cómoda",
   "slint.deep.view": "Vista profunda",
-  "slint.deep.view_tip": "Muestra todo el contenido de la carpeta y sus subcarpetas (recursivo)"
+  "slint.deep.view_tip": "Muestra todo el contenido de la carpeta y sus subcarpetas (recursivo)",
+  "slint.history.label": "Historial de carpetas",
+  "slint.history.empty": "Sin carpetas recientes",
+  "slint.cfg.recent_limit": "Carpetas recientes a recordar"
 }

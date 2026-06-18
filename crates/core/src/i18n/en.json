@@ -587,5 +587,8 @@
   "slint.cfg.density_compact": "Compact",
   "slint.cfg.density_comfortable": "Comfortable",
   "slint.deep.view": "Deep view",
-  "slint.deep.view_tip": "Shows all contents of the folder and its subfolders (recursive)"
+  "slint.deep.view_tip": "Shows all contents of the folder and its subfolders (recursive)",
+  "slint.history.label": "Folder history",
+  "slint.history.empty": "No recent folders",
+  "slint.cfg.recent_limit": "Recent folders to remember"
 }
