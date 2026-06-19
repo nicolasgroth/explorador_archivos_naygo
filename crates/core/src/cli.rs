@@ -32,6 +32,64 @@ pub fn parse_initial_dir(args: &[String]) -> Option<PathBuf> {
     resolve_initial_dir(args, |p| p.is_dir())
 }
 
+/// Argumentos de línea de comandos ya parseados. `theme`/`layout` son las cadenas CRUDAS del
+/// argumento (sin validar contra el catálogo: eso lo hace la UI, que sí lo conoce).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CliArgs {
+    /// Carpeta posicional, SOLO si es un directorio existente (según `is_dir`).
+    pub dir: Option<PathBuf>,
+    /// El token posicional tal cual, aunque no sea un dir válido (para avisar "no es carpeta").
+    pub dir_arg_raw: Option<String>,
+    pub theme: Option<String>,
+    pub layout: Option<String>,
+    pub help: bool,
+    pub version: bool,
+}
+
+/// Parsea los argumentos (SIN el ejecutable). `is_dir` valida la carpeta posicional (inyectable
+/// para test puro). Reglas: `--help`/`--version` ponen su flag; `--theme <v>`/`--layout <v>`
+/// consumen el siguiente token como valor (si no hay, se ignoran); el primer token que no sea
+/// flag ni valor-de-flag es la carpeta posicional. Flags desconocidos se ignoran. Nunca panic.
+pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
+    let mut out = CliArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        match arg {
+            "--help" | "-h" => out.help = true,
+            "--version" | "-v" => out.version = true,
+            "--theme" => {
+                if let Some(v) = args.get(i + 1) {
+                    out.theme = Some(v.clone());
+                    i += 1;
+                }
+            }
+            "--layout" => {
+                if let Some(v) = args.get(i + 1) {
+                    out.layout = Some(v.clone());
+                    i += 1;
+                }
+            }
+            _ if arg.starts_with("--") => {}
+            _ if !arg.is_empty() && out.dir_arg_raw.is_none() => {
+                out.dir_arg_raw = Some(arg.to_string());
+                let path = PathBuf::from(arg);
+                if is_dir(&path) {
+                    out.dir = Some(path);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Atajo de producción: usa `Path::is_dir`.
+pub fn parse_args_real(args: &[String]) -> CliArgs {
+    parse_args(args, |p| p.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +146,77 @@ mod tests {
     fn ruta_inexistente_es_none() {
         let args = vec!["Z:\\no\\existe\\naygo-xyz".to_string()];
         assert_eq!(parse_initial_dir(&args), None);
+    }
+
+    fn s(v: &str) -> String {
+        v.to_string()
+    }
+
+    #[test]
+    fn parse_sin_args_todo_vacio() {
+        assert_eq!(parse_args(&[], |_| true), CliArgs::default());
+    }
+
+    #[test]
+    fn parse_solo_carpeta_valida() {
+        let a = parse_args(&[s("D:\\dir")], |_| true);
+        assert_eq!(a.dir, Some(PathBuf::from("D:\\dir")));
+        assert_eq!(a.dir_arg_raw.as_deref(), Some("D:\\dir"));
+        assert!(a.theme.is_none() && a.layout.is_none() && !a.help && !a.version);
+    }
+
+    #[test]
+    fn parse_carpeta_invalida_dir_none_pero_raw_some() {
+        let a = parse_args(&[s("D:\\no-existe")], |_| false);
+        assert_eq!(a.dir, None);
+        assert_eq!(a.dir_arg_raw.as_deref(), Some("D:\\no-existe"));
+    }
+
+    #[test]
+    fn parse_theme_y_layout() {
+        let a = parse_args(
+            &[s("--theme"), s("winxp"), s("--layout"), s("Mi plantilla")],
+            |_| true,
+        );
+        assert_eq!(a.theme.as_deref(), Some("winxp"));
+        assert_eq!(a.layout.as_deref(), Some("Mi plantilla"));
+        assert_eq!(a.dir, None);
+    }
+
+    #[test]
+    fn parse_orden_mezclado() {
+        let a = parse_args(
+            &[s("--theme"), s("x"), s("D:\\dir"), s("--layout"), s("y")],
+            |_| true,
+        );
+        assert_eq!(a.dir, Some(PathBuf::from("D:\\dir")));
+        assert_eq!(a.theme.as_deref(), Some("x"));
+        assert_eq!(a.layout.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn parse_flag_sin_valor_se_ignora_sin_panic() {
+        assert_eq!(parse_args(&[s("--theme")], |_| true).theme, None);
+        assert_eq!(parse_args(&[s("--layout")], |_| true).layout, None);
+    }
+
+    #[test]
+    fn parse_help_y_version() {
+        assert!(parse_args(&[s("--help")], |_| true).help);
+        assert!(parse_args(&[s("--version")], |_| true).version);
+    }
+
+    #[test]
+    fn parse_flag_desconocido_se_ignora() {
+        let a = parse_args(&[s("--zzz"), s("D:\\dir")], |_| true);
+        assert_eq!(a.dir, Some(PathBuf::from("D:\\dir")));
+    }
+
+    #[test]
+    fn parse_valor_de_theme_no_es_carpeta() {
+        let a = parse_args(&[s("--theme"), s("D:\\dir")], |_| true);
+        assert_eq!(a.theme.as_deref(), Some("D:\\dir"));
+        assert_eq!(a.dir, None);
+        assert_eq!(a.dir_arg_raw, None);
     }
 }
