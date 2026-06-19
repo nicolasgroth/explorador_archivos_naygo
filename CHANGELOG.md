@@ -17,6 +17,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   defecto 50) en la sección Avanzado de la configuración.
 - Tooltips explicativos en todos los botones de la barra de herramientas y de los paneles.
 - Guía para agregar idiomas (`docs/AGREGAR-IDIOMA.md`): basta soltar un `.json` en `lang/`.
+- Registro (log) con más contexto para diagnosticar caídas: marca de tiempo en hora local
+  legible, "migas de pan" de las acciones recientes, y al ocurrir un error se vuelca el
+  estado (carpetas abiertas, tema, idioma, entorno). Todo local, sin telemetría.
 ### Corregido
 - Caída (panic) del render por software al navegar con paneles muy angostos o con el aviso
   de "carpeta no encontrada" desbordado: se blindó la geometría y el aviso ahora tiene scroll.
