@@ -3362,6 +3362,7 @@ dependencies = [
 name = "naygo-ui-slint"
 version = "0.1.0"
 dependencies = [
+ "i-slint-backend-winit",
  "image",
  "lopdf 0.41.0",
  "naygo-core",

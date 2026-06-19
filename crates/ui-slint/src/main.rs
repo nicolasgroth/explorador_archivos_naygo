@@ -171,6 +171,26 @@ fn main() -> Result<(), slint::PlatformError> {
     // Offset del huso local (minutos) para los timestamps del log. Si falla, queda en UTC.
     crate::logging::set_tz_offset(win_tz_offset_minutes());
 
+    // Render por SOFTWARE forzado en código (no por variable de entorno). Naygo no debe
+    // depender de GPU: en VMs/equipos sin GPU el backend acelerado de Slint dejaba la ventana
+    // en 0x0 y producía geometría no finita que reventaba en `euclid::Vector2D::cast` (panic
+    // `Option::unwrap() on None`). El renderizador por software es estable en todos lados y
+    // encaja con la premisa de bajo consumo. Se hace ANTES de crear cualquier ventana (splash
+    // incluido). Si falla (otro backend ya activo, etc.), se registra y se sigue con el
+    // backend por defecto — no tumbamos el arranque por esto.
+    match i_slint_backend_winit::Backend::new_with_renderer_by_name(Some("software")) {
+        Ok(backend) => {
+            if let Err(e) = slint::platform::set_platform(Box::new(backend)) {
+                logging::log_line(&format!(
+                    "No se pudo fijar el backend software (set_platform): {e}"
+                ));
+            }
+        }
+        Err(e) => {
+            logging::log_line(&format!("No se pudo crear el backend winit-software: {e}"));
+        }
+    }
+
     // Argumentos de línea de comandos: el core ya los parsea (carpeta a abrir, --theme,
     // --layout, --help, --version). `--help`/`--version` muestran un diálogo y NO abren la
     // ventana; el resto se aplica más abajo, una vez construido el controlador.

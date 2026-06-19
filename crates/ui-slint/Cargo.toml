@@ -23,6 +23,11 @@ slint = { version = "1.16", default-features = false, features = [
     # Acceso al handle nativo de la ventana (HWND) para el menú contextual del Shell.
     "raw-window-handle-06",
 ] }
+# Backend winit explícito: forzamos el renderizador por SOFTWARE en código (no por variable de
+# entorno) para que Naygo nunca dependa de GPU. En VMs/equipos sin GPU el backend acelerado
+# producía geometría degenerada (ventana 0x0 → panic en euclid::cast). Mismo crate/versión que
+# ya llega de forma transitiva por la feature `backend-winit` de slint (no duplica).
+i-slint-backend-winit = "1.16"
 raw-window-handle = "0.6"
 # Para serializar el nombre de una Action como clave estable en el editor de atajos.
 serde_json = "1"
