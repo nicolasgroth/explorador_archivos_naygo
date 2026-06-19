@@ -428,11 +428,15 @@ fn read_pdf(path: &Path) -> Payload {
         None => "PDF:\n\n".to_string(),
     };
     let trimmed = text.trim();
-    let truncated = trimmed.chars().count() > PDF_TEXT_MAX_CHARS;
-    let body: String = trimmed.chars().take(PDF_TEXT_MAX_CHARS).collect();
+    let too_long = trimmed.chars().count() > PDF_TEXT_MAX_CHARS;
+    let capped: String = trimmed.chars().take(PDF_TEXT_MAX_CHARS).collect();
+    // Recorte por línea: el texto extraído de un PDF puede traer líneas larguísimas que
+    // desbordarían el render por software (glifo fuera del rango i16). Misma defensa que el
+    // preview de texto.
+    let (body, clipped) = naygo_core::preview::clip_long_lines(&capped);
     Payload::Text {
         text: format!("{header}{body}"),
-        truncated,
+        truncated: too_long || clipped,
     }
 }
 

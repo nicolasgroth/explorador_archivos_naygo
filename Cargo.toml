@@ -36,3 +36,7 @@ strip = true
 inherits = "release"
 debug = true
 strip = false
+# Sin LTO ni codegen-units=1: el diagnóstico no necesita el binario más chico/rápido, y así
+# compila en ~2 min en vez de ~20. El panic se reproduce igual; los símbolos son lo que importa.
+lto = false
+codegen-units = 16

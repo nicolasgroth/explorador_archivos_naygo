@@ -46,6 +46,11 @@ pub const DEFAULT_TEXT_EXTENSIONS: &[&str] = &[
 pub const TEXT_MAX_LINES: usize = 100;
 /// Tope de bytes que se leen de un archivo de texto (lo que llegue primero con las líneas).
 pub const TEXT_MAX_BYTES: usize = 64 * 1024;
+/// Tope de caracteres por línea. Una línea más larga se recorta (con marcador). Defensa dura:
+/// el renderizador por software de Slint posiciona cada glifo en coordenadas i16 (máx ~32767px);
+/// una línea larguísima (típica en logs) sin ajuste empuja un glifo fuera de ese rango y la app
+/// caía al pintarla. Recortar la línea + ajustar el texto en la UI evita el desborde de raíz.
+pub const TEXT_MAX_LINE_CHARS: usize = 1000;
 /// Tope de bytes de una imagen para intentar decodificarla (más grande → "muy grande").
 pub const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Lado máximo (px) de la textura de la imagen: si excede, se reescala antes de subirla.
@@ -199,6 +204,28 @@ pub struct TruncatedText {
     pub truncated: bool,
 }
 
+/// Recorta cada línea de `s` a `TEXT_MAX_LINE_CHARS` caracteres (añadiendo `…` a las
+/// recortadas). Devuelve el texto resultante y si recortó alguna línea. Defensa contra el
+/// desborde i16 del renderizador por software de Slint con líneas larguísimas. Útil para
+/// textos que NO pasan por `truncate_text` (p. ej. el texto extraído de un PDF).
+pub fn clip_long_lines(s: &str) -> (String, bool) {
+    let mut out = String::with_capacity(s.len());
+    let mut clipped = false;
+    for (i, line) in s.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if line.chars().count() > TEXT_MAX_LINE_CHARS {
+            out.extend(line.chars().take(TEXT_MAX_LINE_CHARS));
+            out.push('…');
+            clipped = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    (out, clipped)
+}
+
 /// Trunca `bytes` (conversión lossy desde UTF-8) a las primeras `TEXT_MAX_LINES` líneas.
 /// Marca `truncated` si había más líneas que el tope O si el buffer ya venía cortado por
 /// bytes (`hit_byte_cap`). No agrega el aviso: eso es presentación (i18n) de la UI.
@@ -206,6 +233,7 @@ pub fn truncate_text(bytes: &[u8], hit_byte_cap: bool) -> TruncatedText {
     let s = String::from_utf8_lossy(bytes);
     let mut out = String::new();
     let mut more_lines = false;
+    let mut clipped_line = false;
     for (i, line) in s.lines().enumerate() {
         if i >= TEXT_MAX_LINES {
             more_lines = true;
@@ -214,11 +242,19 @@ pub fn truncate_text(bytes: &[u8], hit_byte_cap: bool) -> TruncatedText {
         if i > 0 {
             out.push('\n');
         }
-        out.push_str(line);
+        // Recorte por línea: cuenta caracteres (no bytes) para no partir un carácter
+        // multibyte. Una línea más larga que el tope se trunca y se añade un marcador.
+        if line.chars().count() > TEXT_MAX_LINE_CHARS {
+            out.extend(line.chars().take(TEXT_MAX_LINE_CHARS));
+            out.push('…');
+            clipped_line = true;
+        } else {
+            out.push_str(line);
+        }
     }
     TruncatedText {
         text: out,
-        truncated: more_lines || hit_byte_cap,
+        truncated: more_lines || hit_byte_cap || clipped_line,
     }
 }
 
@@ -301,6 +337,50 @@ mod tests {
         let bytes = [0xff, 0xfe, b'h', b'i', b'\n'];
         let t = truncate_text(&bytes, false);
         assert!(t.text.contains("hi"));
+    }
+
+    #[test]
+    fn recorta_linea_larguisima_y_marca_truncado() {
+        // Una sola línea más larga que el tope por línea (caso típico de logs): se recorta a
+        // TEXT_MAX_LINE_CHARS + el marcador, y se marca truncado. Esto evita que el render por
+        // software posicione un glifo fuera del rango i16 (~32767px) y caiga.
+        let src = "x".repeat(TEXT_MAX_LINE_CHARS + 500);
+        let t = truncate_text(src.as_bytes(), false);
+        assert!(t.truncated, "una línea recortada marca truncado");
+        // La línea resultante tiene a lo más el tope + 1 carácter (el marcador …).
+        let first_line = t.text.lines().next().unwrap();
+        assert_eq!(first_line.chars().count(), TEXT_MAX_LINE_CHARS + 1);
+        assert!(first_line.ends_with('…'));
+    }
+
+    #[test]
+    fn no_recorta_linea_dentro_del_tope() {
+        let src = "x".repeat(TEXT_MAX_LINE_CHARS); // exactamente el tope: no se recorta
+        let t = truncate_text(src.as_bytes(), false);
+        assert!(!t.truncated);
+        assert_eq!(t.text.chars().count(), TEXT_MAX_LINE_CHARS);
+        assert!(!t.text.contains('…'));
+    }
+
+    #[test]
+    fn clip_long_lines_recorta_solo_las_largas() {
+        let corta = "hola";
+        let larga = "y".repeat(TEXT_MAX_LINE_CHARS + 10);
+        let src = format!("{corta}\n{larga}\notra");
+        let (out, clipped) = clip_long_lines(&src);
+        assert!(clipped);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "hola"); // corta intacta
+        assert_eq!(lines[1].chars().count(), TEXT_MAX_LINE_CHARS + 1); // recortada + …
+        assert!(lines[1].ends_with('…'));
+        assert_eq!(lines[2], "otra");
+    }
+
+    #[test]
+    fn clip_long_lines_no_marca_si_todo_corto() {
+        let (out, clipped) = clip_long_lines("una\ndos\ntres");
+        assert!(!clipped);
+        assert_eq!(out, "una\ndos\ntres");
     }
 
     #[test]

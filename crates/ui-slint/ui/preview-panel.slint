@@ -49,7 +49,11 @@ export component PreviewPanel inherits Rectangle {
                     text: root.view.text;
                     color: Theme.text;
                     font-family: "Consolas";
-                    wrap: no-wrap;
+                    // Ajuste de línea (antes no-wrap): el renderizador por software de Slint
+                    // posiciona cada glifo en i16 (~32767px). Una línea larguísima sin ajuste
+                    // empujaba un glifo fuera de rango y la app caía al pintar. El core ya recorta
+                    // cada línea (TEXT_MAX_LINE_CHARS); el wrap es la segunda defensa.
+                    wrap: word-wrap;
                 }
             }
             if root.view.truncated: Text {
