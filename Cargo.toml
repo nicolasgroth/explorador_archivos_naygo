@@ -27,3 +27,12 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+# Perfil de DIAGNÓSTICO: igual que release (mismo código/optimización) pero CON símbolos de
+# depuración y sin strip, para que el backtrace del panic handler muestre nombres de función
+# reales (en release salían como `<unknown>`). Build: `cargo build --profile diag -p naygo-ui-slint`.
+# El .exe queda en target/diag/. NO es el binario de distribución; solo para cazar caídas.
+[profile.diag]
+inherits = "release"
+debug = true
+strip = false

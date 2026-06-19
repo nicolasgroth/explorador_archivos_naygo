@@ -183,13 +183,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // incluido). Si falla (otro backend ya activo, etc.), se registra y se sigue con el
     // backend por defecto — no tumbamos el arranque por esto.
     match i_slint_backend_winit::Backend::new_with_renderer_by_name(Some("software")) {
-        Ok(backend) => {
-            if let Err(e) = slint::platform::set_platform(Box::new(backend)) {
-                logging::log_line(&format!(
-                    "No se pudo fijar el backend software (set_platform): {e}"
-                ));
-            }
-        }
+        Ok(backend) => match slint::platform::set_platform(Box::new(backend)) {
+            Ok(()) => logging::log_line("backend: winit-software fijado OK"),
+            Err(e) => logging::log_line(&format!(
+                "No se pudo fijar el backend software (set_platform): {e}"
+            )),
+        },
         Err(e) => {
             logging::log_line(&format!("No se pudo crear el backend winit-software: {e}"));
         }
@@ -1128,7 +1127,22 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let start_timer = start_timer.clone();
         let apply_device_change = apply_device_change.clone();
+        let ui_weak_wake = ui.as_weak();
+        let logged_first_wake = std::rc::Rc::new(std::cell::Cell::new(false));
         ui.on_wake(move || {
+            // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
+            // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
+            // Se loguea una sola vez. Barato y no depende de símbolos de depuración.
+            if !logged_first_wake.replace(true) {
+                if let Some(ui) = ui_weak_wake.upgrade() {
+                    let size = ui.window().size();
+                    let scale = ui.window().scale_factor();
+                    crate::logging::log_line(&format!(
+                        "arranque: primer wake (ventana {}x{} @{:.2})",
+                        size.width, size.height, scale
+                    ));
+                }
+            }
             apply_device_change();
             start_timer();
         });
@@ -3260,6 +3274,16 @@ fn main() -> Result<(), slint::PlatformError> {
         let size = ui.window().size();
         let scale = ui.window().scale_factor();
         crate::logging::set_env_info((size.width, size.height), scale, &os_version_string());
+    }
+    // Hito de arranque: entrando al event loop. El tamaño aquí suele ser 0x0 (la ventana aún no
+    // fue dimensionada por el SO); el tamaño REAL se registra en el primer `on_wake` (ya dentro
+    // del loop). Sirve para acotar dónde cae un panic de arranque en máquinas problemáticas.
+    {
+        let size = ui.window().size();
+        crate::logging::log_line(&format!(
+            "arranque: entrando al event loop (ventana pre-loop {}x{})",
+            size.width, size.height
+        ));
     }
     ui.run()
 }
