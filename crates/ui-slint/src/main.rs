@@ -2086,6 +2086,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         let cfg_weak = cfg_win.as_weak();
         ui.on_open_config(move || {
+            crate::logging::breadcrumb("abrir configuración");
             refresh();
             if let Some(cfg) = cfg_weak.upgrade() {
                 let _ = cfg.show();

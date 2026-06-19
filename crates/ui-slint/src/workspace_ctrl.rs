@@ -4059,7 +4059,7 @@ impl WorkspaceCtrl {
             panes: panes.trim_end().to_string(),
             theme: self.config.settings.theme.as_str().to_string(),
             lang: self.config.settings.language.0.clone(),
-            last_action: String::new(),
+            last_action: crate::logging::last_breadcrumb(),
         }
     }
 }

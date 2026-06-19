@@ -132,6 +132,16 @@ pub fn breadcrumb(msg: &str) {
     }
 }
 
+/// La última miga registrada (sin la marca de tiempo), o vacío si no hay ninguna. La usa el
+/// snapshot para el campo "última acción". Lee con try_lock para no colgar.
+pub fn last_breadcrumb() -> String {
+    BREADCRUMBS
+        .try_lock()
+        .ok()
+        .and_then(|b| b.back().cloned())
+        .unwrap_or_default()
+}
+
 /// Arma el bloque de contexto que precede al panic en el log. PURO: recibe los datos ya
 /// extraídos (no toca las globales) para poder testearlo. `crumbs` del más viejo al más nuevo.
 fn build_context_block(env: &str, snap: &DiagSnapshot, crumbs: &[String]) -> String {
