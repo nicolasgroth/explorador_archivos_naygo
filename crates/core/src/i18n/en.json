@@ -499,6 +499,7 @@
   "slint.drive.eject_failed": "Couldn't eject the drive",
   "slint.drive.eject_confirm_title": "Eject drive",
   "slint.drive.eject_confirm": "Are you sure you want to eject {drive}? Make sure no files are in use.",
+  "slint.toolbar.config_tip": "Open settings (themes, language, shortcuts…)",
   "slint.toolbar.layouts": "Layouts",
   "slint.toolbar.layouts_tip": "Panel layout templates",
   "slint.toolbar.new_folder": "Folder",

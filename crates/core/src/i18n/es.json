@@ -499,6 +499,7 @@
   "slint.drive.eject_failed": "No se pudo expulsar la unidad",
   "slint.drive.eject_confirm_title": "Expulsar unidad",
   "slint.drive.eject_confirm": "¿Seguro que quieres expulsar {drive}? Asegúrate de que no haya archivos en uso.",
+  "slint.toolbar.config_tip": "Abrir la ventana de configuración (temas, idioma, atajos…)",
   "slint.toolbar.layouts": "Layouts",
   "slint.toolbar.layouts_tip": "Plantillas de disposición de paneles",
   "slint.toolbar.new_folder": "Carpeta",

@@ -40,6 +40,7 @@ where
     tr.set_drive_eject_failed(c.t("slint.drive.eject_failed").into());
     tr.set_drive_eject_confirm_title(c.t("slint.drive.eject_confirm_title").into());
     tr.set_drive_eject_confirm(c.t("slint.drive.eject_confirm").into());
+    tr.set_toolbar_config_tip(c.t("slint.toolbar.config_tip").into());
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
     tr.set_toolbar_new_folder(c.t("slint.toolbar.new_folder").into());
