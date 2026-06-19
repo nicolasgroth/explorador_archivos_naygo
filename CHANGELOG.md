@@ -20,9 +20,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Registro (log) con más contexto para diagnosticar caídas: marca de tiempo en hora local
   legible, "migas de pan" de las acciones recientes, y al ocurrir un error se vuelca el
   estado (carpetas abiertas, tema, idioma, entorno). Todo local, sin telemetría.
+- Seis temas de color nuevos con más personalidad: Windows XP, macOS, Verde sobre azul,
+  Solarized Dark, Terminal ámbar y Ciruela.
+- En la primera ejecución, Naygo arranca con la disposición clásica (árbol + dos paneles de
+  archivos + Propiedades + Vista previa) en vez de un solo panel.
 ### Corregido
 - Caída (panic) del render por software al navegar con paneles muy angostos o con el aviso
   de "carpeta no encontrada" desbordado: se blindó la geometría y el aviso ahora tiene scroll.
+- El aviso de "carpeta no encontrada" ahora refresca el panel al instante al pulsar cualquier
+  opción (antes había que redimensionar); "Subir un nivel" solo aparece si hay una carpeta
+  superior a la que ir; y al volver atrás a una unidad ausente se ven de nuevo las opciones.
+- Los paneles de Propiedades y Vista previa se marcan como panel activo al hacer clic en
+  cualquier parte de su cuerpo, no solo en la barra de título.
+- El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 
 ## [0.1.0] — 2026-06-18
 ### Añadido
