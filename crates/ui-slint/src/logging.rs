@@ -211,8 +211,9 @@ fn install_panic_hook() {
             .set_level(rfd::MessageLevel::Error)
             .set_title("Naygo — error inesperado")
             .set_description(format!(
-                "Naygo encontró un error y debe cerrarse.\n\n{payload}\n\nSe guardó un \
-                 registro en:\n{}",
+                "Naygo se cerró por un error inesperado.\n\nGuardamos un registro \
+                 técnico en:\n{}\n\nSi el problema se repite, ese archivo ayuda a \
+                 diagnosticarlo.",
                 log.display()
             ))
             .set_buttons(rfd::MessageButtons::Ok)
