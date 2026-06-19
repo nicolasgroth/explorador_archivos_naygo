@@ -631,6 +631,7 @@ impl WorkspaceCtrl {
     /// sigue sin existir, no hace nada (el aviso permanece). El aviso desaparece solo cuando el
     /// re-listado puebla la carpeta (la detección es por `current_dir.exists()`).
     pub fn missing_folder_retry(&mut self, id: PaneId) {
+        crate::logging::log_line(&format!("carpeta no encontrada: reintentar panel {}", id.0));
         if let Some(dir) = self.pane_current_dir(id) {
             if std::fs::read_dir(&dir).is_ok() {
                 self.cancel_deep_if_navigating(id);
@@ -643,6 +644,16 @@ impl WorkspaceCtrl {
     /// Subir al ancestro existente más cercano del panel `id` (o al HOME si la unidad entera se
     /// fue). Navega ese panel y re-lista.
     pub fn missing_folder_go_ancestor(&mut self, id: PaneId) {
+        {
+            let dir = self
+                .pane_current_dir(id)
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            crate::logging::log_line(&format!(
+                "carpeta no encontrada: subir del panel {} ({})",
+                id.0, dir
+            ));
+        }
         let Some(lost) = self.pane_current_dir(id) else {
             return;
         };
@@ -1226,6 +1237,7 @@ impl WorkspaceCtrl {
         let Some(tpl) = self.find_template(name) else {
             return;
         };
+        crate::logging::breadcrumb(&format!("aplicar layout {}", name));
         let home = self.template_home();
         // Cancelar los listados/árboles actuales antes de reemplazar el workspace.
         for l in self.listings.values() {
@@ -1419,6 +1431,7 @@ impl WorkspaceCtrl {
         if !naygo_core::batch_rename::can_apply(&rows) {
             return;
         }
+        crate::logging::breadcrumb("batch-rename: aplicar");
         // Solo las filas con cambio real (Ok); Unchanged se omite.
         let mut sources = Vec::new();
         let mut new_names = Vec::new();
@@ -1497,6 +1510,7 @@ impl WorkspaceCtrl {
         if self.ws.pane(id).and_then(|p| p.files.as_ref()).is_none() {
             return false;
         }
+        crate::logging::breadcrumb(&format!("navegar panel {} → {}", id.0, dir.display()));
         // Navegar cancela la vista profunda del panel (no es pegajosa).
         self.cancel_deep_if_navigating(id);
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
@@ -1584,6 +1598,7 @@ impl WorkspaceCtrl {
     /// Agrega un panel Files dividiendo el leaf activo lado a lado (horizontal, el nuevo a la
     /// derecha). Atajo de la dirección por defecto.
     pub fn add_pane_split(&mut self) {
+        crate::logging::breadcrumb("abrir panel (split)");
         self.add_pane_split_dir(SplitDir::Horizontal, false);
     }
 
@@ -1615,6 +1630,7 @@ impl WorkspaceCtrl {
     /// `Files` arrancan listado en la carpeta del activo; los demás no listan. El Tree
     /// inicializa su `DirTree` desde las unidades del sistema.
     pub fn add_pane_of(&mut self, purpose: PanePurpose) {
+        crate::logging::breadcrumb(&format!("abrir panel {:?}", purpose));
         if matches!(purpose, PanePurpose::Files) {
             self.add_pane_split();
             return;
@@ -1665,6 +1681,7 @@ impl WorkspaceCtrl {
         if !self.can_close_pane(id) {
             return;
         }
+        crate::logging::breadcrumb(&format!("cerrar panel {}", id.0));
         // Cancelar y soltar el listado/árbol del panel que se va (no dejar workers huérfanos).
         if let Some(l) = self.listings.remove(&id) {
             l.cancel();
@@ -1747,6 +1764,7 @@ impl WorkspaceCtrl {
         let (Some(dir_a), Some(dir_b)) = (dir_a, dir_b) else {
             return;
         };
+        crate::logging::breadcrumb(&format!("intercambiar paneles {} ⇄ {}", a.0, b.0));
         // El swap cambia la carpeta de ambos paneles: cancelar el deep de cada uno.
         self.cancel_deep_if_navigating(a);
         self.cancel_deep_if_navigating(b);
@@ -1979,6 +1997,8 @@ impl WorkspaceCtrl {
     /// con el selector si hay varios; divide si no hay otro panel. Usa `last_area` (la última
     /// área conocida del contenido) porque el atajo de teclado no la trae.
     pub fn op_to_other(&mut self, move_files: bool) -> bool {
+        let accion = if move_files { "mover" } else { "copiar" };
+        crate::logging::breadcrumb(&format!("{} ítems al otro panel", accion));
         let Some(origin) = self.active_files_id() else {
             return false;
         };
@@ -2162,15 +2182,25 @@ impl WorkspaceCtrl {
     /// (volumen bloqueado) NO fuerza: devuelve [`EjectOutcome::InUse`]. La UI
     /// mapea el resultado a un toast localizado.
     pub fn eject_drive(&self, root: PathBuf) -> EjectOutcome {
+        crate::logging::breadcrumb(&format!("expulsar USB {}", root.display()));
         // Guardia de seguridad: solo se expulsan unidades extraíbles. Nunca se debe
         // intentar desmontar una fija/de red aunque la UI lo pidiera por error.
         if !self.is_removable(&root) {
+            let msg = format!("expulsar USB {}: no es extraíble", root.display());
+            crate::logging::log_line(&msg);
             return EjectOutcome::Failed("not a removable drive".into());
         }
         match naygo_platform::eject::eject_drive(&root) {
             Ok(()) => EjectOutcome::Ok,
-            Err(naygo_platform::eject::EjectError::InUse) => EjectOutcome::InUse,
-            Err(e) => EjectOutcome::Failed(e.to_string()),
+            Err(naygo_platform::eject::EjectError::InUse) => {
+                crate::logging::log_line(&format!("expulsar USB {}: en uso", root.display()));
+                EjectOutcome::InUse
+            }
+            Err(e) => {
+                let msg = format!("expulsar USB {}: fallo — {}", root.display(), e);
+                crate::logging::log_line(&msg);
+                EjectOutcome::Failed(e.to_string())
+            }
         }
     }
 
@@ -2198,6 +2228,11 @@ impl WorkspaceCtrl {
         let Some(active_files_id) = self.active_files_id() else {
             return false;
         };
+        crate::logging::breadcrumb(&format!(
+            "navegar panel {} → {}",
+            active_files_id.0,
+            dir.display()
+        ));
         // Navegar cancela la vista profunda del panel (no es pegajosa).
         self.cancel_deep_if_navigating(active_files_id);
         // Si la carpeta no existe/ilegible (favorito viejo, red caída, ruta tipeada), igual
@@ -2440,6 +2475,11 @@ impl WorkspaceCtrl {
 
     /// Eliminar la selección: abre el modal de confirmación.
     pub fn op_delete(&mut self, permanent: bool) {
+        {
+            let n = self.selected_paths().len();
+            let modo = if permanent { "permanente" } else { "papelera" };
+            crate::logging::breadcrumb(&format!("eliminar {} ítem(s) ({})", n, modo));
+        }
         let paths = self.selected_paths();
         if !paths.is_empty() {
             self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
@@ -2517,6 +2557,7 @@ impl WorkspaceCtrl {
         {
             return false;
         }
+        crate::logging::breadcrumb("renombrar");
         let source = e.path.clone();
         let req = naygo_core::ops::rename(source, new_name.to_string());
         self.ops.start_op(req, "Renombrar".to_string(), true);
@@ -3260,6 +3301,7 @@ impl WorkspaceCtrl {
         let moved = self.ws.active_files_mut().and_then(|f| f.go_up());
         match moved {
             Some(dir) => {
+                crate::logging::breadcrumb("subir un nivel");
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
@@ -3284,6 +3326,7 @@ impl WorkspaceCtrl {
             .and_then(|f| f.go_back());
         match moved {
             Some(dir) => {
+                crate::logging::breadcrumb("atrás");
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
@@ -3307,6 +3350,7 @@ impl WorkspaceCtrl {
             .and_then(|f| f.go_forward());
         match moved {
             Some(dir) => {
+                crate::logging::breadcrumb("adelante");
                 // Navegar cancela la vista profunda del panel (no es pegajosa).
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
@@ -3448,6 +3492,7 @@ impl WorkspaceCtrl {
         if q.is_empty() {
             return;
         }
+        crate::logging::breadcrumb(&format!("buscar '{}'", q));
         let Some(root) = self.ws.active_files().map(|f| f.current_dir.clone()) else {
             return;
         };
@@ -3942,6 +3987,8 @@ impl WorkspaceCtrl {
 
     /// Alterna la vista profunda en el panel `id` (para el toggle de la barra).
     pub fn deep_toggle(&mut self, id: PaneId) {
+        let estado = if self.is_deep_active(id) { "off" } else { "on" };
+        crate::logging::breadcrumb(&format!("vista profunda {}", estado));
         if self.is_deep_active(id) {
             self.deep_cancel();
         } else {
@@ -3993,6 +4040,27 @@ impl WorkspaceCtrl {
             .as_ref()
             .map(|d| d.items.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Construye el snapshot de diagnóstico (rutas por panel + tema + idioma). Barato (strings).
+    /// Lo consume el log ante un panic.
+    pub fn diag_snapshot(&self) -> crate::logging::DiagSnapshot {
+        use std::fmt::Write as _;
+        let mut panes = String::new();
+        for p in self.ws.panes() {
+            let dir = p
+                .files
+                .as_ref()
+                .map(|f| f.current_dir.display().to_string())
+                .unwrap_or_else(|| format!("{:?}", p.purpose));
+            let _ = write!(panes, "[{}] {}  ", p.id.0, dir);
+        }
+        crate::logging::DiagSnapshot {
+            panes: panes.trim_end().to_string(),
+            theme: self.config.settings.theme.as_str().to_string(),
+            lang: self.config.settings.language.0.clone(),
+            last_action: String::new(),
+        }
     }
 }
 

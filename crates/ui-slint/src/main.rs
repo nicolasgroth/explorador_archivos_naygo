@@ -541,6 +541,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .collect();
             ui.set_help_shortcuts(ModelRc::from(Rc::new(VecModel::from(help_rows))));
+            crate::logging::set_diag_snapshot(c.diag_snapshot());
         }
     };
 

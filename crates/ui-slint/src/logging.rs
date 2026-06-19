@@ -47,7 +47,6 @@ pub struct DiagSnapshot {
 }
 
 /// El controlador refresca el snapshot cuando cambia algo relevante. Barato.
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 pub fn set_diag_snapshot(snap: DiagSnapshot) {
     if let Ok(mut d) = DIAG.lock() {
         *d = snap;
@@ -123,7 +122,6 @@ fn local_time_str() -> String {
 
 /// Registra un evento significativo en el buffer circular (en memoria, con su hora local).
 /// NO escribe a disco. Llamar desde el controlador en acciones clave.
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 pub fn breadcrumb(msg: &str) {
     let line = format!("[{}] {msg}", local_time_str());
     if let Ok(mut buf) = BREADCRUMBS.lock() {
