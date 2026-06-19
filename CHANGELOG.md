@@ -32,10 +32,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Los avisos y confirmaciones internos (confirmar expulsar una unidad USB, errores al
   importar/exportar packs) ahora usan un diálogo con el tema de Naygo en vez del cuadro
   nativo del sistema. El mensaje de cierre por error inesperado es más claro y el detalle
-  técnico queda en el registro (`naygo.log`).
-### Corregido
-- Caída (panic) del render por software al navegar con paneles muy angostos o con el aviso
-  de "carpeta no encontrada" desbordado: se blindó la geometría y el aviso ahora tiene scroll.
+  técnico queda en el registro.
+- El registro de diagnóstico ahora se guarda por día: `naygo-AAAA-MM-DD.log` (antes un único
+  `naygo.log`), para no mezclar las corridas y diagnosticar más fácil.
 - El aviso de "carpeta no encontrada" ahora refresca el panel al instante al pulsar cualquier
   opción (antes había que redimensionar); "Subir un nivel" solo aparece si hay una carpeta
   superior a la que ir; y al volver atrás a una unidad ausente se ven de nuevo las opciones.

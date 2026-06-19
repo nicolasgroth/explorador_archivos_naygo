@@ -12,8 +12,10 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
-/// Nombre del archivo de log (en el directorio portable, junto a naygo.exe).
-const LOG_FILE: &str = "naygo.log";
+/// Prefijo del archivo de log. El nombre real lleva la fecha local del día:
+/// `naygo-YYYY-MM-DD.log` (junto a naygo.exe), para separar las corridas por día y no
+/// mezclar diagnósticos de sesiones distintas.
+const LOG_PREFIX: &str = "naygo";
 /// Si el log supera este tamaño, se trunca al arrancar (evita que crezca sin límite).
 const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -71,9 +73,20 @@ pub fn set_tz_offset(minutes: i32) {
     let _ = TZ_OFFSET_MIN.set(minutes);
 }
 
-/// Ruta del archivo de log: junto al ejecutable (mismo criterio que la config portable).
+/// Ruta del archivo de log del día: junto al ejecutable (mismo criterio que la config
+/// portable), con la fecha local en el nombre: `naygo-YYYY-MM-DD.log`. Así cada día (y cada
+/// tanda de pruebas) queda en su propio archivo y no se mezclan las corridas.
 pub fn log_path() -> PathBuf {
-    naygo_core::config::portable_dir().join(LOG_FILE)
+    let name = format!("{LOG_PREFIX}-{}.log", log_date_str());
+    naygo_core::config::portable_dir().join(name)
+}
+
+/// Fecha local de hoy como "YYYY-MM-DD", reutilizando el mismo reloj y huso que las marcas
+/// de tiempo del log (los primeros 10 caracteres de "YYYY-MM-DD HH:MM:SS.mmm").
+fn log_date_str() -> String {
+    let full = local_time_str();
+    // `format_log_time` siempre devuelve "YYYY-MM-DD ..."; tomamos la parte de fecha.
+    full.split(' ').next().unwrap_or("0000-00-00").to_string()
 }
 
 /// Inicializa el logging: trunca el log si está muy grande, escribe una línea de arranque e

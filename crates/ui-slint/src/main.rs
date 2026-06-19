@@ -167,9 +167,13 @@ fn cli_help_text() -> String {
 fn main() -> Result<(), slint::PlatformError> {
     // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
     // diálogo, en vez de cerrarse en silencio (el log queda en naygo.log junto al ejecutable).
-    logging::init();
-    // Offset del huso local (minutos) para los timestamps del log. Si falla, queda en UTC.
+    // Offset del huso local (minutos) ANTES de init(): el nombre del archivo de log lleva la
+    // fecha local del día (naygo-YYYY-MM-DD.log), así que el huso debe estar fijado antes de
+    // resolver la ruta. Si falla, queda en UTC.
     crate::logging::set_tz_offset(win_tz_offset_minutes());
+    // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
+    // diálogo, en vez de cerrarse en silencio (el log queda junto al ejecutable).
+    logging::init();
 
     // Render por SOFTWARE forzado en código (no por variable de entorno). Naygo no debe
     // depender de GPU: en VMs/equipos sin GPU el backend acelerado de Slint dejaba la ventana
