@@ -2315,41 +2315,76 @@ fn main() -> Result<(), slint::PlatformError> {
     // de inmediato. El resultado se anuncia con un toast localizado. NUNCA fuerza: si el volumen
     // está en uso, el toast lo dice y la unidad queda intacta. En éxito refrescamos la tira (la
     // unidad desaparece) — además el device_watch la detectará igual.
+    // Path pendiente de expulsar mientras el modal de confirmación está abierto.
+    let pending_eject: std::rc::Rc<std::cell::RefCell<Option<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     {
-        let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
-        let refresh_drives = refresh_drives.clone();
+        let pending_eject = pending_eject.clone();
         ui.on_eject_drive(move |path| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            // Confirmación nativa antes de expulsar (evita sacar una unidad por un clic accidental).
-            let tr0 = ui.global::<Tr>();
-            let confirm_msg = tr0
-                .get_drive_eject_confirm()
-                .replace("{drive}", path.as_str());
-            let confirmed = rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Warning)
-                .set_title(tr0.get_drive_eject_confirm_title().to_string())
-                .set_description(confirm_msg)
-                .set_buttons(rfd::MessageButtons::OkCancel)
-                .show();
-            if confirmed != rfd::MessageDialogResult::Ok {
-                return;
-            }
-            let outcome = ctrl
-                .borrow()
-                .eject_drive(std::path::PathBuf::from(path.as_str()));
+            // Confirmación con el modal temático de Naygo (evita sacar una unidad por un clic
+            // accidental). La expulsión real ocurre en on_message_confirm; aquí solo guardamos el
+            // path pendiente y abrimos el modal.
             let tr = ui.global::<Tr>();
-            let msg = match outcome {
-                workspace_ctrl::EjectOutcome::Ok => {
-                    refresh_drives();
-                    tr.get_drive_eject_ok()
-                }
-                workspace_ctrl::EjectOutcome::InUse => tr.get_drive_eject_in_use(),
-                workspace_ctrl::EjectOutcome::Failed(_) => tr.get_drive_eject_failed(),
+            let body = tr.get_drive_eject_confirm().replace("{drive}", path.as_str());
+            *pending_eject.borrow_mut() = Some(path.to_string());
+            ui.set_message(MessageVm {
+                kind: 1,
+                level: 1, // warning
+                title: tr.get_drive_eject_confirm_title(),
+                body: body.into(),
+                confirm_label: tr.get_drive_eject(),
+                cancel_label: tr.get_dlg_cancel(),
+                danger: false,
+            });
+        });
+    }
+    // Confirmación del modal temático: ejecuta la expulsión pendiente (kind 1).
+    {
+        let ui_weak = ui.as_weak();
+        let ctrl = ctrl.clone();
+        let refresh_drives = refresh_drives.clone();
+        let pending_eject = pending_eject.clone();
+        ui.on_message_confirm(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
             };
-            ui.invoke_show_toast(msg);
+            let kind = ui.get_message().kind;
+            // Cerrar el modal.
+            ui.set_message(MessageVm::default());
+            // kind 1 = confirmación de expulsar.
+            if kind == 1 {
+                if let Some(path) = pending_eject.borrow_mut().take() {
+                    let outcome = ctrl
+                        .borrow()
+                        .eject_drive(std::path::PathBuf::from(path.as_str()));
+                    let tr = ui.global::<Tr>();
+                    let msg = match outcome {
+                        workspace_ctrl::EjectOutcome::Ok => {
+                            refresh_drives();
+                            tr.get_drive_eject_ok()
+                        }
+                        workspace_ctrl::EjectOutcome::InUse => tr.get_drive_eject_in_use(),
+                        workspace_ctrl::EjectOutcome::Failed(_) => tr.get_drive_eject_failed(),
+                    };
+                    ui.invoke_show_toast(msg);
+                }
+            }
+        });
+    }
+    // Cancelación del modal temático: cierra y descarta el path pendiente.
+    {
+        let ui_weak = ui.as_weak();
+        let pending_eject = pending_eject.clone();
+        ui.on_message_cancel(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            ui.set_message(MessageVm::default());
+            pending_eject.borrow_mut().take();
         });
     }
     // Refrescar unidades a mano (botón ⟳): re-escanea y reconstruye la tira. Útil para unidades
