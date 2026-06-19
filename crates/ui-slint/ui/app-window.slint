@@ -1,7 +1,7 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
 import { LineEdit } from "std-widgets.slint";
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { ColumnMenu } from "column-menu.slint";
@@ -11,6 +11,7 @@ import { HistoryPanel } from "history-panel.slint";
 import { FavoritesPanel } from "favorites-panel.slint";
 import { PreviewPanel } from "preview-panel.slint";
 import { OpDialogs } from "op-dialogs.slint";
+import { MessageModal } from "message-modal.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
@@ -538,6 +539,9 @@ export component AppWindow inherits Window {
     in property <string> status;
     // Operaciones de archivo (Fase 3): modal activo + filas de progreso.
     in property <OpDialogVm> op-dialog;
+    in property <MessageVm> message;
+    callback message-confirm();
+    callback message-cancel();
     in property <[OpRowVm]> op-rows;
     in property <[ResumeRowVm]> resume-rows;
     callback resume-decide(string, int);
@@ -1199,6 +1203,12 @@ export component AppWindow inherits Window {
         name-cancel() => { root.name-cancel(); }
         paste-confirm() => { root.paste-confirm(); }
         paste-cancel() => { root.paste-cancel(); }
+    }
+
+    MessageModal {
+        vm: root.message;
+        message-confirm() => { root.message-confirm(); }
+        message-cancel() => { root.message-cancel(); }
     }
 
     // Tooltip de la toolbar: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido,
