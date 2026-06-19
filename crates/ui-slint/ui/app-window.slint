@@ -587,6 +587,9 @@ export component AppWindow inherits Window {
     in-out property <bool> history-menu-open: false;
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
+    // x de centro del botón de Layouts, capturada al abrir para anclar el menú flotante
+    // (mismo patrón que el menú de historial / discos).
+    property <length> layout-menu-x: 0;
     // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
     property <bool> term-menu-open: false;
     // ¿WSL / Windows Terminal disponibles? Rust lo setea para mostrar u ocultar esas entradas.
@@ -767,14 +770,18 @@ export component AppWindow inherits Window {
                 }
                 // Menú de plantillas de disposición (F4). Ícono propio (grilla 2x2) para no
                 // confundirse con "Tabs".
-                ToolBtn {
+                layouts-btn := ToolBtn {
                     label: Tr.toolbar-layouts;
                     tip: Tr.toolbar-layouts-tip;
                     draw-layouts: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 84px;
                     highlight: root.layout-menu-open;
-                    clicked => { root.layout-menu-open = !root.layout-menu-open; }
+                    clicked => {
+                        // Anclar el menú al botón: capturar su x de centro antes de abrir.
+                        root.layout-menu-x = layouts-btn.absolute-position.x + layouts-btn.width / 2;
+                        root.layout-menu-open = !root.layout-menu-open;
+                    }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolSep { }
@@ -1047,6 +1054,7 @@ export component AppWindow inherits Window {
                         height: 100%;
                         active: p.active;
                         info: p.inspector;
+                        focus-pane() => { root.activate(p.id); }
                     }
                     if p.purpose == 3: HistoryPanel {
                         width: 100%;
@@ -1072,6 +1080,7 @@ export component AppWindow inherits Window {
                         height: 100%;
                         active: p.active;
                         view: p.preview;
+                        focus-pane() => { root.activate(p.id); }
                     }
                 }
             }
@@ -1427,7 +1436,9 @@ export component AppWindow inherits Window {
         clicked => { root.layout-menu-open = false; }
     }
     if root.layout-menu-open: Rectangle {
-        x: root.width - self.width - 90px;
+        // Anclado al botón de Layouts (su x de centro), justo debajo de la barra de
+        // herramientas. Clamp en x para no salirse de la ventana.
+        x: min(root.width - self.width - 4px, max(4px, root.layout-menu-x - self.width / 2));
         y: root.top-bar-h + 2px;
         width: 230px;
         height: layout-items.preferred-height + 8px;

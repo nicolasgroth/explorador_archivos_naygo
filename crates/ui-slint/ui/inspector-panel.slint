@@ -30,9 +30,16 @@ component PropRow inherits HorizontalLayout {
 export component InspectorPanel inherits Rectangle {
     in property <bool> active;
     in property <InspectorVm> info;
+    callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
+
+    // TouchArea de fondo: un clic en el cuerpo (texto o zona vacía) marca el panel como
+    // activo. Va PRIMERO (al fondo) para no robar clics a controles que se monten encima.
+    bg-touch := TouchArea {
+        clicked => { root.focus-pane(); }
+    }
 
     VerticalLayout {
         padding: 8px;

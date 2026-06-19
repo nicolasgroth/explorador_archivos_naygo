@@ -11,9 +11,17 @@ import { Theme } from "theme.slint";
 export component PreviewPanel inherits Rectangle {
     in property <bool> active;
     in property <PreviewVm> view;
+    callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
+
+    // TouchArea de fondo: un clic en el cuerpo (texto, imagen o zona vacía) marca el panel
+    // como activo. Va PRIMERO (al fondo) para que el ScrollView del modo texto siga
+    // recibiendo sus propios gestos por encima.
+    bg-touch := TouchArea {
+        clicked => { root.focus-pane(); }
+    }
 
     VerticalLayout {
         padding: 6px;
