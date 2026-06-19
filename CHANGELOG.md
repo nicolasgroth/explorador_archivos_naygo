@@ -24,6 +24,10 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   Solarized Dark, Terminal ámbar y Ciruela.
 - En la primera ejecución, Naygo arranca con la disposición clásica (árbol + dos paneles de
   archivos + Propiedades + Vista previa) en vez de un solo panel.
+- Argumentos de línea de comandos: `naygo.exe <carpeta>` abre esa carpeta al iniciar, y
+  `--theme`/`--layout` aplican un tema o una disposición solo para esa sesión. `--help` y
+  `--version` muestran la información correspondiente. Útil para accesos directos y para
+  "Abrir en Naygo".
 ### Corregido
 - Caída (panic) del render por software al navegar con paneles muy angostos o con el aviso
   de "carpeta no encontrada" desbordado: se blindó la geometría y el aviso ahora tiene scroll.

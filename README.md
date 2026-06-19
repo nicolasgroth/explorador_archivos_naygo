@@ -74,6 +74,24 @@ Resumen:
 - Publicar una versión nueva: `scripts\bump.ps1` (sube la versión según los commits, mueve el
   CHANGELOG y crea el tag; agrega `-Push` para publicar).
 
+## Uso por línea de comandos
+
+`naygo.exe` acepta argumentos opcionales:
+
+```
+naygo.exe [<carpeta>] [--theme <id>] [--layout <nombre>] [--help] [--version]
+```
+
+- `<carpeta>`: abre Naygo en esa carpeta al iniciar (debe existir). Es lo que usa "Abrir en
+  Naygo" del menú contextual del Explorador.
+- `--theme <id>`: aplica un tema solo en esa sesión (no cambia tu configuración). Los ids son
+  los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `macos`, `solarized-dark`).
+- `--layout <nombre>`: aplica una plantilla de disposición de paneles (de las del menú Layouts,
+  incluidas las tuyas).
+- `--help`, `--version`: muestran un cuadro con la ayuda o la versión.
+
+Los valores que no existan se ignoran (la app abre igual y deja un aviso).
+
 ## Licencia
 
 [MIT](LICENSE) © 2026 **Nicolás Groth / ISGroth**.

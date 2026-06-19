@@ -240,6 +240,10 @@ Naygo guarda su configuración junto al ejecutable (modo portable). Puedes agreg
 
 - **Idiomas**: suelta un `.json` de traducción en la carpeta `lang/`; aparece en el
   selector. ES y EN vienen de base. Guía paso a paso: [`AGREGAR-IDIOMA.md`](AGREGAR-IDIOMA.md).
+
+**Lanzar desde un acceso directo o terminal:** `naygo.exe "D:\carpeta"` abre Naygo en esa
+carpeta; además acepta `--theme <id>` y `--layout <nombre>` (solo para esa sesión) y
+`--help`/`--version`. Detalle en el README.
 - **Temas**: *color sets* intercambiables en caliente.
 - **Sets de íconos**: empaquetados o propios.
 
