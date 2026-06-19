@@ -37,7 +37,6 @@ static TZ_OFFSET_MIN: OnceLock<i32> = OnceLock::new();
 
 /// Resumen barato del estado, para volcar en un panic.
 #[derive(Clone, Default)]
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 pub struct DiagSnapshot {
     /// Paneles abiertos, p. ej. "[1] C:\\  [2] C:\\Users\\ngrot  [3] F:\\logs (no existe)".
     pub panes: String,
@@ -137,7 +136,6 @@ pub fn breadcrumb(msg: &str) {
 
 /// Arma el bloque de contexto que precede al panic en el log. PURO: recibe los datos ya
 /// extraídos (no toca las globales) para poder testearlo. `crumbs` del más viejo al más nuevo.
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 fn build_context_block(env: &str, snap: &DiagSnapshot, crumbs: &[String]) -> String {
     let mut b = String::new();
     let _ = writeln!(b, "-- Contexto --");
@@ -173,6 +171,15 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let mut report = String::new();
         let _ = writeln!(report, "*** PANIC ***");
+        // Bloque de contexto: entorno + estado + migas. Se lee con try_lock para NO colgar ni
+        // re-paniquear si un mutex quedó tomado/envenenado durante el panic.
+        let env = ENV_INFO.get().cloned().unwrap_or_default();
+        let snap = DIAG.try_lock().map(|d| d.clone()).unwrap_or_default();
+        let crumbs: Vec<String> = BREADCRUMBS
+            .try_lock()
+            .map(|b| b.iter().cloned().collect())
+            .unwrap_or_else(|_e| vec!["(migas no disponibles)".to_string()]);
+        let _ = write!(report, "{}", build_context_block(&env, &snap, &crumbs));
         // Mensaje del panic.
         let payload = info
             .payload()
