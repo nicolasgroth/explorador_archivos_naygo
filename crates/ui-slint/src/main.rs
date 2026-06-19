@@ -644,6 +644,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             // Carpeta no encontrada / ilegible: aviso in-place con opciones.
                             missing: ctrl.borrow().pane_dir_missing(*id),
                             missing_path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
+                            // "Subir un nivel" solo tiene sentido si hay un ancestro existente real.
+                            missing_has_ancestor: ctrl.borrow().pane_has_existing_ancestor(*id),
                             deep_active: ctrl.borrow().is_deep_active(*id),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
@@ -2587,27 +2589,35 @@ fn main() -> Result<(), slint::PlatformError> {
     // handler recibe el pane-id del panel que muestra el aviso.
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_missing_retry(move |id| {
             ctrl.borrow_mut().missing_folder_retry(PaneId(id as u64));
             start_timer();
+            // Reconstruir el PaneVm con el estado actual de `missing`: el aviso se refresca al
+            // instante (antes solo se actualizaba al redimensionar, porque el listado async ya
+            // había apagado el timer cuando corría el siguiente sync_rows).
+            sync_rows();
             sync_layout();
         });
     }
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_missing_ancestor(move |id| {
             ctrl.borrow_mut()
                 .missing_folder_go_ancestor(PaneId(id as u64));
             start_timer();
+            sync_rows();
             sync_layout();
         });
     }
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_missing_choose(move |id| {
@@ -2616,17 +2626,20 @@ fn main() -> Result<(), slint::PlatformError> {
                     .missing_folder_choose(PaneId(id as u64), path);
                 start_timer();
             }
+            sync_rows();
             sync_layout();
         });
     }
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_missing_close_pane(move |id| {
             ctrl.borrow_mut()
                 .missing_folder_close_pane(PaneId(id as u64));
             start_timer();
+            sync_rows();
             sync_layout();
         });
     }

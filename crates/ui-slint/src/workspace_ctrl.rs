@@ -627,6 +627,15 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// ¿El panel `id` (en estado "carpeta no encontrada") tiene un ancestro existente real al
+    /// que subir? Falso si la unidad entera se desconectó (no hay a dónde subir con sentido); en
+    /// ese caso el aviso oculta el botón "subir un nivel".
+    pub fn pane_has_existing_ancestor(&self, id: PaneId) -> bool {
+        self.pane_current_dir(id)
+            .and_then(|d| Self::nearest_existing_ancestor(&d))
+            .is_some()
+    }
+
     /// Reintentar en el panel `id`: si su carpeta volvió a existir (USB reconectado), re-listar; si
     /// sigue sin existir, no hace nada (el aviso permanece). El aviso desaparece solo cuando el
     /// re-listado puebla la carpeta (la detección es por `current_dir.exists()`).

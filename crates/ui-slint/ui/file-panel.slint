@@ -166,6 +166,29 @@ component HeaderCell inherits Rectangle {
     }
 }
 
+// Una opción del aviso "carpeta no encontrada" (reintentar / subir / elegir / cerrar).
+// Encapsula el recuadro con hover + texto + TouchArea para no duplicar el markup entre el
+// `for` de las opciones y el botón "subir" que va aparte (condicionado por missing-has-ancestor).
+component MissingOpButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 32px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: opt-touch.has-hover ? Theme.accent : Theme.border;
+    background: opt-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        vertical-alignment: center;
+        x: 12px;
+    }
+    opt-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component FilePanel inherits FocusScope {
     in property <int> pane-id;
     in property <bool> active;
@@ -184,6 +207,7 @@ export component FilePanel inherits FocusScope {
     // Carpeta no encontrada / ilegible: muestra el aviso IN-PLACE con opciones.
     in property <bool> missing;
     in property <string> missing-path;       // la ruta perdida (para mostrarla)
+    in property <bool> missing-has-ancestor;  // ¿hay un ancestro existente al que subir? (ver FIX 2)
     callback missing-retry(int);             // (pane-id) reintentar
     callback missing-ancestor(int);          // (pane-id) subir al ancestro existente
     callback missing-choose(int);            // (pane-id) elegir otra carpeta (selector nativo)
@@ -739,33 +763,24 @@ export component FilePanel inherits FocusScope {
                         wrap: word-wrap;
                     }
                 }
-                // Opciones (una por fila): reintentar / subir / elegir / cerrar.
-                for opt in [
-                    { label: Tr.missing-retry, kind: 0 },
-                    { label: Tr.missing-ancestor, kind: 1 },
-                    { label: Tr.missing-choose, kind: 2 },
-                    { label: Tr.missing-close, kind: 3 },
-                ]: Rectangle {
-                    height: 32px;
-                    border-radius: 5px;
-                    border-width: 1px;
-                    border-color: opt-touch.has-hover ? Theme.accent : Theme.border;
-                    background: opt-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
-                    Text {
-                        text: opt.label;
-                        color: Theme.text;
-                        vertical-alignment: center;
-                        x: 12px;
-                    }
-                    opt-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            if (opt.kind == 0) { root.missing-retry(root.pane-id); }
-                            if (opt.kind == 1) { root.missing-ancestor(root.pane-id); }
-                            if (opt.kind == 2) { root.missing-choose(root.pane-id); }
-                            if (opt.kind == 3) { root.missing-close(root.pane-id); }
-                        }
-                    }
+                // Opciones (una por fila): reintentar / subir / elegir / cerrar. "Subir un nivel"
+                // solo aparece si hay un ancestro existente real (si la unidad entera se
+                // desconectó no tiene sentido: caería al HOME). Todas dependen solo de root.missing.
+                MissingOpButton {
+                    label: Tr.missing-retry;
+                    clicked => { root.missing-retry(root.pane-id); }
+                }
+                if root.missing-has-ancestor: MissingOpButton {
+                    label: Tr.missing-ancestor;
+                    clicked => { root.missing-ancestor(root.pane-id); }
+                }
+                MissingOpButton {
+                    label: Tr.missing-choose;
+                    clicked => { root.missing-choose(root.pane-id); }
+                }
+                MissingOpButton {
+                    label: Tr.missing-close;
+                    clicked => { root.missing-close(root.pane-id); }
                 }
             }
             }
