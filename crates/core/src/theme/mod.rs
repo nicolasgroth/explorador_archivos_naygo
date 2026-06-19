@@ -221,6 +221,12 @@ const NEON_RETRO_JSON: &str = include_str!("builtin/neon-retro.json");
 const OCEAN_MIDNIGHT_JSON: &str = include_str!("builtin/ocean-midnight.json");
 const EMBER_FORGE_JSON: &str = include_str!("builtin/ember-forge.json");
 const POLAR_GRAPHITE_JSON: &str = include_str!("builtin/polar-graphite.json");
+const WINXP_JSON: &str = include_str!("builtin/winxp.json");
+const MACOS_JSON: &str = include_str!("builtin/macos.json");
+const GREEN_ON_BLUE_JSON: &str = include_str!("builtin/green-on-blue.json");
+const SOLARIZED_DARK_JSON: &str = include_str!("builtin/solarized-dark.json");
+const AMBER_TERMINAL_JSON: &str = include_str!("builtin/amber-terminal.json");
+const PLUM_DUSK_JSON: &str = include_str!("builtin/plum-dusk.json");
 
 impl ThemeCatalog {
     /// Id del tema por defecto (Dark Blue).
@@ -242,6 +248,12 @@ impl ThemeCatalog {
             ("ocean-midnight", OCEAN_MIDNIGHT_JSON),
             ("ember-forge", EMBER_FORGE_JSON),
             ("polar-graphite", POLAR_GRAPHITE_JSON),
+            ("winxp", WINXP_JSON),
+            ("macos", MACOS_JSON),
+            ("green-on-blue", GREEN_ON_BLUE_JSON),
+            ("solarized-dark", SOLARIZED_DARK_JSON),
+            ("amber-terminal", AMBER_TERMINAL_JSON),
+            ("plum-dusk", PLUM_DUSK_JSON),
         ] {
             if let Some(t) = Theme::from_json(json) {
                 themes.insert(id.to_string(), t);
@@ -395,6 +407,12 @@ mod tests {
             "ocean-midnight",
             "ember-forge",
             "polar-graphite",
+            "winxp",
+            "macos",
+            "green-on-blue",
+            "solarized-dark",
+            "amber-terminal",
+            "plum-dusk",
         ] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
         }

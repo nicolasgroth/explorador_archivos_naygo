@@ -148,6 +148,65 @@ impl LayoutTemplate {
         }
     }
 
+    /// Disposición de PRIMERA EJECUCIÓN (la "clásica completa"): árbol a la
+    /// izquierda, dos paneles de archivos en el centro, y a la derecha una columna
+    /// con Propiedades (Inspector) arriba y Vista previa (Preview) abajo. No es una
+    /// entrada del menú de plantillas (no está en `builtins`): la usa `main` para
+    /// armar el arranque por defecto cuando no hay una sesión guardada.
+    pub fn primera_ejecucion() -> Self {
+        LayoutTemplate {
+            name: "Clásico completo".into(),
+            builtin: true,
+            favorite: false,
+            // 0: árbol | 1: archivos A | 2: archivos B | 3: propiedades | 4: vista previa
+            panes: vec![
+                TemplatePane {
+                    purpose: PanePurpose::Tree,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Files,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Inspector,
+                    dir: TemplateDir::Home,
+                },
+                TemplatePane {
+                    purpose: PanePurpose::Preview,
+                    dir: TemplateDir::Home,
+                },
+            ],
+            // árbol (0.18) | [ archivos A | archivos B ] (centro) | [ props / preview ] (derecha)
+            layout: LayoutShape::Split {
+                dir: SplitDir::Horizontal,
+                fraction: 0.18,
+                first: Box::new(LayoutShape::Leaf(0)),
+                second: Box::new(LayoutShape::Split {
+                    dir: SplitDir::Horizontal,
+                    fraction: 0.4,
+                    first: Box::new(LayoutShape::Leaf(1)),
+                    second: Box::new(LayoutShape::Split {
+                        dir: SplitDir::Horizontal,
+                        fraction: 0.62,
+                        first: Box::new(LayoutShape::Leaf(2)),
+                        // Columna derecha: propiedades arriba, vista previa abajo.
+                        second: Box::new(LayoutShape::Split {
+                            dir: SplitDir::Vertical,
+                            fraction: 0.5,
+                            first: Box::new(LayoutShape::Leaf(3)),
+                            second: Box::new(LayoutShape::Leaf(4)),
+                        }),
+                    }),
+                }),
+            },
+        }
+    }
+
     /// Power-user: tres paneles de archivos lado a lado + inspector.
     pub fn power_user() -> Self {
         LayoutTemplate {
@@ -272,6 +331,25 @@ mod tests {
             names,
             vec!["Minimalista", "Clásico", "Dual-pane", "Power-user"]
         );
+    }
+
+    #[test]
+    fn primera_ejecucion_es_la_clasica_completa() {
+        // Arranque clásico: árbol + 2 archivos + propiedades + vista previa = 5 paneles.
+        let t = LayoutTemplate::primera_ejecucion();
+        assert_eq!(t.panes.len(), 5);
+        let count = |p: PanePurpose| t.panes.iter().filter(|x| x.purpose == p).count();
+        assert_eq!(count(PanePurpose::Tree), 1, "un árbol");
+        assert_eq!(count(PanePurpose::Files), 2, "dos paneles de archivos");
+        assert_eq!(count(PanePurpose::Inspector), 1, "propiedades");
+        assert_eq!(count(PanePurpose::Preview), 1, "vista previa");
+        // No está en el menú de plantillas (builtins): es solo para el arranque por defecto.
+        assert!(!builtins().iter().any(|b| b.name == t.name));
+    }
+
+    /// Helper local: las built-in del menú (las que sí aparecen como opciones).
+    fn builtins() -> Vec<LayoutTemplate> {
+        LayoutTemplate::builtins()
     }
 
     #[test]

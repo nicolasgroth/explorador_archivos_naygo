@@ -163,9 +163,13 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
-    // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada; si no, se
-    // conserva el panel único del arranque por defecto.
-    ctrl.borrow_mut().load_session();
+    // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada. Si NO hay sesión
+    // previa (primera ejecución), arrancar con la disposición clásica: árbol + dos paneles de
+    // archivos + Propiedades + Vista previa, en vez del panel único de arranque. Las sesiones
+    // guardadas se respetan (solo se aplica el clásico cuando load_session no restauró nada).
+    if !ctrl.borrow_mut().load_session() {
+        ctrl.borrow_mut().apply_first_run_layout();
+    }
     // Disponibilidad de terminales opcionales (Windows Terminal / WSL): se consulta una vez al
     // arranque (escanea el PATH) para decidir qué entradas mostrar en el combo de la toolbar.
     ui.set_has_wt(ctrl.borrow().windows_terminal_available());

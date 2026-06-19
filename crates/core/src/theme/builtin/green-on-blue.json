@@ -1,0 +1,15 @@
+{
+  "name": "Verde sobre azul",
+  "base": "dark",
+  "accent": "#3fcf5f",
+  "panel_bg": "#0a1a3a",
+  "row_bg": "#0d2148",
+  "row_alt_bg": "#102a5c",
+  "text": "#e6f0ff",
+  "text_dim": "#8fa9d6",
+  "selection_bg": "#1f5e3a",
+  "active_bar": "#3fcf5f",
+  "error": "#ff6b6b",
+  "highlight": "#7CFF9E",
+  "border": "#1c3b73"
+}

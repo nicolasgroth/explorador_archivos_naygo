@@ -423,14 +423,18 @@ impl WorkspaceCtrl {
     /// reemplaza el workspace de arranque por el restaurado y relanza el listado de cada
     /// panel Files + el árbol de cada panel Tree. Si no hay sesión guardada (o el layout es
     /// vacío/corrupto), no hace nada y se conserva el arranque por defecto.
-    pub fn load_session(&mut self) {
+    ///
+    /// Devuelve `true` si restauró una sesión, `false` si no había ninguna (primera
+    /// ejecución). El llamador usa ese flag para, en primera ejecución, aplicar la
+    /// disposición clásica en vez del panel único de arranque.
+    pub fn load_session(&mut self) -> bool {
         let (persist, _recovered) =
             naygo_core::config::load_workspace_flagged(&self.config.config_dir);
         let Some(persist) = persist else {
-            return;
+            return false;
         };
         let Some(restored) = Workspace::from_persist(&persist) else {
-            return;
+            return false;
         };
         // Cancelar los listados del arranque por defecto antes de reemplazar el workspace.
         for l in self.listings.values() {
@@ -489,6 +493,34 @@ impl WorkspaceCtrl {
         if let Some(active_dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
             self.sync_trees_active(active_dir);
         }
+        true
+    }
+
+    /// Aplica la disposición CLÁSICA de primera ejecución: árbol + dos paneles de
+    /// archivos + Propiedades (Inspector) + Vista previa (Preview). Reemplaza el
+    /// workspace de arranque (un solo panel) y relanza el contenido de cada panel,
+    /// reusando la misma maquinaria que `apply_template`. La llama `main` SOLO cuando
+    /// no hay sesión guardada (primera ejecución); las sesiones guardadas se respetan.
+    /// A diferencia de `apply_template`, NO registra un uso en la lista de plantillas
+    /// recientes (no es una elección del usuario en el menú).
+    pub fn apply_first_run_layout(&mut self) {
+        let tpl = naygo_core::workspace::LayoutTemplate::primera_ejecucion();
+        crate::logging::breadcrumb("aplicar layout clásico (primera ejecución)");
+        let home = self.template_home();
+        // Cancelar los listados/árboles del arranque por defecto antes de reemplazar el workspace.
+        for l in self.listings.values() {
+            l.cancel();
+        }
+        self.listings.clear();
+        self.trees.clear();
+        self.tree_listings.clear();
+        self.reveal_targets.clear();
+        if let Some(d) = self.deep_job.take() {
+            d.token.cancel();
+        }
+        self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.relaunch_all_panes();
+        self.last_active_files = self.ws.files_panes().first().copied();
     }
 
     /// Huella barata del estado persistible (lo que cambia entre sesiones que vale la pena
@@ -4651,6 +4683,47 @@ mod tests {
         // Borrarla.
         c.delete_template("Mi setup");
         assert!(!c.layout_templates().iter().any(|(n, _)| n == "Mi setup"));
+    }
+
+    /// Primera ejecución (sin sesión guardada): `apply_first_run_layout` arma la disposición
+    /// clásica: árbol + dos paneles de archivos + propiedades + vista previa (5 paneles).
+    #[test]
+    fn primera_ejecucion_arma_layout_clasico() {
+        use naygo_core::workspace::PanePurpose;
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        assert_eq!(
+            c.ws.panes().len(),
+            1,
+            "new_in sigue arrancando con un panel"
+        );
+
+        c.apply_first_run_layout();
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.panes().len(), 5, "árbol + 2 files + props + preview");
+        assert_eq!(c.ws.files_panes().len(), 2, "dos paneles de archivos");
+        let has = |p: PanePurpose| c.ws.panes().iter().any(|x| x.purpose == p);
+        assert!(has(PanePurpose::Tree), "hay árbol");
+        assert!(has(PanePurpose::Inspector), "hay propiedades");
+        assert!(has(PanePurpose::Preview), "hay vista previa");
+    }
+
+    /// Cuando NO hay sesión guardada, `load_session` devuelve `false` (señal de primera
+    /// ejecución); cuando sí la hay, devuelve `true`.
+    #[test]
+    fn load_session_reporta_si_restauro() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        // Sin sesión previa: false.
+        let mut c1 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c1));
+        assert!(!c1.load_session(), "sin sesión previa → false");
+        // Guardar una sesión y reabrir: true.
+        c1.save_session();
+        let mut c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(c2.load_session(), "con sesión guardada → true");
     }
 
     /// "Mover →" desde el menú reordena la columna en el orden visual completo.
