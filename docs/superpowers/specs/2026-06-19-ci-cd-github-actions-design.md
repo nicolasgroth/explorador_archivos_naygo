@@ -115,12 +115,12 @@ jobs:
   tag es `v1.2.0`, el `Cargo.toml` debe decir `1.2.0`; si no, el workflow falla con mensaje
   claro ANTES de compilar.
 
-### 3. `scripts/bump.ps1` (+ `-Push`)
+### 3. `scripts/bump.ps1` (ya tiene `-Push` — sin cambios)
 
-Nuevo parámetro switch `-Push`. Sin él: comportamiento actual (commit + tag local, no
-pushea). Con él: tras crear commit y tag, `git push` y `git push --tags`. La lógica de
-auto-versionado y CHANGELOG queda intacta. Es lo único rescatable del `create-release.ps1`
-del PR, integrado en el script que ya existe.
+VERIFICADO: `bump.ps1` ya implementa el flag `-Push` (param + pasos de push, líneas 21 y
+157-165). Sin él: commit + tag local, no pushea. Con él: tras crear commit y tag, `git push`
+y `git push --tags`. La lógica de auto-versionado y CHANGELOG está intacta. **No hay que
+tocar el script**; es lo único que el `create-release.ps1` del PR aportaba y ya existe.
 
 ### 4. Link de descarga estable
 
@@ -164,8 +164,8 @@ https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/downlo
 ## Archivos
 
 - **Crear:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`
-- **Modificar:** `scripts/bump.ps1` (+`-Push`), `README.md` (línea de link),
-  `docs/DISTRIBUTION.md` (sección release)
+- **Modificar:** `README.md` (línea de link), `docs/DISTRIBUTION.md` (sección release)
+- **Sin cambios:** `scripts/bump.ps1` (ya tiene `-Push`)
 
 ## Fuera de alcance
 
