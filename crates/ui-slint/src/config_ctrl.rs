@@ -91,6 +91,23 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Cambia el tema activo SOLO en memoria (NO persiste): la elección dura lo que dura la
+    /// sesión y no toca settings.json. La usa `main` para el argumento de CLI `--theme`, que
+    /// pinta un tema por una sola ejecución sin cambiar el tema guardado del usuario.
+    /// Devuelve `true` si el id existe en el catálogo (si no, no toca nada).
+    pub fn set_theme_ephemeral(&mut self, id: ThemeId) -> bool {
+        if !self
+            .themes
+            .available()
+            .iter()
+            .any(|t| t.as_str() == id.as_str())
+        {
+            return false;
+        }
+        self.settings.theme = id;
+        true
+    }
+
     // --- Setters de ajustes (cada uno persiste). Los usa la ventana de configuración. ---
 
     /// Modo de ejecución de operaciones: 0 = cola, 1 = paralelo.

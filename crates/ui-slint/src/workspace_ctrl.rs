@@ -1300,6 +1300,35 @@ impl WorkspaceCtrl {
         self.maybe_persist_session();
     }
 
+    /// Aplica la plantilla `name` SOLO para esta sesión: reconstruye el workspace y relanza el
+    /// contenido como `apply_template`, pero NO registra el uso ni persiste (ni la lista de
+    /// recientes ni la sesión). La usa `main` para el argumento de CLI `--layout`, que dispone
+    /// los paneles por una sola ejecución sin tocar templates.json ni la sesión guardada.
+    /// Devuelve `true` si la plantilla existe (si no, no hace nada).
+    pub fn apply_template_ephemeral(&mut self, name: &str) -> bool {
+        let Some(tpl) = self.find_template(name) else {
+            return false;
+        };
+        crate::logging::breadcrumb(&format!("aplicar layout {} (efímero, CLI)", name));
+        let home = self.template_home();
+        // Cancelar los listados/árboles actuales antes de reemplazar el workspace.
+        for l in self.listings.values() {
+            l.cancel();
+        }
+        self.listings.clear();
+        self.trees.clear();
+        self.tree_listings.clear();
+        self.reveal_targets.clear();
+        // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
+        if let Some(d) = self.deep_job.take() {
+            d.token.cancel();
+        }
+        self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.relaunch_all_panes();
+        self.last_active_files = self.ws.files_panes().first().copied();
+        true
+    }
+
     /// Guarda la disposición ACTUAL como plantilla de usuario con `name` (reemplaza si ya existe).
     /// Persiste. Nombre vacío = no hace nada.
     pub fn save_current_template(&mut self, name: &str) {

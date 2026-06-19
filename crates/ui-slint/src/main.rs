@@ -152,12 +152,51 @@ fn os_version_string() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// Texto de ayuda para `--help`: uso de la línea de comandos en español neutral.
+fn cli_help_text() -> String {
+    "Uso: naygo.exe [carpeta] [opciones]\n\
+     \n\
+     [carpeta]          Abre esa carpeta en el panel activo.\n\
+     --theme <id>       Usa ese tema solo en esta ejecución (no se guarda).\n\
+     --layout <nombre>  Usa esa plantilla de disposición solo en esta ejecución.\n\
+     --help             Muestra esta ayuda y sale.\n\
+     --version          Muestra la versión y sale."
+        .to_string()
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
     // diálogo, en vez de cerrarse en silencio (el log queda en naygo.log junto al ejecutable).
     logging::init();
     // Offset del huso local (minutos) para los timestamps del log. Si falla, queda en UTC.
     crate::logging::set_tz_offset(win_tz_offset_minutes());
+
+    // Argumentos de línea de comandos: el core ya los parsea (carpeta a abrir, --theme,
+    // --layout, --help, --version). `--help`/`--version` muestran un diálogo y NO abren la
+    // ventana; el resto se aplica más abajo, una vez construido el controlador.
+    let cli_args = naygo_core::cli::parse_args_real(&std::env::args().skip(1).collect::<Vec<_>>());
+    if cli_args.help {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("Naygo — opciones")
+            .set_description(cli_help_text())
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+        return Ok(());
+    }
+    if cli_args.version {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("Naygo")
+            .set_description(format!(
+                "Naygo v{}\nNicolás Groth / ISGroth · MIT",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+        return Ok(());
+    }
+
     let ui = AppWindow::new()?;
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
@@ -187,6 +226,58 @@ fn main() -> Result<(), slint::PlatformError> {
     let cfg_win = Rc::new(ConfigWindow::new()?);
     i18n_keys::apply(&*cfg_win, &ctrl.borrow().config);
     theme_apply::apply(&*cfg_win, ctrl.borrow().config.active_theme());
+
+    // Aplicar los argumentos de CLI ahora que el controlador y ambas ventanas existen. Orden:
+    // layout (dispone los paneles) → carpeta (navega el panel activo resultante) → tema (repinta
+    // ambas ventanas). Todo es para ESTA sesión: --theme/--layout NO persisten ni la carpeta
+    // entra como tema/plantilla por defecto. Los problemas (plantilla/tema/ruta inválidos) se
+    // juntan en `avisos`; la app abre igual.
+    {
+        let mut avisos: Vec<String> = Vec::new();
+        // 1) --layout: aplica la plantilla por nombre SIN persistir (built-in + usuario).
+        if let Some(name) = cli_args.layout.as_deref() {
+            if !ctrl.borrow_mut().apply_template_ephemeral(name) {
+                avisos.push(format!("La plantilla \"{name}\" no existe; se ignoró."));
+            }
+        }
+        // 2) carpeta: navega el panel Files activo de la disposición resultante. Manda sobre la
+        // sesión restaurada/clásica (es un pedido explícito del usuario).
+        if let Some(dir) = cli_args.dir.clone() {
+            ctrl.borrow_mut().navigate_active_to(dir);
+        } else if let Some(raw) = cli_args.dir_arg_raw.as_deref() {
+            // 4) carpeta inválida: se pasó algo que no resolvió a una carpeta.
+            avisos.push(format!("La ruta \"{raw}\" no es una carpeta; se ignoró."));
+        }
+        // 3) --theme: aplica el tema por id SOLO en memoria y repinta ambas ventanas.
+        if let Some(id) = cli_args.theme.as_deref() {
+            let aplicado = ctrl
+                .borrow_mut()
+                .config
+                .set_theme_ephemeral(naygo_core::theme::ThemeId::new(id));
+            if aplicado {
+                let c = ctrl.borrow();
+                theme_apply::apply(&ui, c.config.active_theme());
+                theme_apply::apply(&*cfg_win, c.config.active_theme());
+            } else {
+                avisos.push(format!(
+                    "El tema \"{id}\" no existe; se usó el predeterminado."
+                ));
+            }
+        }
+        // 5) avisos: al log siempre; un diálogo solo si hubo alguno. La app abre igual.
+        for a in &avisos {
+            crate::logging::log_line(&format!("CLI: {a}"));
+        }
+        if !avisos.is_empty() {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("Naygo — argumentos")
+                .set_description(avisos.join("\n"))
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        }
+    }
+
     // La X del sistema oculta la ventana (no cierra la app ni destruye la instancia): así se
     // reabre con el estado intacto.
     {
