@@ -2003,6 +2003,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // se informa con un MessageDialog (errores) sin bloquear el resto de la UI.
     {
         let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_export_language(move || {
             let c = ctrl.borrow();
             let code = c.config.settings.language.as_str().to_string();
@@ -2011,12 +2012,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 .set_file_name(format!("naygo-idioma-{code}.zip"))
                 .save_file()
             {
-                report(packs::export_lang(&c.config.config_dir, &code, &path));
+                report(&ui_weak, packs::export_lang(&c.config.config_dir, &code, &path));
             }
         });
     }
     {
         let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_export_theme(move || {
             let c = ctrl.borrow();
             let id = c.config.settings.theme.as_str().to_string();
@@ -2025,12 +2027,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 .set_file_name(format!("naygo-tema-{id}.zip"))
                 .save_file()
             {
-                report(packs::export_theme(&c.config.config_dir, &id, &path));
+                report(&ui_weak, packs::export_theme(&c.config.config_dir, &id, &path));
             }
         });
     }
     {
         let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_export_config(move || {
             let c = ctrl.borrow();
             if let Some(path) = rfd::FileDialog::new()
@@ -2038,7 +2041,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 .set_file_name("naygo-config.zip")
                 .save_file()
             {
-                report(packs::export_config(&c.config.config_dir, &path));
+                report(&ui_weak, packs::export_config(&c.config.config_dir, &path));
             }
         });
     }
@@ -2089,7 +2092,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     drop(c);
                     refresh();
                 }
-                Err(e) => report(Err::<(), String>(e)),
+                Err(e) => report(&ui_weak, Err::<(), String>(e)),
             }
         });
     }
@@ -3240,14 +3243,22 @@ fn int_to_purpose(p: i32) -> PanePurpose {
     }
 }
 
-/// Muestra un diálogo de error si el resultado de un import/export falló; silencioso si OK.
-fn report<T>(r: Result<T, String>) {
+/// Muestra un modal de error (temático) si el resultado de un import/export falló;
+/// silencioso si OK.
+fn report<T>(ui: &slint::Weak<AppWindow>, r: Result<T, String>) {
     if let Err(e) = r {
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Naygo")
-            .set_description(e)
-            .show();
+        if let Some(ui) = ui.upgrade() {
+            let tr = ui.global::<Tr>();
+            ui.set_message(MessageVm {
+                kind: 2,
+                level: 2, // error
+                title: "Naygo".into(),
+                body: e.into(),
+                confirm_label: tr.get_dlg_accept(),
+                cancel_label: Default::default(),
+                danger: false,
+            });
+        }
     }
 }
 
