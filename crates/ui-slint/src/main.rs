@@ -135,10 +135,29 @@ fn purpose_to_int(p: PanePurpose) -> i32 {
     }
 }
 
+/// Offset del huso local en minutos (positivo al este de UTC). Delega en
+/// `naygo_platform::time::local_utc_offset_secs` que ya usa GetTimeZoneInformation
+/// con el feature Win32_System_Time activo en el crate platform.
+fn win_tz_offset_minutes() -> i32 {
+    (naygo_platform::time::local_utc_offset_secs() / 60) as i32
+}
+
+/// Cadena corta del SO para el log de entorno.
+#[cfg(windows)]
+fn os_version_string() -> String {
+    "Windows".to_string()
+}
+#[cfg(not(windows))]
+fn os_version_string() -> String {
+    std::env::consts::OS.to_string()
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
     // diálogo, en vez de cerrarse en silencio (el log queda en naygo.log junto al ejecutable).
     logging::init();
+    // Offset del huso local (minutos) para los timestamps del log. Si falla, queda en UTC.
+    crate::logging::set_tz_offset(win_tz_offset_minutes());
     let ui = AppWindow::new()?;
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
@@ -3057,6 +3076,13 @@ fn main() -> Result<(), slint::PlatformError> {
     // Al arrancar: si hay operaciones interrumpidas (journal), ofrecer retomarlas.
     ctrl.borrow_mut().ops.scan_resume();
     sync_layout();
+    // Línea de entorno para el log (versión/OS/ventana). Se fija aquí, tras sync_layout(),
+    // cuando la ventana ya tiene tamaño real. Una sola vez.
+    {
+        let size = ui.window().size();
+        let scale = ui.window().scale_factor();
+        crate::logging::set_env_info((size.width, size.height), scale, &os_version_string());
+    }
     ui.run()
 }
 

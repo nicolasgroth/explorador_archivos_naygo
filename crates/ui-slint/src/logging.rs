@@ -54,7 +54,6 @@ pub fn set_diag_snapshot(snap: DiagSnapshot) {
 }
 
 /// Fija la línea de entorno (una vez). `window` = (ancho, alto) en px; `scale` = factor.
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 pub fn set_env_info(window: (u32, u32), scale: f32, os: &str) {
     let info = format!(
         "Naygo v{} · {} · ventana {}x{} @{:.1}",
@@ -68,7 +67,6 @@ pub fn set_env_info(window: (u32, u32), scale: f32, os: &str) {
 }
 
 /// Fija el offset del huso local en minutos (una vez, desde main.rs).
-#[allow(dead_code)] // lo cablea la Task 3/4/5
 pub fn set_tz_offset(minutes: i32) {
     let _ = TZ_OFFSET_MIN.set(minutes);
 }
