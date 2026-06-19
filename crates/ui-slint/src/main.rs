@@ -2012,7 +2012,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 .set_file_name(format!("naygo-idioma-{code}.zip"))
                 .save_file()
             {
-                report(&ui_weak, packs::export_lang(&c.config.config_dir, &code, &path));
+                report(
+                    &ui_weak,
+                    packs::export_lang(&c.config.config_dir, &code, &path),
+                );
             }
         });
     }
@@ -2027,7 +2030,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 .set_file_name(format!("naygo-tema-{id}.zip"))
                 .save_file()
             {
-                report(&ui_weak, packs::export_theme(&c.config.config_dir, &id, &path));
+                report(
+                    &ui_weak,
+                    packs::export_theme(&c.config.config_dir, &id, &path),
+                );
             }
         });
     }
@@ -2332,7 +2338,9 @@ fn main() -> Result<(), slint::PlatformError> {
             // accidental). La expulsión real ocurre en on_message_confirm; aquí solo guardamos el
             // path pendiente y abrimos el modal.
             let tr = ui.global::<Tr>();
-            let body = tr.get_drive_eject_confirm().replace("{drive}", path.as_str());
+            let body = tr
+                .get_drive_eject_confirm()
+                .replace("{drive}", path.as_str());
             *pending_eject.borrow_mut() = Some(path.to_string());
             ui.set_message(MessageVm {
                 kind: 1,
