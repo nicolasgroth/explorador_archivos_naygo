@@ -4,7 +4,7 @@
 // Columnas repartidas con `horizontal-stretch` (50/15/15/20) para evitar bucles de
 // binding. Cada panel emite sus callbacks con su `pane-id` para que el controller sepa
 // sobre cuál actuar; el panel activo lleva borde de acento.
-import { ListView, LineEdit } from "std-widgets.slint";
+import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -703,8 +703,9 @@ export component FilePanel inherits FocusScope {
         // pane-id para que el controlador actúe sobre ESTE panel.
         if root.missing: Rectangle {
             background: Theme.panel-bg;
+            ScrollView {
             VerticalLayout {
-                alignment: center;
+                alignment: start;
                 spacing: 10px;
                 padding: 20px;
                 Text {
@@ -732,7 +733,7 @@ export component FilePanel inherits FocusScope {
                         color: Theme.highlight;
                         font-size: 12px;
                         x: 8px;
-                        width: parent.width - 16px;
+                        width: max(0px, parent.width - 16px);
                         vertical-alignment: center;
                         horizontal-alignment: center;
                         wrap: word-wrap;
@@ -766,6 +767,7 @@ export component FilePanel inherits FocusScope {
                         }
                     }
                 }
+            }
             }
         }
     }

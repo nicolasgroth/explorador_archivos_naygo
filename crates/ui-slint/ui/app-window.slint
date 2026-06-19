@@ -101,8 +101,8 @@ component ToolBtn inherits Rectangle {
     // ícono + texto juntos, centrados en el botón. En icon-only solo va el ícono.
     content-row := HorizontalLayout {
         spacing: 5px;
-        x: (parent.width - self.preferred-width) / 2;
-        y: (parent.height - self.preferred-height) / 2;
+        x: max(0px, (parent.width - self.preferred-width) / 2);
+        y: max(0px, (parent.height - self.preferred-height) / 2);
         width: self.preferred-width;
         height: self.preferred-height;
         if root.icon.width > 0 && !root.draw-terminal: Image {
@@ -1194,7 +1194,7 @@ export component AppWindow inherits Window {
     // Tooltip de la toolbar: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido,
     // así no queda tapado por los paneles). Aparece justo bajo la barra, centrado en el botón.
     if root.hovered-tip != "": Rectangle {
-        x: min(max(root.hovered-tip-x - self.width / 2, 4px), root.width - self.width - 4px);
+        x: min(max(root.hovered-tip-x - self.width / 2, 4px), max(4px, root.width - self.width - 4px));
         y: root.top-bar-h + 2px;
         width: htip.preferred-width + 14px;
         height: 22px;

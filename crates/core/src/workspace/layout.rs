@@ -436,9 +436,11 @@ fn split_area(area: Rect, dir: SplitDir, fraction: f32) -> (Rect, Rect) {
     let half = SPLIT_BAR / 2.0;
     match dir {
         SplitDir::Horizontal => {
-            let first_w = (area.w * f - half).max(0.0);
+            // Mínimo 1.0 px para que el render por software nunca reciba w=0
+            // (Slint castea f32→i32 y paniquea con geometrías degeneradas).
+            let first_w = (area.w * f - half).max(1.0);
             let second_x = area.x + area.w * f + half;
-            let second_w = (area.x + area.w - second_x).max(0.0);
+            let second_w = (area.x + area.w - second_x).max(1.0);
             (
                 Rect {
                     x: area.x,
@@ -455,9 +457,10 @@ fn split_area(area: Rect, dir: SplitDir, fraction: f32) -> (Rect, Rect) {
             )
         }
         SplitDir::Vertical => {
-            let first_h = (area.h * f - half).max(0.0);
+            // Mínimo 1.0 px por la misma razón (h=0 también paniquea).
+            let first_h = (area.h * f - half).max(1.0);
             let second_y = area.y + area.h * f + half;
-            let second_h = (area.y + area.h - second_y).max(0.0);
+            let second_h = (area.y + area.h - second_y).max(1.0);
             (
                 Rect {
                     x: area.x,
