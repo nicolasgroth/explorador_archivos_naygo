@@ -1,0 +1,113 @@
+// Naygo — modal de mensaje temático (aviso/confirmación). Reemplaza los diálogos
+// nativos rfd con la ventana viva. Mismo look que op-dialogs: velo + tarjeta centrada.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { MessageVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Botón de diálogo reutilizable (copia del de op-dialogs para no acoplar los archivos).
+component DlgBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked();
+    width: txt.preferred-width + 24px;
+    height: 28px;
+    border-radius: 4px;
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : (root.danger ? Theme.error : (root.primary ? Theme.selection-bg : Theme.row-bg));
+    txt := Text {
+        text: root.label;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MessageModal inherits Rectangle {
+    in property <MessageVm> vm;
+    callback message-confirm();
+    callback message-cancel();
+
+    visible: root.vm.kind > 0;
+    background: #000000aa;
+
+    // Velo: clic fuera de la tarjeta = cancelar (kind 1) / cerrar (kind 2).
+    veil := TouchArea {
+        clicked => {
+            if (root.vm.kind == 1) { root.message-cancel(); }
+            if (root.vm.kind == 2) { root.message-confirm(); }
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: card.preferred-height + 32px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 8px;
+        // Captura los clics dentro de la tarjeta (no propaga al velo).
+        TouchArea {}
+        card := VerticalLayout {
+            padding: 16px;
+            spacing: 14px;
+
+            // Título con franja de color según level.
+            HorizontalLayout {
+                spacing: 10px;
+                Rectangle {
+                    width: 3px;
+                    border-radius: 1.5px;
+                    background: root.vm.level == 0 ? Theme.accent : Theme.error;
+                }
+                Text {
+                    text: root.vm.title;
+                    color: white;
+                    font-size: 15px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.vm.body;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                if root.vm.kind == 1: DlgBtn {
+                    label: root.vm.cancel-label;
+                    clicked => { root.message-cancel(); }
+                }
+                DlgBtn {
+                    label: root.vm.confirm-label;
+                    primary: root.vm.kind == 1;
+                    danger: root.vm.danger;
+                    clicked => { root.message-confirm(); }
+                }
+            }
+        }
+    }
+
+    // Esc cierra/cancela.
+    forward-focus: msg-focus;
+    msg-focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                if (root.vm.kind == 1) { root.message-cancel(); }
+                if (root.vm.kind == 2) { root.message-confirm(); }
+            }
+            accept
+        }
+    }
+}
