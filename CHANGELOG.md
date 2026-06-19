@@ -41,6 +41,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Los paneles de Propiedades y Vista previa se marcan como panel activo al hacer clic en
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
+### Corregido
+- Caída (o cuelgue con la ventana en blanco) al previsualizar archivos de texto con líneas muy
+  largas, frecuente en logs: el renderizador por software no podía posicionar glifos tan a la
+  derecha y la app se cerraba con un error. Ahora la Vista previa ajusta las líneas a la columna
+  y recorta las larguísimas (igual para el texto extraído de PDF).
+- Mayor robustez en equipos y máquinas virtuales sin GPU: Naygo fuerza el renderizador por
+  software desde el arranque, sin depender de una GPU acelerada.
 
 ## [0.1.0] — 2026-06-18
 ### Añadido
