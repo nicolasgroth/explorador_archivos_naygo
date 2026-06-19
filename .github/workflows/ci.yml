@@ -1,0 +1,39 @@
+# Naygo — integración continua: corre el gate (formato + tests + clippy) en cada push y
+# pull request a main. No compila release ni publica nada.
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Naygo compila con CARGO_BUILD_JOBS=2: las dependencias de SVG/PDF crashean el compilador
+# de Slint con alta paralelización (los runners tienen varios cores).
+env:
+  CARGO_BUILD_JOBS: "2"
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache de dependencias
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formato
+        run: cargo fmt --all -- --check
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Clippy (warnings = error)
+        run: cargo clippy --workspace --all-targets -- -D warnings

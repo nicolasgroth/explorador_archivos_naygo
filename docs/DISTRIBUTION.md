@@ -53,3 +53,67 @@ Esto es normal en software open-source sin firma. Para continuar:
 
 Naygo es open source (MIT); puedes revisar el código en
 <https://github.com/nicolasgroth/explorador_archivos_naygo>.
+
+---
+
+## Publicar una versión (para mantenedores)
+
+Naygo publica los releases con **GitHub Actions**: al crear un tag `vX.Y.Z`, un workflow
+compila el portable y el instalador y los adjunta a un GitHub Release.
+
+### Paso 1: subir la versión y el tag
+
+Usa el script de versionado, que infiere el nivel (patch/minor/major) de los commits
+convencionales desde el último tag, mueve el CHANGELOG y crea el commit y el tag:
+
+```powershell
+# Local (no publica): crea commit + tag
+powershell -ExecutionPolicy Bypass -File scripts\bump.ps1
+
+# Publicar directamente (crea commit + tag y hace push):
+powershell -ExecutionPolicy Bypass -File scripts\bump.ps1 -Push
+```
+
+Opciones útiles: `-Level minor` fuerza el nivel; `-DryRun` muestra qué haría sin tocar nada.
+
+Si corres `bump.ps1` sin `-Push`, publica el tag a mano cuando estés listo:
+
+```powershell
+git push ; git push --tags
+```
+
+### Paso 2: el workflow hace el resto
+
+Al llegar el tag a GitHub, el workflow `Release`:
+
+1. Valida que el tag coincida con la versión de `Cargo.toml`.
+2. Corre los tests y clippy.
+3. Instala Inno Setup y ejecuta `scripts\build-release.ps1` (portable + instalador).
+4. Crea el GitHub Release y adjunta los cuatro archivos: los versionados
+   (`Naygo-X.Y.Z-portable.zip`, `Naygo-X.Y.Z-setup.exe`) y las copias con nombre estable
+   (`Naygo-portable.zip`, `Naygo-setup.exe`).
+
+Puedes seguir el progreso en la pestaña **Actions** del repositorio.
+
+### Link de descarga estable
+
+Las copias con nombre fijo permiten un link que siempre apunta a la última versión:
+
+```
+https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip
+https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-setup.exe
+```
+
+### Compilar sin publicar
+
+Para generar los artefactos en `dist\` sin crear un release:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+```
+
+### Integración continua
+
+Aparte del release, el workflow `CI` corre el gate (formato + tests + clippy) en cada push
+y pull request a `main`. Es el conjunto de checks natural para exigir en la protección de la
+rama `main` (ver `docs/PROTEGER-RAMA-MAIN.md`).

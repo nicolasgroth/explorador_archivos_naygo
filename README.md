@@ -53,6 +53,10 @@ Rust + [Slint](https://slint.dev) (UI con renderizador por software, sin GPU) + 
 oficial `windows` para la integración con el Shell de Windows. Open source, sin dependencias
 de pago.
 
+## Descargar
+
+**[⬇ Descargar Naygo (portable)](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip)** — siempre apunta a la última versión publicada. También está el [instalador](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-setup.exe).
+
 ## Instalación
 
 - **Portable**: descarga `Naygo-<versión>-portable.zip`, descomprímelo y ejecuta `naygo.exe`.

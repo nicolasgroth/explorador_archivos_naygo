@@ -1,0 +1,88 @@
+# Naygo — publicación de releases: al crear un tag vX.Y.Z compila el portable y el
+# instalador y los publica en un GitHub Release, con un link de descarga estable.
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_BUILD_JOBS: "2"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache de dependencias
+        uses: Swatinem/rust-cache@v2
+
+      # La versión es fuente única en Cargo.toml. El tag debe coincidir (vX.Y.Z == X.Y.Z),
+      # si no, abortamos antes de compilar para no publicar un release inconsistente.
+      - name: Validar tag contra Cargo.toml
+        shell: pwsh
+        run: |
+          $cargo = Get-Content Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^\s*version\s*=\s*"([^"]+)"') {
+            Write-Error "No pude leer la version de Cargo.toml."; exit 1
+          }
+          $cargoVer = $Matches[1]
+          $tag = "${{ github.ref_name }}"
+          $tagVer = $tag -replace '^v', ''
+          Write-Host "Tag: $tag  ->  $tagVer"
+          Write-Host "Cargo.toml: $cargoVer"
+          if ($tagVer -ne $cargoVer) {
+            Write-Error "El tag ($tagVer) no coincide con la version de Cargo.toml ($cargoVer)."
+            exit 1
+          }
+          Write-Host "Version validada: $cargoVer"
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Clippy (warnings = error)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Empaquetar (portable + instalador)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+
+      # build-release.ps1 genera nombres versionados; el link estable necesita un nombre
+      # fijo, así que subimos también una copia sin versión.
+      - name: Copias con nombre estable
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          Copy-Item "dist\Naygo-$ver-portable.zip" "dist\Naygo-portable.zip" -Force
+          if (Test-Path "dist\Naygo-$ver-setup.exe") {
+            Copy-Item "dist\Naygo-$ver-setup.exe" "dist\Naygo-setup.exe" -Force
+          }
+          echo "VER=$ver" >> $env:GITHUB_ENV
+
+      - name: Crear GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $notes = "Build automático de Naygo $env:VER.`n`nDescarga el ZIP portable (o el instalador), descomprime y ejecuta naygo.exe. Si ya tienes Naygo instalado, el instalador actualiza sin perder tu configuración.`n`nEn la primera ejecución, Windows SmartScreen puede advertir ""editor desconocido"" (el ejecutable no está firmado): haz clic en ""Más información"" y luego ""Ejecutar de todos modos""."
+          gh release create "${{ github.ref_name }}" `
+            "dist\Naygo-$env:VER-portable.zip" `
+            "dist\Naygo-$env:VER-setup.exe" `
+            "dist\Naygo-portable.zip" `
+            "dist\Naygo-setup.exe" `
+            --title "Naygo $env:VER" `
+            --notes "$notes"
