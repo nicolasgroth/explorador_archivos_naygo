@@ -111,6 +111,17 @@ pub fn format_time(local_epoch_secs: Option<i64>, fmt: DateFormat) -> String {
     }
 }
 
+/// Formatea un instante para el log: `"YYYY-MM-DD HH:MM:SS.mmm"` en hora LOCAL.
+/// `epoch_ms` son milisegundos desde epoch UTC; `tz_offset_min` es el desplazamiento del
+/// huso local en minutos (p. ej. -180 para UTC-3, +60 para UTC+1). Puro, sin dependencias.
+pub fn format_log_time(epoch_ms: u64, tz_offset_min: i32) -> String {
+    let total_secs = (epoch_ms / 1000) as i64 + (tz_offset_min as i64) * 60;
+    let millis = (epoch_ms % 1000) as u32;
+    let (y, mo, d, h, mi) = civil_from_epoch(total_secs);
+    let sec = total_secs.rem_euclid(60) as u32;
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{sec:02}.{millis:03}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +181,26 @@ mod tests {
         assert_eq!(human_size(1024 * 1024), "1.0 MB");
         assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GB");
         assert_eq!(human_size(1024u64 * 1024 * 1024 * 1024), "1.0 TB");
+    }
+
+    #[test]
+    fn format_log_time_basico() {
+        // 2026-06-18 00:00:00.000 UTC, offset 0.
+        let s = format_log_time(1_781_740_800_000, 0);
+        assert_eq!(s, "2026-06-18 00:00:00.000");
+    }
+
+    #[test]
+    fn format_log_time_con_offset_y_milisegundos() {
+        // +123 ms, offset -180 min (UTC-3): la hora local resta 3 h => 2026-06-17 21:00:00.123.
+        let s = format_log_time(1_781_740_800_123, -180);
+        assert_eq!(s, "2026-06-17 21:00:00.123");
+    }
+
+    #[test]
+    fn format_log_time_offset_positivo() {
+        // offset +60 min: suma 1 hora => 2026-06-18 01:00:00.000.
+        let s = format_log_time(1_781_740_800_000, 60);
+        assert_eq!(s, "2026-06-18 01:00:00.000");
     }
 }
