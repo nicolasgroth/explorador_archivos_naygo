@@ -238,8 +238,8 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 
 Naygo guarda su configuración junto al ejecutable (modo portable). Puedes agregar:
 
-- **Idiomas**: suelta un `.json` de traducción; aparece en el selector. ES y EN vienen
-  de base.
+- **Idiomas**: suelta un `.json` de traducción en la carpeta `lang/`; aparece en el
+  selector. ES y EN vienen de base. Guía paso a paso: [`AGREGAR-IDIOMA.md`](AGREGAR-IDIOMA.md).
 - **Temas**: *color sets* intercambiables en caliente.
 - **Sets de íconos**: empaquetados o propios.
 

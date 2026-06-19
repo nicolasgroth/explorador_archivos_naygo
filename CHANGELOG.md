@@ -15,6 +15,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   las carpetas visitadas recientemente y, al elegir una, navega el panel activo.
 - La cantidad de carpetas recientes recordadas ahora es configurable (1–100, por
   defecto 50) en la sección Avanzado de la configuración.
+- Tooltips explicativos en todos los botones de la barra de herramientas y de los paneles.
+- Guía para agregar idiomas (`docs/AGREGAR-IDIOMA.md`): basta soltar un `.json` en `lang/`.
+### Corregido
+- Caída (panic) del render por software al navegar con paneles muy angostos o con el aviso
+  de "carpeta no encontrada" desbordado: se blindó la geometría y el aviso ahora tiene scroll.
 
 ## [0.1.0] — 2026-06-18
 ### Añadido
