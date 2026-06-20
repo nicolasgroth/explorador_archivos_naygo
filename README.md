@@ -102,3 +102,7 @@ Los valores que no existan se ignoran (la app abre igual y deja un aviso).
 
 Libre de usar, modificar y distribuir. Si te sirve, se agradece mencionar a Nicolás Groth e
 ISGroth.
+
+Naygo usa software de terceros, cada uno bajo su propia licencia (todas permisivas; la interfaz
+usa [Slint](https://slint.dev) bajo su licencia *royalty-free*). Los avisos están en
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

@@ -37,6 +37,7 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item $exe (Join-Path $stage "naygo.exe")
 Copy-Item (Join-Path $repo "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $repo "installer\LEEME.txt") (Join-Path $stage "LEEME.txt")
+Copy-Item (Join-Path $repo "THIRD-PARTY-NOTICES.md") (Join-Path $stage "THIRD-PARTY-NOTICES.md")
 $zip = Join-Path $dist "Naygo-$version-portable.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip

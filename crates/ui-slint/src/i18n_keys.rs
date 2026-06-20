@@ -235,6 +235,7 @@ where
     tr.set_about_company(c.t("about.company").into());
     tr.set_about_license(c.t("about.license").into());
     tr.set_about_stack(c.t("slint.about.stack").into());
+    tr.set_about_notices(c.t("slint.about.notices").into());
     tr.set_about_repo(c.t("about.repo").into());
     tr.set_about_news_title(c.t("slint.about.news_title").into());
     tr.set_about_no_notes(c.t("slint.about.no_notes").into());

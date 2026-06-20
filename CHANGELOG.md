@@ -7,6 +7,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Avisos de software de terceros: archivo `THIRD-PARTY-NOTICES.md` con las licencias de todas
+  las dependencias (todas permisivas; la interfaz usa Slint bajo su licencia *royalty-free*).
+  La sección "Acerca de" lo menciona y el archivo se incluye en el portable y el instalador.
 - Vista profunda: un modo del panel que lista, de forma plana y con sangría por
   profundidad, todo el contenido de la carpeta actual y sus subcarpetas (recursivo).
   Se activa con el botón de la barra del panel; aparece por streaming y se puede

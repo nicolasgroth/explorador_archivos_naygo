@@ -538,6 +538,7 @@
   "slint.cfg.factory_reset_confirm": "¿Seguro? Volver a valores por defecto",
   "slint.about.version": "Versión",
   "slint.about.stack": "Hecho con Rust + Slint",
+  "slint.about.notices": "Incluye software de terceros — ver THIRD-PARTY-NOTICES.md",
   "slint.cfg.size_no_subdirs": "Tamaño sin entrar a subcarpetas",
   "slint.cfg.ops_mode": "Modo de operaciones",
   "slint.cfg.ops_queue": "En cola",

@@ -58,6 +58,7 @@ Name: "ctxmenu"; Description: "Agregar 'Abrir en Naygo' al menú contextual de c
 Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Menú Inicio siempre; escritorio si se marcó la tarea.
