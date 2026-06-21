@@ -45,6 +45,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
+- Al confirmar el borrado de un archivo, pulsar Enter ahora activa "Eliminar" en vez de abrir
+  el archivo de fondo. (El teclado del panel se suspende mientras hay un diálogo abierto.)
+- Hacer clic en el panel de Vista previa (o Propiedades) ya no pierde la selección del archivo:
+  la previsualización sigue al último panel de archivos activo.
+- Tras pegar un texto o imagen y crear el archivo, ya se puede seleccionar otro de inmediato
+  (antes había que clicar primero el archivo recién creado).
 - Caída (o cuelgue con la ventana en blanco) al previsualizar archivos de texto con líneas muy
   largas, frecuente en logs: el renderizador por software no podía posicionar glifos tan a la
   derecha y la app se cerraba con un error. Ahora la Vista previa ajusta las líneas a la columna
