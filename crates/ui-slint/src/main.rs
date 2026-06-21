@@ -2643,7 +2643,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_name_confirm(move || {
-            if ctrl.borrow_mut().ops.name_confirm() {
+            let confirmed = ctrl.borrow_mut().ops.name_confirm();
+            if confirmed {
+                // Re-listar el panel activo tras crear/pegar: el pegado escribe el archivo
+                // directo (sin pasar por el motor de ops), y el listado debe refrescarse para
+                // que aparezca. Además `refresh_active` re-lista con `enter()`, que LIMPIA la
+                // selección/foco; sin esto, tras pegar quedaba un foco de vista "stale" que
+                // bloqueaba los clics del mouse hasta reseleccionar.
+                ctrl.borrow_mut().refresh_active();
                 start_timer();
             }
             sync_rows();

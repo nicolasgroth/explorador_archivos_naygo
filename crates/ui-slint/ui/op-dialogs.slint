@@ -220,6 +220,12 @@ export component OpDialogs inherits Rectangle {
                 if (root.vm.kind == 3) { root.name-cancel(); }
                 if (root.vm.kind == 4) { root.paste-cancel(); }
             }
+            // Enter confirma la acción primaria del modal. Para "pedir nombre" (3) el
+            // TextInput ya maneja su propio `accepted`; aquí cubrimos borrado (1) y pegar (4).
+            if (event.text == Key.Return) {
+                if (root.vm.kind == 1) { root.delete-confirm(); }
+                if (root.vm.kind == 4) { root.paste-confirm(); }
+            }
             accept
         }
     }

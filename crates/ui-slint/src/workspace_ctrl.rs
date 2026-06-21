@@ -3209,9 +3209,16 @@ impl WorkspaceCtrl {
             self.preview.set_wanted(None, now);
             return false;
         }
-        let focused_file = self
-            .ws
-            .active_files()
+        // El preview sigue la selección del ÚLTIMO panel Files activo (no del panel activo a
+        // secas): así, hacer clic en el propio panel de Vista previa (o en el Inspector) no
+        // vacía la previsualización — el archivo seleccionado se conserva. Fallback al panel
+        // activo si todavía no hay un Files recordado.
+        let files_pane = self
+            .last_active_files
+            .and_then(|id| self.ws.pane(id))
+            .and_then(|p| p.files.as_ref())
+            .or_else(|| self.ws.active_files());
+        let focused_file = files_pane
             .and_then(|f| f.focused_view_entry())
             .filter(|e| e.kind != EntryKind::Directory)
             .map(|e| e.path.clone());
@@ -3835,6 +3842,13 @@ impl WorkspaceCtrl {
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         self.ctrl_down = ctrl;
         self.shift_down = shift;
+        // Si hay un modal de operaciones abierto (confirmar borrado, conflicto, pedir nombre,
+        // pegar, retomar), el teclado lo controla el modal Slint (Enter confirma, Esc cancela);
+        // aquí suspendemos las acciones globales para que un Enter NO abra el archivo
+        // seleccionado por debajo del modal. Mismo criterio que con el selector de panel.
+        if self.ops.pending_dialog.is_some() {
+            return false;
+        }
         // Si el selector de panel está activo, el teclado lo controla: 1..9 elige, Esc
         // cancela; cualquier otra tecla se ignora (input suspendido como en un modal).
         if self.pending_pick.is_some() {
