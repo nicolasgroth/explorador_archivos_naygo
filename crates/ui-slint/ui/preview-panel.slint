@@ -2,16 +2,59 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 //
 // El contenido lo calcula un worker en Rust (con debounce 150 ms y cancelación); aquí
-// solo se pinta según `mode`: 0=vacío 1=texto 2=imagen 3=mensaje.
+// solo se pinta según `mode`: 0=vacío 1=texto 2=imagen 3=mensaje. En modo texto, si la regla
+// forzó un lenguaje, se pinta el código resaltado (un Text por segmento); si no, texto plano.
 import { ScrollView } from "std-widgets.slint";
 import { PreviewVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
+// Ícono "abrir con el programa del sistema": un rectángulo con una flecha saliente, dibujado con
+// Path (no glifo de fuente, que bajo render por software puede no existir y salir invisible).
+component OpenExternalIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    // Recuadro (la "ventana").
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        // Caja abierta por la esquina superior derecha.
+        MoveTo { x: 7; y: 1; }
+        LineTo { x: 1; y: 1; }
+        LineTo { x: 1; y: 11; }
+        LineTo { x: 11; y: 11; }
+        LineTo { x: 11; y: 5; }
+    }
+    // Flecha que sale hacia afuera.
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 5; y: 7; }
+        LineTo { x: 11; y: 1; }
+        MoveTo { x: 7.5; y: 1; }
+        LineTo { x: 11; y: 1; }
+        LineTo { x: 11; y: 4.5; }
+    }
+}
+
 export component PreviewPanel inherits Rectangle {
     in property <bool> active;
     in property <PreviewVm> view;
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
+    callback open-in-system();   // abrir el archivo previsualizado con el programa por defecto
+    callback hover-tip(string, length);   // tooltip flotante (texto, x centrada) → AppWindow
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
@@ -26,12 +69,37 @@ export component PreviewPanel inherits Rectangle {
     VerticalLayout {
         padding: 6px;
         spacing: 4px;
-        Text {
-            text: Tr.preview-title;
-            color: Theme.text-dim;
-            font-weight: 700;
+        // Barra de título: rótulo + (si hay archivo) botón "abrir con el sistema".
+        HorizontalLayout {
             height: 20px;
-            vertical-alignment: center;
+            spacing: 6px;
+            Text {
+                text: Tr.preview-title;
+                color: Theme.text-dim;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            // Botón abrir con el programa del sistema (visible cuando hay algo en preview).
+            if root.view.mode != 0: Rectangle {
+                width: 26px;
+                height: 20px;
+                background: open-touch.has-hover ? Theme.selection-bg : transparent;
+                border-radius: 3px;
+                OpenExternalIcon {
+                    width: 100%;
+                    height: 100%;
+                    tint: open-touch.has-hover ? Theme.text : Theme.text-dim;
+                }
+                open-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-in-system(); }
+                    changed has-hover => {
+                        root.hover-tip(self.has-hover ? Tr.preview-open-tip : "",
+                            self.absolute-position.x + self.width / 2);
+                    }
+                }
+            }
         }
 
         if root.view.mode == 0: Text {
@@ -45,14 +113,34 @@ export component PreviewPanel inherits Rectangle {
             spacing: 2px;
             ScrollView {
                 vertical-stretch: 1;
-                Text {
+                // Código resaltado: una fila por línea, un Text por segmento. SIN wrap: cada línea
+                // ya viene recortada por el core (TEXT_MAX_LINE_CHARS), así que ningún glifo sale
+                // del rango i16 del render por software.
+                if root.view.highlighted: VerticalLayout {
+                    alignment: start;
+                    for line in root.view.hl-lines: HorizontalLayout {
+                        alignment: start;
+                        // Las líneas vacías igual deben ocupar alto: un espaciador de alto mínimo.
+                        Rectangle {
+                            height: 16px;
+                            width: 0px;
+                        }
+                        for seg in line.spans: Text {
+                            text: seg.text;
+                            color: seg.color;
+                            font-family: "Consolas";
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                // Texto plano (modo no-código): un solo Text con ajuste de línea.
+                if !root.view.highlighted: Text {
                     text: root.view.text;
                     color: Theme.text;
                     font-family: "Consolas";
-                    // Ajuste de línea (antes no-wrap): el renderizador por software de Slint
-                    // posiciona cada glifo en i16 (~32767px). Una línea larguísima sin ajuste
-                    // empujaba un glifo fuera de rango y la app caía al pintar. El core ya recorta
-                    // cada línea (TEXT_MAX_LINE_CHARS); el wrap es la segunda defensa.
+                    // Ajuste de línea: el renderizador por software de Slint posiciona cada glifo en
+                    // i16 (~32767px). Una línea larguísima sin ajuste empujaba un glifo fuera de rango
+                    // y la app caía al pintar. El core ya recorta cada línea; el wrap es 2ª defensa.
                     wrap: word-wrap;
                 }
             }
