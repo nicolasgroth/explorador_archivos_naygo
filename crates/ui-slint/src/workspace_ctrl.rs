@@ -159,6 +159,16 @@ pub struct WorkspaceCtrl {
     /// selección del ciclo F2. La UI lo lee con `take_rename_request` para abrir el editor en
     /// la celda Name. (pane, posición de vista, etapa). Ver 6D.
     pub rename_requested: Option<(PaneId, usize, u8)>,
+    /// La paleta de comandos (Ctrl+P) pidió abrirse. La UI lo lee con `take_open_palette_request`
+    /// para mostrar el overlay. Se setea desde `run_action(Action::CommandPalette)`. (Task 6/7)
+    pub open_palette_requested: bool,
+    /// La paleta eligió cambiar a este tema. El controlador ya lo aplicó+persistió en los
+    /// settings (`config.set_theme`), pero re-pintar las ventanas Slint es cosa de la UI: la UI
+    /// lo lee con `take_palette_theme_request` y llama a `theme_apply::apply`. (Task 6/7)
+    pub palette_theme_requested: Option<naygo_core::theme::ThemeId>,
+    /// La paleta eligió "abrir configuración". La UI lo lee con `take_open_config_request` y
+    /// muestra la ventana de config (igual que el botón/menú de la toolbar). (Task 6/7)
+    pub open_config_requested: bool,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
@@ -366,6 +376,9 @@ impl WorkspaceCtrl {
             last_active_files: Some(id),
             edit_path_requested: None,
             rename_requested: None,
+            open_palette_requested: false,
+            palette_theme_requested: None,
+            open_config_requested: false,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
         };
@@ -1642,6 +1655,26 @@ impl WorkspaceCtrl {
     /// procesar una tecla para abrir el editor de la path-bar del panel devuelto.
     pub fn take_edit_path_request(&mut self) -> Option<PaneId> {
         self.edit_path_requested.take()
+    }
+
+    /// Consume la petición de "abrir la paleta de comandos" (Ctrl+P), si la hay. La UI la
+    /// llama tras procesar una tecla para mostrar el overlay de la paleta. (Task 6/7)
+    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
+    pub fn take_open_palette_request(&mut self) -> bool {
+        std::mem::take(&mut self.open_palette_requested)
+    }
+
+    /// Consume la petición de "re-aplicar tema" tras elegir un tema en la paleta, si la hay.
+    /// Devuelve el id elegido para que la UI llame a `theme_apply::apply`. (Task 6/7)
+    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
+    pub fn take_palette_theme_request(&mut self) -> Option<naygo_core::theme::ThemeId> {
+        self.palette_theme_requested.take()
+    }
+
+    /// Consume la petición de "abrir configuración" desde la paleta, si la hay. (Task 6/7)
+    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
+    pub fn take_open_config_request(&mut self) -> bool {
+        std::mem::take(&mut self.open_config_requested)
     }
 
     /// Navega el panel `id` a `dir` (clic en un breadcrumb / commit del editor). Reusa la
@@ -4014,6 +4047,14 @@ impl WorkspaceCtrl {
             return false;
         };
         self.typeahead.clear();
+        self.run_action(action)
+    }
+
+    /// Ejecuta una `Action` de alto nivel: el cuerpo del `match` que antes vivía dentro de
+    /// `on_key`. Se extrajo para que la paleta de comandos (Ctrl+P) pueda disparar la MISMA
+    /// acción que el teclado sin duplicar el ruteo (ver `execute_palette_command`). Devuelve
+    /// `true` si algo cambió y la UI debe refrescar (igual semántica que `on_key`).
+    pub fn run_action(&mut self, action: Action) -> bool {
         let active = self.ws.active_id();
         match action {
             Action::MoveUp => self.with_active(|f| f.move_focus_extend(-1, false)),
@@ -4109,6 +4150,12 @@ impl WorkspaceCtrl {
                 self.edit_path_requested = self.active_files_id();
             }
             Action::Help => self.help_open = !self.help_open,
+            // Ctrl+P: ABRE la paleta de comandos (no ejecuta nada). La UI lee el flag con
+            // `take_open_palette_request` y muestra el overlay (Task 6/7).
+            Action::CommandPalette => {
+                self.open_palette_requested = true;
+                return true;
+            }
             _ => {}
         }
         false
@@ -4122,6 +4169,185 @@ impl WorkspaceCtrl {
         };
         let path = fav.path.clone();
         self.navigate_active_to(path)
+    }
+
+    /// Construye la lista de comandos de la paleta (Ctrl+P) desde las fuentes vivas: acciones
+    /// curadas, archivos del panel activo, recientes, favoritos, temas y "abrir configuración".
+    /// La UI filtra/ordena con `naygo_core::palette::filter_and_rank` según lo que se escribe, y
+    /// ejecuta con `execute_palette_command(&commands, index)`. Lo consume la UI de la paleta
+    /// (Task 6/7).
+    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
+    pub fn build_palette_commands(&self) -> Vec<naygo_core::palette::Command> {
+        use naygo_core::keymap::Action;
+        use naygo_core::palette::{Command, CommandCategory, CommandPayload};
+        let mut out: Vec<Command> = Vec::new();
+
+        // 1) Acciones CURADAS: las más útiles, en orden de presentación. (Se omiten las de
+        // micro-navegación —mover foco, extender selección— que no tienen sentido en una paleta.)
+        const CURATED: &[Action] = &[
+            Action::Copy,
+            Action::Cut,
+            Action::Paste,
+            Action::Rename,
+            Action::BatchRename,
+            Action::NewFile,
+            Action::NewDir,
+            Action::ComputeSize,
+            Action::Refresh,
+            Action::Find,
+            Action::Undo,
+            Action::GoUp,
+            Action::GoBack,
+            Action::GoForward,
+            Action::GoHome,
+            Action::SwitchPane,
+            Action::CopyToOther,
+            Action::MoveToOther,
+            Action::SelectAll,
+            Action::Help,
+            Action::EditPath,
+        ];
+        for &a in CURATED {
+            out.push(Command {
+                label: self.config.t(a.i18n_key()),
+                category: CommandCategory::Action,
+                shortcut: self.config.chord_text_for(a),
+                payload: CommandPayload::Action(a),
+            });
+        }
+
+        // 2) Archivos del panel activo (entries de la VISTA actual) → FocusEntry(view_idx). El
+        // índice que se guarda es la posición en la VISTA (0-based en view_indices), que es lo que
+        // consumen el foco/selección/scroll; no el índice crudo en `entries`.
+        if let Some(f) = self.ws.active_files() {
+            for (view_idx, &real) in f.view_indices().iter().enumerate() {
+                if let Some(e) = f.entries.get(real) {
+                    out.push(Command {
+                        label: e.name.clone(),
+                        category: CommandCategory::File,
+                        shortcut: String::new(),
+                        payload: CommandPayload::FocusEntry(view_idx),
+                    });
+                }
+            }
+        }
+
+        // 3) Recientes → Navigate(path). El nombre de la carpeta es la etiqueta; la ruta completa
+        // viaja en el payload.
+        for p in self.recents.list() {
+            let label = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string());
+            out.push(Command {
+                label,
+                category: CommandCategory::Recent,
+                shortcut: String::new(),
+                payload: CommandPayload::Navigate(p.clone()),
+            });
+        }
+
+        // 4) Favoritos → Navigate(path). Usa la etiqueta del favorito (editable a futuro).
+        for fav in self.favorites.list() {
+            out.push(Command {
+                label: fav.label.clone(),
+                category: CommandCategory::Favorite,
+                shortcut: String::new(),
+                payload: CommandPayload::Navigate(fav.path.clone()),
+            });
+        }
+
+        // 5) Temas → Theme(id), etiqueta "Tema: <nombre legible del tema>".
+        let theme_prefix = self.config.t("slint.palette.theme_prefix");
+        for id in self.config.themes.available() {
+            let name = self.config.themes.get(id).name.clone();
+            out.push(Command {
+                label: format!("{theme_prefix}{name}"),
+                category: CommandCategory::Theme,
+                shortcut: String::new(),
+                payload: CommandPayload::Theme(id.clone()),
+            });
+        }
+
+        // 6) Abrir configuración → OpenConfig.
+        out.push(Command {
+            label: self.config.t("slint.palette.open_config"),
+            category: CommandCategory::Config,
+            shortcut: String::new(),
+            payload: CommandPayload::OpenConfig,
+        });
+
+        out
+    }
+
+    /// Ejecuta el comando en `index` de la lista que devolvió `build_palette_commands`. Devuelve
+    /// `true` si algo cambió (para refrescar). El llamador (la UI) cierra la paleta. Lo consume la
+    /// UI de la paleta (Task 6/7).
+    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
+    pub fn execute_palette_command(
+        &mut self,
+        commands: &[naygo_core::palette::Command],
+        index: usize,
+    ) -> bool {
+        use naygo_core::palette::CommandPayload;
+        let Some(cmd) = commands.get(index) else {
+            return false;
+        };
+        match cmd.payload.clone() {
+            // Acción: se rutea por el MISMO dispatcher del teclado (sin duplicar lógica).
+            CommandPayload::Action(a) => self.run_action(a),
+            // Navegar el panel activo a la ruta (reciente/favorito).
+            CommandPayload::Navigate(p) => self.navigate_active_to(p),
+            // Enfocar/seleccionar el índice de VISTA en el panel activo (selección simple, que
+            // además fija el foco; la UI hace scroll a la fila enfocada al refrescar).
+            CommandPayload::FocusEntry(view_idx) => {
+                if let Some(f) = self.ws.active_files_mut() {
+                    f.select_single(view_idx);
+                    true
+                } else {
+                    false
+                }
+            }
+            // Aplicar tema: persistir en settings + pedir a la UI que re-pinte las ventanas.
+            CommandPayload::Theme(id) => {
+                self.config.set_theme(id.clone());
+                self.palette_theme_requested = Some(id);
+                true
+            }
+            // Abrir configuración: la UI lee el flag y muestra la ventana.
+            CommandPayload::OpenConfig => {
+                self.open_config_requested = true;
+                true
+            }
+        }
+    }
+
+    /// Salta el panel activo a una entrada de su historial por índice en la pila (menú ▾ de los
+    /// botones Atrás/Adelante). Mueve el cursor del NavHistory y navega SIN re-apilar (como
+    /// atrás/adelante: `f.go_to_history` usa `history.jump_to`, que solo mueve el cursor).
+    /// Devuelve `true` si navegó.
+    #[allow(dead_code)] // lo consume la UI del menú de historial (Task 7)
+    pub fn go_to_history(&mut self, stack_index: usize) -> bool {
+        let Some(active) = self.active_files_id() else {
+            return false;
+        };
+        let moved = self
+            .ws
+            .pane_mut(active)
+            .and_then(|p| p.files.as_mut())
+            .and_then(|f| f.go_to_history(stack_index));
+        match moved {
+            Some(dir) => {
+                crate::logging::breadcrumb("historial: salto directo");
+                // Navegar cancela la vista profunda del panel (no es pegajosa).
+                self.cancel_deep_if_navigating(active);
+                self.push_recent(dir.clone());
+                self.start_listing(active, dir.clone());
+                self.sync_trees_active(dir);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Aplica `op` al panel activo (helper para no repetir el match de préstamos).
