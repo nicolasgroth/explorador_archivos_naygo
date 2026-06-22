@@ -162,7 +162,10 @@ mod tests {
     fn prefijo_puntua_mas_que_disperso() {
         let (prefix_score, _) = fuzzy_match("co", "Copiar").unwrap();
         let (sparse_score, _) = fuzzy_match("co", "Calcular tamañO").unwrap();
-        assert!(prefix_score > sparse_score, "prefijo {prefix_score} > disperso {sparse_score}");
+        assert!(
+            prefix_score > sparse_score,
+            "prefijo {prefix_score} > disperso {sparse_score}"
+        );
     }
 
     #[test]

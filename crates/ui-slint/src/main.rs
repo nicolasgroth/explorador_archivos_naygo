@@ -2664,7 +2664,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_go_back_history(move |menu_index| {
-            if ctrl.borrow_mut().go_back_history(menu_index.max(0) as usize) {
+            if ctrl
+                .borrow_mut()
+                .go_back_history(menu_index.max(0) as usize)
+            {
                 start_timer();
             }
             sync_layout();
