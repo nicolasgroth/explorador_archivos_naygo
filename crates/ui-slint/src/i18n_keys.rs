@@ -23,6 +23,8 @@ where
     tr.set_nav_back_tip(c.t("slint.toolbar.back_tip").into());
     tr.set_nav_forward_tip(c.t("slint.toolbar.forward_tip").into());
     tr.set_nav_home_tip(c.t("slint.toolbar.home_tip").into());
+    tr.set_nav_back_history_tip(c.t("slint.toolbar.back_history").into());
+    tr.set_nav_forward_history_tip(c.t("slint.toolbar.forward_history").into());
     tr.set_toolbar_add_tip(c.t("slint.toolbar.add").into());
     tr.set_toolbar_panel(c.t("slint.toolbar.panel").into());
     tr.set_toolbar_panel_tip(c.t("toolbar.add_other").into());

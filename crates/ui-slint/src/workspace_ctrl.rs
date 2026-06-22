@@ -4317,11 +4317,68 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Rutas hacia ATRÁS del panel activo, de la más cercana a la más lejana (para el menú ▾ del
+    /// botón Atrás). Vacío si no hay panel Files activo o no hay historial atrás.
+    pub fn back_history_entries(&self) -> Vec<std::path::PathBuf> {
+        self.ws
+            .active_files()
+            .map(|f| f.history.back_entries())
+            .unwrap_or_default()
+    }
+
+    /// Rutas hacia ADELANTE del panel activo, de la más cercana a la más lejana (menú ▾ del botón
+    /// Adelante). Vacío si no hay panel Files activo o no hay historial adelante.
+    pub fn forward_history_entries(&self) -> Vec<std::path::PathBuf> {
+        self.ws
+            .active_files()
+            .map(|f| f.history.forward_entries())
+            .unwrap_or_default()
+    }
+
+    /// Salta el panel activo a la entrada `menu_index` del menú ▾ de ATRÁS (0 = la más cercana).
+    /// Traduce el índice del menú al índice de la pila usando el cursor actual del NavHistory:
+    /// la entrada `i` de `back_entries` está en la posición `cursor - 1 - i` de la pila. Así la UI
+    /// no maneja aritmética de índices. Devuelve `true` si navegó.
+    pub fn go_back_history(&mut self, menu_index: usize) -> bool {
+        let Some(stack_index) = self.stack_index_back(menu_index) else {
+            return false;
+        };
+        self.go_to_history(stack_index)
+    }
+
+    /// Salta el panel activo a la entrada `menu_index` del menú ▾ de ADELANTE (0 = la más cercana).
+    /// La entrada `i` de `forward_entries` está en la posición `cursor + 1 + i` de la pila.
+    /// Devuelve `true` si navegó.
+    pub fn go_forward_history(&mut self, menu_index: usize) -> bool {
+        let Some(stack_index) = self.stack_index_forward(menu_index) else {
+            return false;
+        };
+        self.go_to_history(stack_index)
+    }
+
+    /// Índice en la pila de la entrada `menu_index` del menú de ATRÁS del panel activo. `None` si
+    /// no hay panel/cursor o el índice cae fuera de la rama de atrás.
+    fn stack_index_back(&self, menu_index: usize) -> Option<usize> {
+        let (_, cursor) = self.ws.active_files()?.history.stack();
+        let cursor = cursor?;
+        // back_entries va de cercano (cursor-1) a lejano (0): entrada i ↦ cursor-1-i.
+        cursor.checked_sub(1)?.checked_sub(menu_index)
+    }
+
+    /// Índice en la pila de la entrada `menu_index` del menú de ADELANTE del panel activo. `None`
+    /// si no hay panel/cursor o el índice cae fuera de la rama de adelante.
+    fn stack_index_forward(&self, menu_index: usize) -> Option<usize> {
+        let (stack, cursor) = self.ws.active_files()?.history.stack();
+        let cursor = cursor?;
+        // forward_entries va de cercano (cursor+1) a lejano (len-1): entrada i ↦ cursor+1+i.
+        let idx = cursor + 1 + menu_index;
+        (idx < stack.len()).then_some(idx)
+    }
+
     /// Salta el panel activo a una entrada de su historial por índice en la pila (menú ▾ de los
     /// botones Atrás/Adelante). Mueve el cursor del NavHistory y navega SIN re-apilar (como
     /// atrás/adelante: `f.go_to_history` usa `history.jump_to`, que solo mueve el cursor).
     /// Devuelve `true` si navegó.
-    #[allow(dead_code)] // lo consume la UI del menú de historial (Task 7)
     pub fn go_to_history(&mut self, stack_index: usize) -> bool {
         let Some(active) = self.active_files_id() else {
             return false;
@@ -5008,6 +5065,48 @@ mod tests {
         assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
         // Sin más adelante: no-op.
         assert!(!c.on_go_forward());
+    }
+
+    /// El menú ▾ de historial salta a la entrada elegida traduciendo el índice del menú (cercano→
+    /// lejano) al índice de la pila. Construye A → B → C, retrocede al medio y verifica que las
+    /// listas de atrás/adelante y los saltos por índice de menú caigan en la carpeta correcta.
+    #[test]
+    fn menu_de_historial_salta_por_indice() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        let cc = root.path().join("c");
+        for d in [&a, &b, &cc] {
+            std::fs::create_dir(d).unwrap();
+        }
+        // Arranca en root, luego navega a → b → c (cursor en c, índice 3 de la pila).
+        let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        for d in [&a, &b, &cc] {
+            c.navigate_active_to(d.clone());
+            assert!(drain(&mut c));
+        }
+        assert_eq!(c.ws.active_files().unwrap().current_dir, cc);
+        // Atrás: cercano→lejano = [b, a, root]. Adelante: vacío.
+        assert_eq!(
+            c.back_history_entries(),
+            vec![b.clone(), a.clone(), root.path().to_path_buf()]
+        );
+        assert!(c.forward_history_entries().is_empty());
+        // Saltar al ítem 1 del menú de atrás (a). Tras esto hay atrás (root) y adelante (b, c).
+        assert!(c.go_back_history(1));
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, a);
+        assert_eq!(c.back_history_entries(), vec![root.path().to_path_buf()]);
+        assert_eq!(c.forward_history_entries(), vec![b.clone(), cc.clone()]);
+        // Saltar al ítem 1 del menú de adelante (c, el más lejano).
+        assert!(c.go_forward_history(1));
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, cc);
+        // Índice fuera de rango en cualquiera de los dos: no-op.
+        assert!(!c.go_forward_history(0));
+        assert!(!c.go_back_history(9));
     }
 
     /// "Mover al otro panel" con dos paneles: copia la selección al directorio del otro panel

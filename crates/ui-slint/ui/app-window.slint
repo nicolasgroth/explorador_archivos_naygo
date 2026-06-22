@@ -22,6 +22,7 @@ import { Help } from "help.slint";
 import { CommandPalette } from "command-palette.slint";
 import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
 import { PaletteItemVm } from "types.slint";
+import { HistoryItemVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -491,6 +492,77 @@ component MenuItem inherits Rectangle {
     }
 }
 
+// Ítem de dos líneas para los menús ▾ de historial de Atrás/Adelante: nombre de la carpeta arriba
+// (normal) y ruta completa abajo (atenuada, fuente menor). Clic ↦ saltar a esa carpeta.
+component HistoryMenuItem inherits Rectangle {
+    in property <string> name;
+    in property <string> path;
+    callback clicked();
+    height: 38px;
+    background: hmi-touch.has-hover ? Theme.selection-bg : transparent;
+    border-radius: 4px;
+    VerticalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        spacing: 1px;
+        Text {
+            text: root.name;
+            color: Theme.text;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.path;
+            color: Theme.text-dim;
+            font-size: 11px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    hmi-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// Triángulo ▾ angosto junto a los botones Atrás/Adelante: abre el menú de historial en esa
+// dirección. Se atenúa y no responde cuando no hay historial (mismo gesto visual que el botón).
+// El ▾ se dibuja con Path (el render por software no pinta glifos de fuente). Publica `clicked`
+// con la x absoluta de su centro para anclar el menú flotante.
+component HistoryCaret inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback clicked(length);
+    callback hover-tip(string, length);
+    property <color> tint: root.enabled ? white : Theme.text-dim;
+    width: 14px;
+    border-radius: 7px;
+    background: (hc-touch.has-hover && root.enabled) ? Theme.selection-bg : Theme.row-bg;
+    Path {
+        width: 10px;
+        height: 10px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        MoveTo { x: 2; y: 4; }
+        LineTo { x: 5; y: 7; }
+        LineTo { x: 8; y: 4; }
+    }
+    hc-touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(root.absolute-position.x + root.width / 2); }
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Naygo";
     preferred-width: 1000px;
@@ -512,6 +584,18 @@ export component AppWindow inherits Window {
     // Estado de los botones Atrás/Adelante (Rust los actualiza tras cada navegación).
     in property <bool> can-go-back: false;
     in property <bool> can-go-forward: false;
+    // Menús ▾ de historial de los botones Atrás/Adelante: cada ▾ abre la lista de carpetas en SU
+    // dirección y permite saltar a una. Rust arma `history-items` según el menú que se abra y luego
+    // setea las x/open de ese menú. Los índices del menú van de la carpeta más cercana a la lejana.
+    callback open-back-history(length);    // x de anclaje del ▾ de Atrás
+    callback open-forward-history(length); // x de anclaje del ▾ de Adelante
+    callback go-back-history(int);         // saltar a la entrada N del menú de Atrás
+    callback go-forward-history(int);      // saltar a la entrada N del menú de Adelante
+    in property <[HistoryItemVm]> history-items;
+    in-out property <length> back-history-menu-x: 0;
+    in-out property <bool> back-history-menu-open: false;
+    in-out property <length> fwd-history-menu-x: 0;
+    in-out property <bool> fwd-history-menu-open: false;
     callback add-pane();
     callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
                                       // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
@@ -812,6 +896,13 @@ export component AppWindow inherits Window {
                     clicked => { root.go-back(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                // ▾ del historial hacia atrás (lista las carpetas anteriores del panel activo).
+                HistoryCaret {
+                    enabled: root.can-go-back;
+                    tip: Tr.nav-back-history-tip;
+                    clicked(x) => { root.open-back-history(x); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 ToolBtn {
                     draw-forward: true;
                     icon-only: true;
@@ -819,6 +910,13 @@ export component AppWindow inherits Window {
                     tip: Tr.nav-forward-tip;
                     btn-width: 34px;
                     clicked => { root.go-forward(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // ▾ del historial hacia adelante (lista las carpetas posteriores del panel activo).
+                HistoryCaret {
+                    enabled: root.can-go-forward;
+                    tip: Tr.nav-forward-history-tip;
+                    clicked(x) => { root.open-forward-history(x); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolBtn {
@@ -980,8 +1078,10 @@ export component AppWindow inherits Window {
                     clicked => { root.nav-drive(d.path); }
                     eject-menu(x) => {
                         // Abrir el menú flotante de expulsión anclado a este disco.
-                        // Cerrar el menú de historial para que nunca haya dos menús abiertos a la vez.
+                        // Cerrar los demás menús para que nunca haya dos abiertos a la vez.
                         root.history-menu-open = false;
+                        root.back-history-menu-open = false;
+                        root.fwd-history-menu-open = false;
                         root.drive-menu-path = d.path;
                         root.drive-menu-x = x;
                     }
@@ -1498,6 +1598,62 @@ export component AppWindow inherits Window {
                 clicked => {
                     root.history-pick(r.path);
                     root.history-menu-open = false;
+                }
+            }
+        }
+    }
+
+    // Menú ▾ del historial hacia ATRÁS del panel activo. Mismo patrón que el de recientes/USB:
+    // velo invisible que cierra al clic afuera + Rectangle anclado al ▾. Cada ítem muestra el
+    // nombre de la carpeta (normal) y su ruta completa (atenuada, fuente menor). Clic ↦ saltar.
+    if root.back-history-menu-open: TouchArea {
+        clicked => { root.back-history-menu-open = false; }
+    }
+    if root.back-history-menu-open: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.back-history-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 300px;
+        height: back-hist-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        back-hist-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            for it[i] in root.history-items: HistoryMenuItem {
+                name: it.name;
+                path: it.path;
+                clicked => {
+                    root.go-back-history(i);
+                    root.back-history-menu-open = false;
+                }
+            }
+        }
+    }
+
+    // Menú ▾ del historial hacia ADELANTE del panel activo (espejo del de atrás).
+    if root.fwd-history-menu-open: TouchArea {
+        clicked => { root.fwd-history-menu-open = false; }
+    }
+    if root.fwd-history-menu-open: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.fwd-history-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 300px;
+        height: fwd-hist-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        fwd-hist-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            for it[i] in root.history-items: HistoryMenuItem {
+                name: it.name;
+                path: it.path;
+                clicked => {
+                    root.go-forward-history(i);
+                    root.fwd-history-menu-open = false;
                 }
             }
         }

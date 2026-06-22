@@ -2587,8 +2587,11 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_history_rows(ModelRc::new(VecModel::from(rows)));
                 ui.set_history_menu_x(x);
-                // Cerrar el menú de discos para que nunca haya dos menús abiertos a la vez.
+                // Cerrar los demás menús para que nunca haya dos abiertos a la vez (discos +
+                // historiales ▾ de Atrás/Adelante).
                 ui.set_drive_menu_path("".into());
+                ui.set_back_history_menu_open(false);
+                ui.set_fwd_history_menu_open(false);
                 ui.set_history_menu_open(true);
             }
         });
@@ -2603,6 +2606,81 @@ fn main() -> Result<(), slint::PlatformError> {
             if ctrl
                 .borrow_mut()
                 .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+            {
+                start_timer();
+            }
+            sync_layout();
+            sync_rows();
+        });
+    }
+    // ▾ del botón Atrás: arma las carpetas hacia atrás del panel activo y abre el menú anclado.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_open_back_history(move |x| {
+            let items: Vec<HistoryItemVm> = ctrl
+                .borrow()
+                .back_history_entries()
+                .iter()
+                .map(|p| path_to_history_item(p))
+                .collect();
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_history_items(ModelRc::new(VecModel::from(items)));
+                ui.set_back_history_menu_x(x);
+                // No tener dos menús abiertos a la vez: cerrar adelante + recientes + discos.
+                ui.set_fwd_history_menu_open(false);
+                ui.set_history_menu_open(false);
+                ui.set_drive_menu_path("".into());
+                ui.set_back_history_menu_open(true);
+            }
+        });
+    }
+    // ▾ del botón Adelante: arma las carpetas hacia adelante del panel activo y abre el menú.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_open_forward_history(move |x| {
+            let items: Vec<HistoryItemVm> = ctrl
+                .borrow()
+                .forward_history_entries()
+                .iter()
+                .map(|p| path_to_history_item(p))
+                .collect();
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_history_items(ModelRc::new(VecModel::from(items)));
+                ui.set_fwd_history_menu_x(x);
+                ui.set_back_history_menu_open(false);
+                ui.set_history_menu_open(false);
+                ui.set_drive_menu_path("".into());
+                ui.set_fwd_history_menu_open(true);
+            }
+        });
+    }
+    // Elegir una entrada del menú ▾ de Atrás: el controlador traduce el índice del menú al de la
+    // pila y salta sin re-apilar. Refresca el listado y los menús se cierran solos en la UI.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_go_back_history(move |menu_index| {
+            if ctrl.borrow_mut().go_back_history(menu_index.max(0) as usize) {
+                start_timer();
+            }
+            sync_layout();
+            sync_rows();
+        });
+    }
+    // Elegir una entrada del menú ▾ de Adelante: ídem con la rama de adelante.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_go_forward_history(move |menu_index| {
+            if ctrl
+                .borrow_mut()
+                .go_forward_history(menu_index.max(0) as usize)
             {
                 start_timer();
             }
@@ -3967,6 +4045,22 @@ fn to_hist_row(r: bridge::HistRow) -> HistRow {
         count: r.count,
         undoable: r.undoable,
         reason: SharedString::from(r.reason.as_str()),
+    }
+}
+
+/// Convierte una ruta de la pila de navegación en una entrada del menú ▾ de historial: `name` es
+/// el nombre de la carpeta (o la ruta completa si es raíz, p. ej. "C:\") y `path` la ruta completa
+/// atenuada. Lo consumen los menús de Atrás/Adelante de la toolbar.
+fn path_to_history_item(p: &std::path::Path) -> HistoryItemVm {
+    let display = p.display().to_string();
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| display.clone());
+    HistoryItemVm {
+        name: SharedString::from(name),
+        path: SharedString::from(display),
     }
 }
 

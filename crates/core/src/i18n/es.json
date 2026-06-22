@@ -5,6 +5,8 @@
   "slint.toolbar.back_tip": "Atrás (Alt+←)",
   "slint.toolbar.forward_tip": "Adelante (Alt+→)",
   "slint.toolbar.home_tip": "Ir al inicio (Alt+Inicio)",
+  "slint.toolbar.back_history": "Historial hacia atrás",
+  "slint.toolbar.forward_history": "Historial hacia adelante",
   "slint.toolbar.add": "Dividir: nuevo panel de archivos",
   "slint.toolbar.panel": "Panel",
   "slint.toolbar.swap": "Swap",
