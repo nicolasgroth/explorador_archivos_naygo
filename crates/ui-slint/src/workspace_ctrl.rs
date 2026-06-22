@@ -755,6 +755,13 @@ impl WorkspaceCtrl {
         self.listings.insert(id, Listing::start(dir));
     }
 
+    /// Invalida la caché de disco del footer. La llama main.rs cuando cambian los dispositivos
+    /// (USB conectado/expulsado, vía `on_wake`/`drives_changed`), para que el espacio libre del
+    /// footer siga esos eventos aunque el panel no haya navegado.
+    pub fn invalidate_footer_disk_cache(&mut self) {
+        self.footer_disk_cache.clear();
+    }
+
     /// El preset de footer EFECTIVO: si el guardado es `Custom`, usa el template del usuario
     /// (`footer_custom_template`), que es donde vive realmente (la variante puede traer string
     /// vacío). Para el resto, devuelve el preset tal cual.
@@ -3558,10 +3565,8 @@ impl WorkspaceCtrl {
         self.navigate_active_to(home)
     }
 
-    /// ¿El panel activo puede ir Atrás? (para habilitar/deshabilitar el botón del toolbar).
-    /// El consumidor son los botones Atrás/Adelante del toolbar, que se cablean después; el
-    /// `allow(dead_code)` se quita cuando esos botones lean este estado.
-    #[allow(dead_code)]
+    /// ¿El panel activo puede ir Atrás? Lo consumen los botones Atrás/Adelante del toolbar
+    /// (main.rs los lee tras cada navegación para habilitarlos/deshabilitarlos).
     pub fn can_go_back(&self) -> bool {
         self.ws
             .active_files()
@@ -3569,9 +3574,7 @@ impl WorkspaceCtrl {
             .unwrap_or(false)
     }
 
-    /// ¿El panel activo puede ir Adelante? (para habilitar/deshabilitar el botón del toolbar).
-    /// Mismo consumidor pendiente que `can_go_back`.
-    #[allow(dead_code)]
+    /// ¿El panel activo puede ir Adelante? Mismo consumidor que `can_go_back`.
     pub fn can_go_forward(&self) -> bool {
         self.ws
             .active_files()

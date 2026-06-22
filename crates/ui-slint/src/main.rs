@@ -946,6 +946,9 @@ fn main() -> Result<(), slint::PlatformError> {
             if !devices.drives_changed() {
                 return;
             }
+            // El espacio en disco pudo cambiar (USB conectado/expulsado): invalida la caché del
+            // footer para que se relea en el próximo tick, igual que se refresca la tira de discos.
+            ctrl.borrow_mut().invalidate_footer_disk_cache();
             let moved = ctrl.borrow_mut().relocate_orphans(&home);
             for id in moved {
                 let dir = ctrl
