@@ -650,12 +650,12 @@ mod tests {
                 crate::preview::PreviewRule {
                     ext: "sif".into(),
                     enabled: true,
-                    treat_as: Some("xml".into()),
+                    view: crate::preview::ViewMode::Code(crate::preview::CodeLang::Xml),
                 },
                 crate::preview::PreviewRule {
                     ext: "png".into(),
                     enabled: false,
-                    treat_as: None,
+                    view: crate::preview::ViewMode::Auto,
                 },
             ],
             preview_text_exts_legacy: String::new(),

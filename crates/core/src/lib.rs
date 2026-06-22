@@ -19,6 +19,7 @@ pub mod favorites;
 pub mod filter;
 pub mod format;
 pub mod fs_model;
+pub mod highlight;
 pub mod i18n;
 pub mod icon_kind;
 pub mod icon_set;

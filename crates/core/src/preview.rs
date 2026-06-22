@@ -56,17 +56,128 @@ pub const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Lado máximo (px) de la textura de la imagen: si excede, se reescala antes de subirla.
 pub const IMAGE_MAX_SIDE: u32 = 1024;
 
-/// Regla de previsualización para UNA extensión: si se previsualiza y, opcionalmente,
-/// como qué otra extensión tratarla (alias). Editable en Configuración.
+/// Lenguaje para el resaltado de sintaxis (set curado). `as_str` es la clave estable de
+/// serialización y el nombre que `core::highlight` mapea a la gramática de syntect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CodeLang {
+    Xml,
+    Json,
+    Html,
+    Css,
+    JavaScript,
+    C,
+    Cpp,
+    Java,
+    Python,
+    Rust,
+    Sql,
+    Bash,
+    Markdown,
+    Yaml,
+    Toml,
+    Ini,
+}
+
+impl CodeLang {
+    /// Clave estable (serialización + búsqueda). Minúsculas, sin espacios.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CodeLang::Xml => "xml",
+            CodeLang::Json => "json",
+            CodeLang::Html => "html",
+            CodeLang::Css => "css",
+            CodeLang::JavaScript => "javascript",
+            CodeLang::C => "c",
+            CodeLang::Cpp => "cpp",
+            CodeLang::Java => "java",
+            CodeLang::Python => "python",
+            CodeLang::Rust => "rust",
+            CodeLang::Sql => "sql",
+            CodeLang::Bash => "bash",
+            CodeLang::Markdown => "markdown",
+            CodeLang::Yaml => "yaml",
+            CodeLang::Toml => "toml",
+            CodeLang::Ini => "ini",
+        }
+    }
+
+    /// El lenguaje cuya clave es `s`, o `None` si ninguno coincide.
+    pub fn from_str(s: &str) -> Option<CodeLang> {
+        CodeLang::all().into_iter().find(|l| l.as_str() == s)
+    }
+
+    /// Todos los lenguajes en orden estable (para poblar el combobox).
+    pub fn all() -> [CodeLang; 16] {
+        [
+            CodeLang::Xml,
+            CodeLang::Json,
+            CodeLang::Html,
+            CodeLang::Css,
+            CodeLang::JavaScript,
+            CodeLang::C,
+            CodeLang::Cpp,
+            CodeLang::Java,
+            CodeLang::Python,
+            CodeLang::Rust,
+            CodeLang::Sql,
+            CodeLang::Bash,
+            CodeLang::Markdown,
+            CodeLang::Yaml,
+            CodeLang::Toml,
+            CodeLang::Ini,
+        ]
+    }
+}
+
+/// Modo de previsualización forzado por extensión. `Auto` = clasificación por extensión
+/// (el comportamiento histórico); los demás fuerzan el tipo.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ViewMode {
+    #[default]
+    Auto,
+    Text,
+    Image,
+    Code(CodeLang),
+}
+
+/// Regla de previsualización para UNA extensión: si se previsualiza y con qué modo de vista.
+/// Editable en Configuración.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewRule {
     /// Extensión sin punto, en minúscula ("sif", "txt", "png").
     pub ext: String,
     /// Si se previsualiza esta extensión.
     pub enabled: bool,
-    /// Tratar la extensión como otra (alias). `Some("xml")` => un .sif se clasifica
-    /// como .xml. `None` => por sí misma.
-    pub treat_as: Option<String>,
+    /// Modo de vista: `Auto` clasifica por extensión; `Text`/`Image`/`Code(lang)` fuerzan.
+    #[serde(default)]
+    pub view: ViewMode,
+}
+
+/// Construye una regla desde el formato viejo (`treat_as` como alias de extensión), para
+/// migrar settings.json previos: alias de lenguaje conocido → `Code`; alias de imagen →
+/// `Image`; alias de texto → `Text`; resto (o `None`) → `Auto`.
+pub fn rule_from_legacy(ext: &str, enabled: bool, treat_as: Option<&str>) -> PreviewRule {
+    let view = match treat_as {
+        None => ViewMode::Auto,
+        Some(a) => {
+            let a = a.trim().trim_start_matches('.').to_lowercase();
+            if let Some(l) = CodeLang::from_str(&a) {
+                ViewMode::Code(l)
+            } else if IMAGE_EXTENSIONS.contains(&a.as_str()) || SVG_EXTENSIONS.contains(&a.as_str())
+            {
+                ViewMode::Image
+            } else if DEFAULT_TEXT_EXTENSIONS.contains(&a.as_str()) {
+                ViewMode::Text
+            } else {
+                ViewMode::Auto
+            }
+        }
+    };
+    PreviewRule {
+        ext: ext.to_string(),
+        enabled,
+        view,
+    }
 }
 
 /// Clasifica una ruta según las reglas configuradas. Resuelve el alias `treat_as` (un
@@ -86,9 +197,30 @@ pub fn classify_rules(path: &std::path::Path, rules: &[PreviewRule]) -> PreviewK
     if !rule.enabled {
         return PreviewKind::None;
     }
-    // Extensión efectiva: el alias si lo hay (un salto), si no la propia.
-    let effective = rule.treat_as.as_deref().unwrap_or(&ext);
-    kind_of_extension(effective)
+    // El modo de vista decide: Auto clasifica por la propia extensión; el resto fuerza.
+    // Code(_) se previsualiza como texto (el lenguaje se lee aparte con `code_lang_for`).
+    match &rule.view {
+        ViewMode::Auto => kind_of_extension(&ext),
+        ViewMode::Text => PreviewKind::Text,
+        ViewMode::Image => PreviewKind::Image,
+        ViewMode::Code(_) => PreviewKind::Text,
+    }
+}
+
+/// Si la regla de `path` fuerza un lenguaje de código, devuelve cuál (para el resaltado de
+/// sintaxis). `None` si no hay regla, está deshabilitada, o el modo no es `Code`.
+pub fn code_lang_for(path: &std::path::Path, rules: &[PreviewRule]) -> Option<CodeLang> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    rules
+        .iter()
+        .find(|r| r.ext == ext && r.enabled)
+        .and_then(|r| match r.view {
+            ViewMode::Code(l) => Some(l),
+            _ => None,
+        })
 }
 
 /// Tipo intrínseco de una extensión (sin reglas): imagen fija, o texto si está en la
@@ -113,7 +245,7 @@ pub fn default_preview_rules() -> Vec<PreviewRule> {
     let mk = |e: &&str| PreviewRule {
         ext: (*e).to_string(),
         enabled: true,
-        treat_as: None,
+        view: ViewMode::Auto,
     };
     DEFAULT_TEXT_EXTENSIONS
         .iter()
@@ -132,7 +264,7 @@ pub fn rules_from_csv(csv: &str) -> Vec<PreviewRule> {
         .map(|ext| PreviewRule {
             ext,
             enabled: true,
-            treat_as: None,
+            view: ViewMode::Auto,
         })
         .collect();
     // Agregar las imágenes + SVG + PDF que falten (habilitadas).
@@ -145,7 +277,7 @@ pub fn rules_from_csv(csv: &str) -> Vec<PreviewRule> {
             rules.push(PreviewRule {
                 ext: (*ext).to_string(),
                 enabled: true,
-                treat_as: None,
+                view: ViewMode::Auto,
             });
         }
     }
@@ -389,32 +521,32 @@ mod tests {
             PreviewRule {
                 ext: "txt".into(),
                 enabled: true,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
             PreviewRule {
                 ext: "log".into(),
                 enabled: false,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
             PreviewRule {
                 ext: "sif".into(),
                 enabled: true,
-                treat_as: Some("xml".into()),
+                view: ViewMode::Code(CodeLang::Xml),
             },
             PreviewRule {
                 ext: "xml".into(),
                 enabled: true,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
             PreviewRule {
                 ext: "png".into(),
                 enabled: true,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
             PreviewRule {
                 ext: "jpg".into(),
                 enabled: false,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
         ];
         assert_eq!(
@@ -454,17 +586,17 @@ mod tests {
             PreviewRule {
                 ext: "raw".into(),
                 enabled: true,
-                treat_as: Some("png".into()),
+                view: ViewMode::Image,
             },
             PreviewRule {
                 ext: "png".into(),
                 enabled: true,
-                treat_as: None,
+                view: ViewMode::Auto,
             },
             PreviewRule {
                 ext: "weird".into(),
                 enabled: true,
-                treat_as: Some("zzz".into()),
+                view: ViewMode::Auto,
             },
         ];
         // raw -> png -> imagen.
@@ -484,7 +616,7 @@ mod tests {
         let rules = default_preview_rules();
         assert!(rules.iter().any(|r| r.ext == "txt" && r.enabled));
         assert!(rules.iter().any(|r| r.ext == "png" && r.enabled));
-        assert!(rules.iter().all(|r| r.enabled && r.treat_as.is_none()));
+        assert!(rules.iter().all(|r| r.enabled && r.view == ViewMode::Auto));
     }
 
     #[test]
@@ -492,8 +624,49 @@ mod tests {
         let rules = rules_from_csv("txt, md, .RS,, json");
         assert!(rules
             .iter()
-            .any(|r| r.ext == "txt" && r.enabled && r.treat_as.is_none()));
+            .any(|r| r.ext == "txt" && r.enabled && r.view == ViewMode::Auto));
         assert!(rules.iter().any(|r| r.ext == "rs"));
         assert!(rules.iter().any(|r| r.ext == "png"));
+    }
+
+    #[test]
+    fn codelang_round_trip_y_all() {
+        for l in CodeLang::all() {
+            assert_eq!(CodeLang::from_str(l.as_str()), Some(l), "round-trip de {}", l.as_str());
+        }
+        assert_eq!(CodeLang::from_str("noexiste"), None);
+        assert!(CodeLang::all().contains(&CodeLang::Xml));
+        assert!(CodeLang::all().contains(&CodeLang::Json));
+    }
+
+    #[test]
+    fn migra_treat_as_a_view_mode() {
+        // alias a lenguaje conocido -> Code
+        assert_eq!(
+            rule_from_legacy("sif", true, Some("xml")).view,
+            ViewMode::Code(CodeLang::Xml)
+        );
+        // alias a imagen -> Image
+        assert_eq!(rule_from_legacy("raw", true, Some("png")).view, ViewMode::Image);
+        // alias a extensión de texto -> Text
+        assert_eq!(rule_from_legacy("foo", true, Some("txt")).view, ViewMode::Text);
+        // sin alias -> Auto
+        assert_eq!(rule_from_legacy("md", true, None).view, ViewMode::Auto);
+        // alias desconocido -> Auto
+        assert_eq!(rule_from_legacy("zz", true, Some("zzz")).view, ViewMode::Auto);
+    }
+
+    #[test]
+    fn classify_respeta_view_forzado() {
+        let rules = vec![
+            PreviewRule { ext: "dat".into(), enabled: true, view: ViewMode::Code(CodeLang::Json) },
+            PreviewRule { ext: "bin".into(), enabled: true, view: ViewMode::Image },
+        ];
+        // Code(_) se previsualiza como texto; code_lang_for da el lenguaje.
+        assert_eq!(classify_rules(Path::new("a.dat"), &rules), PreviewKind::Text);
+        assert_eq!(code_lang_for(Path::new("a.dat"), &rules), Some(CodeLang::Json));
+        // Image forzado.
+        assert_eq!(classify_rules(Path::new("a.bin"), &rules), PreviewKind::Image);
+        assert_eq!(code_lang_for(Path::new("a.bin"), &rules), None);
     }
 }
