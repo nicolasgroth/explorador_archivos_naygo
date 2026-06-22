@@ -461,6 +461,25 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.no_matches = nm;
                             changed = true;
                         }
+                        // Aviso "carpeta no encontrada": hay que refrescarlo en cada tick (no solo
+                        // en sync_layout). Sin esto, al "subir nivel" / "elegir otra" / "reintentar"
+                        // el panel navegaba a una carpeta válida pero el campo `missing` quedaba
+                        // pegado en true y el aviso seguía tapando el listado.
+                        let miss = c.pane_dir_missing(id);
+                        if pv.missing != miss {
+                            pv.missing = miss;
+                            changed = true;
+                        }
+                        let miss_path = SharedString::from(c.path_of(id).as_str());
+                        if pv.missing_path != miss_path {
+                            pv.missing_path = miss_path;
+                            changed = true;
+                        }
+                        let miss_anc = c.pane_has_existing_ancestor(id);
+                        if pv.missing_has_ancestor != miss_anc {
+                            pv.missing_has_ancestor = miss_anc;
+                            changed = true;
+                        }
                         // Estado del botón de vista profunda: on/off según el job activo.
                         let deep = c.is_deep_active(id);
                         if pv.deep_active != deep {
