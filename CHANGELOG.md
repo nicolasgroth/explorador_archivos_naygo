@@ -50,6 +50,10 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
+- Temas claros (Light, macOS, Windows XP, Citrus Glow): el texto atenuado de las columnas
+  (extensión, tamaño, fecha) se leía muy flojo sobre el fondo claro. Ahora tiene mejor contraste.
+- Vista previa de código: las líneas largas ya no se cortan; el código se desplaza en horizontal
+  como en un editor (conservando los colores y la indentación).
 - Al confirmar el borrado de un archivo, pulsar Enter ahora activa "Eliminar" en vez de abrir
   el archivo de fondo. (El teclado del panel se suspende mientras hay un diálogo abierto.)
 - Hacer clic en el panel de Vista previa (o Propiedades) ya no pierde la selección del archivo:
