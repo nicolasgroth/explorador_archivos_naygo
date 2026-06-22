@@ -176,6 +176,8 @@ pub enum Action {
     GoFavorite7,
     GoFavorite8,
     GoFavorite9,
+    /// Abrir la paleta de comandos (Ctrl+P).
+    CommandPalette,
 }
 
 impl Action {
@@ -235,6 +237,7 @@ impl Action {
             GoFavorite7,
             GoFavorite8,
             GoFavorite9,
+            CommandPalette,
         ]
     }
 
@@ -294,6 +297,7 @@ impl Action {
             GoFavorite7 => "action.go_favorite_7",
             GoFavorite8 => "action.go_favorite_8",
             GoFavorite9 => "action.go_favorite_9",
+            CommandPalette => "action.command_palette",
         }
     }
 
@@ -388,6 +392,8 @@ impl KeyMap {
             (GoFavorite7, vec![Chord::ctrl(Char('7'))]),
             (GoFavorite8, vec![Chord::ctrl(Char('8'))]),
             (GoFavorite9, vec![Chord::ctrl(Char('9'))]),
+            // Paleta de comandos: Ctrl+P abre el buscador de acciones.
+            (CommandPalette, vec![Chord::ctrl(Char('p'))]),
         ];
         KeyMap { bindings: b }
     }
@@ -507,13 +513,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_52_acciones_con_clave_i18n_unica() {
+    fn all_tiene_53_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 52);
+        assert_eq!(all.len(), 53);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 52, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 53, "cada acción tiene una clave i18n única");
+    }
+
+    #[test]
+    fn ctrl_p_dispara_la_paleta() {
+        let km = KeyMap::defaults();
+        let chord = Chord::ctrl(KeyCode::Char('p'));
+        assert_eq!(km.action_for(&chord), Some(Action::CommandPalette));
     }
 
     #[test]

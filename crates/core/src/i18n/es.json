@@ -111,6 +111,7 @@
   "action.go_favorite_7": "Ir al favorito 7",
   "action.go_favorite_8": "Ir al favorito 8",
   "action.go_favorite_9": "Ir al favorito 9",
+  "action.command_palette": "Paleta de comandos",
   "pathbar.copy": "Copiar la ruta al portapapeles",
   "pathbar.copied": "Ruta copiada al portapapeles",
   "pathbar.fav_add": "Agregar esta carpeta a Favoritos",

@@ -111,6 +111,7 @@
   "action.go_favorite_7": "Go to favorite 7",
   "action.go_favorite_8": "Go to favorite 8",
   "action.go_favorite_9": "Go to favorite 9",
+  "action.command_palette": "Command palette",
   "pathbar.copy": "Copy the path to the clipboard",
   "pathbar.copied": "Path copied to the clipboard",
   "pathbar.fav_add": "Add this folder to Favorites",
