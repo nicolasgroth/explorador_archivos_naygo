@@ -29,6 +29,7 @@ pub mod keymap;
 pub mod listing;
 pub mod listing_cache;
 pub mod ops;
+pub mod palette;
 pub mod path_segments;
 pub mod preview;
 pub mod recent_dirs;
