@@ -213,6 +213,12 @@ where
     tr.set_cfg_preview_add_ph(c.t("slint.cfg.preview_add_ph").into());
     tr.set_cfg_preview_add_title(c.t("slint.cfg.preview_add_title").into());
     tr.set_cfg_preview_as_ph(c.t("slint.cfg.preview_as_ph").into());
+    tr.set_preview_view_auto(c.t("slint.preview.view_auto").into());
+    tr.set_preview_view_text(c.t("slint.preview.view_text").into());
+    tr.set_preview_view_image(c.t("slint.preview.view_image").into());
+    tr.set_preview_view_code(c.t("slint.preview.view_code").into());
+    tr.set_preview_lang(c.t("slint.preview.lang").into());
+    tr.set_preview_open_tip(c.t("slint.preview.open_tip").into());
     tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());

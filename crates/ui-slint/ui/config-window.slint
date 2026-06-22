@@ -168,15 +168,22 @@ export component ConfigWindow inherits Window {
     callback clear-default-table();
     // Reglas de previsualización (C3):
     in property <[PreviewRuleVm]> preview-rules;
+    // Nombres legibles de los lenguajes de código (orden de CodeLang::all()), poblados desde Rust.
+    in property <[string]> lang-names;
     // Novedades de esta versión (Acerca de, cat 8):
     in property <[NewsSection]> release-notes;
     callback preview-toggle(string);
-    callback preview-set-as(string, string);
+    // Modo de vista (0=Auto 1=Texto 2=Imagen 3=Código) y lenguaje (índice en lang-names) por ext.
+    callback preview-set-view-mode(string, int);
+    callback preview-set-view-lang(string, int);
     callback preview-remove(string);
     callback preview-add(string);
     property <string> preview-add-draft: "";
-    // Borrador del "tratar como" de la fila de alta (ej. "xml"); se aplica al agregar.
-    property <string> preview-add-as-draft: "";
+    // Borradores del modo de vista / lenguaje de la fila de alta; se aplican al agregar.
+    property <int> preview-add-view-draft: 0;
+    property <int> preview-add-lang-draft: 0;
+    // Etiquetas de los 4 modos de vista, para los combobox (orden = índice del modo).
+    property <[string]> view-mode-names: [Tr.preview-view-auto, Tr.preview-view-text, Tr.preview-view-image, Tr.preview-view-code];
     // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
     property <bool> reset-armed: false;
     // Atajos:
@@ -695,11 +702,19 @@ export component ConfigWindow inherits Window {
                                                         toggled => { root.preview-toggle(r.ext); }
                                                     }
                                                 }
-                                                LineEdit {
+                                                // Modo de vista de la regla.
+                                                ThemeCombo {
                                                     horizontal-stretch: 1;
-                                                    text: r.treat-as;
-                                                    placeholder-text: "—";
-                                                    edited(t) => { root.preview-set-as(r.ext, t); }
+                                                    model: root.view-mode-names;
+                                                    current-index: r.view-index;
+                                                    selected => { root.preview-set-view-mode(r.ext, self.current-index); }
+                                                }
+                                                // Lenguaje (solo cuando el modo es Código).
+                                                if r.view-index == 3: ThemeCombo {
+                                                    horizontal-stretch: 1;
+                                                    model: root.lang-names;
+                                                    current-index: r.lang-index;
+                                                    selected => { root.preview-set-view-lang(r.ext, self.current-index); }
                                                 }
                                                 // Quitar la regla: ✕ dibujada con Path (visible en
                                                 // software-render) + borde para que se lea como botón.
@@ -725,48 +740,57 @@ export component ConfigWindow inherits Window {
                                         }
                                     }
                                 }
-                                // Alta de una extensión nueva: escribís la extensión y, opcional,
-                                // cómo tratarla en el preview (ej. "sif" → "xml"). El botón Agregar
-                                // crea la regla y le aplica el "tratar como" si lo pusiste.
+                                // Alta de una extensión nueva: la extensión + el modo de vista (y el
+                                // lenguaje si es Código). El botón Agregar crea la regla y le aplica el
+                                // modo elegido.
                                 Rectangle { height: 4px; }
                                 Text {
                                     text: Tr.cfg-preview-add-title;
                                     color: Theme.text-dim;
                                     font-size: 12px;
                                 }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    // Extensión (ej. sif).
-                                    LineEdit {
-                                        width: 110px;
-                                        text: root.preview-add-draft;
-                                        placeholder-text: Tr.cfg-preview-add-ph;
-                                        edited(t) => { root.preview-add-draft = t; }
-                                    }
-                                    // Tratar como (ej. xml / txt). Opcional.
-                                    LineEdit {
-                                        horizontal-stretch: 1;
-                                        text: root.preview-add-as-draft;
-                                        placeholder-text: Tr.cfg-preview-as-ph;
-                                        edited(t) => { root.preview-add-as-draft = t; }
-                                        accepted => {
-                                            root.preview-add(root.preview-add-draft);
-                                            if (root.preview-add-as-draft != "") {
-                                                root.preview-set-as(root.preview-add-draft, root.preview-add-as-draft);
-                                            }
-                                            root.preview-add-draft = "";
-                                            root.preview-add-as-draft = "";
+                                // Crea la regla y le aplica el modo de vista / lenguaje del borrador,
+                                // luego limpia los borradores. Reutilizado por el botón y el accepted.
+                                add-fn := Rectangle {
+                                    function add-rule() {
+                                        root.preview-add(root.preview-add-draft);
+                                        if (root.preview-add-view-draft != 0) {
+                                            root.preview-set-view-mode(root.preview-add-draft, root.preview-add-view-draft);
                                         }
+                                        if (root.preview-add-view-draft == 3) {
+                                            root.preview-set-view-lang(root.preview-add-draft, root.preview-add-lang-draft);
+                                        }
+                                        root.preview-add-draft = "";
+                                        root.preview-add-view-draft = 0;
+                                        root.preview-add-lang-draft = 0;
                                     }
-                                    CfgBtn {
-                                        label: Tr.cfg-preview-add;
-                                        clicked => {
-                                            root.preview-add(root.preview-add-draft);
-                                            if (root.preview-add-as-draft != "") {
-                                                root.preview-set-as(root.preview-add-draft, root.preview-add-as-draft);
-                                            }
-                                            root.preview-add-draft = "";
-                                            root.preview-add-as-draft = "";
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        // Extensión (ej. sif).
+                                        LineEdit {
+                                            width: 110px;
+                                            text: root.preview-add-draft;
+                                            placeholder-text: Tr.cfg-preview-add-ph;
+                                            edited(t) => { root.preview-add-draft = t; }
+                                            accepted => { add-fn.add-rule(); }
+                                        }
+                                        // Modo de vista del alta.
+                                        ThemeCombo {
+                                            horizontal-stretch: 1;
+                                            model: root.view-mode-names;
+                                            current-index: root.preview-add-view-draft;
+                                            selected => { root.preview-add-view-draft = self.current-index; }
+                                        }
+                                        // Lenguaje (solo si el modo de alta es Código).
+                                        if root.preview-add-view-draft == 3: ThemeCombo {
+                                            horizontal-stretch: 1;
+                                            model: root.lang-names;
+                                            current-index: root.preview-add-lang-draft;
+                                            selected => { root.preview-add-lang-draft = self.current-index; }
+                                        }
+                                        CfgBtn {
+                                            label: Tr.cfg-preview-add;
+                                            clicked => { add-fn.add-rule(); }
                                         }
                                     }
                                 }

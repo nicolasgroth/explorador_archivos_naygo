@@ -1912,18 +1912,29 @@ impl WorkspaceCtrl {
 
     // --- Reglas de previsualización (C3) ---
 
-    /// Reglas de preview actuales (espejo para la UI): (extensión, habilitada, tratar-como).
-    pub fn preview_rules(&self) -> Vec<(String, bool, String)> {
+    /// Reglas de preview actuales (espejo para la UI): (extensión, habilitada, índice de modo de
+    /// vista, índice de lenguaje). El modo de vista es 0=Auto 1=Texto 2=Imagen 3=Código; el índice
+    /// de lenguaje es la posición en `CodeLang::all()` (0 si el modo no es Código).
+    pub fn preview_rules(&self) -> Vec<(String, bool, i32, i32)> {
+        use naygo_core::preview::{CodeLang, ViewMode};
         self.config
             .settings
             .preview_rules
             .iter()
             .map(|r| {
-                (
-                    r.ext.clone(),
-                    r.enabled,
-                    r.treat_as.clone().unwrap_or_default(),
-                )
+                let (view_idx, lang_idx) = match &r.view {
+                    ViewMode::Auto => (0, 0),
+                    ViewMode::Text => (1, 0),
+                    ViewMode::Image => (2, 0),
+                    ViewMode::Code(l) => {
+                        let li = CodeLang::all()
+                            .iter()
+                            .position(|c| c == l)
+                            .unwrap_or(0) as i32;
+                        (3, li)
+                    }
+                };
+                (r.ext.clone(), r.enabled, view_idx, lang_idx)
             })
             .collect()
     }
@@ -1942,8 +1953,13 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Fija el alias "tratar como" de la extensión `ext` (vacío = sin alias). Persiste.
-    pub fn preview_rule_set_treat_as(&mut self, ext: &str, treat_as: &str) {
+    /// Fija el modo de vista de la extensión `ext` por índice (0=Auto 1=Texto 2=Imagen 3=Código).
+    /// Al pasar a Código conserva el lenguaje previo si ya lo tenía; si no, parte de XML. Persiste.
+    pub fn preview_rule_set_view_mode(&mut self, ext: &str, idx: i32) {
+        use naygo_core::preview::{CodeLang, ViewMode};
+        // Normaliza igual que `preview_rule_add` (la regla se guarda en minúscula sin punto), para
+        // que el alta — que pasa el texto crudo — encuentre la regla recién creada.
+        let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
         if let Some(r) = self
             .config
             .settings
@@ -1951,8 +1967,37 @@ impl WorkspaceCtrl {
             .iter_mut()
             .find(|r| r.ext == ext)
         {
-            let t = treat_as.trim().to_ascii_lowercase();
-            r.treat_as = if t.is_empty() { None } else { Some(t) };
+            r.view = match idx {
+                1 => ViewMode::Text,
+                2 => ViewMode::Image,
+                3 => match r.view {
+                    // Conserva el lenguaje si ya estaba en Código; si no, XML por defecto.
+                    ViewMode::Code(l) => ViewMode::Code(l),
+                    _ => ViewMode::Code(CodeLang::Xml),
+                },
+                _ => ViewMode::Auto,
+            };
+            self.config.save();
+        }
+    }
+
+    /// Fija el lenguaje de código de la extensión `ext` por índice en `CodeLang::all()`. Fuerza el
+    /// modo a Código. Índice fuera de rango = no-op. Persiste.
+    pub fn preview_rule_set_view_lang(&mut self, ext: &str, idx: i32) {
+        use naygo_core::preview::{CodeLang, ViewMode};
+        let langs = CodeLang::all();
+        let Some(lang) = (idx >= 0).then(|| idx as usize).and_then(|i| langs.get(i)) else {
+            return;
+        };
+        let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+        if let Some(r) = self
+            .config
+            .settings
+            .preview_rules
+            .iter_mut()
+            .find(|r| r.ext == ext)
+        {
+            r.view = ViewMode::Code(*lang);
             self.config.save();
         }
     }
@@ -1983,7 +2028,7 @@ impl WorkspaceCtrl {
             .push(naygo_core::preview::PreviewRule {
                 ext,
                 enabled: true,
-                treat_as: None,
+                view: naygo_core::preview::ViewMode::Auto,
             });
         self.config.save();
     }
@@ -4379,39 +4424,43 @@ mod tests {
         let cfg = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
-        // Agregar una extensión nueva (normaliza el punto y mayúsculas).
+        // Agregar una extensión nueva (normaliza el punto y mayúsculas). Nace en Auto (modo 0).
         c.preview_rule_add(".SIF");
-        assert!(c.preview_rules().iter().any(|(e, on, _)| e == "sif" && *on));
+        assert!(c
+            .preview_rules()
+            .iter()
+            .any(|(e, on, v, _)| e == "sif" && *on && *v == 0));
         // No duplica.
         c.preview_rule_add("sif");
         assert_eq!(
             c.preview_rules()
                 .iter()
-                .filter(|(e, _, _)| e == "sif")
+                .filter(|(e, _, _, _)| e == "sif")
                 .count(),
             1
         );
-        // Tratar-como.
-        c.preview_rule_set_treat_as("sif", "XML");
+        // Forzar el modo a Código + lenguaje XML (índice 0 en CodeLang::all()).
+        c.preview_rule_set_view_mode("sif", 3);
+        c.preview_rule_set_view_lang("sif", 0);
         assert!(c
             .preview_rules()
             .iter()
-            .any(|(e, _, t)| e == "sif" && t == "xml"));
+            .any(|(e, _, v, l)| e == "sif" && *v == 3 && *l == 0));
         // Alternar.
         c.preview_rule_toggle("sif");
         assert!(c
             .preview_rules()
             .iter()
-            .any(|(e, on, _)| e == "sif" && !*on));
-        // Persistió: reabrir y la regla sigue.
+            .any(|(e, on, _, _)| e == "sif" && !*on));
+        // Persistió: reabrir y la regla sigue (modo Código + XML).
         let c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
         assert!(c2
             .preview_rules()
             .iter()
-            .any(|(e, _, t)| e == "sif" && t == "xml"));
+            .any(|(e, _, v, l)| e == "sif" && *v == 3 && *l == 0));
         // Quitar.
         c.preview_rule_remove("sif");
-        assert!(!c.preview_rules().iter().any(|(e, _, _)| e == "sif"));
+        assert!(!c.preview_rules().iter().any(|(e, _, _, _)| e == "sif"));
     }
 
     /// C4: guardar la tabla del panel activo como plantilla → un panel Files nuevo nace con esas
