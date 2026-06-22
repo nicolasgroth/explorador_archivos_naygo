@@ -191,9 +191,12 @@ impl Theme {
                 name,
                 base,
                 accent: c(0x17, 0x69, 0xe0),
-                panel_bg: c(0xfb, 0xfb, 0xfb),
-                row_bg: c(0xfb, 0xfb, 0xfb),
-                row_alt_bg: c(0xf4, 0xf4, 0xf4),
+                // Fondos en gris suave (no blanco puro): el blanco puro "lava" la vista y hace
+                // que los temas claros se perciban demasiado brillantes. Un gris leve da mejor
+                // confort y sensación de contraste sin tocar el texto.
+                panel_bg: c(0xe8, 0xe8, 0xea),
+                row_bg: c(0xee, 0xee, 0xf0),
+                row_alt_bg: c(0xe4, 0xe4, 0xe7),
                 text: c(0x1f, 0x1f, 0x1f),
                 // Gris medio-oscuro: contrasta bien sobre fondo claro (~7:1). Un gris más claro
                 // (estilo dark mode) queda casi ilegible sobre blanco en las columnas atenuadas.

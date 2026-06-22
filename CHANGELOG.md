@@ -50,8 +50,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
-- Temas claros (Light, macOS, Windows XP, Citrus Glow): el texto atenuado de las columnas
-  (extensión, tamaño, fecha) se leía muy flojo sobre el fondo claro. Ahora tiene mejor contraste.
+- Temas claros (Light, macOS, Windows XP, Citrus Glow): mejor legibilidad. El texto atenuado de
+  las columnas (extensión, tamaño, fecha) tiene más contraste, y los fondos blanco-puro pasaron a
+  grises/cremas suaves para que no "laven" la vista (se veían demasiado brillantes).
+- Aviso "carpeta no encontrada": "Subir un nivel" / "Elegir otra" / "Reintentar" ahora refrescan
+  el panel al instante. Antes el panel sí navegaba pero el aviso seguía tapando el contenido.
 - Vista previa de código: las líneas largas ya no se cortan; el código se desplaza en horizontal
   como en un editor (conservando los colores y la indentación).
 - Al confirmar el borrado de un archivo, pulsar Enter ahora activa "Eliminar" en vez de abrir
