@@ -108,6 +108,33 @@ impl CodeLang {
         CodeLang::all().into_iter().find(|l| l.as_str() == s)
     }
 
+    /// Lenguaje deducido por la extensión de archivo (sin punto, en minúsculas). Cubre las
+    /// extensiones reales (`rs`, `py`, `js`, …), no solo la clave estable: `as_str()` da
+    /// nombres largos ("rust"), pero los archivos llevan la extensión corta. `None` si la
+    /// extensión no corresponde a ningún lenguaje del set.
+    pub fn from_extension(ext: &str) -> Option<CodeLang> {
+        match ext {
+            "xml" => Some(CodeLang::Xml),
+            "json" => Some(CodeLang::Json),
+            "html" | "htm" => Some(CodeLang::Html),
+            "css" => Some(CodeLang::Css),
+            "js" | "mjs" | "cjs" => Some(CodeLang::JavaScript),
+            "ts" => Some(CodeLang::JavaScript),
+            "c" | "h" => Some(CodeLang::C),
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(CodeLang::Cpp),
+            "java" => Some(CodeLang::Java),
+            "py" => Some(CodeLang::Python),
+            "rs" => Some(CodeLang::Rust),
+            "sql" => Some(CodeLang::Sql),
+            "sh" | "bash" => Some(CodeLang::Bash),
+            "md" | "markdown" => Some(CodeLang::Markdown),
+            "yaml" | "yml" => Some(CodeLang::Yaml),
+            "toml" => Some(CodeLang::Toml),
+            "ini" | "cfg" | "conf" => Some(CodeLang::Ini),
+            _ => None,
+        }
+    }
+
     /// Todos los lenguajes en orden estable (para poblar el combobox).
     pub fn all() -> [CodeLang; 16] {
         [
@@ -209,20 +236,45 @@ pub fn classify_rules(path: &std::path::Path, rules: &[PreviewRule]) -> PreviewK
     }
 }
 
-/// Si la regla de `path` fuerza un lenguaje de código, devuelve cuál (para el resaltado de
-/// sintaxis). `None` si no hay regla, está deshabilitada, o el modo no es `Code`.
-pub fn code_lang_for(path: &std::path::Path, rules: &[PreviewRule]) -> Option<CodeLang> {
+/// Lenguaje de código para el resaltado de `path`. Si una regla fuerza `Code(l)`, gana ese
+/// (manda sobre el global). Si la regla es `Auto` (o no hay regla que fuerce Text/Image) y
+/// `auto_highlight` está activo, intenta deducir el lenguaje por la extensión conocida.
+pub fn code_lang_for(
+    path: &std::path::Path,
+    rules: &[PreviewRule],
+    auto_highlight: bool,
+) -> Option<CodeLang> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    rules
-        .iter()
-        .find(|r| r.ext == ext && r.enabled)
-        .and_then(|r| match r.view {
-            ViewMode::Code(l) => Some(l),
-            _ => None,
+    if ext.is_empty() {
+        return None;
+    }
+    let rule = rules.iter().find(|r| r.ext == ext && r.enabled);
+    // 1) Regla que fuerza un lenguaje: manda siempre.
+    if let Some(PreviewRule {
+        view: ViewMode::Code(l),
+        ..
+    }) = rule
+    {
+        return Some(*l);
+    }
+    // 2) Global ON + (regla Auto o sin regla que fuerce Text/Image): deducir por extensión.
+    let forces_non_code = matches!(
+        rule,
+        Some(PreviewRule {
+            view: ViewMode::Text,
+            ..
+        }) | Some(PreviewRule {
+            view: ViewMode::Image,
+            ..
         })
+    );
+    if auto_highlight && !forces_non_code {
+        return CodeLang::from_extension(&ext);
+    }
+    None
 }
 
 /// Tipo intrínseco de una extensión (sin reglas): imagen fija, o texto si está en la
@@ -691,8 +743,9 @@ mod tests {
             classify_rules(Path::new("a.dat"), &rules),
             PreviewKind::Text
         );
+        // La regla fuerza el lenguaje: manda aunque el global esté apagado.
         assert_eq!(
-            code_lang_for(Path::new("a.dat"), &rules),
+            code_lang_for(Path::new("a.dat"), &rules, false),
             Some(CodeLang::Json)
         );
         // Image forzado.
@@ -700,6 +753,28 @@ mod tests {
             classify_rules(Path::new("a.bin"), &rules),
             PreviewKind::Image
         );
-        assert_eq!(code_lang_for(Path::new("a.bin"), &rules), None);
+        assert_eq!(code_lang_for(Path::new("a.bin"), &rules, false), None);
+    }
+
+    #[test]
+    fn auto_highlight_on_resalta_extension_conocida() {
+        let rules = default_preview_rules(); // todas Auto
+        let p = std::path::Path::new("main.rs");
+        // ON: una extensión de código conocida en modo Auto se resalta sola.
+        assert_eq!(code_lang_for(p, &rules, true), Some(CodeLang::Rust));
+        // OFF: en Auto no se resalta.
+        assert_eq!(code_lang_for(p, &rules, false), None);
+    }
+
+    #[test]
+    fn regla_forzada_manda_sobre_el_global() {
+        // Una regla que fuerza Code(Json) se resalta aunque auto_highlight esté OFF.
+        let rules = vec![PreviewRule {
+            ext: "txt".into(),
+            enabled: true,
+            view: ViewMode::Code(CodeLang::Json),
+        }];
+        let p = std::path::Path::new("notas.txt");
+        assert_eq!(code_lang_for(p, &rules, false), Some(CodeLang::Json));
     }
 }

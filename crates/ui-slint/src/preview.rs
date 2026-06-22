@@ -215,7 +215,8 @@ fn build_payload(path: &Path, rules: &[PreviewRule], token: &CancellationToken) 
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
         // Si la regla fuerza un lenguaje, `code_lang_for` lo devuelve y el texto se resalta.
-        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules)),
+        // TODO(footer-block): usar settings.auto_highlight_code
+        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, true)),
         PreviewKind::Image => read_image(path, token),
         PreviewKind::Svg => read_svg(path, token),
         PreviewKind::Pdf => read_pdf(path),
