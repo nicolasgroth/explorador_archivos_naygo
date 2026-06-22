@@ -114,6 +114,28 @@ según su nivel para ver de dónde viene. Los resultados aparecen mientras se re
 y los filtros de columna funcionan sobre toda la lista. El doble clic en una carpeta
 sale de la vista profunda y navega a ella; en un archivo, lo abre.
 
+**Menú de historial en Atrás / Adelante:** junto a los botones **Atrás** y **Adelante**
+de la barra de herramientas hay un pequeño triángulo **▾**. Al pulsarlo se despliega la
+lista de carpetas visitadas en esa dirección (las de "atrás" o las de "adelante" según
+el botón), de modo que puedes saltar directo a cualquiera sin pulsar el botón varias
+veces. El **▾** se atenúa cuando no hay historial en esa dirección.
+
+**Paleta de comandos (Ctrl+P):** un buscador rápido que aparece centrado en la parte
+superior, por encima del resto de la interfaz. Lo abres con **Ctrl+P** (atajo
+configurable en *Configuración → Atajos*). Escribes y la lista se filtra con
+**coincidencia aproximada** (*fuzzy*): las letras que tecleas aparecen en ese orden
+aunque no estén seguidas, y se resaltan las que coinciden. La paleta busca en:
+
+- **Acciones** (Copiar, Renombrar, Calcular tamaño, Refrescar, etc.), mostrando su
+  atajo asociado.
+- **Archivos de la carpeta actual** del panel activo: escribe el nombre y saltas a él.
+- **Carpetas recientes** y **favoritos**.
+- **Temas**.
+
+Navegas con las flechas **↑ / ↓**, **Enter** ejecuta el elemento seleccionado y **Esc**
+cierra. La paleta **no** busca archivos recorriendo subcarpetas del disco; para eso
+está **Ctrl+F** (búsqueda recursiva).
+
 ---
 
 ## 4. Seleccionar
@@ -270,6 +292,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Alt+← / Alt+→ | Atrás / adelante |
 | Alt+Inicio | Ir a la carpeta de inicio |
 | Tab | Cambiar panel activo |
+| Ctrl+P | Abrir la paleta de comandos |
 | F1 | Ayuda |
 | F2 / Shift+F2 | Renombrar / renombrar por lotes |
 | F3 | Calcular el tamaño de la carpeta |
