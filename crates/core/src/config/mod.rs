@@ -241,6 +241,23 @@ pub struct Settings {
     /// (settings viejo sin el campo → 50). El uso real lo clampa a 1..=100.
     #[serde(default = "default_recent_limit")]
     pub recent_limit: usize,
+    /// Mostrar el footer (barra inferior) en cada panel de archivos. `#[serde(default)]`
+    /// retro-compat (settings viejo → true).
+    #[serde(default = "default_footer_enabled")]
+    pub footer_enabled: bool,
+    /// Plantilla del footer (global a todos los paneles). `#[serde(default)]` retro-compat.
+    #[serde(default)]
+    pub footer_preset: crate::footer::FooterPreset,
+    /// Template personalizado del footer (cuando `footer_preset == Custom`). `#[serde(default)]`.
+    #[serde(default)]
+    pub footer_custom_template: String,
+    /// Resaltar automáticamente el código de extensiones conocidas en modo Auto del preview.
+    /// `#[serde(default)]` retro-compat (settings viejo → true).
+    #[serde(default = "default_auto_highlight_code")]
+    pub auto_highlight_code: bool,
+    /// Carpeta de inicio (botón Home). Vacío = carpeta personal del usuario. `#[serde(default)]`.
+    #[serde(default)]
+    pub home_dir: String,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -264,6 +281,16 @@ fn default_low_power_mode() -> LowPowerMode {
 /// Default de `recent_limit`: 50 carpetas recientes.
 fn default_recent_limit() -> usize {
     50
+}
+
+/// Default de `footer_enabled`: true (mostrar el footer).
+fn default_footer_enabled() -> bool {
+    true
+}
+
+/// Default de `auto_highlight_code`: true (resaltar código en Auto).
+fn default_auto_highlight_code() -> bool {
+    true
 }
 
 /// Default de `preview_rules`: las reglas semilla (texto + imagen, habilitadas).
@@ -410,6 +437,11 @@ impl Default for Settings {
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Auto,
             recent_limit: 50,
+            footer_enabled: true,
+            footer_preset: crate::footer::FooterPreset::Compact,
+            footer_custom_template: String::new(),
+            auto_highlight_code: true,
+            home_dir: String::new(),
         }
     }
 }
@@ -674,6 +706,11 @@ mod tests {
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Always,
             recent_limit: 25,
+            footer_enabled: false,
+            footer_preset: crate::footer::FooterPreset::Full,
+            footer_custom_template: "{sel}/{total}".into(),
+            auto_highlight_code: false,
+            home_dir: "D:\\Trabajo".into(),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -958,6 +995,26 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.recent_limit, 50);
+    }
+
+    #[test]
+    fn settings_nuevos_tienen_defaults() {
+        let s = Settings::default();
+        assert!(s.footer_enabled);
+        assert_eq!(s.footer_preset, crate::footer::FooterPreset::Compact);
+        assert!(s.footer_custom_template.is_empty());
+        assert!(s.auto_highlight_code);
+        assert!(s.home_dir.is_empty());
+    }
+
+    #[test]
+    fn settings_viejo_sin_campos_nuevos_migra_a_defaults() {
+        // Un JSON v1 mínimo SIN los campos nuevos debe cargar con defaults (serde default).
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":false}"#;
+        let s: Settings = serde_json::from_str(json).expect("debe migrar");
+        assert!(s.footer_enabled);
+        assert!(s.auto_highlight_code);
+        assert!(s.home_dir.is_empty());
     }
 
     #[test]
