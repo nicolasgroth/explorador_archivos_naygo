@@ -66,7 +66,7 @@ En `crates/core/src/footer.rs`:
 //! Nunca falla: datos ausentes (disco no disponible) se muestran como `—`.
 
 use crate::disk::DiskUsage;
-use crate::format::{human_size, SizeFormat};
+use crate::format::{format_size, SizeFormat}; // format_size(bytes, fmt); human_size NO toma fmt
 use serde::{Deserialize, Serialize};
 
 /// Plantilla del footer. `Custom` lleva el template de tokens del usuario.
@@ -221,13 +221,13 @@ pub fn render(preset: &FooterPreset, data: &FooterData, size_fmt: SizeFormat) ->
     let dash = "—";
     let (free, disk_total, pct) = match &data.disk {
         Some(u) => (
-            human_size(u.free, size_fmt),
-            human_size(u.total, size_fmt),
+            format_size(u.free, size_fmt),
+            format_size(u.total, size_fmt),
             format!("{}%", u.percent_used()),
         ),
         None => (dash.to_string(), dash.to_string(), dash.to_string()),
     };
-    let marked = human_size(data.marked_bytes, size_fmt);
+    let marked = format_size(data.marked_bytes, size_fmt);
 
     // Sustitución token a token. Se aplican los más largos primero no es necesario aquí
     // porque ningún token es prefijo de otro salvo {total}/{total_disk}: usamos {disk_total}.
@@ -305,15 +305,16 @@ pub fn resolve_home_dir(home_dir: &str) -> PathBuf {
     if !home_dir.trim().is_empty() {
         return PathBuf::from(home_dir);
     }
-    // Carpeta personal del usuario. dirs::home_dir si está; si no, USERPROFILE; último
-    // recurso: la raíz C:\ (nunca vacío, nunca panic).
-    dirs::home_dir()
-        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+    // Carpeta personal del usuario vía USERPROFILE; último recurso: la raíz C:\
+    // (nunca vacío, nunca panic). `naygo-core` NO tiene la crate `dirs`.
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("C:\\"))
 }
 ```
 
-> Si `dirs` NO está en naygo-core, quitar la primera rama y dejar solo `USERPROFILE` + fallback.
+> VERIFICADO: `naygo-core` NO depende de `dirs` (ver crates/core/Cargo.toml). Usar SOLO
+> `std::env::var_os("USERPROFILE")` + fallback. NO agregar `dirs`.
 
 - [ ] **Step 4: Correr el test (pasa)**
 

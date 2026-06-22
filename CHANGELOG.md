@@ -7,6 +7,21 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Pie de panel (footer): cada panel de archivos muestra al pie sus propios datos —archivos
+  seleccionados sobre el total, bytes marcados, y espacio libre/total del disco de su unidad—.
+  La plantilla es global y se elige en Configuración → Avanzado entre varias predefinidas
+  (Compacta, Completa, Solo disco, Solo selección) o una personalizada con tokens
+  (`{sel} {total} {marked} {free} {disk_total} {pct} {items} {files} {dirs}`), con vista previa
+  en vivo. Se puede ocultar.
+- Botones Atrás, Adelante e Inicio en la barra de herramientas, al estilo de un navegador.
+  Atrás/Adelante se atenúan cuando no hay a dónde ir. El botón Inicio (atajo Alt+Inicio) navega
+  a la carpeta de inicio, configurable en Avanzado (vacío = carpeta personal del usuario).
+- Resaltado automático de código en la Vista previa: las extensiones de código conocidas se
+  resaltan solas en modo Automático. Se puede desactivar con un interruptor en
+  Configuración → Previsualización; las reglas por extensión siguen mandando sobre el ajuste global.
+- La Vista previa de texto permite seleccionar y copiar el contenido: el texto plano siempre es
+  seleccionable, y el código resaltado tiene un botón que alterna a una vista seleccionable
+  (selección con el mouse y Ctrl+C).
 - La Vista previa resalta el código por colores (XML, JSON, HTML, CSS, JavaScript, C/C++, Java,
   Python, Rust, SQL, Bash, Markdown, YAML, TOML, INI). En Configuración → Previsualización se
   puede forzar el modo de vista por extensión: Automático, ver como texto, ver como imagen, o
