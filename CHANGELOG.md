@@ -7,6 +7,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- La Vista previa resalta el código por colores (XML, JSON, HTML, CSS, JavaScript, C/C++, Java,
+  Python, Rust, SQL, Bash, Markdown, YAML, TOML, INI). En Configuración → Previsualización se
+  puede forzar el modo de vista por extensión: Automático, ver como texto, ver como imagen, o
+  ver como código eligiendo el lenguaje.
+- Botón en la Vista previa para abrir el archivo con el programa predeterminado del sistema.
 - Avisos de software de terceros: archivo `THIRD-PARTY-NOTICES.md` con las licencias de todas
   las dependencias (todas permisivas; la interfaz usa Slint bajo su licencia *royalty-free*).
   La sección "Acerca de" lo menciona y el archivo se incluye en el portable y el instalador.
