@@ -222,6 +222,7 @@ where
     tr.set_preview_view_code(c.t("slint.preview.view_code").into());
     tr.set_preview_lang(c.t("slint.preview.lang").into());
     tr.set_preview_open_tip(c.t("slint.preview.open_tip").into());
+    tr.set_preview_select_tip(c.t("slint.preview.select_tip").into());
     tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
