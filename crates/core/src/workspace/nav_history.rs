@@ -61,6 +61,22 @@ impl NavHistory {
         matches!(self.cursor, Some(i) if i + 1 < self.stack.len())
     }
 
+    /// Rutas hacia ATRÁS desde el cursor (de la más cercana a la más lejana). Vacío si no hay.
+    pub fn back_entries(&self) -> Vec<PathBuf> {
+        match self.cursor {
+            Some(i) if i > 0 => self.stack[..i].iter().rev().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Rutas hacia ADELANTE desde el cursor (de la más cercana a la más lejana). Vacío si no hay.
+    pub fn forward_entries(&self) -> Vec<PathBuf> {
+        match self.cursor {
+            Some(i) if i + 1 < self.stack.len() => self.stack[i + 1..].to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
     /// La pila completa (de la más vieja a la más nueva) y el índice del cursor.
     /// Para el menú de historial del botón atrás/adelante.
     pub fn stack(&self) -> (&[PathBuf], Option<usize>) {
@@ -188,6 +204,26 @@ mod tests {
         h.back();
         assert!(!h.can_back());
         assert!(h.can_forward());
+    }
+
+    #[test]
+    fn back_y_forward_entries_parten_la_pila_por_el_cursor() {
+        let mut h = NavHistory::new();
+        h.push(std::path::PathBuf::from("A"));
+        h.push(std::path::PathBuf::from("B"));
+        h.push(std::path::PathBuf::from("C")); // cursor en C (índice 2)
+        assert_eq!(
+            h.back_entries(),
+            vec![std::path::PathBuf::from("B"), std::path::PathBuf::from("A")]
+        );
+        assert!(h.forward_entries().is_empty());
+        h.back();
+        h.back(); // cursor en A (índice 0)
+        assert!(h.back_entries().is_empty());
+        assert_eq!(
+            h.forward_entries(),
+            vec![std::path::PathBuf::from("B"), std::path::PathBuf::from("C")]
+        );
     }
 
     #[test]
