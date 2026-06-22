@@ -1,0 +1,121 @@
+// Naygo — overlay de la paleta de comandos (Ctrl+P).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Overlay modal: velo + tarjeta centrada arriba con un campo de búsqueda y la lista de
+// resultados (cada uno = label partido en segmentos resaltados/normales + atajo). El campo
+// toma el foco al abrir (init → focus), filtra al escribir (edited) y maneja el teclado de
+// navegación en su `key-pressed`: ↑/↓ mueven la selección, Esc cierra, Enter ejecuta (vía
+// `accepted`). El resto de teclas (letras) caen al LineEdit con `reject`. Esc/clic-fuera cierran.
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { PaletteItemVm, PaletteSpanVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+export component CommandPalette inherits Rectangle {
+    in property <[PaletteItemVm]> results;
+    in-out property <string> query;
+    in-out property <int> selected;
+    callback query-changed(string);
+    callback run(int);
+    callback dismiss();
+
+    // Velo semitransparente: clic fuera de la tarjeta cierra.
+    background: #00000070;
+    TouchArea { clicked => { root.dismiss(); } }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 24px;
+        width: min(560px, parent.width - 48px);
+        height: min(420px, parent.height - 48px);
+        background: Theme.panel-bg;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 8px;
+        // Tragar los clics dentro de la tarjeta (no propagar al velo).
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 0px;
+
+            // Campo de búsqueda. Toma el foco al aparecer; escribir filtra; ↑/↓ navegan;
+            // Esc cierra; Enter ejecuta la selección actual. Las letras caen al LineEdit (reject).
+            search := LineEdit {
+                placeholder-text: Tr.palette-placeholder;
+                text <=> root.query;
+                init => { self.focus(); }
+                edited => { root.query-changed(self.text); }
+                accepted => { root.run(root.selected); }
+                key-pressed(ev) => {
+                    if (ev.text == Key.Escape) {
+                        root.dismiss();
+                        return accept;
+                    }
+                    if (ev.text == Key.UpArrow) {
+                        if (root.selected > 0) {
+                            root.selected -= 1;
+                        }
+                        return accept;
+                    }
+                    if (ev.text == Key.DownArrow) {
+                        if (root.selected < root.results.length - 1) {
+                            root.selected += 1;
+                        }
+                        return accept;
+                    }
+                    reject
+                }
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: 4px;
+                    for item[i] in root.results: Rectangle {
+                        height: 30px;
+                        border-radius: 4px;
+                        background: i == root.selected ? Theme.selection-bg
+                            : (row-touch.has-hover ? Theme.row-alt-bg : transparent);
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            // Label partido en segmentos: los `hit` van con el color de acento.
+                            HorizontalLayout {
+                                horizontal-stretch: 1;
+                                for sp in item.spans: Text {
+                                    text: sp.text;
+                                    color: sp.hit ? Theme.accent : Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            // Atajo (si lo hay), atenuado y monoespaciado.
+                            Text {
+                                text: item.shortcut;
+                                color: Theme.text-dim;
+                                font-family: "Consolas";
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.run(i); }
+                        }
+                    }
+                }
+            }
+
+            // Pie con la ayuda de teclado.
+            Text {
+                text: Tr.palette-help;
+                color: Theme.text-dim;
+                font-size: 11px;
+                horizontal-alignment: center;
+                height: 22px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -1659,20 +1659,17 @@ impl WorkspaceCtrl {
 
     /// Consume la petición de "abrir la paleta de comandos" (Ctrl+P), si la hay. La UI la
     /// llama tras procesar una tecla para mostrar el overlay de la paleta. (Task 6/7)
-    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
     pub fn take_open_palette_request(&mut self) -> bool {
         std::mem::take(&mut self.open_palette_requested)
     }
 
     /// Consume la petición de "re-aplicar tema" tras elegir un tema en la paleta, si la hay.
     /// Devuelve el id elegido para que la UI llame a `theme_apply::apply`. (Task 6/7)
-    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
     pub fn take_palette_theme_request(&mut self) -> Option<naygo_core::theme::ThemeId> {
         self.palette_theme_requested.take()
     }
 
     /// Consume la petición de "abrir configuración" desde la paleta, si la hay. (Task 6/7)
-    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
     pub fn take_open_config_request(&mut self) -> bool {
         std::mem::take(&mut self.open_config_requested)
     }
@@ -4176,7 +4173,6 @@ impl WorkspaceCtrl {
     /// La UI filtra/ordena con `naygo_core::palette::filter_and_rank` según lo que se escribe, y
     /// ejecuta con `execute_palette_command(&commands, index)`. Lo consume la UI de la paleta
     /// (Task 6/7).
-    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
     pub fn build_palette_commands(&self) -> Vec<naygo_core::palette::Command> {
         use naygo_core::keymap::Action;
         use naygo_core::palette::{Command, CommandCategory, CommandPayload};
@@ -4283,7 +4279,6 @@ impl WorkspaceCtrl {
     /// Ejecuta el comando en `index` de la lista que devolvió `build_palette_commands`. Devuelve
     /// `true` si algo cambió (para refrescar). El llamador (la UI) cierra la paleta. Lo consume la
     /// UI de la paleta (Task 6/7).
-    #[allow(dead_code)] // lo consume la UI de la paleta (Task 7)
     pub fn execute_palette_command(
         &mut self,
         commands: &[naygo_core::palette::Command],

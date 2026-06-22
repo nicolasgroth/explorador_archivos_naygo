@@ -225,6 +225,13 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
+    // abierta (la arma `build_palette_commands` al abrir) y, en paralelo, el índice del COMANDO
+    // que cada FILA visible ejecuta (lo llena `palette_items_from_matches`). El callback
+    // `on_palette_run(result_idx)` traduce fila→comando con esta tabla.
+    let palette_cmds: Rc<RefCell<Vec<naygo_core::palette::Command>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let palette_cmd_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
     // Restaurar la sesión anterior (paneles y carpetas) si hay una guardada. Si NO hay sesión
     // previa (primera ejecución), arrancar con la disposición clásica: árbol + dos paneles de
     // archivos + Propiedades + Vista previa, en vez del panel único de arranque. Las sesiones
@@ -1495,9 +1502,34 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         let ui_weak = ui.as_weak();
+        let palette_cmds = palette_cmds.clone();
+        let palette_cmd_indices = palette_cmd_indices.clone();
         ui.on_key(move |text, c, s, a| {
+            // Con la paleta de comandos abierta, su propio overlay (FocusScope del LineEdit) maneja
+            // el teclado. Suspendemos el on_key global del panel para que las teclas (Enter/letras/
+            // flechas) no disparen acciones por debajo. Mismo criterio que con un modal abierto.
+            if let Some(ui) = ui_weak.upgrade() {
+                if ui.get_palette_open() {
+                    return;
+                }
+            }
             if ctrl.borrow_mut().on_key(text.as_str(), c, s, a) {
                 start_timer();
+            }
+            // ¿La tecla pidió abrir la paleta de comandos (Ctrl+P)? Construir los comandos vigentes,
+            // mostrar todos (query vacía) y abrir el overlay. El LineEdit toma el foco en `init`.
+            if ctrl.borrow_mut().take_open_palette_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let cmds = ctrl.borrow().build_palette_commands();
+                    let matches = naygo_core::palette::filter_and_rank(&cmds, "");
+                    let (items, idxs) = palette_items_from_matches(&cmds, &matches);
+                    *palette_cmds.borrow_mut() = cmds;
+                    *palette_cmd_indices.borrow_mut() = idxs;
+                    ui.set_palette_results(ModelRc::from(Rc::new(VecModel::from(items))));
+                    ui.set_palette_query(SharedString::new());
+                    ui.set_palette_selected(0);
+                    ui.set_palette_open(true);
+                }
             }
             // Atajo "editar ruta" (Ctrl+L / F4): abrir el editor de la path-bar del panel pedido.
             if let Some(pane) = ctrl.borrow_mut().take_edit_path_request() {
@@ -1938,6 +1970,85 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_help_close(move || {
             ctrl.borrow_mut().help_close();
+            sync_rows();
+        });
+    }
+    // Paleta de comandos (Ctrl+P): se escribió en el campo → re-filtrar con la query nueva sobre
+    // los comandos vigentes. Reconstruye los resultados y reinicia la selección al primero.
+    {
+        let ui_weak = ui.as_weak();
+        let palette_cmds = palette_cmds.clone();
+        let palette_cmd_indices = palette_cmd_indices.clone();
+        ui.on_palette_query_changed(move |q| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let cmds = palette_cmds.borrow();
+                let matches = naygo_core::palette::filter_and_rank(&cmds, q.as_str());
+                let (items, idxs) = palette_items_from_matches(&cmds, &matches);
+                *palette_cmd_indices.borrow_mut() = idxs;
+                ui.set_palette_results(ModelRc::from(Rc::new(VecModel::from(items))));
+                ui.set_palette_selected(0);
+            }
+        });
+    }
+    // Paleta: cerrar sin ejecutar (Esc / clic fuera).
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_palette_dismiss(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_palette_open(false);
+            }
+        });
+    }
+    // Paleta: ejecutar el resultado de índice `result_idx`. La fila lleva el índice del COMANDO
+    // (tabla paralela `palette_cmd_indices`). Ejecuta, cierra la paleta, y consume los pedidos que
+    // el comando pudo dejar: re-aplicar tema (a ambas ventanas) y/o abrir configuración. Refresca.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        let sync_layout = sync_layout.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let palette_cmds = palette_cmds.clone();
+        let palette_cmd_indices = palette_cmd_indices.clone();
+        ui.on_palette_run(move |result_idx| {
+            let cmd_idx = palette_cmd_indices
+                .borrow()
+                .get(result_idx.max(0) as usize)
+                .copied();
+            let Some(cmd_idx) = cmd_idx else {
+                // Sin resultados (índice fuera de rango): solo cerrar.
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_palette_open(false);
+                }
+                return;
+            };
+            {
+                let cmds = palette_cmds.borrow();
+                if ctrl.borrow_mut().execute_palette_command(&cmds, cmd_idx) {
+                    start_timer();
+                }
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_palette_open(false);
+            }
+            // Tema elegido en la paleta: re-pintar ambas ventanas con el tema activo.
+            if let Some(_id) = ctrl.borrow_mut().take_palette_theme_request() {
+                let c = ctrl.borrow();
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, c.config.active_theme());
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, c.config.active_theme());
+                }
+            }
+            // "Abrir configuración" desde la paleta: reusa el handler del engranaje de la toolbar.
+            if ctrl.borrow_mut().take_open_config_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_open_config();
+                }
+            }
+            sync_layout();
             sync_rows();
         });
     }
@@ -3767,6 +3878,76 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         status: SharedString::from(r.status.as_str()),
         running: r.running,
     }
+}
+
+/// Categoría de comando de la paleta → el `int` que espera `PaletteItemVm.category`
+/// (0=Acción 1=Archivo 2=Reciente 3=Favorito 4=Tema 5=Config). Espeja `CommandCategory`.
+fn palette_category_to_int(c: naygo_core::palette::CommandCategory) -> i32 {
+    use naygo_core::palette::CommandCategory as Cat;
+    match c {
+        Cat::Action => 0,
+        Cat::File => 1,
+        Cat::Recent => 2,
+        Cat::Favorite => 3,
+        Cat::Theme => 4,
+        Cat::Config => 5,
+    }
+}
+
+/// Mapea los resultados de `filter_and_rank` a la vista: un `PaletteItemVm` por match (con el
+/// label partido en segmentos resaltados/normales según `hit_positions`) y, en paralelo, el
+/// índice del COMANDO que cada fila ejecuta (para que `on_palette_run(result_idx)` sepa qué
+/// comando correr). Devuelve `(items, cmd_indices)` con la misma longitud y orden.
+fn palette_items_from_matches(
+    commands: &[naygo_core::palette::Command],
+    matches: &[naygo_core::palette::CommandMatch],
+) -> (Vec<PaletteItemVm>, Vec<usize>) {
+    let mut items: Vec<PaletteItemVm> = Vec::with_capacity(matches.len());
+    let mut cmd_indices: Vec<usize> = Vec::with_capacity(matches.len());
+    for m in matches {
+        let Some(cmd) = commands.get(m.index) else {
+            continue;
+        };
+        // Partir el label en runs contiguos: cada char se marca como hit si su índice está en
+        // `hit_positions`. Acumulamos en spans alternando el flag `hit`.
+        let chars: Vec<char> = cmd.label.chars().collect();
+        let hit_set: std::collections::HashSet<usize> = m.hit_positions.iter().copied().collect();
+        let mut spans: Vec<PaletteSpanVm> = Vec::new();
+        let mut cur = String::new();
+        let mut cur_hit: Option<bool> = None;
+        for (i, ch) in chars.iter().enumerate() {
+            let is_hit = hit_set.contains(&i);
+            match cur_hit {
+                Some(h) if h == is_hit => cur.push(*ch),
+                Some(h) => {
+                    spans.push(PaletteSpanVm {
+                        text: SharedString::from(cur.as_str()),
+                        hit: h,
+                    });
+                    cur.clear();
+                    cur.push(*ch);
+                    cur_hit = Some(is_hit);
+                }
+                None => {
+                    cur.push(*ch);
+                    cur_hit = Some(is_hit);
+                }
+            }
+        }
+        if let Some(h) = cur_hit {
+            spans.push(PaletteSpanVm {
+                text: SharedString::from(cur.as_str()),
+                hit: h,
+            });
+        }
+        items.push(PaletteItemVm {
+            spans: ModelRc::from(Rc::new(VecModel::from(spans))),
+            category: palette_category_to_int(cmd.category),
+            shortcut: SharedString::from(cmd.shortcut.as_str()),
+        });
+        cmd_indices.push(m.index);
+    }
+    (items, cmd_indices)
 }
 
 fn to_nav_row(r: bridge::NavRow) -> NavRow {

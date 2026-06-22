@@ -128,6 +128,9 @@ where
     tr.set_help_layouts(c.t("slint.help.layouts").into());
     tr.set_help_shortcuts(c.t("slint.help.shortcuts").into());
     tr.set_help_close(c.t("slint.help.close").into());
+    // Paleta de comandos (Ctrl+P).
+    tr.set_palette_placeholder(c.t("slint.palette.placeholder").into());
+    tr.set_palette_help(c.t("slint.palette.help").into());
     // Ventana de renombrado por lotes (F5).
     tr.set_batch_title(c.t("slint.batch.title").into());
     tr.set_batch_template(c.t("slint.batch.template").into());

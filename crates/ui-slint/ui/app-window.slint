@@ -19,6 +19,7 @@ import { BatchRename } from "batch-rename.slint";
 import { NewFolder } from "new-folder.slint";
 import { SearchPanel } from "search-panel.slint";
 import { Help } from "help.slint";
+import { CommandPalette } from "command-palette.slint";
 import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
 import { PaletteItemVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
@@ -671,6 +672,9 @@ export component AppWindow inherits Window {
     in-out property <string> palette-query: "";
     in property <[PaletteItemVm]> palette-results;
     in-out property <int> palette-selected: 0;
+    callback palette-query-changed(string);  // se escribió en el campo: re-filtrar (Rust)
+    callback palette-run(int);               // ejecutar el resultado de índice i (Rust)
+    callback palette-dismiss();              // cerrar la paleta sin ejecutar (Esc / clic fuera)
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
     // x de centro del botón de Layouts, capturada al abrir para anclar el menú flotante
@@ -1742,5 +1746,18 @@ export component AppWindow inherits Window {
         pick-touch := TouchArea {
             clicked => { root.pick-resolve(p.number); }
         }
+    }
+
+    // Paleta de comandos (Ctrl+P): overlay por encima de todo. Solo se monta cuando está abierta
+    // (su LineEdit toma el foco en `init`). Rust llena `palette-results` y consume los callbacks.
+    if root.palette-open: CommandPalette {
+        width: 100%;
+        height: 100%;
+        results: root.palette-results;
+        query <=> root.palette-query;
+        selected <=> root.palette-selected;
+        query-changed(q) => { root.palette-query-changed(q); }
+        run(i) => { root.palette-run(i); }
+        dismiss => { root.palette-dismiss(); }
     }
 }
