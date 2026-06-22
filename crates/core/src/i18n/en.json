@@ -51,6 +51,7 @@
   "action.go_up": "Go up one level",
   "action.go_back": "Back",
   "action.go_forward": "Forward",
+  "action.go_home": "Go home",
   "action.switch_pane": "Switch pane",
   "action.cancel_listing": "Cancel listing",
   "action.copy": "Copy",

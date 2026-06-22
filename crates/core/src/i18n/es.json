@@ -51,6 +51,7 @@
   "action.go_up": "Subir un nivel",
   "action.go_back": "Atrás",
   "action.go_forward": "Adelante",
+  "action.go_home": "Ir al inicio",
   "action.switch_pane": "Cambiar de panel",
   "action.cancel_listing": "Cancelar listado",
   "action.copy": "Copiar",
