@@ -108,6 +108,8 @@ pub enum Action {
     GoUp,
     GoBack,
     GoForward,
+    /// Ir a la carpeta de inicio configurada (Home). Alt+Home.
+    GoHome,
     SwitchPane,
     CancelListing,
     Copy,
@@ -189,6 +191,7 @@ impl Action {
             GoUp,
             GoBack,
             GoForward,
+            GoHome,
             SwitchPane,
             CancelListing,
             Copy,
@@ -247,6 +250,7 @@ impl Action {
             GoUp => "action.go_up",
             GoBack => "action.go_back",
             GoForward => "action.go_forward",
+            GoHome => "action.go_home",
             SwitchPane => "action.switch_pane",
             CancelListing => "action.cancel_listing",
             Copy => "action.copy",
@@ -331,6 +335,8 @@ impl KeyMap {
             (GoUp, vec![Chord::plain(Backspace), Chord::plain(ArrowLeft)]),
             (GoBack, vec![Chord::alt(ArrowLeft)]),
             (GoForward, vec![Chord::alt(ArrowRight)]),
+            // Home: ir a la carpeta de inicio. Alt+Home (Home a secas es FocusHome).
+            (GoHome, vec![Chord::alt(Home)]),
             (SwitchPane, vec![Chord::plain(Tab)]),
             (CancelListing, vec![Chord::plain(Escape)]),
             (Copy, vec![Chord::ctrl(Char('c'))]),
@@ -501,13 +507,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_51_acciones_con_clave_i18n_unica() {
+    fn all_tiene_52_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 51);
+        assert_eq!(all.len(), 52);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 51, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 52, "cada acción tiene una clave i18n única");
+    }
+
+    #[test]
+    fn alt_home_dispara_go_home() {
+        let km = KeyMap::defaults();
+        let chord = Chord::alt(KeyCode::Home);
+        assert_eq!(km.action_for(&chord), Some(Action::GoHome));
     }
 
     #[test]
