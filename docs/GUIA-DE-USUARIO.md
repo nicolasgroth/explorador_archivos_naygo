@@ -14,8 +14,9 @@ la forma más rápida de trabajar.
 
 La ventana se divide en:
 
-- **Barra de herramientas** (arriba): botones de acciones + la tira de unidades de
-  disco (C:, D:, …) + la ruta actual.
+- **Barra de herramientas** (arriba): botones de navegación (atrás / adelante /
+  inicio), botones de acciones + la tira de unidades de disco (C:, D:, …) + la ruta
+  actual.
 - **Paneles**: el área principal. Empieza con un panel de archivos; puedes dividir
   en varios (dual-pane y más).
 - **Barra de estado** (abajo): ruta del panel activo y conteo de elementos.
@@ -49,6 +50,27 @@ Cada panel puede ser de un **tipo**:
 - **Swap / Clonar / Tabs** (toolbar): intercambiar carpetas de dos paneles, abrir la
   carpeta actual en otro panel, o apilar el panel como pestaña sobre otro.
 
+**Pie de panel (footer):** cada panel de archivos muestra al pie una barra con
+información de **ese** panel: archivos seleccionados sobre el total, bytes marcados, y
+espacio libre/total del disco de su unidad. Se muestra u oculta y se da formato desde
+**Configuración → Avanzado**, sección *Pie de panel* (ver §9). El formato es **global**
+(igual en todos los paneles), pero cada panel muestra **sus propios** datos.
+
+**Vista previa de código y texto:**
+
+- **Resaltado automático de código:** los archivos de código de extensiones conocidas
+  (`.rs`, `.json`, `.xml`, `.js`, `.html`, `.css`, `.c`, `.cpp`, `.java`, `.py`, `.sh`,
+  `.md`, `.yaml`, `.toml`, `.ini`, `.sql`) se muestran con **resaltado de sintaxis por
+  colores** de forma automática. Viene activado por defecto y se puede apagar con el
+  interruptor **"Resaltar código automáticamente"** en *Configuración →
+  Previsualización*. Las **reglas por extensión** (forzar un modo de vista a una
+  extensión concreta) tienen prioridad sobre este ajuste global.
+- **Seleccionar y copiar:** el **texto plano** de la vista previa siempre se puede
+  seleccionar con el mouse y copiar con **Ctrl+C**. Cuando la vista muestra **código
+  resaltado por colores**, aparece un botón **✎** en la barra de la vista previa que
+  alterna a una vista de **texto seleccionable** (en un solo color) para poder
+  seleccionar y copiar; al pulsarlo de nuevo vuelve a la vista con colores.
+
 ---
 
 ## 3. Navegar
@@ -61,6 +83,16 @@ Cada panel puede ser de un **tipo**:
 - **Tipeo rápido (typeahead):** escribe las primeras letras de un nombre y el foco
   salta a ese ítem. Si haces una pausa (~½ segundo), empieza una búsqueda nueva.
 - **Esc**: cancela un listado en curso (útil en discos de red lentos).
+
+**Botones Atrás / Adelante / Inicio (estilo navegador):** la barra de herramientas
+tiene tres botones de navegación que actúan sobre el panel activo:
+
+- **Atrás** (**Alt+←**) y **Adelante** (**Alt+→**) recorren el historial de carpetas
+  del panel. Se **atenúan** (se deshabilitan) cuando no hay a dónde ir hacia atrás o
+  hacia adelante.
+- **Inicio** (ícono de casa, **Alt+Inicio**) lleva a la carpeta de inicio. Esa carpeta
+  se define en **Configuración → Avanzado → "Carpeta de inicio (Home)"**; si la dejas
+  vacía, se usa tu carpeta personal (la de tu perfil de usuario).
 
 **Barra de ruta (breadcrumbs):** muestra la ruta como segmentos clicables. Clic en el
 hueco vacío la convierte en un editor de texto con autocompletado (Enter navega, Esc
@@ -191,6 +223,10 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
   subcarpetas, iniciar con Windows.
 - **Operaciones**: cola vs. paralelo, confirmar papelera, resumen al terminar.
 - **Pegado**: confirmar nombre al pegar, plantilla/extensión del texto pegado.
+- **Previsualización**: interruptor **"Resaltar código automáticamente"** (resaltado de
+  sintaxis por colores para extensiones de código conocidas; ver §2) y **reglas por
+  extensión** para forzar un modo de vista a una extensión concreta (estas reglas
+  tienen prioridad sobre el resaltado automático).
 - **Apariencia**: el **tema** se elige en una galería de tarjetas (cada una muestra
   sus colores; la activa lleva borde de acento y ★). Hay temas claros y oscuros
   (Citrus Glow, Neon Retro, Ocean Midnight, Ember Forge, Polar Graphite, y los
@@ -199,10 +235,26 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
 - **Atajos**: editor de atajos por acción (cambiar / restablecer / restablecer todo),
   con detección de conflictos.
 - **Importar/Exportar**: packs `.zip` de idioma, tema o configuración.
-- **Avanzado**: progreso de operaciones (panel/modal/siempre), formato de imagen
-  pegada, modo de bajo consumo, archivos nuevos al final, bandeja del sistema,
+- **Avanzado**: **Carpeta de inicio (Home)** (destino del botón Inicio / Alt+Inicio;
+  vacío = tu carpeta personal), **Pie de panel** (ver abajo), progreso de operaciones
+  (panel/modal/siempre), formato de imagen pegada, modo de bajo consumo, archivos
+  nuevos al final, historial de carpetas a recordar (1–100), bandeja del sistema,
   cerrar-a-bandeja, y **Restablecer todo** (en dos pasos).
 - **Acerca de**: autoría, licencia, stack, enlace al repo (y un pequeño easter egg).
+
+**Pie de panel (en Avanzado):** controla la barra de información al pie de cada panel
+(ver §2):
+
+- Una **casilla** para mostrarlo u ocultarlo.
+- Un **combo de plantilla** con formatos predefinidos: *Compacta*, *Completa*,
+  *Solo disco*, *Solo selección* y **"Personalizada…"**.
+- Si eliges **"Personalizada…"**, aparece un campo para escribir tu plantilla con
+  *tokens*, la lista de tokens disponibles y una **vista previa en vivo**. Tokens:
+  `{sel}` (seleccionados), `{total}` (total visible), `{marked}` (bytes marcados),
+  `{free}` (espacio libre), `{disk_total}` (capacidad del disco), `{pct}` (% usado),
+  `{items}` (elementos), `{files}` (archivos), `{dirs}` (carpetas).
+- La plantilla es **global**: vale para todos los paneles, pero cada panel rellena los
+  tokens con **sus propios** datos.
 
 ---
 
@@ -216,6 +268,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Enter | Abrir / entrar |
 | Backspace, ← | Subir un nivel |
 | Alt+← / Alt+→ | Atrás / adelante |
+| Alt+Inicio | Ir a la carpeta de inicio |
 | Tab | Cambiar panel activo |
 | F1 | Ayuda |
 | F2 / Shift+F2 | Renombrar / renombrar por lotes |
