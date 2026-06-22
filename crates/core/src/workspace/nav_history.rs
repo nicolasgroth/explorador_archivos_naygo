@@ -172,6 +172,25 @@ mod tests {
     }
 
     #[test]
+    fn can_back_forward_reflejan_el_cursor() {
+        // Bloquea la semántica de can_back/can_forward que habilita/deshabilita los
+        // botones del toolbar: vacío y recién-creado no permiten moverse; tras push hay
+        // atrás pero no adelante; tras back se invierte.
+        let mut h = NavHistory::new();
+        assert!(!h.can_back());
+        assert!(!h.can_forward());
+        h.push(p("A"));
+        assert!(!h.can_back(), "una sola entrada: nada atrás");
+        assert!(!h.can_forward());
+        h.push(p("B"));
+        assert!(h.can_back());
+        assert!(!h.can_forward());
+        h.back();
+        assert!(!h.can_back());
+        assert!(h.can_forward());
+    }
+
+    #[test]
     fn respeta_el_tope_de_profundidad() {
         // Empujar más allá del tope descarta las más viejas; el cursor queda en
         // la última y `current` apunta a ella. Protege la lógica de overflow.

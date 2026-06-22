@@ -250,6 +250,16 @@ impl FilePaneState {
         Some(path)
     }
 
+    /// ¿Hay una carpeta anterior en el historial? (para habilitar el botón Atrás).
+    pub fn can_go_back(&self) -> bool {
+        self.history.can_back()
+    }
+
+    /// ¿Hay una carpeta posterior en el historial? (para habilitar el botón Adelante).
+    pub fn can_go_forward(&self) -> bool {
+        self.history.can_forward()
+    }
+
     /// Sube al directorio padre (entra al historial). Devuelve el padre si existe.
     pub fn go_up(&mut self) -> Option<PathBuf> {
         let parent = self.current_dir.parent()?.to_path_buf();

@@ -1983,7 +1983,10 @@ impl WorkspaceCtrl {
     pub fn preview_rule_set_view_lang(&mut self, ext: &str, idx: i32) {
         use naygo_core::preview::{CodeLang, ViewMode};
         let langs = CodeLang::all();
-        let Some(lang) = (idx >= 0).then_some(idx as usize).and_then(|i| langs.get(i)) else {
+        let Some(lang) = (idx >= 0)
+            .then_some(idx as usize)
+            .and_then(|i| langs.get(i))
+        else {
             return;
         };
         let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
@@ -3481,6 +3484,35 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Navega el panel Files activo a la carpeta Home configurada (vacío = perfil del usuario).
+    /// Registra en el historial igual que cualquier navegación normal. Devuelve true si navegó.
+    pub fn on_go_home(&mut self) -> bool {
+        let home = naygo_core::config::resolve_home_dir(&self.config.settings.home_dir);
+        crate::logging::breadcrumb(&format!("home → {}", home.display()));
+        self.navigate_active_to(home)
+    }
+
+    /// ¿El panel activo puede ir Atrás? (para habilitar/deshabilitar el botón del toolbar).
+    /// El consumidor son los botones Atrás/Adelante del toolbar, que se cablean después; el
+    /// `allow(dead_code)` se quita cuando esos botones lean este estado.
+    #[allow(dead_code)]
+    pub fn can_go_back(&self) -> bool {
+        self.ws
+            .active_files()
+            .map(|f| f.can_go_back())
+            .unwrap_or(false)
+    }
+
+    /// ¿El panel activo puede ir Adelante? (para habilitar/deshabilitar el botón del toolbar).
+    /// Mismo consumidor pendiente que `can_go_back`.
+    #[allow(dead_code)]
+    pub fn can_go_forward(&self) -> bool {
+        self.ws
+            .active_files()
+            .map(|f| f.can_go_forward())
+            .unwrap_or(false)
+    }
+
     /// Refresca (re-lista) la carpeta del panel activo — estilo navegador (F5). No toca el
     /// historial; solo vuelve a leer el disco. Devuelve true si relanzó un listado.
     pub fn refresh_active(&mut self) -> bool {
@@ -3949,6 +3981,7 @@ impl WorkspaceCtrl {
             Action::GoUp => return self.on_go_up(),
             Action::GoBack => return self.on_go_back(),
             Action::GoForward => return self.on_go_forward(),
+            Action::GoHome => return self.on_go_home(),
             Action::Refresh => return self.refresh_active(),
             // Ctrl+F: alterna el panel de búsqueda recursiva (abre vacío / cierra).
             Action::Find => {
