@@ -101,7 +101,9 @@ impl CodeLang {
         }
     }
 
-    /// El lenguaje cuya clave es `s`, o `None` si ninguno coincide.
+    /// El lenguaje cuya clave es `s`, o `None` si ninguno coincide. (No es `FromStr`: devuelve
+    /// `Option`, no `Result`, porque "clave desconocida" no es un error sino un caso normal.)
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<CodeLang> {
         CodeLang::all().into_iter().find(|l| l.as_str() == s)
     }
@@ -632,7 +634,12 @@ mod tests {
     #[test]
     fn codelang_round_trip_y_all() {
         for l in CodeLang::all() {
-            assert_eq!(CodeLang::from_str(l.as_str()), Some(l), "round-trip de {}", l.as_str());
+            assert_eq!(
+                CodeLang::from_str(l.as_str()),
+                Some(l),
+                "round-trip de {}",
+                l.as_str()
+            );
         }
         assert_eq!(CodeLang::from_str("noexiste"), None);
         assert!(CodeLang::all().contains(&CodeLang::Xml));
@@ -647,26 +654,52 @@ mod tests {
             ViewMode::Code(CodeLang::Xml)
         );
         // alias a imagen -> Image
-        assert_eq!(rule_from_legacy("raw", true, Some("png")).view, ViewMode::Image);
+        assert_eq!(
+            rule_from_legacy("raw", true, Some("png")).view,
+            ViewMode::Image
+        );
         // alias a extensión de texto -> Text
-        assert_eq!(rule_from_legacy("foo", true, Some("txt")).view, ViewMode::Text);
+        assert_eq!(
+            rule_from_legacy("foo", true, Some("txt")).view,
+            ViewMode::Text
+        );
         // sin alias -> Auto
         assert_eq!(rule_from_legacy("md", true, None).view, ViewMode::Auto);
         // alias desconocido -> Auto
-        assert_eq!(rule_from_legacy("zz", true, Some("zzz")).view, ViewMode::Auto);
+        assert_eq!(
+            rule_from_legacy("zz", true, Some("zzz")).view,
+            ViewMode::Auto
+        );
     }
 
     #[test]
     fn classify_respeta_view_forzado() {
         let rules = vec![
-            PreviewRule { ext: "dat".into(), enabled: true, view: ViewMode::Code(CodeLang::Json) },
-            PreviewRule { ext: "bin".into(), enabled: true, view: ViewMode::Image },
+            PreviewRule {
+                ext: "dat".into(),
+                enabled: true,
+                view: ViewMode::Code(CodeLang::Json),
+            },
+            PreviewRule {
+                ext: "bin".into(),
+                enabled: true,
+                view: ViewMode::Image,
+            },
         ];
         // Code(_) se previsualiza como texto; code_lang_for da el lenguaje.
-        assert_eq!(classify_rules(Path::new("a.dat"), &rules), PreviewKind::Text);
-        assert_eq!(code_lang_for(Path::new("a.dat"), &rules), Some(CodeLang::Json));
+        assert_eq!(
+            classify_rules(Path::new("a.dat"), &rules),
+            PreviewKind::Text
+        );
+        assert_eq!(
+            code_lang_for(Path::new("a.dat"), &rules),
+            Some(CodeLang::Json)
+        );
         // Image forzado.
-        assert_eq!(classify_rules(Path::new("a.bin"), &rules), PreviewKind::Image);
+        assert_eq!(
+            classify_rules(Path::new("a.bin"), &rules),
+            PreviewKind::Image
+        );
         assert_eq!(code_lang_for(Path::new("a.bin"), &rules), None);
     }
 }

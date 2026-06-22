@@ -1927,10 +1927,7 @@ impl WorkspaceCtrl {
                     ViewMode::Text => (1, 0),
                     ViewMode::Image => (2, 0),
                     ViewMode::Code(l) => {
-                        let li = CodeLang::all()
-                            .iter()
-                            .position(|c| c == l)
-                            .unwrap_or(0) as i32;
+                        let li = CodeLang::all().iter().position(|c| c == l).unwrap_or(0) as i32;
                         (3, li)
                     }
                 };
@@ -1986,7 +1983,7 @@ impl WorkspaceCtrl {
     pub fn preview_rule_set_view_lang(&mut self, ext: &str, idx: i32) {
         use naygo_core::preview::{CodeLang, ViewMode};
         let langs = CodeLang::all();
-        let Some(lang) = (idx >= 0).then(|| idx as usize).and_then(|i| langs.get(i)) else {
+        let Some(lang) = (idx >= 0).then_some(idx as usize).and_then(|i| langs.get(i)) else {
             return;
         };
         let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
