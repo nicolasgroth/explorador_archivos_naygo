@@ -486,6 +486,14 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.deep_active = deep;
                             changed = true;
                         }
+                        // Footer (barra inferior): selección + disco. Vacío si está deshabilitado.
+                        // El disco se cachea por unidad dentro del controlador (no pega a WinAPI
+                        // en cada tick).
+                        let footer = SharedString::from(c.footer_text_of(id).as_str());
+                        if pv.footer_text != footer {
+                            pv.footer_text = footer;
+                            changed = true;
+                        }
                     }
                     // Inspector/Preview son structs sueltas: se setean según el tipo.
                     if purpose == Some(PanePurpose::Inspector) {
@@ -789,6 +797,9 @@ fn main() -> Result<(), slint::PlatformError> {
                             // "Subir un nivel" solo tiene sentido si hay un ancestro existente real.
                             missing_has_ancestor: ctrl.borrow().pane_has_existing_ancestor(*id),
                             deep_active: ctrl.borrow().is_deep_active(*id),
+                            // El footer se llena en el primer `sync_rows` (necesita `&mut` por la
+                            // caché de disco). Aquí nace vacío.
+                            footer_text: SharedString::new(),
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()

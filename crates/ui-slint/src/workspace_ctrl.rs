@@ -163,6 +163,11 @@ pub struct WorkspaceCtrl {
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
     pub icons: crate::icons::IconCache,
+    /// Caché del uso de disco por raíz de unidad (p. ej. `C:\`), para el footer de cada panel.
+    /// Evita pegarle a WinAPI en CADA tick de `sync_rows`: se lee una vez por unidad y se reusa.
+    /// Se vacía al navegar (vía `start_listing`) para que el espacio libre se refresque al
+    /// entrar a otra carpeta/unidad. Ver `footer_text_for`.
+    footer_disk_cache: std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
 }
 
 /// Estado del menú contextual abierto.
@@ -362,6 +367,7 @@ impl WorkspaceCtrl {
             edit_path_requested: None,
             rename_requested: None,
             icons,
+            footer_disk_cache: std::collections::HashMap::new(),
         };
         c.push_recent(start.clone());
         c.start_listing(id, start);
@@ -743,7 +749,64 @@ impl WorkspaceCtrl {
         if let Some(l) = self.listings.get(&id) {
             l.cancel();
         }
+        // Navegar (o refrescar) puede cambiar de unidad: invalida la caché de disco del footer
+        // para que el espacio libre/total se relea. Es pequeña; se repuebla a demanda por tick.
+        self.footer_disk_cache.clear();
         self.listings.insert(id, Listing::start(dir));
+    }
+
+    /// El preset de footer EFECTIVO: si el guardado es `Custom`, usa el template del usuario
+    /// (`footer_custom_template`), que es donde vive realmente (la variante puede traer string
+    /// vacío). Para el resto, devuelve el preset tal cual.
+    fn footer_preset_resolved(&self) -> naygo_core::footer::FooterPreset {
+        match &self.config.settings.footer_preset {
+            naygo_core::footer::FooterPreset::Custom(_) => {
+                naygo_core::footer::FooterPreset::Custom(
+                    self.config.settings.footer_custom_template.clone(),
+                )
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Texto del footer (barra inferior) para el panel `id`. Vacío si el footer está deshabilitado
+    /// en Settings o el panel no es de archivos. Lo invoca `sync_rows` por tick. Toma `&mut self`
+    /// por la caché de disco (`footer_disk_cache`): primero lee los datos crudos del panel bajo un
+    /// borrow inmutable de `self.ws`, lo suelta, y recién entonces toca la caché y renderiza. Así
+    /// no chocan el `&self.ws` y el `&mut self.footer_disk_cache`.
+    pub fn footer_text_of(&mut self, id: PaneId) -> String {
+        if !self.config.settings.footer_enabled {
+            return String::new();
+        }
+        // Paso 1: extraer datos crudos del panel (borrow inmutable acotado a este bloque).
+        let Some((data_no_disk, root)) = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(footer_inputs_of)
+        else {
+            return String::new();
+        };
+        // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por raíz de unidad.
+        let disk = match root {
+            Some(root) => match self.footer_disk_cache.get(&root) {
+                Some(d) => Some(*d),
+                None => {
+                    let d = disk_usage(&root);
+                    if let Some(u) = d {
+                        self.footer_disk_cache.insert(root, u);
+                    }
+                    d
+                }
+            },
+            None => None,
+        };
+        let data = naygo_core::footer::FooterData {
+            disk,
+            ..data_no_disk
+        };
+        let preset = self.footer_preset_resolved();
+        naygo_core::footer::render(&preset, &data, self.config.settings.size_format)
     }
 
     /// Drena los lotes de TODOS los listados activos. Devuelve true si TODOS terminaron
@@ -4231,6 +4294,45 @@ fn build_tree() -> DirTree {
             .map(|d| (d.path, d.label, d.kind))
             .collect();
     DirTree::from_drives(&drives)
+}
+
+/// Datos crudos del footer de un panel (todo MENOS el disco) + la raíz de su unidad (para
+/// cachear el disco). Puro sobre el `FilePaneState`: lo llama `footer_text_of` bajo un borrow
+/// inmutable y acotado, así el `&mut self` de la caché no choca con el `&self.ws`.
+fn footer_inputs_of(
+    files: &FilePaneState,
+) -> (naygo_core::footer::FooterData, Option<std::path::PathBuf>) {
+    // Selección: `files.selected` son posiciones de VISTA; se mapean a `entries` vía la vista.
+    let view = files.view_indices();
+    let sel_count = files.selected.len();
+    let total_count = view.len();
+    let marked_bytes: u64 = files
+        .selected
+        .iter()
+        .filter_map(|&pos| view.get(pos))
+        .filter_map(|&real| files.entries.get(real))
+        .filter_map(|e| e.size)
+        .sum();
+    // Conteo de archivos/carpetas sobre TODO el listado (no solo la vista filtrada).
+    let dir_count = files.entries.iter().filter(|e| e.is_dir()).count();
+    let file_count = files.entries.len() - dir_count;
+    let item_count = file_count + dir_count;
+    // Raíz de la unidad de la carpeta actual (p. ej. `C:\`), para cachear el disco por unidad.
+    let root = files
+        .current_dir
+        .ancestors()
+        .last()
+        .map(std::path::Path::to_path_buf);
+    let data = naygo_core::footer::FooterData {
+        sel_count,
+        total_count,
+        marked_bytes,
+        disk: None,
+        item_count,
+        file_count,
+        dir_count,
+    };
+    (data, root)
 }
 
 /// Uso de disco de una unidad (total/libre), o `None` si no se puede leer (red caída,

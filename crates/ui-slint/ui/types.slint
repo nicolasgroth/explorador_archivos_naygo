@@ -401,6 +401,7 @@ export struct PaneVm {
     // el aviso oculta el botón "subir un nivel" (no tendría sentido: caería al HOME).
     missing-has-ancestor: bool,
     deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
+    footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos)
