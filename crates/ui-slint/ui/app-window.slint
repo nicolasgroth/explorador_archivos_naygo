@@ -92,6 +92,16 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-search: false;
     // Si true, dibuja un RELOJ (historial de carpetas) con Path: círculo + dos manecillas.
     in property <bool> draw-history: false;
+    // Si true, dibuja un CHEVRON IZQUIERDO (atrás en el historial de navegación) con Path.
+    in property <bool> draw-back: false;
+    // Si true, dibuja un CHEVRON DERECHO (adelante en el historial) con Path (espejo del de atrás).
+    in property <bool> draw-forward: false;
+    // Si true, dibuja una CASITA (ir al inicio / carpeta Home) con Path: techo + cuerpo.
+    in property <bool> draw-home: false;
+    // Si false, el botón se ve atenuado y no dispara `clicked` (Atrás/Adelante sin historial).
+    in property <bool> enabled: true;
+    // Color del ícono dibujado por Path. Atenuado cuando el botón está deshabilitado.
+    property <color> icon-tint: root.enabled ? white : Theme.text-dim;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -257,7 +267,64 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 11; y: 7; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history: Text {
+        // Chevron izquierdo dibujado: «atrás» en el historial de navegación.
+        if root.draw-back: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 16px;
+                height: 16px;
+                stroke: root.icon-tint;
+                stroke-width: 1.6px;
+                fill: transparent;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                MoveTo { x: 10; y: 3; }
+                LineTo { x: 5; y: 8; }
+                LineTo { x: 10; y: 13; }
+            }
+        }
+        // Chevron derecho dibujado: «adelante» (espejo del de atrás).
+        if root.draw-forward: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 16px;
+                height: 16px;
+                stroke: root.icon-tint;
+                stroke-width: 1.6px;
+                fill: transparent;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                MoveTo { x: 6; y: 3; }
+                LineTo { x: 11; y: 8; }
+                LineTo { x: 6; y: 13; }
+            }
+        }
+        // Casita dibujada: «ir al inicio» (carpeta Home). Techo triangular + cuerpo.
+        if root.draw-home: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 16px;
+                height: 16px;
+                stroke: root.icon-tint;
+                stroke-width: 1.4px;
+                fill: transparent;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                // Techo (triángulo).
+                MoveTo { x: 3; y: 8; }
+                LineTo { x: 8; y: 3; }
+                LineTo { x: 13; y: 8; }
+                // Cuerpo (paredes y base).
+                MoveTo { x: 4.5; y: 7; }
+                LineTo { x: 4.5; y: 13; }
+                LineTo { x: 11.5; y: 13; }
+                LineTo { x: 11.5; y: 7; }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -269,6 +336,7 @@ component ToolBtn inherits Rectangle {
     // por los paneles, que se pintan después en el VerticalLayout).
     callback hover-tip(string, length);
     touch := TouchArea {
+        enabled: root.enabled;
         clicked => { root.clicked(); }
         changed has-hover => {
             root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
@@ -435,6 +503,13 @@ export component AppWindow inherits Window {
     in property <[PaneVm]> panes;
     in property <[SplitVm]> splits;
     callback go-up();
+    // Navegación tipo navegador: atrás/adelante en el historial del panel activo + ir al inicio.
+    callback go-back();
+    callback go-forward();
+    callback go-home();
+    // Estado de los botones Atrás/Adelante (Rust los actualiza tras cada navegación).
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
     callback add-pane();
     callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
                                       // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
@@ -715,6 +790,35 @@ export component AppWindow inherits Window {
                 padding: 4px;
                 spacing: 6px;
                 // --- Grupo NAVEGACIÓN ---
+                // Atrás / Adelante / Inicio: navegación tipo navegador. Íconos dibujados con Path
+                // (el render por software no pinta glifos de fuente). Atrás/Adelante se atenúan y
+                // no responden cuando no hay historial en esa dirección.
+                ToolBtn {
+                    draw-back: true;
+                    icon-only: true;
+                    enabled: root.can-go-back;
+                    tip: Tr.nav-back-tip;
+                    btn-width: 34px;
+                    clicked => { root.go-back(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                ToolBtn {
+                    draw-forward: true;
+                    icon-only: true;
+                    enabled: root.can-go-forward;
+                    tip: Tr.nav-forward-tip;
+                    btn-width: 34px;
+                    clicked => { root.go-forward(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                ToolBtn {
+                    draw-home: true;
+                    icon-only: true;
+                    tip: Tr.nav-home-tip;
+                    btn-width: 34px;
+                    clicked => { root.go-home(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;

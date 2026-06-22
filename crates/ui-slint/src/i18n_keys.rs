@@ -20,6 +20,9 @@ where
     // Barra de herramientas.
     tr.set_toolbar_up(c.t("slint.toolbar.up").into());
     tr.set_toolbar_up_tip(c.t("toolbar.up").into());
+    tr.set_nav_back_tip(c.t("slint.toolbar.back_tip").into());
+    tr.set_nav_forward_tip(c.t("slint.toolbar.forward_tip").into());
+    tr.set_nav_home_tip(c.t("slint.toolbar.home_tip").into());
     tr.set_toolbar_add_tip(c.t("slint.toolbar.add").into());
     tr.set_toolbar_panel(c.t("slint.toolbar.panel").into());
     tr.set_toolbar_panel_tip(c.t("toolbar.add_other").into());

@@ -505,6 +505,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
             }
             ui.set_status(SharedString::from(c.status_line().as_str()));
+            // Botones Atrás/Adelante del toolbar: habilitados según el historial del panel activo.
+            // Va aquí (refresco central) para que se actualicen tras cualquier navegación —teclado,
+            // mouse, doble-clic, breadcrumbs— no solo al pulsar los botones.
+            ui.set_can_go_back(c.can_go_back());
+            ui.set_can_go_forward(c.can_go_forward());
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
             let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
@@ -1567,6 +1572,41 @@ fn main() -> Result<(), slint::PlatformError> {
         let start_timer = start_timer.clone();
         ui.on_go_up(move || {
             if ctrl.borrow_mut().on_go_up() {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    // Navegación tipo navegador: Atrás / Adelante / Inicio. Cada uno relanza el listado si se
+    // movió (start_timer) y repinta (sync_layout, que además actualiza can-go-back/forward).
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_go_back(move || {
+            if ctrl.borrow_mut().on_go_back() {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_go_forward(move || {
+            if ctrl.borrow_mut().on_go_forward() {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_go_home(move || {
+            if ctrl.borrow_mut().on_go_home() {
                 start_timer();
             }
             sync_layout();
