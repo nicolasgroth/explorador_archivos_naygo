@@ -7,6 +7,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Paleta de comandos (Ctrl+P): un buscador rápido que filtra acciones, archivos de la carpeta
+  actual, carpetas recientes, favoritos y temas con coincidencia aproximada (fuzzy), resaltando
+  las letras que coinciden. Se navega con las flechas, Enter ejecuta y Esc cierra. El atajo es
+  configurable en Configuración → Atajos.
+- Menú de historial en los botones Atrás y Adelante: un triángulo ▾ junto a cada uno despliega
+  las carpetas visitadas en esa dirección para saltar directo a una.
 - Pie de panel (footer): cada panel de archivos muestra al pie sus propios datos —archivos
   seleccionados sobre el total, bytes marcados, y espacio libre/total del disco de su unidad—.
   La plantilla es global y se elige en Configuración → Avanzado entre varias predefinidas
