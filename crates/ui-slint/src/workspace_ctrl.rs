@@ -3331,6 +3331,9 @@ impl WorkspaceCtrl {
             .filter(|e| e.kind != EntryKind::Directory)
             .map(|e| e.path.clone());
         self.preview.set_wanted(focused_file, now);
+        // El toggle global de auto-resaltado controla al worker: se sincroniza antes de lanzarlo.
+        self.preview
+            .set_auto_highlight(self.config.settings.auto_highlight_code);
         if self.preview.should_start(now) {
             self.preview.start();
         }

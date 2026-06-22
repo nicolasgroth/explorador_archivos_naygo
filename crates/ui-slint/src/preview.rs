@@ -71,6 +71,9 @@ pub struct PreviewState {
     token: Option<CancellationToken>,
     /// Reglas de clasificación (qué extensiones son texto/imagen).
     rules: Vec<PreviewRule>,
+    /// Toggle global de auto-resaltado de código (`Settings.auto_highlight_code`). Si está en
+    /// `false`, el worker pinta el código como texto plano aunque la regla fuerce un lenguaje.
+    auto_highlight: bool,
     /// Última vista entregada (para pintar en cada tick). `None` = nada cargado aún.
     last: Option<ViewCache>,
 }
@@ -84,6 +87,7 @@ impl Default for PreviewState {
             rx: None,
             token: None,
             rules: preview::default_preview_rules(),
+            auto_highlight: true,
             last: None,
         }
     }
@@ -113,6 +117,12 @@ impl PreviewState {
         true
     }
 
+    /// Refleja el toggle global `Settings.auto_highlight_code`. El controlador lo sincroniza
+    /// antes de lanzar el worker, así el siguiente preview respeta la preferencia actual.
+    pub fn set_auto_highlight(&mut self, on: bool) {
+        self.auto_highlight = on;
+    }
+
     /// La última vista entregada, para pintar (None = nada cargado).
     pub fn last_view(&self) -> Option<&ViewCache> {
         self.last.as_ref()
@@ -139,11 +149,12 @@ impl PreviewState {
             return;
         };
         let rules = self.rules.clone();
+        let auto_highlight = self.auto_highlight;
         let token = CancellationToken::new();
         let worker_token = token.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let payload = build_payload(&path, &rules, &worker_token);
+            let payload = build_payload(&path, &rules, auto_highlight, &worker_token);
             let _ = tx.send((path, payload));
         });
         self.token = Some(token);
@@ -207,16 +218,21 @@ impl PreviewState {
 }
 
 /// Construye el payload leyendo/decodificando en el hilo del worker.
-fn build_payload(path: &Path, rules: &[PreviewRule], token: &CancellationToken) -> Payload {
+fn build_payload(
+    path: &Path,
+    rules: &[PreviewRule],
+    auto_highlight: bool,
+    token: &CancellationToken,
+) -> Payload {
     // Los .zip muestran su contenido (lista de entradas), antes de la clasificación normal.
     if is_zip(path) {
         return read_zip_listing(path);
     }
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
-        // Si la regla fuerza un lenguaje, `code_lang_for` lo devuelve y el texto se resalta.
-        // TODO(footer-block): usar settings.auto_highlight_code
-        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, true)),
+        // Si la regla fuerza un lenguaje y el toggle global está activo, `code_lang_for` lo
+        // devuelve y el texto se resalta; con el toggle en `false` cae a texto plano.
+        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, auto_highlight)),
         PreviewKind::Image => read_image(path, token),
         PreviewKind::Svg => read_svg(path, token),
         PreviewKind::Pdf => read_pdf(path),
@@ -539,7 +555,7 @@ mod tests {
         std::fs::write(&p, b"linea1\nlinea2\n").unwrap();
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
-        match build_payload(&p, &rules, &token) {
+        match build_payload(&p, &rules, true, &token) {
             Payload::Text {
                 text, highlighted, ..
             } => {
@@ -563,10 +579,42 @@ mod tests {
             view: preview::ViewMode::Code(CodeLang::Json),
         }];
         let token = CancellationToken::new();
-        match build_payload(&p, &rules, &token) {
+        // Con el toggle activo, la regla de código produce líneas resaltadas.
+        match build_payload(&p, &rules, true, &token) {
             Payload::Text { highlighted, .. } => {
                 let lines = highlighted.expect("debe traer líneas resaltadas");
                 assert!(!lines.is_empty(), "el resaltado produce líneas");
+            }
+            other => panic!("esperaba texto, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_controla_el_resaltado_automatico() {
+        // Extensión de código conocida (`.rs`) SIN regla que fuerce lenguaje: el resaltado
+        // depende del toggle. Con él activo se deduce el lenguaje y se resalta; apagado, no.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("lib.rs");
+        std::fs::write(&p, b"fn main() {}\n").unwrap();
+        let rules = preview::default_preview_rules();
+        let token = CancellationToken::new();
+
+        match build_payload(&p, &rules, true, &token) {
+            Payload::Text { highlighted, .. } => {
+                assert!(
+                    highlighted.is_some(),
+                    "con el toggle activo el código se resalta"
+                );
+            }
+            other => panic!("esperaba texto, fue {other:?}"),
+        }
+
+        match build_payload(&p, &rules, false, &token) {
+            Payload::Text { highlighted, .. } => {
+                assert!(
+                    highlighted.is_none(),
+                    "con el toggle apagado no debe resaltar"
+                );
             }
             other => panic!("esperaba texto, fue {other:?}"),
         }
