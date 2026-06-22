@@ -16,8 +16,8 @@ teclado (prioridad de velocidad del proyecto).
 
 - **Atajo**: Ctrl+P por defecto, pero como **acción del keymap** (`Action::CommandPalette`),
   editable en Configuración → Atajos como cualquier otra.
-- **Categorías** (las 4): Acciones (curadas del keymap), Carpetas recientes, Favoritos,
-  Temas + "Abrir configuración".
+- **Categorías** (las 5): Acciones (curadas del keymap), Archivos de la carpeta actual,
+  Carpetas recientes, Favoritos, Temas + "Abrir configuración".
 - **Matching**: fuzzy (subsecuencia) con ranking. Resalta las letras coincidentes.
 - **Aspecto**: overlay centrado arriba, sobre velo oscuro semitransparente. Cada resultado:
   ícono por categoría + nombre con letras resaltadas + etiqueta de categoría + atajo a la derecha.
@@ -29,12 +29,16 @@ Puro, sin UI ni Windows. 100% testeable.
 
 ```rust
 /// Categoría de un comando (define el ícono y la etiqueta).
-pub enum CommandCategory { Action, Recent, Favorite, Theme, Config }
+pub enum CommandCategory { Action, File, Recent, Favorite, Theme, Config }
 
 /// Qué ejecuta un comando al elegirlo.
 pub enum CommandPayload {
     Action(crate::keymap::Action),  // se rutea por el dispatcher de teclado existente
     Navigate(std::path::PathBuf),   // navegar el panel activo a esta ruta (reciente/favorito)
+    /// Enfocar/seleccionar un archivo o carpeta YA cargado en el panel activo. Lleva el índice
+    /// de VISTA del entry (no la ruta): la paleta no toca disco, solo mueve foco/selección.
+    /// Si el entry es carpeta y el usuario lo eligió, se puede navegar; si es archivo, se enfoca.
+    FocusEntry(usize),
     Theme(crate::theme::ThemeId),   // aplicar este tema
     OpenConfig,                     // abrir la ventana de configuración
 }
@@ -73,6 +77,11 @@ en el controlador que arma `Vec<Command>` desde:
   Help, EditPath. Se EXCLUYEN las de bajo nivel (MoveUp/MoveDown/FocusPageDown/ExtendUp/
   FocusUpKeep/ToggleSelect/GoFavorite1..9/etc.). El label sale de `Action::i18n_key()`; el
   shortcut del keymap (`chords_for(action)` → texto del primer chord).
+- **Archivos de la carpeta actual**: los entries YA cargados en el panel activo (la vista
+  filtrada actual). Label = nombre del archivo/carpeta; payload `FocusEntry(view_index)`.
+  Instantáneo (ya están en memoria); NO toca disco. Si la carpeta tiene muchísimos entries, se
+  puede tope a un máximo razonable para la lista por defecto (el fuzzy igual recorre todos al
+  filtrar — es CPU puro sobre RAM, barato).
 - **Recientes**: del historial de carpetas recientes (label = nombre de carpeta, payload Navigate).
 - **Favoritos**: de la lista de favoritos persistida (label = nombre, payload Navigate).
 - **Temas**: del ThemeCatalog (label = "Tema: <nombre>", payload Theme).
@@ -97,7 +106,9 @@ en el controlador que arma `Vec<Command>` desde:
   actuar con la paleta abierta — patrón ya usado con `pending_dialog` en op-dialogs).
 - **Ejecución** (en el controlador): `execute_palette_command(index)` despacha por payload —
   Action → rutea por el mismo camino que `on_key`; Navigate → navega el panel activo;
-  Theme → aplica y persiste; OpenConfig → abre la ventana. Luego cierra la paleta.
+  FocusEntry(view_idx) → enfoca/selecciona ese entry en el panel activo y hace scroll a él (si
+  es carpeta, opcionalmente entra); Theme → aplica y persiste; OpenConfig → abre la ventana.
+  Luego cierra la paleta.
 
 ### Regla de oro
 
@@ -155,8 +166,8 @@ Claves nuevas (triple es/en, sin voseo, sin reutilizar): tooltip "Historial haci
 
 ## i18n (todas, triple, español neutral sin voseo, sin reutilizar claves)
 
-Paleta: título/placeholder del campo, etiquetas de categoría (Acción/Reciente/Favorito/Tema),
-ayuda de teclas, "Abrir configuración", "Tema: {nombre}". Historial: tooltips de los ▾.
+Paleta: título/placeholder del campo, etiquetas de categoría (Acción/Archivo/Reciente/Favorito/
+Tema), ayuda de teclas, "Abrir configuración", "Tema: {nombre}". Historial: tooltips de los ▾.
 `action.command_palette` (nombre de la acción para el editor de atajos).
 
 ## Orden de implementación sugerido
@@ -170,7 +181,9 @@ ayuda de teclas, "Abrir configuración", "Tema: {nombre}". Historial: tooltips d
 
 ## Fuera de alcance (YAGNI)
 
-- Buscar ARCHIVOS por nombre dentro de la paleta (ya existe Ctrl+F para eso; la paleta es de
-  comandos/navegación, no un buscador de archivos del disco).
+- Buscar archivos por nombre RECORRIENDO EL DISCO (carpeta + subcarpetas) dentro de la paleta:
+  eso ya lo hace Ctrl+F (búsqueda recursiva con worker cancelable) y rompería que la paleta sea
+  instantánea. La paleta SÍ incluye los archivos de la carpeta actual YA cargados en el panel
+  activo (categoría File, en memoria, sin tocar disco) — esa es la frontera.
 - Historial global entre paneles (cada panel tiene su NavHistory; el menú muestra el del activo).
 - Acciones de bajo nivel en la paleta (curaduría explícita las excluye).
