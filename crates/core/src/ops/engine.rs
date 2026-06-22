@@ -666,6 +666,38 @@ mod tests {
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "NUEVO");
     }
 
+    // Confirma la causa raíz del bug "pegar+sobrescribir copió solo unos MB de un archivo
+    // grande": el camino Ask+Overwrite NO trunca. Copia un archivo MULTI-CHUNK (mayor que
+    // BUF_SIZE) y verifica que el destino queda con TODOS los bytes. Si esto pasa, el motor
+    // copia completo y el síntoma de "se detuvo en N MB" es de la UI (sin progreso visible
+    // la copia en curso parece detenida) o de un cierre prematuro, no del motor.
+    #[test]
+    fn ask_overwrite_copia_archivo_grande_completo() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("big.bin");
+        // 1 MiB = 4 chunks de 256 KiB + cambia el patrón por byte para detectar truncamiento.
+        let size = 1024 * 1024;
+        let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        fs::write(&src, &payload).unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        // El destino YA existe (con otro contenido más corto) → fuerza el camino de conflicto.
+        fs::write(dst.join("big.bin"), b"viejo-corto").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::Overwrite,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1, "debió preguntar una vez");
+        assert_eq!(summary.count_done(), 1, "debió completar la copia");
+        let copied = fs::read(dst.join("big.bin")).unwrap();
+        assert_eq!(copied.len(), size, "copió {} bytes de {size}", copied.len());
+        assert_eq!(copied, payload, "el contenido copiado no coincide byte a byte");
+    }
+
     #[test]
     fn ask_skip_deja_el_existente() {
         let dir = tempfile::tempdir().unwrap();
