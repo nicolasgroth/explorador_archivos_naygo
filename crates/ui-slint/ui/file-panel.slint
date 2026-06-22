@@ -253,6 +253,8 @@ export component FilePanel inherits FocusScope {
     // Vista profunda (recursiva): toggle en la barra + estado on/off.
     in property <bool> deep-active: false;
     callback toggle-deep(int);               // (pane-id)
+    // Barra inferior (footer): texto de selección/espacio de disco. Vacío = barra oculta.
+    in property <string> footer-text;
 
     key-pressed(event) => {
         root.activate(root.pane-id);
@@ -666,6 +668,25 @@ export component FilePanel inherits FocusScope {
                         }
                     }
                 }
+                }
+            }
+            // Barra inferior (footer): resumen de selección / espacio de disco. Va al FONDO del
+            // panel como último hijo del VerticalLayout; alto fijo de 22px (la lista de arriba se
+            // queda con el resto del alto). Solo se pinta si hay texto que mostrar.
+            if root.footer-text != "": Rectangle {
+                height: 22px;
+                background: Theme.row-alt-bg;
+                // Borde superior fino que separa el footer del contenido.
+                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.border; }
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: root.footer-text;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    overflow: elide;
                 }
             }
         }
