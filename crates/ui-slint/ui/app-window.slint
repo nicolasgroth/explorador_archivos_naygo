@@ -20,6 +20,7 @@ import { NewFolder } from "new-folder.slint";
 import { SearchPanel } from "search-panel.slint";
 import { Help } from "help.slint";
 import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
+import { PaletteItemVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -665,6 +666,11 @@ export component AppWindow inherits Window {
     in property <[NavRow]> history-rows;
     in-out property <length> history-menu-x: 0;
     in-out property <bool> history-menu-open: false;
+    // Paleta de comandos (Ctrl+P): overlay con búsqueda difusa de acciones/archivos/recientes/etc.
+    in-out property <bool> palette-open: false;
+    in-out property <string> palette-query: "";
+    in property <[PaletteItemVm]> palette-results;
+    in-out property <int> palette-selected: 0;
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
     property <bool> layout-menu-open: false;
     // x de centro del botón de Layouts, capturada al abrir para anclar el menú flotante

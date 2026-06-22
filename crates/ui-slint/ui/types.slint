@@ -419,3 +419,22 @@ export struct NewsSection {
     category: string,
     items: [string],
 }
+
+// Un segmento del label de un resultado de la paleta: texto + si está resaltado (match).
+export struct PaletteSpanVm {
+    text: string,
+    hit: bool,
+}
+
+// Un resultado de la paleta de comandos (Ctrl+P).
+export struct PaletteItemVm {
+    spans: [PaletteSpanVm],   // el label partido en segmentos resaltados/normales
+    category: int,            // 0=Acción 1=Archivo 2=Reciente 3=Favorito 4=Tema 5=Config
+    shortcut: string,         // "Ctrl+C" o ""
+}
+
+// Una entrada del menú de historial (▾) de Atrás/Adelante.
+export struct HistoryItemVm {
+    name: string,             // nombre de la carpeta
+    path: string,             // ruta completa (atenuada)
+}
