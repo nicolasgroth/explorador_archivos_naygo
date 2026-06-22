@@ -269,6 +269,17 @@ export struct InspectorVm {
     created: string,
 }
 
+// Un segmento coloreado de una línea de código resaltado (un Text por segmento en la UI).
+export struct HlSpanVm {
+    text: string,
+    color: color,
+}
+
+// Una línea de código resaltado = sus segmentos en orden de izquierda a derecha.
+export struct HlLineVm {
+    spans: [HlSpanVm],
+}
+
 // Vista de preview: modo 0=vacío 1=texto 2=imagen 3=mensaje.
 export struct PreviewVm {
     mode: int,
@@ -276,6 +287,12 @@ export struct PreviewVm {
     truncated: bool,
     image: image,
     message: string,
+    // Resaltado de código: si `highlighted`, se pintan `hl-lines` (un Text por segmento) en vez
+    // del `text` plano. `path` es la ruta del archivo en preview ("" = ninguno) para "abrir con el
+    // programa del sistema".
+    highlighted: bool,
+    hl-lines: [HlLineVm],
+    path: string,
 }
 
 // Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.
@@ -328,11 +345,14 @@ export struct SettingsVm {
     icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
 }
 
-// Una regla de previsualización editable (C3): extensión, si se previsualiza, y "tratar como".
+// Una regla de previsualización editable (C3): extensión, si se previsualiza, y el modo de vista
+// forzado. `view-index`: 0=Auto 1=Texto 2=Imagen 3=Código. `lang-index`: posición en CodeLang::all()
+// (solo relevante cuando view-index==3).
 export struct PreviewRuleVm {
     ext: string,
     enabled: bool,
-    treat-as: string,
+    view-index: int,
+    lang-index: int,
 }
 
 // Una fila del editor de atajos: la clave estable de la acción, su nombre legible y el chord

@@ -1627,13 +1627,20 @@ fn main() -> Result<(), slint::PlatformError> {
             let prev: Vec<PreviewRuleVm> = c
                 .preview_rules()
                 .into_iter()
-                .map(|(ext, enabled, treat_as)| PreviewRuleVm {
+                .map(|(ext, enabled, view_index, lang_index)| PreviewRuleVm {
                     ext: ext.into(),
                     enabled,
-                    treat_as: treat_as.into(),
+                    view_index,
+                    lang_index,
                 })
                 .collect();
             cfg.set_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
+            // Nombres legibles de los lenguajes de código para el combobox (orden de CodeLang::all()).
+            let lang_names: Vec<SharedString> = naygo_core::preview::CodeLang::all()
+                .iter()
+                .map(|l| SharedString::from(code_lang_label(*l)))
+                .collect();
+            cfg.set_lang_names(ModelRc::from(Rc::new(VecModel::from(lang_names))));
             // Tarjetas de tema para la galería de selección (config → Apariencia).
             let active = c.config.settings.theme.clone();
             let col =
@@ -2191,9 +2198,18 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
-        cfg_win.on_preview_set_as(move |ext, as_| {
+        cfg_win.on_preview_set_view_mode(move |ext, idx| {
             ctrl.borrow_mut()
-                .preview_rule_set_treat_as(ext.as_str(), as_.as_str());
+                .preview_rule_set_view_mode(ext.as_str(), idx);
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_preview_set_view_lang(move |ext, idx| {
+            ctrl.borrow_mut()
+                .preview_rule_set_view_lang(ext.as_str(), idx);
             refresh();
         });
     }
@@ -2571,6 +2587,15 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_fav_pin_current(move || {
             ctrl.borrow_mut().toggle_favorite_active();
             sync_rows();
+        });
+    }
+    {
+        // Botón "abrir con el programa del sistema" del panel de vista previa: ShellExecute
+        // sobre la ruta del archivo previsualizado (la app no edita; abre con el editor del SO).
+        ui.on_preview_open(move |path| {
+            if !path.is_empty() {
+                let _ = naygo_platform::open::open_default(std::path::Path::new(path.as_str()));
+            }
         });
     }
     {
@@ -3425,15 +3450,81 @@ fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
 /// El `PreviewVm` actual a partir del último resultado guardado en el controlador. El
 /// resultado vivo se entrega por `poll()` en el timer y se cachea en el ctrl; aquí lo
 /// reconstruimos para pintarlo. (Mantener la última vista evita parpadeo entre ticks.)
+/// Nombre legible de un lenguaje de código para el combobox de Configuración (no es texto i18n:
+/// son nombres propios de lenguajes, iguales en todos los idiomas).
+fn code_lang_label(lang: naygo_core::preview::CodeLang) -> &'static str {
+    use naygo_core::preview::CodeLang;
+    match lang {
+        CodeLang::Xml => "XML",
+        CodeLang::Json => "JSON",
+        CodeLang::Html => "HTML",
+        CodeLang::Css => "CSS",
+        CodeLang::JavaScript => "JavaScript",
+        CodeLang::C => "C",
+        CodeLang::Cpp => "C++",
+        CodeLang::Java => "Java",
+        CodeLang::Python => "Python",
+        CodeLang::Rust => "Rust",
+        CodeLang::Sql => "SQL",
+        CodeLang::Bash => "Bash",
+        CodeLang::Markdown => "Markdown",
+        CodeLang::Yaml => "YAML",
+        CodeLang::Toml => "TOML",
+        CodeLang::Ini => "INI",
+    }
+}
+
 fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
+    // Ruta del archivo cargado (para "abrir con el programa del sistema"); "" si ninguno.
+    let path: SharedString = c
+        .preview
+        .loaded
+        .as_ref()
+        .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
+        .unwrap_or_default();
     match c.preview.last_view() {
-        Some(preview::ViewCache::Text { text, truncated }) => PreviewVm {
-            mode: 1,
-            text: SharedString::from(text.as_str()),
-            truncated: *truncated,
-            image: slint::Image::default(),
-            message: SharedString::new(),
-        },
+        Some(preview::ViewCache::Text {
+            text,
+            truncated,
+            highlighted,
+        }) => {
+            // Si el worker resaltó el texto, mapeamos cada línea/segmento al modelo de la UI; el
+            // color (u8,u8,u8) de core se vuelve `slint::Color::from_rgb_u8`.
+            let (is_hl, hl_lines): (bool, Vec<HlLineVm>) = match highlighted {
+                Some(lines) => (
+                    true,
+                    lines
+                        .iter()
+                        .map(|l| {
+                            let spans: Vec<HlSpanVm> = l
+                                .spans
+                                .iter()
+                                .map(|s| HlSpanVm {
+                                    text: SharedString::from(s.text.as_str()),
+                                    color: slint::Color::from_rgb_u8(
+                                        s.color.0, s.color.1, s.color.2,
+                                    ),
+                                })
+                                .collect();
+                            HlLineVm {
+                                spans: ModelRc::from(Rc::new(VecModel::from(spans))),
+                            }
+                        })
+                        .collect(),
+                ),
+                None => (false, Vec::new()),
+            };
+            PreviewVm {
+                mode: 1,
+                text: SharedString::from(text.as_str()),
+                truncated: *truncated,
+                image: slint::Image::default(),
+                message: SharedString::new(),
+                highlighted: is_hl,
+                hl_lines: ModelRc::from(Rc::new(VecModel::from(hl_lines))),
+                path,
+            }
+        }
         Some(preview::ViewCache::Image {
             rgba,
             width,
@@ -3446,6 +3537,9 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 truncated: false,
                 image: slint::Image::from_rgba8(buf),
                 message: SharedString::new(),
+                highlighted: false,
+                hl_lines: ModelRc::default(),
+                path,
             }
         }
         Some(preview::ViewCache::Message(m)) => PreviewVm {
@@ -3454,6 +3548,9 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             truncated: false,
             image: slint::Image::default(),
             message: SharedString::from(m.as_str()),
+            highlighted: false,
+            hl_lines: ModelRc::default(),
+            path,
         },
         None => PreviewVm {
             mode: 0,
@@ -3461,6 +3558,9 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             truncated: false,
             image: slint::Image::default(),
             message: SharedString::new(),
+            highlighted: false,
+            hl_lines: ModelRc::default(),
+            path: SharedString::new(),
         },
     }
 }
