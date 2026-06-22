@@ -95,7 +95,10 @@ mod tests {
             sel_count: 3,
             total_count: 12,
             marked_bytes: 4_404_019, // ~4,2 MB
-            disk: Some(DiskUsage { total: 500_000_000_000, free: 112_000_000_000 }),
+            disk: Some(DiskUsage {
+                total: 500_000_000_000,
+                free: 112_000_000_000,
+            }),
             item_count: 12,
             file_count: 8,
             dir_count: 4,
@@ -104,7 +107,11 @@ mod tests {
 
     #[test]
     fn compact_con_disco() {
-        let s = render(&FooterPreset::Compact, &sample_with_disk(), SizeFormat::Auto);
+        let s = render(
+            &FooterPreset::Compact,
+            &sample_with_disk(),
+            SizeFormat::Auto,
+        );
         assert!(s.contains("3/12"), "esperaba sel/total: {s}");
         assert!(s.contains("MB"), "esperaba bytes marcados: {s}");
     }
@@ -129,7 +136,10 @@ mod tests {
     fn custom_token_desconocido_queda_literal() {
         let p = FooterPreset::Custom("{sel} {desconocido} {dirs}".to_string());
         let s = render(&p, &sample_with_disk(), SizeFormat::Auto);
-        assert!(s.contains("{desconocido}"), "token raro se deja literal: {s}");
+        assert!(
+            s.contains("{desconocido}"),
+            "token raro se deja literal: {s}"
+        );
         assert!(s.contains("3"), "{s}");
         assert!(s.contains("4"), "dirs=4: {s}");
     }
