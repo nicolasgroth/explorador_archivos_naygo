@@ -17,6 +17,7 @@ pub mod disk;
 pub mod dnd;
 pub mod favorites;
 pub mod filter;
+pub mod footer;
 pub mod format;
 pub mod fs_model;
 pub mod highlight;
