@@ -195,7 +195,9 @@ impl Theme {
                 row_bg: c(0xfb, 0xfb, 0xfb),
                 row_alt_bg: c(0xf4, 0xf4, 0xf4),
                 text: c(0x1f, 0x1f, 0x1f),
-                text_dim: c(0x6b, 0x6b, 0x6b),
+                // Gris medio-oscuro: contrasta bien sobre fondo claro (~7:1). Un gris más claro
+                // (estilo dark mode) queda casi ilegible sobre blanco en las columnas atenuadas.
+                text_dim: c(0x52, 0x52, 0x52),
                 selection_bg: c(0xdc, 0xeb, 0xff),
                 active_bar: c(0x17, 0x69, 0xe0),
                 error: c(0xc0, 0x39, 0x2b),

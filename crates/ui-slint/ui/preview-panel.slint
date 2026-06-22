@@ -113,14 +113,16 @@ export component PreviewPanel inherits Rectangle {
             spacing: 2px;
             ScrollView {
                 vertical-stretch: 1;
-                // Código resaltado: una fila por línea, un Text por segmento. SIN wrap: cada línea
-                // ya viene recortada por el core (TEXT_MAX_LINE_CHARS), así que ningún glifo sale
-                // del rango i16 del render por software.
-                if root.view.highlighted: VerticalLayout {
+                // Código resaltado: una fila por línea (un Text por segmento, sin ajuste), con
+                // SCROLL HORIZONTAL como un editor — respeta la indentación y conserva el color.
+                // El viewport toma el ancho natural del contenido; si supera el visible, el
+                // ScrollView ofrece la barra horizontal. Las líneas ya vienen recortadas a
+                // TEXT_MAX_LINE_CHARS, así que ningún glifo sale del rango i16 del render software.
+                if root.view.highlighted: hl-col := VerticalLayout {
                     alignment: start;
                     for line in root.view.hl-lines: HorizontalLayout {
                         alignment: start;
-                        // Las líneas vacías igual deben ocupar alto: un espaciador de alto mínimo.
+                        // Espaciador para que las líneas vacías ocupen alto.
                         Rectangle {
                             height: 16px;
                             width: 0px;
