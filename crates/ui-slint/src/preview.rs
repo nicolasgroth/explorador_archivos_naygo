@@ -8,7 +8,8 @@
 // el foco cambia, el token se cancela y el resultado tardío se descarta por path.
 
 use naygo_core::cancel::CancellationToken;
-use naygo_core::preview::{self, PreviewKind, PreviewRule};
+use naygo_core::highlight::HlLine;
+use naygo_core::preview::{self, CodeLang, PreviewKind, PreviewRule};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -24,6 +25,8 @@ pub enum ViewCache {
     Text {
         text: String,
         truncated: bool,
+        /// Líneas ya resaltadas si la regla forzó un lenguaje de código; `None` = texto plano.
+        highlighted: Option<Vec<HlLine>>,
     },
     Image {
         rgba: Vec<u8>,
@@ -36,8 +39,13 @@ pub enum ViewCache {
 /// Resultado crudo del worker (sin tipos de Slint). El hilo de UI lo convierte a `PreviewVm`.
 #[derive(Clone, Debug)]
 pub enum Payload {
-    /// Texto truncado listo para pintar (+ si se cortó, para el aviso).
-    Text { text: String, truncated: bool },
+    /// Texto truncado listo para pintar (+ si se cortó, para el aviso). `highlighted` lleva las
+    /// líneas resaltadas cuando la regla forzó un lenguaje de código (sino `None` = texto plano).
+    Text {
+        text: String,
+        truncated: bool,
+        highlighted: Option<Vec<HlLine>>,
+    },
     /// Imagen decodificada: RGBA8 + dimensiones (ya reescalada al tope).
     Image {
         rgba: Vec<u8>,
@@ -153,9 +161,14 @@ impl PreviewState {
                 if Some(&path) == self.wanted.as_ref() {
                     self.loaded = Some(path);
                     self.last = Some(match &payload {
-                        Payload::Text { text, truncated } => ViewCache::Text {
+                        Payload::Text {
+                            text,
+                            truncated,
+                            highlighted,
+                        } => ViewCache::Text {
                             text: text.clone(),
                             truncated: *truncated,
+                            highlighted: highlighted.clone(),
                         },
                         Payload::Image {
                             rgba,
@@ -201,7 +214,8 @@ fn build_payload(path: &Path, rules: &[PreviewRule], token: &CancellationToken) 
     }
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
-        PreviewKind::Text => read_text(path),
+        // Si la regla fuerza un lenguaje, `code_lang_for` lo devuelve y el texto se resalta.
+        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules)),
         PreviewKind::Image => read_image(path, token),
         PreviewKind::Svg => read_svg(path, token),
         PreviewKind::Pdf => read_pdf(path),
@@ -256,10 +270,13 @@ fn read_zip_listing(path: &Path) -> Payload {
     Payload::Text {
         text: lines.join("\n"),
         truncated,
+        highlighted: None,
     }
 }
 
-fn read_text(path: &Path) -> Payload {
+/// Lee el archivo como texto y, si `lang` está presente (la regla fuerza un lenguaje), resalta
+/// el texto YA recortado con `core::highlight` (defensa i16 intacta: se resalta lo recortado).
+fn read_text(path: &Path, lang: Option<CodeLang>) -> Payload {
     use naygo_core::preview::{truncate_text, TEXT_MAX_BYTES};
     use std::io::Read;
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -283,9 +300,13 @@ fn read_text(path: &Path) -> Payload {
         }
     }
     let t = truncate_text(&buf, hit_cap);
+    // El resaltado opera SOBRE el texto ya recortado por `truncate_text` (≤ TEXT_MAX_LINES y
+    // ≤ TEXT_MAX_LINE_CHARS por línea), así que ningún glifo cae fuera del rango i16.
+    let highlighted = lang.map(|l| naygo_core::highlight::highlight(&t.text, l));
     Payload::Text {
         text: t.text,
         truncated: t.truncated,
+        highlighted,
     }
 }
 
@@ -420,6 +441,7 @@ fn read_pdf(path: &Path) -> Payload {
             return Payload::Text {
                 text: format!("{head}(No se pudo extraer el texto: puede ser un PDF escaneado, protegido o con solo imágenes.)"),
                 truncated: false,
+                highlighted: None,
             };
         }
     };
@@ -437,6 +459,7 @@ fn read_pdf(path: &Path) -> Payload {
     Payload::Text {
         text: format!("{header}{body}"),
         truncated: too_long || clipped,
+        highlighted: None,
     }
 }
 
@@ -516,7 +539,34 @@ mod tests {
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
         match build_payload(&p, &rules, &token) {
-            Payload::Text { text, .. } => assert!(text.contains("linea1")),
+            Payload::Text {
+                text, highlighted, ..
+            } => {
+                assert!(text.contains("linea1"));
+                // Sin regla de código (`.txt` es Auto) → texto plano, sin resaltado.
+                assert!(highlighted.is_none(), "txt en Auto no debe resaltar");
+            }
+            other => panic!("esperaba texto, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regla_de_codigo_resalta_el_texto() {
+        // Una regla que fuerza `.dat` a código JSON → el worker resalta el texto leído.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.dat");
+        std::fs::write(&p, b"{\n  \"a\": 1\n}\n").unwrap();
+        let rules = vec![preview::PreviewRule {
+            ext: "dat".to_string(),
+            enabled: true,
+            view: preview::ViewMode::Code(CodeLang::Json),
+        }];
+        let token = CancellationToken::new();
+        match build_payload(&p, &rules, &token) {
+            Payload::Text { highlighted, .. } => {
+                let lines = highlighted.expect("debe traer líneas resaltadas");
+                assert!(!lines.is_empty(), "el resaltado produce líneas");
+            }
             other => panic!("esperaba texto, fue {other:?}"),
         }
     }
