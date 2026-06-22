@@ -163,6 +163,22 @@ export component ConfigWindow inherits Window {
     // Historial de carpetas recientes (límite 1–100).
     in property <int> recent-limit: 50;
     callback recent-limit-changed(int);
+    // Auto-resaltado de código (Previsualización).
+    in property <bool> auto-highlight-code: true;
+    callback set-auto-highlight-code(bool);
+    // Pie de panel (Avanzado): mostrar/ocultar + plantilla (0..3 fijas, 4=Personalizada) +
+    // template personalizado + vista previa en vivo (renderizada por Rust).
+    in property <bool> footer-enabled: true;
+    callback set-footer-enabled(bool);
+    in property <int> footer-preset-index: 0;
+    callback set-footer-preset-index(int);
+    in property <string> footer-custom-template: "";
+    callback set-footer-custom-template(string);
+    in property <string> footer-preview: "";
+    // Carpeta de inicio (Home, Avanzado). Vacío = carpeta personal del usuario.
+    in property <string> home-dir: "";
+    callback set-home-dir(string);
+    callback browse-home();
     // Plantilla de tabla por defecto (C4):
     callback save-default-table();
     callback clear-default-table();
@@ -648,6 +664,95 @@ export component ConfigWindow inherits Window {
                                         }
                                     }
                                 }
+                                // === Pie de panel (footer) ===
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.cfg-footer-section;
+                                    color: Theme.text-dim;
+                                    font-weight: 700;
+                                }
+                                Field {
+                                    label: Tr.cfg-footer-enabled;
+                                    Switch {
+                                        checked: root.footer-enabled;
+                                        toggled => { root.set-footer-enabled(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-footer-template;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [
+                                            Tr.cfg-footer-preset-compact,
+                                            Tr.cfg-footer-preset-full,
+                                            Tr.cfg-footer-preset-disk,
+                                            Tr.cfg-footer-preset-selection,
+                                            Tr.cfg-footer-preset-custom,
+                                        ];
+                                        current-index: root.footer-preset-index;
+                                        selected => { root.set-footer-preset-index(self.current-index); }
+                                    }
+                                }
+                                // Plantilla personalizada: solo cuando el preset es "Personalizada…" (4).
+                                // Muestra el campo de tokens + la lista de tokens disponibles.
+                                if root.footer-preset-index == 4: VerticalLayout {
+                                    spacing: 4px;
+                                    LineEdit {
+                                        text: root.footer-custom-template;
+                                        placeholder-text: "{sel}/{total} · {marked}";
+                                        edited(t) => { root.set-footer-custom-template(t); }
+                                    }
+                                    Text {
+                                        text: Tr.cfg-footer-tokens;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                // Vista previa en vivo: render del preset/template actual sobre
+                                // datos de ejemplo (la calcula Rust y la repuebla en cada cambio).
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: Tr.cfg-footer-preview + ":";
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.footer-preview;
+                                        color: Theme.text;
+                                        font-size: 11px;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // === Carpeta de inicio (Home) ===
+                                Rectangle { height: 8px; }
+                                Field {
+                                    label: Tr.cfg-home-dir;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        LineEdit {
+                                            width: root.ctl-w - 90px;
+                                            text: root.home-dir;
+                                            placeholder-text: Tr.cfg-home-dir-empty;
+                                            edited(t) => { root.set-home-dir(t); }
+                                        }
+                                        CfgBtn {
+                                            label: Tr.cfg-home-dir-browse;
+                                            clicked => { root.browse-home(); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: Tr.cfg-home-dir-empty;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
                                 // Factory reset en dos pasos: el primer clic arma la confirmación.
                                 Rectangle { height: 8px; }
                                 HorizontalLayout {
@@ -671,6 +776,14 @@ export component ConfigWindow inherits Window {
                             // === Previsualización (cat 7) ===
                             if root.cat == 7: VerticalLayout {
                                 spacing: 6px;
+                                // Auto-resaltado de código: ARRIBA de la tabla de reglas.
+                                Field {
+                                    label: Tr.cfg-auto-highlight;
+                                    Switch {
+                                        checked: root.auto-highlight-code;
+                                        toggled => { root.set-auto-highlight-code(self.checked); }
+                                    }
+                                }
                                 Text { text: Tr.cfg-preview-hint; color: Theme.text-dim; wrap: word-wrap; }
                                 // Encabezado de la tabla.
                                 HorizontalLayout {

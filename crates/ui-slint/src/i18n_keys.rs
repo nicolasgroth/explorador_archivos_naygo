@@ -239,6 +239,21 @@ where
     tr.set_cfg_low_power_never(c.t("slint.cfg.low_power_never").into());
     tr.set_cfg_factory_reset(c.t("slint.cfg.factory_reset").into());
     tr.set_cfg_factory_reset_confirm(c.t("slint.cfg.factory_reset_confirm").into());
+    // Auto-resaltado (Previsualización) + pie de panel + Home (Avanzado).
+    tr.set_cfg_auto_highlight(c.t("slint.cfg.auto_highlight").into());
+    tr.set_cfg_footer_section(c.t("slint.cfg.footer_section").into());
+    tr.set_cfg_footer_enabled(c.t("slint.cfg.footer_enabled").into());
+    tr.set_cfg_footer_template(c.t("slint.cfg.footer_template").into());
+    tr.set_cfg_footer_preset_compact(c.t("slint.cfg.footer_preset_compact").into());
+    tr.set_cfg_footer_preset_full(c.t("slint.cfg.footer_preset_full").into());
+    tr.set_cfg_footer_preset_disk(c.t("slint.cfg.footer_preset_disk").into());
+    tr.set_cfg_footer_preset_selection(c.t("slint.cfg.footer_preset_selection").into());
+    tr.set_cfg_footer_preset_custom(c.t("slint.cfg.footer_preset_custom").into());
+    tr.set_cfg_footer_tokens(c.t("slint.cfg.footer_tokens").into());
+    tr.set_cfg_footer_preview(c.t("slint.cfg.footer_preview").into());
+    tr.set_cfg_home_dir(c.t("slint.cfg.home_dir").into());
+    tr.set_cfg_home_dir_empty(c.t("slint.cfg.home_dir_empty").into());
+    tr.set_cfg_home_dir_browse(c.t("slint.cfg.home_dir_browse").into());
     // Sección "Acerca de".
     tr.set_about_version(c.t("slint.about.version").into());
     tr.set_about_author(c.t("about.author").into());

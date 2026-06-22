@@ -1681,6 +1681,14 @@ fn main() -> Result<(), slint::PlatformError> {
             cfg.set_vm(settings_vm);
             // Poblar el campo de límite de recientes (no está en SettingsVm).
             cfg.set_recent_limit(c.config.settings.recent_limit as i32);
+            // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
+            // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
+            cfg.set_auto_highlight_code(c.config.auto_highlight_code());
+            cfg.set_footer_enabled(c.config.footer_enabled());
+            cfg.set_footer_preset_index(c.config.footer_preset_index());
+            cfg.set_footer_custom_template(c.config.footer_custom_template().into());
+            cfg.set_footer_preview(c.config.footer_preview().into());
+            cfg.set_home_dir(c.config.home_dir().into());
             let rows: Vec<ShortcutRowVm> = c
                 .config
                 .shortcut_list()
@@ -2002,6 +2010,66 @@ fn main() -> Result<(), slint::PlatformError> {
         cfg_win.on_recent_limit_changed(move |v| {
             ctrl.borrow_mut().set_recent_limit(v as usize);
             refresh();
+        });
+    }
+    // Auto-resaltado de código (Previsualización): persiste el toggle.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_auto_highlight_code(move |v| {
+            ctrl.borrow_mut().config.set_auto_highlight_code(v);
+            refresh();
+        });
+    }
+    // Pie de panel (Avanzado): mostrar/ocultar.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_footer_enabled(move |v| {
+            ctrl.borrow_mut().config.set_footer_enabled(v);
+            refresh();
+        });
+    }
+    // Pie de panel: plantilla por índice (0..3 fijas, 4=Personalizada).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_footer_preset_index(move |idx| {
+            ctrl.borrow_mut().config.set_footer_preset_index(idx);
+            refresh();
+        });
+    }
+    // Pie de panel: template personalizado. Refresca para recalcular la vista previa en vivo.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_footer_custom_template(move |t| {
+            ctrl.borrow_mut()
+                .config
+                .set_footer_custom_template(t.to_string());
+            refresh();
+        });
+    }
+    // Carpeta de inicio (Home, Avanzado): edición directa del campo.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_home_dir(move |dir| {
+            ctrl.borrow_mut().config.set_home_dir(dir.to_string());
+            refresh();
+        });
+    }
+    // Carpeta de inicio: botón Examinar → diálogo de carpeta nativo; aplica la ruta elegida.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_browse_home(move || {
+            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                ctrl.borrow_mut()
+                    .config
+                    .set_home_dir(path.to_string_lossy().to_string());
+                refresh();
+            }
         });
     }
     // Cambio de idioma en caliente: persiste + re-vuelca todos los textos a Tr. Se aplica a

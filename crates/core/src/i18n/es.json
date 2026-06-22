@@ -601,5 +601,19 @@
   "slint.deep.view_tip": "Muestra todo el contenido de la carpeta y sus subcarpetas (recursivo)",
   "slint.history.label": "Historial de carpetas",
   "slint.history.recent_empty": "Sin carpetas recientes",
-  "slint.cfg.recent_limit": "Carpetas recientes a recordar"
+  "slint.cfg.recent_limit": "Carpetas recientes a recordar",
+  "slint.cfg.auto_highlight": "Resaltar código automáticamente",
+  "slint.cfg.footer_section": "Pie de panel",
+  "slint.cfg.footer_enabled": "Mostrar pie de panel",
+  "slint.cfg.footer_template": "Plantilla",
+  "slint.cfg.footer_preset_compact": "Compacta",
+  "slint.cfg.footer_preset_full": "Completa",
+  "slint.cfg.footer_preset_disk": "Solo disco",
+  "slint.cfg.footer_preset_selection": "Solo selección",
+  "slint.cfg.footer_preset_custom": "Personalizada…",
+  "slint.cfg.footer_tokens": "Tokens disponibles: {sel} {total} {marked} {free} {disk_total} {pct} {items} {files} {dirs}",
+  "slint.cfg.footer_preview": "Vista previa",
+  "slint.cfg.home_dir": "Carpeta de inicio (Home)",
+  "slint.cfg.home_dir_empty": "Vacío = carpeta personal del usuario",
+  "slint.cfg.home_dir_browse": "Examinar…"
 }

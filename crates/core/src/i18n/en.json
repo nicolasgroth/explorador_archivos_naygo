@@ -601,5 +601,19 @@
   "slint.deep.view_tip": "Shows all contents of the folder and its subfolders (recursive)",
   "slint.history.label": "Folder history",
   "slint.history.recent_empty": "No recent folders",
-  "slint.cfg.recent_limit": "Recent folders to remember"
+  "slint.cfg.recent_limit": "Recent folders to remember",
+  "slint.cfg.auto_highlight": "Highlight code automatically",
+  "slint.cfg.footer_section": "Panel footer",
+  "slint.cfg.footer_enabled": "Show panel footer",
+  "slint.cfg.footer_template": "Template",
+  "slint.cfg.footer_preset_compact": "Compact",
+  "slint.cfg.footer_preset_full": "Full",
+  "slint.cfg.footer_preset_disk": "Disk only",
+  "slint.cfg.footer_preset_selection": "Selection only",
+  "slint.cfg.footer_preset_custom": "Custom…",
+  "slint.cfg.footer_tokens": "Available tokens: {sel} {total} {marked} {free} {disk_total} {pct} {items} {files} {dirs}",
+  "slint.cfg.footer_preview": "Preview",
+  "slint.cfg.home_dir": "Home folder",
+  "slint.cfg.home_dir_empty": "Empty = your user folder",
+  "slint.cfg.home_dir_browse": "Browse…"
 }

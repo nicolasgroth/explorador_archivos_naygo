@@ -277,6 +277,113 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Resaltar automáticamente el código de extensiones conocidas en el modo Auto del preview.
+    pub fn auto_highlight_code(&self) -> bool {
+        self.settings.auto_highlight_code
+    }
+
+    /// Activa/desactiva el auto-resaltado de código y persiste.
+    pub fn set_auto_highlight_code(&mut self, v: bool) {
+        self.settings.auto_highlight_code = v;
+        self.save();
+    }
+
+    // --- Pie de panel (footer) ---
+
+    /// ¿Mostrar el pie (barra inferior) en cada panel de archivos?
+    pub fn footer_enabled(&self) -> bool {
+        self.settings.footer_enabled
+    }
+
+    /// Activa/desactiva el footer y persiste.
+    pub fn set_footer_enabled(&mut self, v: bool) {
+        self.settings.footer_enabled = v;
+        self.save();
+    }
+
+    /// Índice del preset del footer para el combo: 0=Compacta, 1=Completa, 2=Solo disco,
+    /// 3=Solo selección, 4=Personalizada.
+    pub fn footer_preset_index(&self) -> i32 {
+        use naygo_core::footer::FooterPreset::*;
+        match self.settings.footer_preset {
+            Compact => 0,
+            Full => 1,
+            DiskOnly => 2,
+            SelectionOnly => 3,
+            Custom(_) => 4,
+        }
+    }
+
+    /// Aplica el índice del combo al preset del footer (inversa de `footer_preset_index`) y
+    /// persiste. Al pasar a Personalizada (4) conserva el template guardado en `footer_custom_template`.
+    pub fn set_footer_preset_index(&mut self, idx: i32) {
+        use naygo_core::footer::FooterPreset::*;
+        self.settings.footer_preset = match idx {
+            1 => Full,
+            2 => DiskOnly,
+            3 => SelectionOnly,
+            4 => Custom(self.settings.footer_custom_template.clone()),
+            _ => Compact,
+        };
+        self.save();
+    }
+
+    /// Template personalizado del footer (cuando el preset es Personalizada).
+    pub fn footer_custom_template(&self) -> String {
+        self.settings.footer_custom_template.clone()
+    }
+
+    /// Cambia el template personalizado y persiste. Si el preset activo es Personalizada,
+    /// lo mantiene en sincronía (para que el preview y el footer real usen el nuevo texto).
+    pub fn set_footer_custom_template(&mut self, t: String) {
+        self.settings.footer_custom_template = t.clone();
+        if matches!(
+            self.settings.footer_preset,
+            naygo_core::footer::FooterPreset::Custom(_)
+        ) {
+            self.settings.footer_preset = naygo_core::footer::FooterPreset::Custom(t);
+        }
+        self.save();
+    }
+
+    /// Vista previa en vivo del footer: renderiza el preset/template activo con datos de
+    /// ejemplo fijos (3 de 12 seleccionados, ~4,2 MB marcados, disco 112/500 GB). Útil para
+    /// que el usuario vea el efecto del preset o de su template sin tener que mirar un panel.
+    pub fn footer_preview(&self) -> String {
+        use naygo_core::disk::DiskUsage;
+        use naygo_core::footer::{render, FooterData};
+        let data = FooterData {
+            sel_count: 3,
+            total_count: 12,
+            marked_bytes: 4_404_019,
+            disk: Some(DiskUsage {
+                total: 500_000_000_000,
+                free: 112_000_000_000,
+            }),
+            item_count: 12,
+            file_count: 8,
+            dir_count: 4,
+        };
+        render(
+            &self.settings.footer_preset,
+            &data,
+            self.settings.size_format,
+        )
+    }
+
+    // --- Carpeta de inicio (Home) ---
+
+    /// Carpeta de inicio (botón Home). Vacío = carpeta personal del usuario.
+    pub fn home_dir(&self) -> String {
+        self.settings.home_dir.clone()
+    }
+
+    /// Cambia la carpeta de inicio y persiste. Vacío = carpeta personal del usuario.
+    pub fn set_home_dir(&mut self, dir: String) {
+        self.settings.home_dir = dir;
+        self.save();
+    }
+
     /// Restablece TODOS los ajustes a sus valores por defecto (factory reset) y persiste.
     /// El llamador debe reaplicar i18n/tema tras esto (cambian idioma/tema activos).
     pub fn factory_reset(&mut self) {
