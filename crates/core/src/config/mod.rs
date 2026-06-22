@@ -243,6 +243,19 @@ pub struct Settings {
     pub recent_limit: usize,
 }
 
+/// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
+/// (`%USERPROFILE%`); si tiene una ruta, usa esa. Pura, testeable.
+pub fn resolve_home_dir(home_dir: &str) -> PathBuf {
+    if !home_dir.trim().is_empty() {
+        return PathBuf::from(home_dir);
+    }
+    // Carpeta personal del usuario vía USERPROFILE; último recurso: la raíz C:\
+    // (nunca vacío, nunca panic). `naygo-core` NO tiene la crate `dirs`.
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\"))
+}
+
 /// Default de `low_power_mode`: Auto (lo decide la app según el renderer).
 fn default_low_power_mode() -> LowPowerMode {
     LowPowerMode::Auto
@@ -945,5 +958,16 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.recent_limit, 50);
+    }
+
+    #[test]
+    fn home_vacio_cae_al_perfil_del_usuario() {
+        // Una ruta explícita se respeta tal cual.
+        let explicit = resolve_home_dir("D:\\Trabajo");
+        assert_eq!(explicit, std::path::PathBuf::from("D:\\Trabajo"));
+
+        // Vacío → alguna ruta no vacía (el perfil del usuario; varía por máquina).
+        let fallback = resolve_home_dir("");
+        assert!(!fallback.as_os_str().is_empty(), "vacío debe resolver a una ruta");
     }
 }
