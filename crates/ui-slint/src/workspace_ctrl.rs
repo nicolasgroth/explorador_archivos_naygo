@@ -2934,6 +2934,15 @@ impl WorkspaceCtrl {
             return false;
         };
         let label = if move_ { "Mover" } else { "Copiar" };
+        // Diagnóstico: este es el camino de FALLBACK (el drop no se pudo enrutar por el punto y
+        // cayó al panel activo). Si aquí el destino coincide con el origen, el resultado es un
+        // no-op silencioso — clave para diagnosticar drops "que no hacen nada".
+        crate::logging::breadcrumb(&format!(
+            "drop_external (fallback panel activo): {} {} ítem(s) → {}",
+            label,
+            sources.len(),
+            dir.display(),
+        ));
         let req = naygo_core::ops::transfer(move_, sources, dir);
         self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
@@ -2961,12 +2970,29 @@ impl WorkspaceCtrl {
         use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
         if paths.is_empty() {
+            crate::logging::breadcrumb("drop_at: sin rutas, no-op");
             return false;
         }
         // Panel bajo el cursor, reusando la maquinaria de hit-testing del docking. `last_area`
         // es el área de contenido que la UI mantiene actualizada con `set_area`.
         let panes = self.pane_rects(self.last_area);
-        let Some((target, _zone)) = drop_hit(&panes, content_x, content_y) else {
+        let hit = drop_hit(&panes, content_x, content_y);
+        // Diagnóstico: coords (ya en sistema de contenido), nº de rutas, move_ y a qué panel
+        // (índice de orden visual en `panes`) acertó el hit-testing — o None si cayó fuera.
+        let hit_idx = hit
+            .as_ref()
+            .and_then(|(id, _)| panes.iter().position(|(pid, _)| pid == id));
+        crate::logging::breadcrumb(&format!(
+            "drop_at: content=({:.1},{:.1}) rutas={} move_hint={} → panel={}",
+            content_x,
+            content_y,
+            paths.len(),
+            _move_hint,
+            hit_idx
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "None".to_string()),
+        ));
+        let Some((target, _zone)) = hit else {
             return false;
         };
         // El destino debe ser un panel Files con carpeta resoluble.
@@ -2976,6 +3002,7 @@ impl WorkspaceCtrl {
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
         else {
+            crate::logging::breadcrumb("drop_at: el panel destino no es Files, no-op");
             return false;
         };
         // Soltar sobre la propia carpeta de origen es no-op: si todas las rutas ya viven en
@@ -2987,6 +3014,7 @@ impl WorkspaceCtrl {
                 .unwrap_or(false)
         });
         if all_from_dest {
+            crate::logging::breadcrumb("drop_at: soltado sobre la propia carpeta, no-op");
             return false;
         }
         // Acción según modificadores + mismo disco (Ctrl/Shift mandan; el move_hint del OLE es
@@ -2994,6 +3022,12 @@ impl WorkspaceCtrl {
         let same = same_drive(&paths[0], &dest_dir);
         let is_move = matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
         let label = if is_move { "Mover" } else { "Copiar" };
+        crate::logging::breadcrumb(&format!(
+            "drop_at: {} {} ítem(s) → {}",
+            label,
+            paths.len(),
+            dest_dir.display(),
+        ));
         let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
         self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
@@ -5568,6 +5602,89 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(b.path().join("doc.txt").exists(), "se copió al otro panel");
+        assert!(
+            a.path().join("doc.txt").exists(),
+            "el original sigue (copia)"
+        );
+    }
+
+    /// Regresión del bug de drop entre paneles: `drop_at` debe enrutar al panel que está BAJO
+    /// el punto, NO al panel activo (origen). Construye 2 paneles con área conocida, calcula un
+    /// punto que cae claramente dentro del rect del panel destino (el que NO es el origen) y
+    /// verifica que la op de copia aterriza en la carpeta de ese panel.
+    ///
+    /// Cubre el ruteo posterior a la conversión de coordenadas (que sí ocurre con coords ya en
+    /// el sistema de contenido). La conversión ScreenToClient en sí necesita un HWND real y se
+    /// verifica a mano en la VM; aquí se blinda que coords realistas dentro del destino → ese
+    /// panel, y no el fallback.
+    #[test]
+    fn drop_at_enruta_al_panel_bajo_el_cursor_no_al_activo() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Segundo panel apuntando a `b` (el destino del drop).
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Área conocida; el panel activo sigue siendo el origen (`a`).
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        c.set_area(area);
+        c.ws.set_active(origin);
+        // Localizar el rect del panel destino (`dest`) y apuntar a su CENTRO. Así el punto cae
+        // dentro de ese panel (no del origen) y la zona es Center → drop sobre el panel.
+        let panes = c.pane_rects(area);
+        let (_, dest_rect) = panes
+            .iter()
+            .find(|(id, _)| *id == dest)
+            .copied()
+            .expect("el panel destino tiene rect");
+        let cx = dest_rect.x + dest_rect.w / 2.0;
+        let cy = dest_rect.y + dest_rect.h / 2.0;
+        // Sanity: ese punto NO cae dentro del rect del panel origen.
+        let (_, origin_rect) = panes
+            .iter()
+            .find(|(id, _)| *id == origin)
+            .copied()
+            .expect("el panel origen tiene rect");
+        let dentro_origen = cx >= origin_rect.x
+            && cx < origin_rect.x + origin_rect.w
+            && cy >= origin_rect.y
+            && cy < origin_rect.y + origin_rect.h;
+        assert!(!dentro_origen, "el punto debe caer fuera del panel origen");
+        // Soltar el archivo de `a` sobre el panel destino (`b`). Forzamos COPIA con Ctrl para que
+        // el aserto sea determinista sea cual sea el disco: sin modificadores, soltar dentro del
+        // mismo disco MUEVE (regla del Explorador), y `a`/`b` viven en el mismo disco temporal.
+        // Lo que prueba este test es el RUTEO (que el archivo aterriza en `b`, bajo el cursor),
+        // no la elección mover/copiar (eso ya lo cubre dnd::decide_drop_action).
+        let routed = c.drop_at(
+            cx,
+            cy,
+            true, // ctrl → copiar
+            false,
+            vec![a.path().join("doc.txt")],
+            true,
+        );
+        assert!(routed, "drop_at debe enrutar (no caer al fallback)");
+        // Drenar la op y verificar que la copia aterrizó en el panel destino (`b`), no en `a`.
+        for _ in 0..2000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            b.path().join("doc.txt").exists(),
+            "se copió al panel destino (b), bajo el cursor"
+        );
         assert!(
             a.path().join("doc.txt").exists(),
             "el original sigue (copia)"

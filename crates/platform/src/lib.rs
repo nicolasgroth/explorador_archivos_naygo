@@ -20,6 +20,7 @@ pub mod locale;
 pub mod open;
 pub mod time;
 pub mod trash;
+pub mod window;
 
 pub fn hello() -> &'static str {
     "naygo-platform"

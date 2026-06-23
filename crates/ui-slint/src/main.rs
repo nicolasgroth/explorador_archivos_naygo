@@ -1104,33 +1104,45 @@ fn main() -> Result<(), slint::PlatformError> {
                     // activo).
                     //
                     // Conversión pantalla→contenido:
-                    //   win_fis = pantalla - window().position()   (ambos en píxeles físicos)
-                    //   win_log = win_fis / scale_factor           (a coords lógicas)
-                    //   content = win_log - (0, TOP_BAR_H)         (descontar la barra superior)
-                    // El área de contenido tiene origen (0,0) bajo la barra (ver `area_of`), así
-                    // que en X no hay offset lateral. SUPUESTO a confirmar en la VM: la altura de
-                    // la barra superior es 34px lógicos (top-bar-h). Si la geometría real difiere,
-                    // se afina este offset.
+                    //   cliente = ScreenToClient(hwnd, pantalla)    (físicos; el SO descuenta el
+                    //             marco y la barra de título nativos de un golpe)
+                    //   win_log = cliente / scale_factor            (a coords lógicas)
+                    //   content = win_log - (0, TOP_BAR_H)          (descontar la barra superior
+                    //             de Naygo, que SÍ vive dentro del área de cliente, sobre `content`)
+                    // El área de contenido tiene origen (0,0) bajo la barra (ver app-window.slint:
+                    // `content` empieza en y=TOP_BAR_H, x=0), así que en X no hay offset lateral.
+                    // ScreenToClient ya quitó el marco del SO: NO restar nada más por ese lado.
+                    // TOP_BAR_H = 34px lógicos (alto de la barra superior de Naygo).
                     const TOP_BAR_H: f32 = 34.0;
                     while let Ok(payload) = drop_rx.try_recv() {
                         let mut routed = false;
                         if let Some(ui) = ui_weak.upgrade() {
-                            let pos = ui.window().position();
-                            let scale = ui.window().scale_factor().max(0.01);
-                            let cx = (payload.screen_x - pos.x) as f32 / scale;
-                            let cy = (payload.screen_y - pos.y) as f32 / scale - TOP_BAR_H;
-                            let (ctrl_down, shift_down) = {
-                                let c = ctrl.borrow();
-                                (c.ctrl_down, c.shift_down)
-                            };
-                            routed = ctrl.borrow_mut().drop_at(
-                                cx,
-                                cy,
-                                ctrl_down,
-                                shift_down,
-                                payload.paths.clone(),
-                                payload.move_,
-                            );
+                            // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
+                            // HWND o ScreenToClient falla, caemos al fallback del panel activo.
+                            let client = naygo_hwnd(&ui).and_then(|hwnd| {
+                                naygo_platform::window::screen_to_client(
+                                    hwnd,
+                                    payload.screen_x,
+                                    payload.screen_y,
+                                )
+                            });
+                            if let Some((client_x, client_y)) = client {
+                                let scale = ui.window().scale_factor().max(0.01);
+                                let cx = client_x as f32 / scale;
+                                let cy = client_y as f32 / scale - TOP_BAR_H;
+                                let (ctrl_down, shift_down) = {
+                                    let c = ctrl.borrow();
+                                    (c.ctrl_down, c.shift_down)
+                                };
+                                routed = ctrl.borrow_mut().drop_at(
+                                    cx,
+                                    cy,
+                                    ctrl_down,
+                                    shift_down,
+                                    payload.paths.clone(),
+                                    payload.move_,
+                                );
+                            }
                         }
                         // Fallback: si no se pudo enrutar por el punto (sin ventana, o el cursor
                         // no cayó sobre un panel Files), caer al panel activo como antes para no
