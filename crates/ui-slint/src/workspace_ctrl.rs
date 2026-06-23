@@ -4347,7 +4347,8 @@ impl WorkspaceCtrl {
     /// Navega el panel Files activo al favorito en el índice `idx` (Ctrl+1..9). No-op si no
     /// hay tantos favoritos. Devuelve true si navegó.
     pub fn go_favorite(&mut self, idx: usize) -> bool {
-        let Some(fav) = self.favorites.list().get(idx) else {
+        let flat = self.favorites.list_flat();
+        let Some(fav) = flat.get(idx) else {
             return false;
         };
         let path = fav.path.clone();
@@ -4430,12 +4431,13 @@ impl WorkspaceCtrl {
         }
 
         // 4) Favoritos → Navigate(path). Usa la etiqueta del favorito (editable a futuro).
-        for fav in self.favorites.list() {
+        // `list_flat` aplana el árbol de grupos en orden de usuario (pre-orden).
+        for fav in self.favorites.list_flat() {
             out.push(Command {
-                label: fav.label.clone(),
+                label: fav.label,
                 category: CommandCategory::Favorite,
                 shortcut: String::new(),
-                payload: CommandPayload::Navigate(fav.path.clone()),
+                payload: CommandPayload::Navigate(fav.path),
             });
         }
 

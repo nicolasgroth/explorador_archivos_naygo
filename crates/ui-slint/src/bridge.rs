@@ -332,7 +332,7 @@ pub struct NavRow {
 /// Favoritos en orden de usuario (índice 0 = Ctrl+1). `folder_icon` es el ícono de carpeta
 /// ya cacheado (igual para todas las filas: comparten el mismo buffer).
 pub fn favorite_rows(favs: &Favorites, folder_icon: &slint::Image) -> Vec<NavRow> {
-    favs.list()
+    favs.list_flat()
         .iter()
         .map(|f| NavRow {
             label: f.label.clone(),
