@@ -1,7 +1,7 @@
 // Naygo — puente entre el estado del panel (core) y el modelo de filas de Slint (puro).
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-use naygo_core::favorites::Favorites;
+use naygo_core::favorites::{FavNode, Favorites};
 use naygo_core::ops::undo::{self, UndoEntry};
 use naygo_core::recent_dirs::RecentDirs;
 use naygo_core::tree::{DirTree, NodeState, TreeNode};
@@ -341,6 +341,126 @@ pub fn favorite_rows(favs: &Favorites, folder_icon: &slint::Image) -> Vec<NavRow
             removable: false,
         })
         .collect()
+}
+
+// --- Árbol de favoritos (aplanado a lista con sangría, con grupos) ---
+
+/// Fila del árbol de favoritos (espejo de `FavTreeRow` de Slint). El árbol se aplana en
+/// preorden a una lista; `depth` da la sangría. Para GRUPOS: `is_group=true`, `name` es el
+/// nombre del grupo, `group_id` es su ruta de índices serializada ("0/2/1") y `path` va vacío.
+/// Para FAVORITOS: `is_group=false`, `name`/`path` son la etiqueta y la ruta, `group_id` vacío.
+/// `expanded` solo aplica a grupos; `has_children` indica si el grupo tiene hijos (chevron).
+/// `name_path` es la "ruta de nombres" del nodo (clave ESTABLE de expansión que sobrevive al
+/// reordenamiento de índices, a diferencia del `group_id` numérico).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FavTreeRow {
+    pub depth: i32,
+    pub is_group: bool,
+    pub name: String,
+    pub path: String,
+    pub group_id: String,
+    pub name_path: String,
+    pub expanded: bool,
+    pub has_children: bool,
+    pub icon: slint::Image,
+}
+
+/// Serializa un `GroupId` (`[0, 2, 1]`) a la cadena estable "0/2/1" para cruzar la frontera
+/// a Slint. Vacío para la raíz. El controlador lo parsea de vuelta re-leyendo el árbol actual.
+pub fn group_id_to_str(id: &[usize]) -> String {
+    id.iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Parsea la cadena "0/2/1" de vuelta a un `GroupId`. Cadena vacía → `Vec` vacío (la raíz).
+pub fn str_to_group_id(s: &str) -> Vec<usize> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    s.split('/').filter_map(|p| p.parse().ok()).collect()
+}
+
+/// Recorre el subárbol en preorden y empuja una `FavTreeRow` por nodo VISIBLE. Un grupo
+/// colapsado (`name_path` no en `expanded`) no desciende a sus hijos. `id` es la ruta de
+/// índices acumulada; `name_path` la ruta de nombres acumulada (clave de expansión).
+fn push_fav_node(
+    nodes: &[FavNode],
+    depth: i32,
+    parent_id: &[usize],
+    parent_name_path: &str,
+    expanded: &dyn Fn(&str) -> bool,
+    folder_icon: &slint::Image,
+    out: &mut Vec<FavTreeRow>,
+) {
+    for (i, node) in nodes.iter().enumerate() {
+        let mut id = parent_id.to_vec();
+        id.push(i);
+        match node {
+            FavNode::Favorite { path, label } => {
+                let name_path = if parent_name_path.is_empty() {
+                    format!("\u{1}{label}") // prefijo \u{1}: separa hojas de grupos homónimos
+                } else {
+                    format!("{parent_name_path}/\u{1}{label}")
+                };
+                out.push(FavTreeRow {
+                    depth,
+                    is_group: false,
+                    name: label.clone(),
+                    path: path.display().to_string(),
+                    group_id: String::new(),
+                    name_path,
+                    expanded: false,
+                    has_children: false,
+                    icon: folder_icon.clone(),
+                });
+            }
+            FavNode::Group { name, children } => {
+                let name_path = if parent_name_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{parent_name_path}/{name}")
+                };
+                let is_expanded = expanded(&name_path);
+                out.push(FavTreeRow {
+                    depth,
+                    is_group: true,
+                    name: name.clone(),
+                    path: String::new(),
+                    group_id: group_id_to_str(&id),
+                    name_path: name_path.clone(),
+                    expanded: is_expanded,
+                    has_children: !children.is_empty(),
+                    icon: folder_icon.clone(),
+                });
+                if is_expanded {
+                    push_fav_node(
+                        children,
+                        depth + 1,
+                        &id,
+                        &name_path,
+                        expanded,
+                        folder_icon,
+                        out,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Aplana el árbol de favoritos a filas con sangría, respetando los grupos colapsados.
+/// `expanded(name_path)` decide si un grupo se expande (la UI mantiene ese estado). El ícono
+/// de carpeta del set activo se reusa en todas las filas (comparten buffer).
+pub fn fav_tree_rows(
+    favs: &Favorites,
+    expanded: &dyn Fn(&str) -> bool,
+    folder_icon: &slint::Image,
+) -> Vec<FavTreeRow> {
+    let mut out = Vec::new();
+    push_fav_node(favs.roots(), 0, &[], "", expanded, folder_icon, &mut out);
+    out
 }
 
 /// Recientes (los más recientes primero, según el orden que provea `RecentDirs`). La
@@ -696,6 +816,42 @@ mod tests {
         let r = recent_rows(&recents, &slint::Image::default());
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].label, "Documents");
+    }
+
+    #[test]
+    fn favoritos_arbol_se_aplana_con_grupos_y_respeta_colapso() {
+        use naygo_core::favorites::{Favorites, NodeId};
+        let mut f = Favorites::new();
+        f.add_favorite(std::path::Path::new("C:/uno"));
+        let g = f.new_group(None, "Trabajo");
+        f.add_favorite(std::path::Path::new("C:/dos"));
+        f.move_node(&NodeId::favorite(std::path::Path::new("C:/dos")), Some(&g));
+
+        // Grupo COLAPSADO: la hoja interna no aparece.
+        let collapsed = |_: &str| false;
+        let rows = fav_tree_rows(&f, &collapsed, &slint::Image::default());
+        // raíz: "uno" (favorito) + "Trabajo" (grupo colapsado). "dos" oculto.
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.name == "uno" && !r.is_group && r.depth == 0));
+        let grp = rows.iter().find(|r| r.name == "Trabajo").unwrap();
+        assert!(grp.is_group && grp.has_children && !grp.expanded);
+        assert_eq!(grp.group_id, "1"); // segundo nodo raíz
+
+        // Grupo EXPANDIDO: la hoja interna aparece con sangría (depth 1).
+        let expanded = |np: &str| np == "Trabajo";
+        let rows = fav_tree_rows(&f, &expanded, &slint::Image::default());
+        assert_eq!(rows.len(), 3);
+        let dos = rows.iter().find(|r| r.name == "dos").unwrap();
+        assert_eq!(dos.depth, 1);
+        assert!(!dos.is_group);
+    }
+
+    #[test]
+    fn group_id_round_trip() {
+        assert_eq!(group_id_to_str(&[0, 2, 1]), "0/2/1");
+        assert_eq!(str_to_group_id("0/2/1"), vec![0, 2, 1]);
+        assert_eq!(group_id_to_str(&[]), "");
+        assert!(str_to_group_id("").is_empty());
     }
 
     #[test]

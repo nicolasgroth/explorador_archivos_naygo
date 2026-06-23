@@ -111,6 +111,22 @@ export struct NavRow {
     removable: bool,       // true para unidades extraíbles (USB) en la tira de discos
 }
 
+// Fila del árbol de favoritos (panel editable + menú ▾ del toolbar). `is-group` distingue
+// grupo de favorito; `depth` da la sangría; `group-id` es el GroupId serializado ("0/2") del
+// grupo (vacío en favoritos); `name-path` la ruta de nombres (clave estable de expansión);
+// `expanded`/`has-children` solo aplican a grupos (chevron ▸/▾). `path` es la ruta del favorito.
+export struct FavTreeRow {
+    depth: int,
+    is-group: bool,
+    name: string,
+    path: string,
+    group-id: string,
+    name-path: string,
+    expanded: bool,
+    has-children: bool,
+    icon: image,
+}
+
 // Un segmento de la barra de ruta (breadcrumb): etiqueta visible + ruta acumulada a la que
 // navegar si se clickea. Ej: ("Empresas", "D:\Empresas").
 export struct PathSeg {
@@ -418,8 +434,9 @@ export struct PaneVm {
     footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
-    favs: [NavRow],           // Favorites (sección favoritos)
+    favs: [NavRow],           // Favorites (sección favoritos — sin usar; reemplazado por fav-tree)
     recents: [NavRow],        // Favorites (sección recientes)
+    fav-tree: [FavTreeRow],   // Favorites (árbol editable de favoritos con grupos)
     hist-rows: [HistRow],     // History
     inspector: InspectorVm,   // Inspector
     preview: PreviewVm,       // Preview

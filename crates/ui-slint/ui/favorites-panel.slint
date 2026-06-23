@@ -1,28 +1,96 @@
-// Naygo — panel Favoritos (Fase 2b): favoritos anclados + carpetas recientes.
+// Naygo — panel Favoritos (Fase 2 / Feature 2): árbol EDITABLE de favoritos con grupos.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 //
-// Clic en una fila navega el panel Files activo; el botón × quita un favorito.
-import { ListView } from "std-widgets.slint";
-import { NavRow } from "types.slint";
+// El panel pinta el árbol de favoritos aplanado (`fav-tree`): grupos con triángulo ▸/▾ para
+// expandir/colapsar e ícono de carpeta; favoritos con ícono. Clic en un favorito navega el panel
+// Files activo; clic en el triángulo de un grupo lo expande/colapsa. Clic DERECHO sobre una fila
+// abre un menú contextual flotante (Nuevo grupo / Renombrar / Eliminar / Mover a…). El nombre de
+// grupo (nuevo/renombrar) se captura con un mini-modal de texto. Debajo del árbol va la sección de
+// carpetas recientes (solo navegación). El DRAG para mover quedó como mejora futura: mover se hace
+// por el submenú "Mover a…" (Slint 1.16 software no tiene drag interno robusto).
+import { ListView, LineEdit } from "std-widgets.slint";
+import { NavRow, FavTreeRow, PathSeg } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
+// Una fila de menú contextual simple (etiqueta + clic).
+component FavMenuItem inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 26px;
+    background: fmi-touch.has-hover ? Theme.selection-bg : transparent;
+    border-radius: 4px;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 13px;
+        vertical-alignment: center;
+        x: 8px;
+    }
+    fmi-touch := TouchArea { clicked => { root.clicked(); } }
+}
+
 export component FavoritesPanel inherits Rectangle {
     in property <bool> active;
-    in property <[NavRow]> favs;
-    in property <[NavRow]> recents;
-    callback navigate(string);   // ruta a la que ir
-    callback remove(string);     // quitar favorito por ruta
-    callback pin-current();      // anclar la carpeta del panel activo como favorita
-    callback focus-pane();       // marcar este panel como activo al interactuar
+    in property <[FavTreeRow]> fav-tree;       // árbol de favoritos aplanado (grupos + hojas)
+    in property <[NavRow]> recents;            // carpetas recientes (sección inferior)
+    in property <[PathSeg]> group-options;     // grupos para "Mover a…" (label=ruta, path=group-id)
+    callback navigate(string);                 // ruta a la que ir (favorito o reciente)
+    callback toggle-expand(string);            // expandir/colapsar un grupo por su ruta de nombres
+    callback new-group(string, string);        // crear grupo: (parent-group-id, nombre)
+    callback rename-group(string, string);     // renombrar grupo: (group-id, nombre nuevo)
+    callback delete-node(bool, string, string);// eliminar: (is-group, group-id, path)
+    callback move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
+    callback pin-current();                    // anclar la carpeta del panel activo como favorita
+    callback focus-pane();                     // marcar este panel como activo al interactuar
 
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
 
+    // --- Estado del menú contextual flotante (clic derecho sobre una fila) ---
+    property <bool> menu-open: false;
+    property <length> menu-x: 0;
+    property <length> menu-y: 0;
+    // Datos de la fila sobre la que se hizo clic derecho (para las acciones del menú).
+    property <bool> menu-is-group: false;
+    property <string> menu-group-id: "";
+    property <string> menu-path: "";
+    property <string> menu-name: "";
+    property <bool> submenu-move: false;       // submenú "Mover a…" desplegado
+
+    // --- Estado del mini-modal de nombre (nuevo grupo / renombrar) ---
+    property <bool> name-modal-open: false;
+    property <bool> name-modal-rename: false;  // true=renombrar, false=nuevo grupo
+    property <string> name-modal-gid: "";      // group-id objetivo (renombrar) o padre (nuevo)
+    property <string> name-modal-title: "";
+    property <string> name-modal-text: "";     // texto en edición (el LineEdit lo refleja)
+
+    function close-menu() {
+        root.menu-open = false;
+        root.submenu-move = false;
+    }
+    function open-name-modal(rename: bool, gid: string, title: string, initial: string) {
+        root.name-modal-rename = rename;
+        root.name-modal-gid = gid;
+        root.name-modal-title = title;
+        root.name-modal-text = initial;
+        root.name-modal-open = true;
+    }
+    function confirm-name() {
+        if (root.name-modal-rename) {
+            root.rename-group(root.name-modal-gid, root.name-modal-text);
+        } else {
+            root.new-group(root.name-modal-gid, root.name-modal-text);
+        }
+        root.name-modal-open = false;
+    }
+
     VerticalLayout {
         padding: 6px;
         spacing: 4px;
+
+        // Encabezado: título + botón "Anclar" (ancla la carpeta del panel activo).
         HorizontalLayout {
             height: 20px;
             Text {
@@ -40,47 +108,98 @@ export component FavoritesPanel inherits Rectangle {
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
         }
-        if root.favs.length == 0: Text {
+
+        // Aviso si no hay favoritos.
+        if root.fav-tree.length == 0: Text {
             text: Tr.fav-empty;
             color: Theme.text-dim;
             height: 18px;
         }
-        for f[i] in root.favs: Rectangle {
-            height: 22px;
-            background: fav-touch.has-hover ? Theme.row-alt-bg : transparent;
-            border-radius: 3px;
-            HorizontalLayout {
-                padding-left: 6px;
-                spacing: 4px;
-                Image {
-                    source: f.icon;
-                    width: 16px;
-                    height: 16px;
-                    vertical-alignment: center;
-                    image-rendering: smooth;
+
+        // Árbol de favoritos (sección superior, con scroll).
+        ListView {
+            vertical-stretch: 1;
+            for f[i] in root.fav-tree: Rectangle {
+                height: 22px;
+                background: row-touch.has-hover ? Theme.row-alt-bg : transparent;
+                border-radius: 3px;
+                HorizontalLayout {
+                    // Sangría por nivel (12px por nivel) + base.
+                    padding-left: 6px + f.depth * 12px;
+                    spacing: 4px;
+
+                    // Triángulo expand/colapsar (solo grupos con hijos). Dibujado con Path
+                    // (el render por software no pinta glifos de fuente).
+                    Rectangle {
+                        width: 14px;
+                        height: 22px;
+                        if f.is-group && f.has-children: Path {
+                            width: 8px;
+                            height: 8px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            fill: Theme.text-dim;
+                            viewbox-width: 8;
+                            viewbox-height: 8;
+                            // ▾ si expandido (apunta abajo), ▸ si colapsado (apunta derecha).
+                            commands: f.expanded
+                                ? "M 1 2.5 L 7 2.5 L 4 6.5 Z"
+                                : "M 2.5 1 L 6.5 4 L 2.5 7 Z";
+                        }
+                        tri-touch := TouchArea {
+                            clicked => {
+                                if (f.is-group) { root.toggle-expand(f.name-path); }
+                            }
+                        }
+                    }
+                    // Ícono (carpeta para ambos; el grupo es una carpeta lógica).
+                    Image {
+                        source: f.icon;
+                        width: 16px;
+                        height: 16px;
+                        vertical-alignment: center;
+                        image-rendering: smooth;
+                    }
+                    // Nombre (grupo: negrita; favorito: color resaltado).
+                    Text {
+                        text: f.name;
+                        color: f.is-group ? Theme.text : Theme.highlight;
+                        font-weight: f.is-group ? 700 : 400;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
                 }
-                Text {
-                    text: f.label;
-                    color: Theme.highlight;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-                Rectangle {
-                    width: 18px;
-                    background: rm-touch.has-hover ? Theme.error : transparent;
-                    border-radius: 3px;
-                    Text { text: "x"; color: Theme.error; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-                    rm-touch := TouchArea {
-                        clicked => { root.remove(f.path); }
+                // Clic izquierdo: navegar (favorito) o expandir/colapsar (grupo). Clic derecho:
+                // abrir el menú contextual sobre esta fila. Un solo TouchArea cubre toda la fila;
+                // el triángulo tiene su propio TouchArea encima (z-order) para expandir/colapsar.
+                row-touch := TouchArea {
+                    pointer-event(ev) => {
+                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                            root.focus-pane();
+                            root.menu-is-group = f.is-group;
+                            root.menu-group-id = f.group-id;
+                            root.menu-path = f.path;
+                            root.menu-name = f.name;
+                            root.menu-x = self.mouse-x + 6px;
+                            root.menu-y = f.depth * 0px + self.absolute-position.y - root.absolute-position.y + 18px;
+                            root.submenu-move = false;
+                            root.menu-open = true;
+                        }
+                    }
+                    clicked => {
+                        root.focus-pane();
+                        if (f.is-group) {
+                            root.toggle-expand(f.name-path);
+                        } else {
+                            root.navigate(f.path);
+                        }
                     }
                 }
             }
-            fav-touch := TouchArea {
-                clicked => { root.focus-pane(); root.navigate(f.path); }
-            }
         }
 
+        // Sección de recientes.
         Text {
             text: Tr.fav-recents;
             color: Theme.text-dim;
@@ -114,6 +233,150 @@ export component FavoritesPanel inherits Rectangle {
                 }
                 rec-touch := TouchArea {
                     clicked => { root.focus-pane(); root.navigate(r.path); }
+                }
+            }
+        }
+    }
+
+    // --- Menú contextual flotante (clic derecho) ---
+    // Velo invisible que cierra al clic afuera.
+    if root.menu-open: TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.close-menu(); }
+        pointer-event(ev) => {
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.close-menu();
+            }
+        }
+    }
+    if root.menu-open: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.menu-x));
+        y: min(root.height - self.height - 4px, max(4px, root.menu-y));
+        width: 180px;
+        height: menu-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        menu-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            // Nuevo grupo: dentro del grupo (si la fila es grupo) o en la raíz (si es favorito).
+            FavMenuItem {
+                label: Tr.fav-new-group;
+                clicked => {
+                    root.open-name-modal(false,
+                        root.menu-is-group ? root.menu-group-id : "",
+                        Tr.fav-new-group, "");
+                    root.close-menu();
+                }
+            }
+            // Renombrar (solo grupos).
+            if root.menu-is-group: FavMenuItem {
+                label: Tr.fav-rename;
+                clicked => {
+                    root.open-name-modal(true, root.menu-group-id, Tr.fav-rename, root.menu-name);
+                    root.close-menu();
+                }
+            }
+            // Eliminar.
+            FavMenuItem {
+                label: Tr.fav-delete;
+                clicked => {
+                    root.delete-node(root.menu-is-group, root.menu-group-id, root.menu-path);
+                    root.close-menu();
+                }
+            }
+            // Mover a… (despliega el submenú de grupos + Raíz).
+            FavMenuItem {
+                label: Tr.fav-move-to;
+                clicked => { root.submenu-move = !root.submenu-move; }
+            }
+        }
+    }
+    // Submenú "Mover a…": lista de grupos destino + "Raíz". Anclado a la derecha del menú.
+    if root.menu-open && root.submenu-move: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.menu-x + 184px));
+        y: min(root.height - self.height - 4px, max(4px, root.menu-y + 70px));
+        width: 200px;
+        height: move-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        move-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            // Raíz como destino.
+            FavMenuItem {
+                label: Tr.fav-root;
+                clicked => {
+                    root.move-node(root.menu-is-group, root.menu-group-id, root.menu-path, "");
+                    root.close-menu();
+                }
+            }
+            // Cada grupo existente (label = ruta de nombres; path = group-id serializado).
+            for g[i] in root.group-options: FavMenuItem {
+                label: g.label;
+                clicked => {
+                    root.move-node(root.menu-is-group, root.menu-group-id, root.menu-path, g.path);
+                    root.close-menu();
+                }
+            }
+        }
+    }
+
+    // --- Mini-modal de nombre (nuevo grupo / renombrar) ---
+    if root.name-modal-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000aa;
+        TouchArea { clicked => { root.name-modal-open = false; } }
+        Rectangle {
+            width: 280px;
+            height: 130px;
+            background: Theme.panel-bg;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            TouchArea {} // tragar clics dentro
+            VerticalLayout {
+                padding: 14px;
+                spacing: 10px;
+                Text {
+                    text: root.name-modal-title;
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                }
+                name-input := LineEdit {
+                    placeholder-text: Tr.fav-new-group;
+                    text: root.name-modal-text;
+                    edited(t) => { root.name-modal-text = t; }
+                    accepted => { root.confirm-name(); }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Rectangle {
+                        width: 90px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: cancel-t.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        Text { text: Tr.newfolder-cancel; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                        cancel-t := TouchArea { clicked => { root.name-modal-open = false; } }
+                    }
+                    Rectangle {
+                        width: 90px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: confirm-t.has-hover ? Theme.selection-bg : Theme.accent;
+                        Text { text: Tr.newfolder-create; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                        confirm-t := TouchArea { clicked => { root.confirm-name(); } }
+                    }
                 }
             }
         }

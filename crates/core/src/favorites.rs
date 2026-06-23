@@ -194,6 +194,16 @@ impl Favorites {
         }
     }
 
+    /// Elimina el grupo identificado por `id` junto con TODO su subárbol (sus favoritos y
+    /// subgrupos). No-op si `id` no existe o no apunta a un grupo. Lo usa el botón "Eliminar"
+    /// del panel de favoritos sobre una fila de grupo (borra el grupo completo de una vez).
+    pub fn remove_group(&mut self, id: &GroupId) {
+        // Solo borrar si efectivamente apunta a un grupo (no a una hoja).
+        if matches!(node_at_mut(&mut self.roots, id), Some(FavNode::Group { .. })) {
+            extract_group(&mut self.roots, id);
+        }
+    }
+
     /// Renombra el grupo identificado por `id`. No-op si no existe o no es un grupo.
     pub fn rename_group(&mut self, id: &GroupId, name: &str) {
         if let Some(FavNode::Group { name: n, .. }) = node_at_mut(&mut self.roots, id) {
@@ -413,6 +423,26 @@ mod tests {
             &f.roots()[0],
             FavNode::Group { name, children } if name == "Trabajo" && children.len() == 1
         ));
+    }
+
+    #[test]
+    fn remove_group_borra_el_subarbol_completo() {
+        let mut f = Favorites::default();
+        f.add_favorite(&p("D:/fuera"));
+        let g = f.new_group(None, "G");
+        f.add_favorite(&p("D:/dentro"));
+        f.move_node(&NodeId::favorite(&p("D:/dentro")), Some(&g));
+        // Borrar el grupo elimina su hoja interna, pero deja intacto el favorito de la raíz.
+        f.remove_group(&g);
+        assert!(!f.contains(&p("D:/dentro")), "la hoja del grupo se va con él");
+        assert!(f.contains(&p("D:/fuera")), "el favorito de la raíz queda");
+        assert!(!f
+            .roots()
+            .iter()
+            .any(|n| matches!(n, FavNode::Group { .. })));
+        // Borrar un id que no es grupo (un favorito) es no-op seguro.
+        f.remove_group(&vec![0]);
+        assert!(f.contains(&p("D:/fuera")));
     }
 
     #[test]

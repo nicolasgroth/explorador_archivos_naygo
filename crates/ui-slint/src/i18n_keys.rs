@@ -209,6 +209,13 @@ where
     tr.set_fav_title(c.t("pane.favorites.title").into());
     tr.set_fav_empty(c.t("slint.fav.empty").into());
     tr.set_fav_recents(c.t("slint.fav.recents").into());
+    // Favoritos editables (panel árbol + menú ▾ del toolbar).
+    tr.set_fav_menu_tip(c.t("fav.menu_tip").into());
+    tr.set_fav_new_group(c.t("fav.new_group").into());
+    tr.set_fav_rename(c.t("fav.rename").into());
+    tr.set_fav_delete(c.t("fav.delete").into());
+    tr.set_fav_move_to(c.t("fav.move_to").into());
+    tr.set_fav_root(c.t("fav.root").into());
     tr.set_preview_title(c.t("pane.preview.title").into());
     tr.set_preview_select(c.t("slint.preview.select").into());
     tr.set_preview_truncated(c.t("slint.preview.truncated").into());

@@ -1,7 +1,7 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
-import { LineEdit } from "std-widgets.slint";
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm } from "types.slint";
+import { LineEdit, ListView } from "std-widgets.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { ColumnMenu } from "column-menu.slint";
@@ -103,6 +103,8 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-home: false;
     // Si true, dibuja un OJO (menú de visibilidad de archivos) con Path: óvalo + iris central.
     in property <bool> draw-eye: false;
+    // Si true, dibuja una ESTRELLA (menú de favoritos) con Path + un chevron ▾ a su derecha.
+    in property <bool> draw-star: false;
     // Si false, el botón se ve atenuado y no dispara `clicked` (Atrás/Adelante sin historial).
     in property <bool> enabled: true;
     // Color del ícono dibujado por Path. Atenuado cuando el botón está deshabilitado.
@@ -364,7 +366,47 @@ component ToolBtn inherits Rectangle {
                 Close { }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye: Text {
+        // Estrella de 5 puntas (menú de favoritos) + chevron ▾ a su derecha.
+        if root.draw-star: Rectangle {
+            width: 24px;
+            height: 16px;
+            Path {
+                width: 15px;
+                height: 15px;
+                x: 0px;
+                y: 0.5px;
+                fill: root.icon-tint;
+                viewbox-width: 15;
+                viewbox-height: 15;
+                // Estrella de 5 puntas centrada en (7.5, 7.5).
+                MoveTo { x: 7.5; y: 0.5; }
+                LineTo { x: 9.5; y: 5.3; }
+                LineTo { x: 14.5; y: 5.7; }
+                LineTo { x: 10.7; y: 9; }
+                LineTo { x: 11.9; y: 14; }
+                LineTo { x: 7.5; y: 11.3; }
+                LineTo { x: 3.1; y: 14; }
+                LineTo { x: 4.3; y: 9; }
+                LineTo { x: 0.5; y: 5.7; }
+                LineTo { x: 5.5; y: 5.3; }
+                Close { }
+            }
+            // Chevron ▾ pequeño.
+            Path {
+                width: 8px;
+                height: 8px;
+                x: 16px;
+                y: 4px;
+                fill: root.icon-tint;
+                viewbox-width: 8;
+                viewbox-height: 8;
+                MoveTo { x: 1; y: 2.5; }
+                LineTo { x: 7; y: 2.5; }
+                LineTo { x: 4; y: 6.5; }
+                Close { }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye && !root.draw-star: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -773,6 +815,14 @@ export component AppWindow inherits Window {
     callback nav-navigate(string);       // favorito/reciente → navegar Files activo
     callback fav-remove(string);         // quitar favorito por ruta
     callback fav-pin-current();          // anclar la carpeta del Files activo
+    // Árbol de favoritos editable (panel + menú ▾ del toolbar):
+    in property <[FavTreeRow]> fav-tree;          // árbol de favoritos aplanado (menú ▾ del toolbar)
+    in property <[PathSeg]> fav-group-options;    // grupos para "Mover a…" (label=ruta, path=group-id)
+    callback fav-toggle-expand(string);           // expandir/colapsar un grupo (ruta de nombres)
+    callback fav-new-group(string, string);       // crear grupo: (parent-group-id, nombre)
+    callback fav-rename-group(string, string);    // renombrar grupo: (group-id, nombre)
+    callback fav-delete-node(bool, string, string);       // eliminar: (is-group, group-id, path)
+    callback fav-move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
     callback preview-open(string);       // abrir el archivo previsualizado con el programa por defecto
     callback undo-entry(int);            // deshacer la entrada del historial
     // Acciones multi-panel (toolbar):
@@ -862,6 +912,9 @@ export component AppWindow inherits Window {
     in property <[NavRow]> history-rows;
     in-out property <length> history-menu-x: 0;
     in-out property <bool> history-menu-open: false;
+    // Menú flotante ▾ de favoritos (toolbar): muestra el árbol jerárquico, solo navega.
+    in-out property <length> fav-menu-x: 0;
+    in-out property <bool> fav-menu-open: false;
     // Paleta de comandos (Ctrl+P): overlay con búsqueda difusa de acciones/archivos/recientes/etc.
     in-out property <bool> palette-open: false;
     in-out property <string> palette-query: "";
@@ -1172,6 +1225,25 @@ export component AppWindow inherits Window {
                     }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                // Favoritos: estrella ▾ abre menú flotante con el ÁRBOL de favoritos (solo navega).
+                fav-btn := ToolBtn {
+                    draw-star: true;
+                    icon-only: true;
+                    tip: Tr.fav-menu-tip;
+                    btn-width: 40px;
+                    highlight: root.fav-menu-open;
+                    clicked => {
+                        // Cerrar otros menús flotantes para no tener dos abiertos a la vez.
+                        root.history-menu-open = false;
+                        root.back-history-menu-open = false;
+                        root.fwd-history-menu-open = false;
+                        root.drive-menu-path = "";
+                        root.view-menu-open = false;
+                        root.fav-menu-x = fav-btn.absolute-position.x + fav-btn.width / 2;
+                        root.fav-menu-open = !root.fav-menu-open;
+                    }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.toolbar-config-tip;
@@ -1413,10 +1485,15 @@ export component AppWindow inherits Window {
                         width: 100%;
                         height: 100%;
                         active: p.active;
-                        favs: p.favs;
+                        fav-tree: p.fav-tree;
                         recents: p.recents;
+                        group-options: root.fav-group-options;
                         navigate(path) => { root.nav-navigate(path); }
-                        remove(path) => { root.fav-remove(path); }
+                        toggle-expand(np) => { root.fav-toggle-expand(np); }
+                        new-group(pid, name) => { root.fav-new-group(pid, name); }
+                        rename-group(gid, name) => { root.fav-rename-group(gid, name); }
+                        delete-node(g, gid, path) => { root.fav-delete-node(g, gid, path); }
+                        move-node(g, sgid, spath, dgid) => { root.fav-move-node(g, sgid, spath, dgid); }
                         pin-current() => { root.fav-pin-current(); }
                         focus-pane() => { root.activate(p.id); }
                     }
@@ -1702,6 +1779,88 @@ export component AppWindow inherits Window {
         close() => { root.search-close(); }
         cancel() => { root.search-cancel(); }
         open(i) => { root.search-open(i); }
+    }
+
+    // Menú flotante ▾ de FAVORITOS (toolbar). Muestra el árbol jerárquico de favoritos: grupos
+    // (negrita, clic expande/colapsa) y favoritos (clic navega el panel Files activo). Solo
+    // navegación, sin edición (eso vive en el panel Favoritos). Velo cierra al clic afuera.
+    if root.fav-menu-open: TouchArea {
+        clicked => { root.fav-menu-open = false; }
+    }
+    if root.fav-menu-open: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.fav-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 300px;
+        height: min(420px, fav-menu-list.preferred-height + 8px);
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        fav-menu-list := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            if root.fav-tree.length == 0: Text {
+                text: Tr.fav-empty;
+                color: Theme.text-dim;
+                font-size: 12px;
+                x: 8px;
+                height: 26px;
+                vertical-alignment: center;
+            }
+            ListView {
+                height: min(404px, root.fav-tree.length * 26px);
+                for f[i] in root.fav-tree: Rectangle {
+                    height: 26px;
+                    background: fmrow-touch.has-hover ? Theme.selection-bg : transparent;
+                    border-radius: 4px;
+                    HorizontalLayout {
+                        padding-left: 8px + f.depth * 14px;
+                        spacing: 6px;
+                        // Chevron ▸/▾ para grupos con hijos.
+                        Rectangle {
+                            width: 10px;
+                            if f.is-group && f.has-children: Path {
+                                width: 8px;
+                                height: 8px;
+                                y: (parent.height - self.height) / 2;
+                                fill: Theme.text-dim;
+                                viewbox-width: 8;
+                                viewbox-height: 8;
+                                commands: f.expanded
+                                    ? "M 1 2.5 L 7 2.5 L 4 6.5 Z"
+                                    : "M 2.5 1 L 6.5 4 L 2.5 7 Z";
+                            }
+                        }
+                        Image {
+                            source: f.icon;
+                            width: 16px;
+                            height: 16px;
+                            vertical-alignment: center;
+                            image-rendering: smooth;
+                        }
+                        Text {
+                            text: f.name;
+                            color: f.is-group ? Theme.text : Theme.highlight;
+                            font-weight: f.is-group ? 700 : 400;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    fmrow-touch := TouchArea {
+                        clicked => {
+                            if (f.is-group) {
+                                root.fav-toggle-expand(f.name-path);
+                            } else {
+                                root.nav-navigate(f.path);
+                                root.fav-menu-open = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Menú flotante del historial de carpetas recientes. Velo invisible cierra al clic afuera.

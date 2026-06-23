@@ -3,11 +3,12 @@
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
 use crate::bridge::{
-    favorite_rows, history_rows, inspector_info, recent_rows, rows_from_view, tree_rows, HistRow,
-    InspectorInfo, NavRow, PlainRow, TreeRow, VisibilityFlags,
+    fav_tree_rows, favorite_rows, history_rows, inspector_info, recent_rows, rows_from_view,
+    str_to_group_id, tree_rows, FavTreeRow, HistRow, InspectorInfo, NavRow, PlainRow, TreeRow,
+    VisibilityFlags,
 };
 use crate::listing::Listing;
-use naygo_core::favorites::Favorites;
+use naygo_core::favorites::{favorites_path, FavNode, Favorites, NodeId};
 use naygo_core::fs_model::{EntryKind, SortKey};
 use naygo_core::keymap::Action;
 use naygo_core::recent_dirs::RecentDirs;
@@ -89,9 +90,14 @@ pub struct WorkspaceCtrl {
     /// Destino a "revelar" en cada árbol: al navegar el Files activo, el árbol expande
     /// progresivamente los ancestros hasta esta carpeta (reveal). Se limpia al llegar.
     pub reveal_targets: HashMap<PaneId, PathBuf>,
-    /// Favoritos (global). Persistencia real diferida a la fase de config (F4); en 2b
-    /// vive en memoria de sesión (el modelo core ya serializa).
+    /// Favoritos (global), ahora un ÁRBOL de grupos anidados. Se carga de
+    /// `<config>/favorites.json` al arrancar y se persiste tras cada cambio (anclar/quitar,
+    /// nuevo grupo, renombrar, eliminar, mover).
     pub favorites: Favorites,
+    /// Grupos EXPANDIDOS del panel de favoritos, por su "ruta de nombres" ("Trabajo/Sub").
+    /// Es una clave estable que sobrevive al reordenamiento de índices (a diferencia del
+    /// `GroupId` numérico). Estado de UI: no se persiste.
+    pub fav_expanded: std::collections::HashSet<String>,
     /// Carpetas recientes (global): se empuja al navegar.
     pub recents: RecentDirs,
     /// Controlador de operaciones de archivo (F3): ops en curso, modales, deshacer,
@@ -345,7 +351,8 @@ impl WorkspaceCtrl {
             tree_cursor: HashMap::new(),
             tree_listings: HashMap::new(),
             reveal_targets: HashMap::new(),
-            favorites: Favorites::new(),
+            favorites: load_favorites(&config_dir),
+            fav_expanded: std::collections::HashSet::new(),
             recents: RecentDirs::new(),
             ops: crate::ops_ctrl::OpsCtrl::new(config_dir.clone()),
             preview: crate::preview::PreviewState::new(),
@@ -2522,15 +2529,23 @@ impl WorkspaceCtrl {
         true
     }
 
-    /// Quita un favorito por ruta.
-    pub fn remove_favorite(&mut self, path: &Path) {
-        self.favorites.remove(path);
+    /// Persiste el árbol de favoritos a disco. Se llama tras CADA mutación (anclar/quitar,
+    /// nuevo grupo, renombrar, eliminar, mover) para no perder cambios si la app cae.
+    fn persist_favorites(&self) {
+        save_favorites(&self.config.config_dir, &self.favorites);
     }
 
-    /// Alterna el favorito de la carpeta del panel Files activo (estrella).
+    /// Quita un favorito por ruta (y persiste).
+    pub fn remove_favorite(&mut self, path: &Path) {
+        self.favorites.remove(path);
+        self.persist_favorites();
+    }
+
+    /// Alterna el favorito de la carpeta del panel Files activo (estrella; persiste).
     pub fn toggle_favorite_active(&mut self) {
         if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
             self.favorites.toggle(&dir);
+            self.persist_favorites();
         }
     }
 
@@ -2543,7 +2558,7 @@ impl WorkspaceCtrl {
             .unwrap_or(false)
     }
 
-    /// Alterna el favorito de la carpeta del panel `id` (botón ★ de la path-bar de ese panel).
+    /// Alterna el favorito de la carpeta del panel `id` (botón ★ de la path-bar; persiste).
     pub fn toggle_favorite_dir(&mut self, id: PaneId) {
         if let Some(dir) = self
             .ws
@@ -2552,7 +2567,165 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
         {
             self.favorites.toggle(&dir);
+            self.persist_favorites();
         }
+    }
+
+    // --- Árbol de favoritos editable (panel + menú ▾ del toolbar) ---
+
+    /// Filas del árbol de favoritos (aplanadas con sangría, grupos colapsables). Lleva el ícono
+    /// de carpeta del set activo. Las usa tanto el panel editable como el menú ▾ del toolbar.
+    pub fn fav_tree_rows(&mut self) -> Vec<FavTreeRow> {
+        let folder = self.icons.get(naygo_core::icon_kind::IconKey::Folder);
+        let expanded = &self.fav_expanded;
+        fav_tree_rows(&self.favorites, &|np| expanded.contains(np), &folder)
+    }
+
+    /// Expande/colapsa un grupo del árbol de favoritos por su ruta de nombres ("Trabajo/Sub").
+    /// Estado de UI puro (no persiste): solo cambia qué se muestra.
+    pub fn fav_toggle_expand(&mut self, name_path: &str) {
+        if !self.fav_expanded.remove(name_path) {
+            self.fav_expanded.insert(name_path.to_string());
+        }
+    }
+
+    /// Crea un grupo nuevo. `parent_group_id` es el GroupId serializado ("0/2") del grupo padre,
+    /// o cadena vacía para crearlo en la raíz. El grupo nace con `name` y se persiste. Tras crear,
+    /// expande al padre para que el grupo nuevo sea visible.
+    pub fn fav_new_group(&mut self, parent_group_id: &str, name: &str) {
+        let name = name.trim();
+        let name = if name.is_empty() { "Nuevo grupo" } else { name };
+        let parent = if parent_group_id.is_empty() {
+            None
+        } else {
+            Some(str_to_group_id(parent_group_id))
+        };
+        // Si el padre existe, expandirlo (por su ruta de nombres) para revelar el hijo nuevo.
+        if let Some(pid) = parent.as_ref() {
+            if let Some(np) = self.fav_group_name_path(pid) {
+                self.fav_expanded.insert(np);
+            }
+        }
+        self.favorites.new_group(parent.as_ref(), name);
+        self.persist_favorites();
+    }
+
+    /// Renombra el grupo identificado por su GroupId serializado. La clave de expansión cambia
+    /// (es por nombre), así que se re-mapea el estado expandido del subárbol para no "colapsar"
+    /// visualmente el grupo renombrado.
+    pub fn fav_rename_group(&mut self, group_id: &str, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let id = str_to_group_id(group_id);
+        let old_np = self.fav_group_name_path(&id);
+        self.favorites.rename_group(&id, name);
+        self.persist_favorites();
+        // Re-mapear las claves de expansión que colgaban del nombre viejo al nuevo.
+        if let (Some(old), Some(new)) = (old_np, self.fav_group_name_path(&id)) {
+            if old != new {
+                let affected: Vec<String> = self
+                    .fav_expanded
+                    .iter()
+                    .filter(|k| **k == old || k.starts_with(&format!("{old}/")))
+                    .cloned()
+                    .collect();
+                for k in affected {
+                    self.fav_expanded.remove(&k);
+                    let suffix = &k[old.len()..]; // "" o "/resto"
+                    self.fav_expanded.insert(format!("{new}{suffix}"));
+                }
+            }
+        }
+    }
+
+    /// Elimina un nodo del árbol de favoritos. `is_group` decide el identificador: grupo por
+    /// GroupId serializado, favorito por ruta. Persiste. (Un grupo se borra con todo su subárbol.)
+    pub fn fav_delete_node(&mut self, is_group: bool, group_id: &str, path: &str) {
+        if is_group {
+            let id = str_to_group_id(group_id);
+            self.favorites.remove_group(&id);
+        } else {
+            self.favorites.remove(Path::new(path));
+        }
+        self.persist_favorites();
+    }
+
+    /// Mueve un nodo a un grupo destino. `dest_group_id` vacío = raíz. El nodo origen se
+    /// identifica por GroupId (grupo) o ruta (favorito). Persiste.
+    pub fn fav_move_node(
+        &mut self,
+        is_group: bool,
+        src_group_id: &str,
+        src_path: &str,
+        dest_group_id: &str,
+    ) {
+        let dest = if dest_group_id.is_empty() {
+            None
+        } else {
+            Some(str_to_group_id(dest_group_id))
+        };
+        let node = if is_group {
+            NodeId::group(str_to_group_id(src_group_id))
+        } else {
+            NodeId::favorite(Path::new(src_path))
+        };
+        self.favorites.move_node(&node, dest.as_ref());
+        self.persist_favorites();
+    }
+
+    /// Lista de grupos existentes para el submenú "Mover a…": pares (ruta de nombres, GroupId
+    /// serializado). El primer elemento NO es la raíz (la UI agrega "Raíz" aparte). Preorden.
+    pub fn fav_group_options(&self) -> Vec<(String, String)> {
+        fn walk(
+            nodes: &[FavNode],
+            parent_id: &[usize],
+            parent_np: &str,
+            out: &mut Vec<(String, String)>,
+        ) {
+            for (i, n) in nodes.iter().enumerate() {
+                if let FavNode::Group { name, children } = n {
+                    let mut id = parent_id.to_vec();
+                    id.push(i);
+                    let np = if parent_np.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{parent_np}/{name}")
+                    };
+                    out.push((np.clone(), crate::bridge::group_id_to_str(&id)));
+                    walk(children, &id, &np, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(self.favorites.roots(), &[], "", &mut out);
+        out
+    }
+
+    /// Ruta de nombres ("Trabajo/Sub") del grupo en `id`, o `None` si no existe / no es grupo.
+    /// Sirve para mantener el estado de expansión (que se indexa por nombre, no por índice).
+    fn fav_group_name_path(&self, id: &[usize]) -> Option<String> {
+        let mut nodes = self.favorites.roots();
+        let mut np = String::new();
+        for (depth, &idx) in id.iter().enumerate() {
+            let node = nodes.get(idx)?;
+            match node {
+                FavNode::Group { name, children } => {
+                    if np.is_empty() {
+                        np = name.clone();
+                    } else {
+                        np = format!("{np}/{name}");
+                    }
+                    if depth + 1 == id.len() {
+                        return Some(np);
+                    }
+                    nodes = children;
+                }
+                FavNode::Favorite { .. } => return None,
+            }
+        }
+        None
     }
 
     /// Copia la ruta de la carpeta del panel `id` al portapapeles (botón 📋).
@@ -4814,6 +4987,32 @@ fn disk_usage(root: &Path) -> Option<naygo_core::disk::DiskUsage> {
     Some(naygo_core::disk::DiskUsage { total, free })
 }
 
+/// Carga tolerante del árbol de favoritos desde `<config>/favorites.json`. Ausente o corrupto →
+/// árbol vacío (nunca cae la app; `Favorites::from_json` ya migra el formato plano antiguo).
+fn load_favorites(config_dir: &Path) -> Favorites {
+    let path = favorites_path(config_dir);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Favorites::from_json(&s),
+        Err(_) => Favorites::new(),
+    }
+}
+
+/// Persiste el árbol de favoritos a `<config>/favorites.json` (pretty, diminuto). Crea la
+/// carpeta de config si falta. Un fallo de escritura se registra y se ignora (no es fatal: el
+/// estado en memoria sigue siendo válido para la sesión).
+fn save_favorites(config_dir: &Path, favorites: &Favorites) {
+    let path = favorites_path(config_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, favorites.to_json()) {
+        crate::logging::log_line(&format!(
+            "guardar favoritos {}: fallo — {e}",
+            path.display()
+        ));
+    }
+}
+
 // --- Parseo/formato para el editor de filtros de columna (F2) ---
 
 const SECS_PER_DAY: i64 = 86_400;
@@ -5955,6 +6154,76 @@ mod tests {
         );
         // La carpeta nueva quedó en recientes (al frente).
         assert_eq!(c.recents.list().first(), Some(&sub));
+    }
+
+    /// El árbol editable de favoritos: crear grupo, mover un favorito dentro, expandir/colapsar,
+    /// renombrar y eliminar; todo persiste a `favorites.json` (un controlador nuevo lo restaura).
+    #[test]
+    fn favoritos_arbol_editable_y_persistente() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.clone(), cfg.clone());
+        assert!(drain(&mut c));
+        c.favorites.add_favorite(&a);
+        c.favorites.add_favorite(&b);
+
+        // Crear grupo en la raíz y mover el favorito `b` dentro.
+        c.fav_new_group("", "Trabajo");
+        let opts = c.fav_group_options();
+        assert_eq!(opts.len(), 1);
+        let (np, gid) = opts[0].clone();
+        assert_eq!(np, "Trabajo");
+        c.fav_move_node(false, "", &b.display().to_string(), &gid);
+
+        // Colapsado por defecto: solo se ven `a` y el grupo (la hoja `b` está oculta).
+        let rows = c.fav_tree_rows();
+        assert!(rows.iter().any(|r| r.is_group && r.name == "Trabajo"));
+        assert!(!rows.iter().any(|r| r.path == b.display().to_string()));
+
+        // Expandir el grupo revela la hoja con sangría.
+        c.fav_toggle_expand("Trabajo");
+        let rows = c.fav_tree_rows();
+        let inner = rows.iter().find(|r| r.path == b.display().to_string());
+        assert!(inner.is_some() && inner.unwrap().depth == 1);
+
+        // Renombrar el grupo (re-mapea la expansión: sigue expandido tras renombrar).
+        let gid = c
+            .fav_group_options()
+            .into_iter()
+            .find(|(n, _)| n == "Trabajo")
+            .unwrap()
+            .1;
+        c.fav_rename_group(&gid, "Proyectos");
+        assert!(c.fav_expanded.contains("Proyectos"));
+        let rows = c.fav_tree_rows();
+        assert!(rows.iter().any(|r| r.is_group && r.name == "Proyectos"));
+        // Sigue expandido: la hoja interna se ve.
+        assert!(rows.iter().any(|r| r.path == b.display().to_string() && r.depth == 1));
+
+        // Persistió: un controlador nuevo (mismo config_dir) ve el grupo renombrado con su hoja.
+        let mut c2 = WorkspaceCtrl::new_in(a.clone(), cfg.clone());
+        assert!(drain(&mut c2));
+        assert!(c2.favorites.contains(&b));
+        assert!(c2
+            .favorites
+            .roots()
+            .iter()
+            .any(|n| matches!(n, FavNode::Group { name, .. } if name == "Proyectos")));
+
+        // Eliminar el grupo borra su hoja interna; el favorito de la raíz queda.
+        let gid = c2
+            .fav_group_options()
+            .into_iter()
+            .find(|(n, _)| n == "Proyectos")
+            .unwrap()
+            .1;
+        c2.fav_delete_node(true, &gid, "");
+        assert!(!c2.favorites.contains(&b));
+        assert!(c2.favorites.contains(&a));
     }
 
     /// Expandir una rama del árbol la marca expandida y, tras drenar, puebla sus hijos;

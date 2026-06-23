@@ -60,6 +60,8 @@ struct PaneModels {
     tree: Rc<VecModel<TreeRow>>,
     favs: Rc<VecModel<NavRow>>,
     recents: Rc<VecModel<NavRow>>,
+    /// Árbol de favoritos editable (panel Favoritos): grupos + hojas aplanados con sangría.
+    fav_tree: Rc<VecModel<FavTreeRow>>,
     hist: Rc<VecModel<HistRow>>,
 }
 
@@ -72,6 +74,7 @@ impl PaneModels {
             tree: Rc::new(VecModel::default()),
             favs: Rc::new(VecModel::default()),
             recents: Rc::new(VecModel::default()),
+            fav_tree: Rc::new(VecModel::default()),
             hist: Rc::new(VecModel::default()),
         }
     }
@@ -389,9 +392,27 @@ fn main() -> Result<(), slint::PlatformError> {
             // Datos compartidos (no dependen del panel concreto): favoritos, recientes,
             // historial, inspector, preview se derivan del estado global / panel activo.
             let favs: Vec<NavRow> = c.favorite_rows().into_iter().map(to_nav_row).collect();
+            let fav_tree: Vec<FavTreeRow> =
+                c.fav_tree_rows().into_iter().map(to_fav_tree_row).collect();
+            // Grupos para el submenú "Mover a…" del panel y para que el menú ▾ del toolbar exista.
+            let fav_group_options: Vec<PathSeg> = c
+                .fav_group_options()
+                .into_iter()
+                .map(|(label, gid)| PathSeg {
+                    label: SharedString::from(label),
+                    path: SharedString::from(gid),
+                })
+                .collect();
             let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
             let inspector = to_inspector_vm(c.inspector_info());
+
+            // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
+            // y para el submenú "Mover a…" del panel (lista de grupos destino).
+            ui.set_fav_tree(ModelRc::from(Rc::new(VecModel::from(fav_tree.clone()))));
+            ui.set_fav_group_options(ModelRc::from(Rc::new(VecModel::from(
+                fav_group_options.clone(),
+            ))));
 
             let mut m = models.borrow_mut();
             for (i, &id) in m.pane_ids.clone().iter().enumerate() {
@@ -424,6 +445,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     Some(PanePurpose::Favorites) => {
                         m.models_for(id).favs.set_vec(favs.clone());
                         m.models_for(id).recents.set_vec(recents.clone());
+                        m.models_for(id).fav_tree.set_vec(fav_tree.clone());
                     }
                     Some(PanePurpose::History) => {
                         m.models_for(id).hist.set_vec(hist.clone());
@@ -838,6 +860,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             tree_rows: ModelRc::from(pm.tree.clone()),
                             favs: ModelRc::from(pm.favs.clone()),
                             recents: ModelRc::from(pm.recents.clone()),
+                            fav_tree: ModelRc::from(pm.fav_tree.clone()),
                             hist_rows: ModelRc::from(pm.hist.clone()),
                             inspector: InspectorVm::default(),
                             preview: PreviewVm::default(),
@@ -3248,6 +3271,59 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // --- Árbol de favoritos editable (panel + menú ▾ del toolbar) ---
+    {
+        // Expandir/colapsar un grupo del árbol por su ruta de nombres (estado de UI, no persiste).
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_toggle_expand(move |name_path| {
+            ctrl.borrow_mut().fav_toggle_expand(name_path.as_str());
+            sync_rows();
+        });
+    }
+    {
+        // Crear un grupo nuevo: (parent-group-id serializado, nombre). Persiste y refresca.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_new_group(move |parent_gid, name| {
+            ctrl.borrow_mut()
+                .fav_new_group(parent_gid.as_str(), name.as_str());
+            sync_rows();
+        });
+    }
+    {
+        // Renombrar un grupo: (group-id serializado, nombre nuevo). Persiste y refresca.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_rename_group(move |gid, name| {
+            ctrl.borrow_mut().fav_rename_group(gid.as_str(), name.as_str());
+            sync_rows();
+        });
+    }
+    {
+        // Eliminar un nodo: (is-group, group-id, path). Persiste y refresca.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_delete_node(move |is_group, gid, path| {
+            ctrl.borrow_mut()
+                .fav_delete_node(is_group, gid.as_str(), path.as_str());
+            sync_rows();
+        });
+    }
+    {
+        // Mover un nodo: (is-group, src-group-id, src-path, dest-group-id; "" = raíz). Persiste.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_move_node(move |is_group, src_gid, src_path, dest_gid| {
+            ctrl.borrow_mut().fav_move_node(
+                is_group,
+                src_gid.as_str(),
+                src_path.as_str(),
+                dest_gid.as_str(),
+            );
+            sync_rows();
+        });
+    }
     {
         // Botón "abrir con el programa del sistema" del panel de vista previa: ShellExecute
         // sobre la ruta del archivo previsualizado (la app no edita; abre con el editor del SO).
@@ -4451,6 +4527,20 @@ fn to_tree_row(r: bridge::TreeRow) -> TreeRow {
         error: r.error,
         disk_percent: r.disk_percent,
         disk_detail: SharedString::from(r.disk_detail.as_str()),
+        icon: r.icon,
+    }
+}
+
+fn to_fav_tree_row(r: bridge::FavTreeRow) -> FavTreeRow {
+    FavTreeRow {
+        depth: r.depth,
+        is_group: r.is_group,
+        name: SharedString::from(r.name.as_str()),
+        path: SharedString::from(r.path.as_str()),
+        group_id: SharedString::from(r.group_id.as_str()),
+        name_path: SharedString::from(r.name_path.as_str()),
+        expanded: r.expanded,
+        has_children: r.has_children,
         icon: r.icon,
     }
 }
