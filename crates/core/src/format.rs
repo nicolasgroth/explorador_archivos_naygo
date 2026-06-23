@@ -25,6 +25,25 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Velocidad legible a partir de bytes/segundo: reutiliza `human_size` y añade "/s".
+/// Ejemplo: 125_000_000 → "119.2 MB/s".
+pub fn format_speed(bytes_per_sec: u64) -> String {
+    format!("{}/s", human_size(bytes_per_sec))
+}
+
+/// Duración legible: `mm:ss` si es menor a 1 h, `h:mm:ss` si es 1 h o más.
+/// Ejemplos: 108 → "01:48"; 3661 → "1:01:01".
+pub fn format_duration(total_secs: u64) -> String {
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
 /// Cómo se muestra el tamaño en la columna. Configurable por el usuario.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SizeFormat {
@@ -202,5 +221,18 @@ mod tests {
         // offset +60 min: suma 1 hora => 2026-06-18 01:00:00.000.
         let s = format_log_time(1_781_740_800_000, 60);
         assert_eq!(s, "2026-06-18 01:00:00.000");
+    }
+
+    #[test]
+    fn velocidad_legible() {
+        assert!(format_speed(0).contains("0"));
+        assert!(format_speed(125_000_000).contains("MB/s"));
+    }
+
+    #[test]
+    fn duracion_legible() {
+        assert_eq!(format_duration(0), "00:00");
+        assert_eq!(format_duration(108), "01:48"); // 1 min 48 s
+        assert_eq!(format_duration(3661), "1:01:01"); // 1 h 1 min 1 s
     }
 }
