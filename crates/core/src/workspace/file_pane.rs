@@ -134,6 +134,65 @@ impl FilePaneState {
         self.highlighted.clear();
     }
 
+    /// Sincroniza el conjunto de resaltadas con el set autoritativo del watcher (las rutas que
+    /// siguen "frescas"). Lo llama el tick tras podar las vencidas, para que las filas dejen de
+    /// quedarse al final cuando se les vence el resaltado (solo importa si `group_new_at_end`).
+    /// `fresh` son las rutas todavía vigentes; las que ya no estén se quitan de `highlighted`.
+    pub fn sync_highlighted<F>(&mut self, still_fresh: F)
+    where
+        F: Fn(&Path) -> bool,
+    {
+        self.highlighted.retain(|p| still_fresh(p));
+    }
+
+    /// Marca un lote de rutas recién aparecidas (watcher: Created) como resaltadas Y las deja
+    /// SELECCIONADAS para que el usuario vea cuáles llegaron (sobre todo tras copiar/mover dentro
+    /// de Naygo). Reemplaza la selección anterior por las posiciones de VISTA de los nuevos.
+    ///
+    /// Las posiciones se calculan DESPUÉS de reordenar (`view_indices`), porque tras insertar y
+    /// re-ordenar las posiciones cambian; y se filtran por la vista: una ruta nueva oculta por el
+    /// filtro de columna o la visibilidad no entra a la vista, así que NO se selecciona. El foco
+    /// va a la última posición seleccionada (la UI hace scroll a ella). Devuelve cuántas filas
+    /// quedaron seleccionadas (las nuevas que sí están visibles).
+    ///
+    /// Debe llamarse DESPUÉS de haber actualizado `entries` y re-ordenado, y DESPUÉS de empujar
+    /// `group_new_at_end` (para que la vista ya refleje el agrupamiento al final si está activo).
+    pub fn select_arrivals(&mut self, new_paths: &[PathBuf]) -> usize {
+        for p in new_paths {
+            self.highlighted.insert(p.clone());
+        }
+        if new_paths.is_empty() {
+            return 0;
+        }
+        // El caché de la vista se invalida solo (la firma incluye `highlighted.len()` cuando se
+        // agrupa al final, y los nuevos `entries` cambian el len). Calculamos la vista YA ordenada.
+        let new_set: std::collections::HashSet<&PathBuf> = new_paths.iter().collect();
+        let positions: Vec<usize> = self
+            .view_indices()
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, &real)| {
+                let e = self.entries.get(real)?;
+                if new_set.contains(&e.path) {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if positions.is_empty() {
+            // Todos los nuevos están ocultos por filtro/visibilidad: no tocar la selección.
+            return 0;
+        }
+        let count = positions.len();
+        if let Some(&last) = positions.last() {
+            self.focused = Some(last);
+            self.anchor = Some(last);
+        }
+        self.selected = positions;
+        count
+    }
+
     /// Actualiza los flags de visibilidad (los setea la UI al cambiar el menú "ojo"). Cambia
     /// el conjunto de la vista; el caché se invalida solo (la firma incluye `visibility`). Si
     /// la selección/foco quedaran fuera de rango tras esconder filas, se reacomodan.
@@ -774,6 +833,102 @@ mod tests {
         assert_eq!(s.view_indices(), vec![0, 1, 2]);
         // Con flag: b (idx 1) al final, estable. (Cálculo crudo, sin pasar por el caché.)
         assert_eq!(s.compute_view_indices(true), vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn select_arrivals_resalta_y_selecciona_por_posicion_de_vista() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("D:/x"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("D:/x/{name}")),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: false,
+            system: false,
+        };
+        // Vista ordenada alfabéticamente: a(0), b(1), c(2).
+        s.entries = vec![mk("a"), mk("b"), mk("c")];
+        // Llegan "b" y "c" (Created). En orden alfabético caen en pos 1 y 2.
+        let n = s.select_arrivals(&[p("D:/x/c"), p("D:/x/b")]);
+        assert_eq!(n, 2);
+        let mut sel = s.selected.clone();
+        sel.sort_unstable();
+        assert_eq!(sel, vec![1, 2], "posiciones de vista de b y c");
+        assert!(s.is_highlighted(&p("D:/x/b")));
+        assert!(s.is_highlighted(&p("D:/x/c")));
+        // El foco quedó en la última posición seleccionada (para el scroll).
+        assert_eq!(s.focused, s.selected.last().copied());
+    }
+
+    #[test]
+    fn select_arrivals_al_final_selecciona_las_ultimas_posiciones() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("D:/x"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("D:/x/{name}")),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: false,
+            system: false,
+        };
+        s.entries = vec![mk("a"), mk("b"), mk("c")];
+        // Con "agrupar al final", el nuevo ("a", que ordenaría primero) cae al final de la vista.
+        s.group_new_at_end = true;
+        let n = s.select_arrivals(&[p("D:/x/a")]);
+        assert_eq!(n, 1);
+        // Vista con a al final: [b, c, a] → "a" en la última posición (2).
+        assert_eq!(s.selected, vec![2]);
+        assert_eq!(s.focused, Some(2));
+    }
+
+    #[test]
+    fn select_arrivals_ignora_los_ocultos_por_filtro() {
+        use crate::columns::ColumnKind;
+        use crate::filter::ColumnFilter;
+        use crate::fs_model::{Entry, EntryKind};
+        use std::collections::BTreeSet;
+        let mut s = FilePaneState::new(p("D:/x"));
+        let mk = |name: &str| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("D:/x/{name}")),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: false,
+            system: false,
+        };
+        s.entries = vec![mk("a.txt"), mk("b.pdf")];
+        // Filtro: solo .txt → la vista es [a.txt].
+        let mut set = BTreeSet::new();
+        set.insert("txt".to_string());
+        s.table
+            .set_filter(ColumnKind::Extension, ColumnFilter::Extensions(set));
+        // Llega "b.pdf" (oculto por el filtro): se resalta pero NO se selecciona (no está en vista).
+        let n = s.select_arrivals(&[p("D:/x/b.pdf")]);
+        assert_eq!(
+            n, 0,
+            "el nuevo oculto no entra a la vista, no se selecciona"
+        );
+        assert!(s.is_highlighted(&p("D:/x/b.pdf")));
+        assert!(s.selected.is_empty(), "no se tocó la selección");
+    }
+
+    #[test]
+    fn sync_highlighted_quita_las_que_ya_no_estan_frescas() {
+        let mut s = FilePaneState::new(p("D:/x"));
+        s.highlighted.insert(p("D:/x/a"));
+        s.highlighted.insert(p("D:/x/b"));
+        // El watcher dice: "a" sigue fresca, "b" ya venció.
+        s.sync_highlighted(|path| path == p("D:/x/a").as_path());
+        assert!(s.is_highlighted(&p("D:/x/a")));
+        assert!(!s.is_highlighted(&p("D:/x/b")));
     }
 
     #[test]

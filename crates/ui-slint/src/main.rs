@@ -1245,6 +1245,11 @@ fn main() -> Result<(), slint::PlatformError> {
                     // pintando hasta que se apaguen).
                     let hl_secs = ctrl.borrow().highlight_secs();
                     ctrl.borrow_mut().watchers.prune(hl_secs, now);
+                    // Reflejar la poda en el `highlighted` de cada panel: si la opción "archivos
+                    // nuevos al final" está activa, las filas que ya no están frescas dejan de
+                    // quedarse al final y vuelven a su orden normal.
+                    ctrl.borrow_mut()
+                        .sync_highlighted_from_watchers(hl_secs, now);
                     let fresh_pending = ctrl.borrow().watchers.any_fresh(hl_secs, now);
                     sync_rows();
                     // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato

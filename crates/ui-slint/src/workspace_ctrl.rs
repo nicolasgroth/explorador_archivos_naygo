@@ -617,12 +617,25 @@ impl WorkspaceCtrl {
     }
 
     /// Aplica un lote de eventos del watcher al panel `pane`: muta sus entries SIN re-listar,
-    /// re-ordena, y devuelve las rutas NUEVAS (para resaltar). No-op si el panel no es Files.
+    /// re-ordena, resalta+selecciona los archivos recién llegados (Created), y devuelve las rutas
+    /// NUEVAS (para que el watcher las marque "fresh"). No-op si el panel no es Files.
+    ///
+    /// Dos comportamientos, ambos sobre los Created (no se distingue origen app vs externo: tanto
+    /// una copia/movida dentro de Naygo como un cambio externo se tratan igual, coherente con el
+    /// resaltado ámbar):
+    /// - Resaltado + selección: los nuevos quedan SELECCIONADOS por su posición de vista, para que
+    ///   el usuario vea cuáles llegaron (sobre todo tras copiar). El foco va al último (scroll).
+    /// - "Archivos nuevos al final" (setting `new_items_at_end`): se empuja `group_new_at_end` al
+    ///   panel, de modo que `view_indices` agrupe las recién aparecidas al final de la vista en vez
+    ///   de en su posición ordenada. Al refrescar (F5) o navegar, el resaltado se limpia y todo
+    ///   vuelve a su orden normal.
     pub fn apply_watch_events(
         &mut self,
         pane: PaneId,
         events: &[naygo_core::listing::DirEvent],
     ) -> Vec<std::path::PathBuf> {
+        // Espejo runtime del setting "agrupar al final" (se lee antes del préstamo mutable).
+        let group_new_at_end = self.config.settings.new_items_at_end;
         let Some(f) = self.ws.pane_mut(pane).and_then(|p| p.files.as_mut()) else {
             return Vec::new();
         };
@@ -635,7 +648,28 @@ impl WorkspaceCtrl {
         });
         let spec = f.sort;
         naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        // Empujar el flag ANTES de calcular posiciones: si está activo, la vista pone los nuevos al
+        // final y la selección debe apuntar a esas posiciones finales.
+        f.group_new_at_end = group_new_at_end;
+        // Resaltar + seleccionar los recién llegados (MEJORA 1). Los que estén ocultos por
+        // filtro/visibilidad se resaltan pero no se seleccionan (no están en la vista).
+        f.select_arrivals(&nuevas);
         nuevas
+    }
+
+    /// Sincroniza el conjunto `highlighted` de cada panel Files con el set autoritativo de rutas
+    /// "frescas" del watcher (las que siguen vigentes según `highlight_secs`). Lo llama el tick
+    /// tras `prune`: cuando a una ruta se le vence el resaltado, se quita de `highlighted` y, si
+    /// estaba "agrupada al final", vuelve a su posición ordenada en la próxima vista. Mantiene una
+    /// única fuente de verdad (el watcher) entre el resaltado ámbar y el agrupar-al-final.
+    pub fn sync_highlighted_from_watchers(&mut self, highlight_secs: u64, now: std::time::Instant) {
+        let WorkspaceCtrl { ws, watchers, .. } = self;
+        for pane in ws.panes_mut() {
+            let id = pane.id.0;
+            if let Some(f) = pane.files.as_mut() {
+                f.sync_highlighted(|p| watchers.is_fresh_ro(id, p, highlight_secs, now));
+            }
+        }
     }
 
     /// Tras un cambio de unidades (USB enchufado/quitado), reubica a `home` los paneles Files
@@ -843,6 +877,9 @@ impl WorkspaceCtrl {
         // panel recién listado (arranque, navegación, refresh) ya nace con la vista filtrada
         // correcta sin depender de que el usuario abra el menú "ojo".
         let vis = self.visibility_flags();
+        // Espejo del setting "archivos nuevos al final": se empuja en el mismo punto, así un panel
+        // recién listado refleja la opción aunque el watcher aún no haya disparado.
+        let group_new_at_end = self.config.settings.new_items_at_end;
         let ids: Vec<PaneId> = self.listings.keys().copied().collect();
         for id in ids {
             let (batch, done) = match self.listings.get(&id) {
@@ -851,6 +888,7 @@ impl WorkspaceCtrl {
             };
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.set_visibility(vis);
+                f.group_new_at_end = group_new_at_end;
                 if !batch.is_empty() {
                     f.entries.extend(batch);
                 }
@@ -5977,6 +6015,24 @@ mod tests {
             .rows_of(id, 8, std::time::Instant::now())
             .iter()
             .any(|r| r.name == "nuevo.txt"));
+        // MEJORA 1: el archivo recién llegado queda SELECCIONADO (resaltado como selección) y la
+        // fila correspondiente lo refleja. Su posición de vista se calculó tras reordenar.
+        let f = c.ws.pane(id).and_then(|p| p.files.as_ref()).unwrap();
+        let nuevo_pos = f
+            .view_indices()
+            .iter()
+            .position(|&real| f.entries[real].path == nuevo)
+            .expect("nuevo.txt está en la vista");
+        assert!(
+            f.is_selected(nuevo_pos),
+            "el archivo recién llegado queda seleccionado"
+        );
+        assert!(
+            c.rows_of(id, 8, std::time::Instant::now())
+                .iter()
+                .any(|r| r.name == "nuevo.txt" && r.selected),
+            "la fila del nuevo se pinta como seleccionada"
+        );
     }
 
     /// 6D: el rename inline. `op_rename` marca el pedido sobre la fila enfocada; `rename_commit`
