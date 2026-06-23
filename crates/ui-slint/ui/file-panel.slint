@@ -197,6 +197,18 @@ export component FilePanel inherits FocusScope {
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
     in property <length> row-h: 22px;        // alto de fila (densidad configurable)
     in property <length> scroll-y;
+    // Desplazamiento por rueda del cuerpo de la lista. El ListView va con `interactive: false`
+    // (su Flickable se tragaba los `move` con botón apretado y cancelaba el TouchArea hijo, así
+    // que ni el arrastre ni el rubber-band funcionaban). Ahora un único TouchArea exterior
+    // captura todo y la rueda mueve `wheel-scroll`; `viewport-y` lo lee de una sola vía (sin
+    // ciclo de binding). 0 = arriba; crece hacia abajo (viewport-y es su negativo).
+    property <length> wheel-scroll: 0;
+    // Fila bajo el cursor según el TouchArea exterior (-1 = ninguna/zona vacía). La pinta el
+    // fondo de cada fila para el efecto hover (antes lo daba el `has-hover` del row-touch).
+    property <int> hover-row: -1;
+    // Al cambiar el contenido (navegar / refrescar), el scroll por rueda vuelve a arriba: si no,
+    // una carpeta nueva quedaría desplazada con el offset de la anterior.
+    changed rows => { root.wheel-scroll = 0; }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
     in property <bool> editing;              // este panel está editando su ruta
@@ -498,35 +510,22 @@ export component FilePanel inherits FocusScope {
                     }
                 }
             }
-            // Cuerpo de la lista. La envoltura tiene, por DETRÁS del ListView, un TouchArea que
-            // cubre todo el cuerpo: al hacer clic en la ZONA VACÍA (cuando los archivos no llenan
-            // el panel) marca este panel como activo (para que terminal/Explorer usen su carpeta)
-            // y, con clic derecho, abre el menú contextual de la CARPETA (no de un archivo). Los
-            // clics sobre filas los atrapa el TouchArea de cada fila (que está delante).
+            // Cuerpo de la lista. El ListView va con `interactive: false`: su Flickable arbitraba
+            // los `move` con botón apretado para hacer scroll y CANCELABA el TouchArea de cada
+            // fila, de modo que ni el arrastre OLE ni la selección por rectángulo recibían los
+            // `move` (el clic sí, porque el Flickable reenvía press+release sin movimiento). Ahora
+            // un único TouchArea exterior (`body-touch`, hermano POSTERIOR del ListView, por
+            // ENCIMA en z-order) captura TODOS los eventos crudos y deduce la fila por la `y` + el
+            // scroll. La rueda se re-implementa con `scroll-event` moviendo `wheel-scroll`.
             Rectangle {
-                empty-touch := TouchArea {
-                    pointer-event(ev) => {
-                        if (ev.kind == PointerEventKind.down) {
-                            root.activate(root.pane-id);
-                            root.focus();
-                        }
-                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
-                            root.empty-context(
-                                root.pane-id,
-                                empty-touch.absolute-position.x + empty-touch.mouse-x,
-                                empty-touch.absolute-position.y + empty-touch.mouse-y);
-                        }
-                        // Botones laterales del mouse: atrás/adelante en el historial del panel.
-                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.back) {
-                            root.nav-back(root.pane-id);
-                        }
-                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
-                            root.nav-forward(root.pane-id);
-                        }
-                    }
-                }
-                ListView {
-                viewport-y: root.scroll-y;
+                list := ListView {
+                // El ListView (std-widgets) NO expone `interactive`; su Flickable interno ya viene
+                // con `interactive: false` en el estilo fluent, pero igual interceptaba el `move`
+                // del TouchArea hijo. La solución es el `body-touch` exterior (abajo): al estar por
+                // ENCIMA en z-order, agarra el puntero antes que el Flickable y le quita los
+                // eventos. El scroll lo maneja `body-touch` por la rueda; `viewport-y` lee
+                // `wheel-scroll` de una sola vía (0 arriba, NEGATIVO al bajar) sin ciclo de binding.
+                viewport-y: -(root.scroll-y + root.wheel-scroll);
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
                     // Fondo: selección > resaltado (recién aparecido) > hover > fila par (cebra
@@ -535,7 +534,7 @@ export component FilePanel inherits FocusScope {
                         ? Theme.selection-bg
                         : (row.highlight
                             ? Theme.highlight.with-alpha(0.22)
-                            : (row-touch.has-hover
+                            : (i == root.hover-row
                                 ? Theme.row-alt-bg
                                 : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)));
                     border-width: row.focused ? 1px : 0px;
@@ -596,90 +595,130 @@ export component FilePanel inherits FocusScope {
                             }
                         }
                     }
-                    row-touch := TouchArea {
-                        // El `clicked` de un TouchArea DENTRO de un ListView no se dispara
-                        // bajo el backend winit/software: el Flickable del ListView se traga
-                        // el press/release para interpretar scroll. Los eventos pointer-event
-                        // SÍ llegan (el hover funciona), así que detectamos el clic a mano:
-                        // press y release sobre la misma fila = clic. El doble-clic lo detecta
-                        // Rust por tiempo. (Si el puntero se va entre press y release, no es
-                        // clic: se cancela.)
-                        property <bool> pressed-here: false;
-                        // Coords del press (para detectar el inicio de un arrastre por umbral).
-                        property <length> press-x;
-                        property <length> press-y;
-                        // Se disparó ya el arrastre OLE de este gesto (no repetir).
-                        property <bool> dragging: false;
-                        pointer-event(ev) => {
-                            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
-                                self.pressed-here = true;
-                                self.dragging = false;
-                                self.press-x = self.mouse-x;
-                                self.press-y = self.mouse-y;
-                            }
-                            // Inicio de ARRASTRE OLE: el botón sigue abajo y el puntero se movió
-                            // más que el umbral sobre una fila SELECCIONADA → sacar los archivos.
-                            // Solo si la fila ya estaba seleccionada (arrastrar lo elegido), para
-                            // no pisar el clic-para-seleccionar ni el scroll del ListView.
-                            if (ev.kind == PointerEventKind.move && self.pressed-here && !self.dragging && row.selected) {
-                                if (abs(self.mouse-x - self.press-x) > 6px || abs(self.mouse-y - self.press-y) > 6px) {
-                                    self.dragging = true;
-                                    self.pressed-here = false;
-                                    root.activate(root.pane-id);
-                                    root.row-drag-out(root.pane-id);
-                                }
-                            }
-                            // RUBBER-BAND (6F): arrastrar desde una fila NO seleccionada selecciona
-                            // el rango entre la fila de inicio (i) y la de destino (i + Δfilas por
-                            // la y arrastrada; filas de 22px). Ctrl = aditivo. No pisa el OLE
-                            // (que sale de filas YA seleccionadas) ni el clic simple.
-                            if (ev.kind == PointerEventKind.move && self.pressed-here && !row.selected) {
-                                if (abs(self.mouse-y - self.press-y) > 6px) {
-                                    root.activate(root.pane-id);
-                                    root.rubber-band(
-                                        root.pane-id, i,
-                                        i + round((self.mouse-y - self.press-y) / 22px));
-                                }
-                            }
-                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
-                                self.pressed-here = false;
-                                root.activate(root.pane-id);
-                                root.row-clicked(root.pane-id, i);
-                                // Tomar el foco de teclado: así los atajos (Supr, Ctrl+C…)
-                                // llegan al panel tras hacer clic en una fila. (Se hace en el
-                                // `up`, ya completado el gesto, para no robar el grab del clic.)
-                                root.focus();
-                            }
-                            // Botones laterales del mouse sobre una fila: atrás/adelante en el panel.
-                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.back) {
-                                root.nav-back(root.pane-id);
-                            }
-                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
-                                root.nav-forward(root.pane-id);
-                            }
-                            // Clic derecho: seleccionar la fila y abrir el menú contextual en
-                            // coords de la ventana (absolute-position del TouchArea + puntero).
-                            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
-                                root.activate(root.pane-id);
-                                root.row-clicked(root.pane-id, i);
-                                root.row-context(
-                                    root.pane-id, i,
-                                    row-touch.absolute-position.x + row-touch.mouse-x,
-                                    row-touch.absolute-position.y + row-touch.mouse-y);
-                            }
-                            if (ev.kind == PointerEventKind.cancel) {
-                                self.pressed-here = false;
-                            }
+                    // La fila es solo VISUAL: ya no lleva TouchArea propio. Todo el input lo captura
+                    // `body-touch` (abajo), por encima del ListView.
+                }
+                }
+                // TouchArea exterior: ÚLTIMO hijo del cuerpo (por ENCIMA del ListView en z-order),
+                // captura TODOS los eventos crudos y deduce la fila por la `y` + el scroll. Se
+                // oculta durante el rename inline para no tapar el editor de la celda Name (durante
+                // el rename no se necesita clic-en-vacío).
+                if root.rename-pos == -1: body-touch := TouchArea {
+                    // Estado del gesto en curso. `pressed-here`: hay un press de botón izquierdo
+                    // vivo. `dragging`: ya se disparó el arrastre OLE (no repetir). `press-x/y`:
+                    // dónde empezó (umbral clic-vs-arrastre). `start-row`: fila bajo el press.
+                    property <bool> pressed-here: false;
+                    property <bool> dragging: false;
+                    property <length> press-x;
+                    property <length> press-y;
+                    property <int> start-row: -1;
+                    // Fila ABSOLUTA bajo el cursor. `viewport-y` es 0 arriba y NEGATIVO al bajar, así
+                    // que `mouse-y - viewport-y` = posición absoluta en el contenido. Puede caer
+                    // fuera de rango (zona vacía): el llamador valida contra `rows.length`.
+                    property <int> cur-row: floor((self.mouse-y - list.viewport-y) / root.row-h);
+                    // ¿`start-row` es una fila real Y estaba seleccionada? (decide OLE vs rubber-band)
+                    property <bool> start-selected:
+                        self.start-row >= 0 && self.start-row < root.rows.length
+                            ? root.rows[self.start-row].selected
+                            : false;
+                    // Hover: expón la fila bajo el cursor para que el fondo de la fila la resalte.
+                    // -1 cuando el puntero no está sobre el cuerpo o cae en zona vacía.
+                    changed has-hover => {
+                        root.hover-row = (self.has-hover && self.cur-row >= 0 && self.cur-row < root.rows.length)
+                            ? self.cur-row : -1;
+                    }
+                    moved => {
+                        root.hover-row = (self.has-hover && self.cur-row >= 0 && self.cur-row < root.rows.length)
+                            ? self.cur-row : -1;
+                        // Inicio de ARRASTRE OLE: botón abajo, movimiento > umbral, sobre una fila YA
+                        // seleccionada → sacar lo elegido. Solo desde selección (para no pisar el
+                        // clic-para-seleccionar ni el rubber-band).
+                        if (self.pressed-here && !self.dragging && self.start-selected
+                            && (abs(self.mouse-x - self.press-x) > 6px || abs(self.mouse-y - self.press-y) > 6px)) {
+                            self.dragging = true;
+                            self.pressed-here = false;
+                            root.activate(root.pane-id);
+                            root.row-drag-out(root.pane-id);
                         }
-                        // Doble clic NATIVO de Slint (cronometrado por el SO, robusto ante la
-                        // latencia del hilo de UI bajo render por software). Es el camino
-                        // primario para abrir; la detección por tiempo en Rust queda de
-                        // respaldo. Rust evita la doble navegación (ver on_row_double_clicked).
-                        double-clicked => {
-                            root.row-double-clicked(root.pane-id, i);
+                        // RUBBER-BAND (6F): arrastrar desde una fila NO seleccionada (o desde zona
+                        // vacía) selecciona el rango [start-row, cur-row], ambos ABSOLUTOS. Rust
+                        // (select_rect_range) ordena y recorta el rango; Ctrl = aditivo. El alto de
+                        // fila usa `row-h` (no 22px hardcodeado como el rubber-band viejo).
+                        if (self.pressed-here && !self.dragging && !self.start-selected
+                            && abs(self.mouse-y - self.press-y) > 6px) {
+                            root.activate(root.pane-id);
+                            root.rubber-band(root.pane-id, self.start-row, self.cur-row);
                         }
                     }
-                }
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                            self.pressed-here = true;
+                            self.dragging = false;
+                            self.press-x = self.mouse-x;
+                            self.press-y = self.mouse-y;
+                            self.start-row = self.cur-row;
+                            root.activate(root.pane-id);
+                            root.focus();
+                        }
+                        // Soltar el botón izquierdo SIN haber arrastrado = clic. Sobre fila válida →
+                        // seleccionar (Rust aplica Ctrl/Shift) y tomar el foco para que Supr/Ctrl+C
+                        // lleguen al panel. En zona vacía: solo activar (ya se hizo en el down).
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
+                            self.pressed-here = false;
+                            if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
+                                root.row-clicked(root.pane-id, self.cur-row);
+                                root.focus();
+                            }
+                        }
+                        // Botones laterales del mouse: atrás/adelante en el historial del panel.
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.back) {
+                            root.nav-back(root.pane-id);
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
+                            root.nav-forward(root.pane-id);
+                        }
+                        // Clic derecho: sobre fila válida la selecciona y abre el menú del ARCHIVO;
+                        // en zona vacía abre el menú de la CARPETA. Coords en la ventana
+                        // (absolute-position + puntero).
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                            root.activate(root.pane-id);
+                            if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
+                                root.row-clicked(root.pane-id, self.cur-row);
+                                root.row-context(
+                                    root.pane-id, self.cur-row,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
+                            } else {
+                                root.empty-context(
+                                    root.pane-id,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
+                            }
+                        }
+                        if (ev.kind == PointerEventKind.cancel) {
+                            self.pressed-here = false;
+                            self.dragging = false;
+                        }
+                    }
+                    // Doble clic NATIVO de Slint (cronometrado por el SO, robusto bajo render por
+                    // software). Camino primario para abrir; la detección por tiempo en Rust queda
+                    // de respaldo (evita la doble navegación, ver on_row_double_clicked).
+                    double-clicked => {
+                        if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
+                            root.row-double-clicked(root.pane-id, self.cur-row);
+                        }
+                    }
+                    // Scroll por rueda: el ListView ya no lo hace (interactive:false). Movemos
+                    // `wheel-scroll` en [0, alto-total - alto-visible]. `delta-y` es negativo al
+                    // rodar hacia abajo, así que restarlo BAJA (aumenta wheel-scroll). Si el
+                    // contenido cabe entero, el clamp deja el valor en 0.
+                    scroll-event(ev) => {
+                        root.wheel-scroll = clamp(
+                            root.wheel-scroll - ev.delta-y,
+                            0px,
+                            max(0px, root.rows.length * root.row-h - self.height));
+                        return accept;
+                    }
                 }
             }
             // Barra inferior (footer): resumen de selección / espacio de disco. Va al FONDO del
