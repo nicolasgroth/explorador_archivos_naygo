@@ -17,8 +17,9 @@ toolbar.
   (los que empiezan con `.`, estilo Linux).
 - **Acceso rápido**: botón "ojo" con ▾ en el toolbar (menú con las 3 casillas). Persistente.
 - Aplicación **global** (todos los paneles + el árbol).
-- **Defaults como Windows**: `show_hidden=false`, `show_system=false`, `hide_dotfiles=false`
-  (los dotfiles SÍ se ven por defecto; el toggle es para ocultarlos).
+- **Defaults (pedido de Nicolás): mostrar TODO por defecto** — `show_hidden=true`,
+  `show_system=true`, `hide_dotfiles=false`. Naygo arranca mostrando ocultos, de sistema y dotfiles;
+  el usuario los oculta con los toggles si quiere. (Difiere del Explorer de Windows a propósito.)
 
 ### Core
 - `Entry` ya tiene `hidden: bool` pero está hardcodeado a `false` en `entry_from_path`
@@ -32,7 +33,8 @@ toolbar.
   `hide_dotfiles && entry.name.starts_with('.')`. Testeable.
 
 ### Settings
-`#[serde(default)]` los tres (todos default `false`): `show_hidden`, `show_system`, `hide_dotfiles`.
+`#[serde(default = "...")]` los tres: `show_hidden` (default **true**), `show_system` (default
+**true**), `hide_dotfiles` (default **false**). Cada uno con su fn default explícita para los `true`.
 
 ### UI
 - Botón "ojo" + ▾ en el toolbar → menú flotante (patrón de los menús ▾ existentes) con 3 casillas.
