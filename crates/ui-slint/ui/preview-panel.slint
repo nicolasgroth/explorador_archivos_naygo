@@ -4,7 +4,7 @@
 // El contenido lo calcula un worker en Rust (con debounce 150 ms y cancelación); aquí
 // solo se pinta según `mode`: 0=vacío 1=texto 2=imagen 3=mensaje. En modo texto, si la regla
 // forzó un lenguaje, se pinta el código resaltado (un Text por segmento); si no, texto plano.
-import { ScrollView, TextEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { PreviewVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -55,10 +55,6 @@ export component PreviewPanel inherits Rectangle {
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     callback open-in-system();   // abrir el archivo previsualizado con el programa por defecto
     callback hover-tip(string, length);   // tooltip flotante (texto, x centrada) → AppWindow
-    // Cuando hay código resaltado (no seleccionable por ser un Text por segmento), este toggle
-    // alterna a una vista de texto plano dentro de un TextEdit read-only, que sí permite
-    // seleccionar y copiar (Ctrl+C nativo). Solo aplica al modo texto con resaltado.
-    property <bool> selectable: false;
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
@@ -83,31 +79,6 @@ export component PreviewPanel inherits Rectangle {
                 font-weight: 700;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
-            }
-            // Botón "seleccionar/copiar texto": solo cuando hay código resaltado. Alterna entre la
-            // vista coloreada (no seleccionable) y una vista de texto plano seleccionable.
-            if root.view.highlighted: Rectangle {
-                width: 26px;
-                height: 20px;
-                background: sel-touch.has-hover ? Theme.selection-bg : transparent;
-                border-radius: 3px;
-                Text {
-                    text: "✎";
-                    color: root.selectable ? Theme.accent : Theme.text-dim;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
-                }
-                sel-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.selectable = !root.selectable; }
-                    changed has-hover => {
-                        root.hover-tip(self.has-hover ? Tr.preview-select-tip : "",
-                            self.absolute-position.x + self.width / 2);
-                    }
-                }
             }
             // Botón abrir con el programa del sistema (visible cuando hay algo en preview).
             if root.view.mode != 0: Rectangle {
@@ -147,7 +118,7 @@ export component PreviewPanel inherits Rectangle {
                 // El viewport toma el ancho natural del contenido; si supera el visible, el
                 // ScrollView ofrece la barra horizontal. Las líneas ya vienen recortadas a
                 // TEXT_MAX_LINE_CHARS, así que ningún glifo sale del rango i16 del render software.
-                if root.view.highlighted && !root.selectable: hl-col := VerticalLayout {
+                if root.view.highlighted: hl-col := VerticalLayout {
                     alignment: start;
                     for line in root.view.hl-lines: HorizontalLayout {
                         alignment: start;
@@ -164,16 +135,20 @@ export component PreviewPanel inherits Rectangle {
                         }
                     }
                 }
-                // Vista seleccionable: texto plano dentro de un TextEdit read-only (una sola tinta,
-                // con selección y Ctrl+C nativos). Se usa para el texto plano "puro" (sin resaltado)
-                // y como vista alterna del código resaltado cuando el usuario activa el toggle.
-                // El TextEdit de std-widgets hace word-wrap por defecto, así que las líneas larguísimas
-                // no empujan glifos fuera del rango i16 del render por software (el core ya recorta).
-                if !root.view.highlighted || root.selectable: TextEdit {
-                    vertical-stretch: 1;
-                    read-only: true;
+                // Texto plano (modo no-código): un solo Text con ajuste de línea.
+                // NOTA: aquí NO se usa un TextEdit read-only (aunque permitiría selección con el
+                // mouse + Ctrl+C nativos) porque el render por SOFTWARE que Naygo fuerza
+                // (main.rs: new_with_renderer_by_name("software")) no rasteriza ese widget y el
+                // panel salía en blanco. Un Text sí se pinta bajo software. La selección de texto
+                // queda fuera mientras se use el render por software.
+                if !root.view.highlighted: Text {
                     text: root.view.text;
+                    color: Theme.text;
                     font-family: "Consolas";
+                    // Ajuste de línea: el renderizador por software de Slint posiciona cada glifo en
+                    // i16 (~32767px). Una línea larguísima sin ajuste empujaba un glifo fuera de rango
+                    // y la app caía al pintar. El core ya recorta cada línea; el wrap es 2ª defensa.
+                    wrap: word-wrap;
                 }
             }
             if root.view.truncated: Text {

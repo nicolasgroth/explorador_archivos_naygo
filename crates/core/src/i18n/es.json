@@ -514,7 +514,6 @@
   "slint.preview.view_code": "Ver como código",
   "slint.preview.lang": "Lenguaje",
   "slint.preview.open_tip": "Abrir con el programa predeterminado",
-  "slint.preview.select_tip": "Seleccionar/copiar texto",
   "slint.col.name": "Nombre",
   "slint.col.ext": "Extensión",
   "slint.col.size": "Tamaño",
