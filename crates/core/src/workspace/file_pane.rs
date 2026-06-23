@@ -590,6 +590,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         s.entries = vec![mk("a.txt"), mk("b.pdf"), mk("c.txt")];
         // Filtro: solo .txt → vista = [a.txt (idx0), c.txt (idx2)].
@@ -631,6 +632,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         s.entries = vec![mk("a"), mk("b"), mk("c")];
         s.highlighted.insert(p("D:/x/b"));
@@ -652,6 +654,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         s.entries = vec![mk("a"), mk("b")];
         assert_eq!(s.view_indices(), vec![0, 1]);
@@ -693,6 +696,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         });
         let d = p.view_indices();
         assert_eq!(d.len(), 51);
@@ -744,6 +748,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         let mut p = FilePaneState::new(PathBuf::from("C:/"));
         p.entries = (0..n).map(|i| mk(&format!("f{i}.txt"))).collect();

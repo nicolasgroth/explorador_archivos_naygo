@@ -255,6 +255,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         }
     }
 
@@ -289,6 +290,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         assert_eq!(icon_key_for(&dir), IconKey::Folder);
         assert_eq!(
@@ -311,6 +313,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         assert_eq!(icon_key_for(&other), IconKey::Unknown);
     }

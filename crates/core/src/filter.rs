@@ -116,6 +116,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         }
     }
 

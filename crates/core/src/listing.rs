@@ -111,6 +111,33 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     list_into_filtered(dir, token, tx, ListingFilter::All);
 }
 
+/// Lee los atributos "oculto" y "de sistema" de la metadata de Windows.
+/// Devuelve `(hidden, system)`. Si no hay metadata, ambos son `false`.
+/// `file_attributes()` es de `std::os::windows::fs::MetadataExt` (std puro,
+/// no requiere la crate `windows`).
+#[cfg(windows)]
+fn attrs_of(metadata: Option<&Metadata>) -> (bool, bool) {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    match metadata {
+        Some(m) => {
+            let a = m.file_attributes();
+            (
+                a & FILE_ATTRIBUTE_HIDDEN != 0,
+                a & FILE_ATTRIBUTE_SYSTEM != 0,
+            )
+        }
+        None => (false, false),
+    }
+}
+
+/// Fuera de Windows no hay atributos hidden/system del FS → ambos `false`.
+#[cfg(not(windows))]
+fn attrs_of(_metadata: Option<&Metadata>) -> (bool, bool) {
+    (false, false)
+}
+
 /// Construye un `Entry` desde una ruta + su metadata (ya leída). Tolerante a metadata
 /// ausente. Compartido por el listado inicial y por el merge incremental del watcher.
 pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
@@ -135,6 +162,9 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
     // La fecha de creación puede no estar soportada por el FS → None. Tolerante.
     let created = metadata.and_then(|m| m.created().ok());
 
+    // Atributos reales del FS (Windows). Fuera de Windows quedan en false.
+    let (hidden, system) = attrs_of(metadata);
+
     Entry {
         name,
         path: path.to_path_buf(),
@@ -142,7 +172,8 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         size,
         modified,
         created,
-        hidden: false,
+        hidden,
+        system,
     }
 }
 
@@ -360,6 +391,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         }
     }
 

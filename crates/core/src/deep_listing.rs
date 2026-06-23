@@ -139,6 +139,7 @@ fn make_entry(path: &Path, is_dir: bool) -> Entry {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         },
     }
 }

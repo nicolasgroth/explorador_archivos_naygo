@@ -29,8 +29,10 @@ pub struct Entry {
     pub modified: Option<SystemTime>,
     /// Fecha de creación, si el SO la entrega.
     pub created: Option<SystemTime>,
-    /// Atributo "oculto" (en Windows). En esta fase se rellena en fases futuras; default false.
+    /// Atributo "oculto" (en Windows). Se rellena leyendo los atributos reales del FS.
     pub hidden: bool,
+    /// Atributo "de sistema" (en Windows). Se rellena leyendo los atributos reales del FS.
+    pub system: bool,
 }
 
 impl Entry {
@@ -125,6 +127,7 @@ mod tests {
             modified: None,
             created: None,
             hidden: false,
+            system: false,
         };
         assert!(e.is_dir());
     }
