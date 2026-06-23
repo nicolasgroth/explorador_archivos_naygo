@@ -7,6 +7,15 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Panel de Operaciones: muestra la copia o el movimiento en curso con todos los datos —archivo
+  actual, barra de progreso, copiado X de Y, velocidad media y pico, tiempo transcurrido y
+  restante— más los botones Pausar/Reanudar y Cancelar, la cola de operaciones pendientes y un
+  historial reciente. Aparece solo al iniciar una operación. Se puede agregar también desde el
+  menú «Panel ▾».
+- Pausar y reanudar una copia o movimiento en curso (sin perder lo ya copiado).
+- Arrastrar archivos de un panel a otro: dentro del mismo disco mueve, a otro disco copia;
+  Ctrl fuerza copiar y Shift fuerza mover. Los archivos arrastrados desde el Explorador de
+  Windows también caen en el panel sobre el que se sueltan.
 - Paleta de comandos (Ctrl+P): un buscador rápido que filtra acciones, archivos de la carpeta
   actual, carpetas recientes, favoritos y temas con coincidencia aproximada (fuzzy), resaltando
   las letras que coinciden. Se navega con las flechas, Enter ejecuta y Esc cierra. El atajo es
@@ -71,6 +80,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
+- Copiar o mover archivos grandes ya muestra el avance real (antes la copia en curso parecía
+  detenerse): el progreso se actualiza por bytes con velocidad y tiempo restante. Resuelve el caso
+  en que pegar y sobrescribir un archivo grande parecía copiar solo unos megas.
+- El doble clic en una carpeta vuelve a navegar dentro del panel aunque antes se haya usado un
+  atajo con Ctrl (los modificadores ya no quedan "pegados").
 - Temas claros (Light, macOS, Windows XP, Citrus Glow): mejor legibilidad. El texto atenuado de
   las columnas (extensión, tamaño, fecha) tiene más contraste, y los fondos blanco-puro pasaron a
   grises/cremas suaves para que no "laven" la vista (se veían demasiado brillantes).
