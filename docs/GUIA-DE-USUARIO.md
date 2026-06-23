@@ -38,6 +38,7 @@ Cada panel puede ser de un **tipo**:
 | **Historial de acciones** | Operaciones hechas, con botón de deshacer. |
 | **Favoritos** | Carpetas ancladas + recientes. |
 | **Vista previa** | Vista liviana del archivo enfocado: texto, imagen, o la lista de contenido de un `.zip`. |
+| **Operaciones** | Copias y movimientos en curso, en cola y recién terminados (ver §5). Aparece solo al iniciar una operación. |
 
 **Dividir y reorganizar:**
 
@@ -182,6 +183,31 @@ le da el **foco** al panel, así las acciones de la toolbar usan su carpeta.
 menú de carpeta) abre un cuadro donde puedes crear **varias a la vez**: una carpeta
 por línea, y usando `\` se anidan (p. ej. `proyecto\src\bin` crea las tres). Las
 líneas inválidas se avisan y se omiten; las válidas se crean.
+
+**Panel de Operaciones:** muestra las copias y movimientos en curso. Aparece solo al
+iniciar una operación (también se puede agregar a mano desde el menú **Panel ▾**).
+Tiene tres zonas:
+
+- **En curso:** la operación que se está ejecutando. Muestra el archivo actual, una
+  **barra de progreso**, *"Copiado X de Y"*, la **velocidad** (media y pico), el
+  **tiempo transcurrido** y el **restante** estimado. Trae botones **Pausar/Reanudar**,
+  **Saltar** y **Cancelar**.
+- **En cola:** las operaciones que esperan su turno.
+- **Historial reciente:** las últimas operaciones terminadas con su resultado (cuántos
+  archivos se copiaron, se saltaron o fallaron).
+
+Cómo se muestra el progreso (panel, ventana modal o ambos) también depende de
+*Configuración → Avanzado → progreso de operaciones* (ver §9).
+
+**Pausar y reanudar:** una copia o movimiento en curso se puede **pausar** con el botón
+del panel de Operaciones (se detiene sin perder lo ya copiado) y **reanudar** desde
+donde quedó.
+
+**Arrastrar archivos entre paneles:** puedes arrastrar los archivos seleccionados de un
+panel a otro. Dentro del **mismo disco** la operación **mueve**; hacia **otro disco**
+**copia**. Mantener **Ctrl** mientras arrastras **fuerza copiar**; mantener **Shift**
+**fuerza mover**. (Arrastrar archivos **fuera** de Naygo, al Explorador de Windows,
+sigue funcionando como antes.)
 
 ---
 
