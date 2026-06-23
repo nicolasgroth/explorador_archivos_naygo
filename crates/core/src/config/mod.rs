@@ -258,6 +258,15 @@ pub struct Settings {
     /// Carpeta de inicio (botón Home). Vacío = carpeta personal del usuario. `#[serde(default)]`.
     #[serde(default)]
     pub home_dir: String,
+    /// Mostrar archivos/carpetas con atributo oculto (HIDDEN). Default true (Naygo muestra todo).
+    #[serde(default = "default_show_hidden")]
+    pub show_hidden: bool,
+    /// Mostrar archivos/carpetas con atributo de sistema (SYSTEM). Default true.
+    #[serde(default = "default_show_system")]
+    pub show_system: bool,
+    /// Ocultar los que empiezan con punto (dotfiles estilo Linux). Default false.
+    #[serde(default)]
+    pub hide_dotfiles: bool,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -399,6 +408,16 @@ fn default_size_no_subdirs() -> bool {
     false
 }
 
+/// Default de `show_hidden`: true (Naygo muestra los ocultos por defecto).
+fn default_show_hidden() -> bool {
+    true
+}
+
+/// Default de `show_system`: true.
+fn default_show_system() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -442,6 +461,9 @@ impl Default for Settings {
             footer_custom_template: String::new(),
             auto_highlight_code: true,
             home_dir: String::new(),
+            show_hidden: true,
+            show_system: true,
+            hide_dotfiles: false,
         }
     }
 }
@@ -711,6 +733,9 @@ mod tests {
             footer_custom_template: "{sel}/{total}".into(),
             auto_highlight_code: false,
             home_dir: "D:\\Trabajo".into(),
+            show_hidden: false,
+            show_system: false,
+            hide_dotfiles: true,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -1018,6 +1043,24 @@ mod tests {
     }
 
     #[test]
+    fn settings_visibilidad_defaults() {
+        let s = Settings::default();
+        assert!(s.show_hidden); // mostrar todo por defecto
+        assert!(s.show_system);
+        assert!(!s.hide_dotfiles);
+    }
+
+    #[test]
+    fn settings_viejo_migra_visibilidad() {
+        // Un settings.json sin estos campos: show_hidden/show_system caen a true (default fn).
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":false}"#;
+        let s: Settings = serde_json::from_str(json).expect("debe migrar");
+        assert!(s.show_hidden);
+        assert!(s.show_system);
+        assert!(!s.hide_dotfiles);
+    }
+
+    #[test]
     fn home_vacio_cae_al_perfil_del_usuario() {
         // Una ruta explícita se respeta tal cual.
         let explicit = resolve_home_dir("D:\\Trabajo");
@@ -1025,6 +1068,9 @@ mod tests {
 
         // Vacío → alguna ruta no vacía (el perfil del usuario; varía por máquina).
         let fallback = resolve_home_dir("");
-        assert!(!fallback.as_os_str().is_empty(), "vacío debe resolver a una ruta");
+        assert!(
+            !fallback.as_os_str().is_empty(),
+            "vacío debe resolver a una ruta"
+        );
     }
 }
