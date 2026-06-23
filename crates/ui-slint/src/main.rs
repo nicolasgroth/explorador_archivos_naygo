@@ -1839,6 +1839,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         id: id.as_str().into(),
                         name: t.name.clone().into(),
                         active: id.as_str() == active.as_str(),
+                        is_builtin: naygo_core::theme::is_builtin_id(id.as_str()),
                         sw_panel: col(t.panel_bg),
                         sw_accent: col(t.accent),
                         sw_row: col(t.row_bg),
@@ -1848,6 +1849,30 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .collect();
             cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
+            // Estado del editor de temas (config → Apariencia). Cuando hay un tema en edición se
+            // vuelcan su nombre/base y los 11 tokens (hex + r/g/b por canal, para inicializar el
+            // color-picker, que no parsea hex).
+            cfg.set_editing_active(c.config.is_editing_theme());
+            cfg.set_editing_name(c.config.editing_name().into());
+            cfg.set_editing_base_index(c.config.editing_base_index());
+            let n = config_ctrl::THEME_TOKEN_COUNT;
+            let mut hexes: Vec<SharedString> = Vec::with_capacity(n);
+            let mut rs: Vec<i32> = Vec::with_capacity(n);
+            let mut gs: Vec<i32> = Vec::with_capacity(n);
+            let mut bs: Vec<i32> = Vec::with_capacity(n);
+            if c.config.is_editing_theme() {
+                for idx in 0..n {
+                    hexes.push(c.config.editing_token_hex(idx).into());
+                    let (r, g, b) = c.config.editing_token_rgb(idx);
+                    rs.push(r as i32);
+                    gs.push(g as i32);
+                    bs.push(b as i32);
+                }
+            }
+            cfg.set_editing_token_hex(ModelRc::from(Rc::new(VecModel::from(hexes))));
+            cfg.set_editing_token_r(ModelRc::from(Rc::new(VecModel::from(rs))));
+            cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(gs))));
+            cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(bs))));
             cfg.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
             cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
             // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
@@ -2288,6 +2313,170 @@ fn main() -> Result<(), slint::PlatformError> {
             ctrl.borrow_mut()
                 .config
                 .set_theme(naygo_core::theme::ThemeId::new(&id));
+            let c = ctrl.borrow();
+            if let Some(ui) = ui_weak.upgrade() {
+                theme_apply::apply(&ui, c.config.active_theme());
+            }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // === Editor de temas (config → Apariencia) ===
+    // "Personalizar" (builtin) / "Editar" (de usuario): abre el editor y aplica el tema en edición
+    // como preview en vivo en AMBAS ventanas. El refresh vuelca el estado del editor a la UI.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_customize(move |id| {
+            ctrl.borrow_mut().config.duplicate_theme(&id);
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_edit(move |id| {
+            ctrl.borrow_mut().config.edit_user_theme(&id);
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // Eliminar un tema de usuario: borra el .json, recarga catálogo y, si era el activo, cae al
+    // default. Re-aplica el tema activo resultante a ambas ventanas.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_delete(move |id| {
+            ctrl.borrow_mut().config.delete_user_theme(&id);
+            let c = ctrl.borrow();
+            if let Some(ui) = ui_weak.upgrade() {
+                theme_apply::apply(&ui, c.config.active_theme());
+            }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // Nombre del tema en edición (no re-aplica preview: el nombre no es un color).
+    {
+        let ctrl = ctrl.clone();
+        cfg_win.on_theme_set_name(move |name| {
+            ctrl.borrow_mut().config.set_editing_name(name.to_string());
+        });
+    }
+    // Base oscuro/claro del tema en edición.
+    {
+        let ctrl = ctrl.clone();
+        cfg_win.on_theme_set_base(move |idx| {
+            ctrl.borrow_mut().config.set_editing_base(idx);
+        });
+    }
+    // Cambiar un token de color → preview en vivo en ambas ventanas + refresh (para repintar las
+    // muestras/hex del editor).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_set_token(move |idx, hex| {
+            ctrl.borrow_mut()
+                .config
+                .set_token_color(idx.max(0) as usize, &hex);
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // Guardar el tema en edición: escribe el .json, lo deja activo y re-aplica el tema activo.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_save(move || {
+            ctrl.borrow_mut().config.save_editing_theme();
+            let c = ctrl.borrow();
+            if let Some(ui) = ui_weak.upgrade() {
+                theme_apply::apply(&ui, c.config.active_theme());
+            }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // Restaurar de fábrica: resetea los 11 tokens del tema en edición al builtin del que se
+    // duplicó y re-aplica el preview.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_restore(move || {
+            ctrl.borrow_mut().config.restore_factory_editing();
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    // Cancelar: descarta el tema en edición y re-aplica el tema que estaba activo antes (revierte
+    // el preview).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_cancel(move || {
+            if let Some(prev) = ctrl.borrow_mut().config.cancel_editing() {
+                ctrl.borrow_mut().config.set_theme(prev);
+            }
             let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
                 theme_apply::apply(&ui, c.config.active_theme());

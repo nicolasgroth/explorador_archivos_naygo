@@ -176,6 +176,9 @@ export struct ThemeCardVm {
     id: string,
     name: string,
     active: bool,
+    // ¿Es un tema de fábrica? Decide los botones de la tarjeta: builtin → "Personalizar" (duplica);
+    // de usuario → "Editar" + "Eliminar".
+    is-builtin: bool,
     sw-panel: color,
     sw-accent: color,
     sw-row: color,

@@ -50,6 +50,19 @@ export component ColorPicker inherits Rectangle {
         root.hex = root.rgb-hex(root.r, root.g, root.b);
         root.changed(root.hex);
     }
+
+    // Inicializa los sliders/hex desde un color externo (r/g/b 0-255) SIN emitir `changed`. La usa
+    // el editor de temas para mostrar el color actual del token al abrir el picker: el hex es de
+    // solo lectura, así que el llamador pasa los canales enteros (no se parsea hex). No notifica
+    // para no disparar un preview redundante al solo abrir.
+    public function load-rgb(rr: int, gg: int, bb: int) {
+        root.r = Math.clamp(rr, 0, 255);
+        root.g = Math.clamp(gg, 0, 255);
+        root.b = Math.clamp(bb, 0, 255);
+        root.hex = root.rgb-hex(root.r, root.g, root.b);
+        // Abrir directo en la sección de sliders: el usuario viene a ajustar un color concreto.
+        root.expanded = true;
+    }
     // Atajo: fija un canal acotado a 0-255 y recompone.
     function set-r(v: int) { root.r = Math.clamp(v, 0, 255); root.commit(); }
     function set-g(v: int) { root.g = Math.clamp(v, 0, 255); root.commit(); }

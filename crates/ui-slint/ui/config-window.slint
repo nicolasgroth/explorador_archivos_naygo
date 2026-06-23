@@ -7,6 +7,7 @@ import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm, NewsSection } fr
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
+import { ColorPicker } from "color-picker.slint";
 
 // Ícono "✕" dibujado con un Path (dos aspas), no con un glifo de fuente: bajo render por
 // software el carácter ✕/× a veces no existe en la fuente base y salía invisible (botón "vacío").
@@ -149,6 +150,35 @@ export component ConfigWindow inherits Window {
     callback set-language(string);
     callback set-theme(string);
     callback set-icon-set(string);
+    // --- Editor de temas (galería de Apariencia) ---
+    // Abrir el editor: "Personalizar" (builtin → duplica) o "Editar" (de usuario). Eliminar uno
+    // de usuario. Todos toman el id de la tarjeta.
+    callback theme-customize(string);
+    callback theme-edit(string);
+    callback theme-delete(string);
+    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 11 tokens
+    // como hex "#rrggbb" + sus componentes r/g/b (para inicializar el picker, que no parsea hex).
+    in property <bool> editing-active: false;
+    in property <string> editing-name: "";
+    in property <int> editing-base-index: 0;
+    in property <[string]> editing-token-hex;
+    in property <[int]> editing-token-r;
+    in property <[int]> editing-token-g;
+    in property <[int]> editing-token-b;
+    // Nombres legibles de los 11 tokens (orden = índice del token).
+    property <[string]> token-names: [
+        Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
+        Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
+        Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border,
+    ];
+    // Token cuyo picker está abierto/expandido (-1 = ninguno).
+    property <int> editing-open-token: -1;
+    callback theme-set-name(string);
+    callback theme-set-base(int);
+    callback theme-set-token(int, string);   // (índice de token, nuevo hex) → preview en vivo
+    callback theme-save();
+    callback theme-restore();
+    callback theme-cancel();
     callback set-date-format(int);
     callback set-size-format(int);
     callback set-row-density(int);
@@ -381,8 +411,8 @@ export component ConfigWindow inherits Window {
                                 gallery := Rectangle {
                                     // Geometría de las tarjetas (en una sola fuente para alto/ancho).
                                     property <length> gap: 8px;
-                                    property <length> card-w: 150px;
-                                    property <length> card-h: 86px;
+                                    property <length> card-w: 168px;
+                                    property <length> card-h: 116px;
                                     // Columnas que entran en el ancho actual (mínimo 1).
                                     property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
                                     property <int> rows: ceil(root.theme-cards.length / self.cols);
@@ -402,7 +432,7 @@ export component ConfigWindow inherits Window {
                                         border-color: tc.active ? Theme.accent : Theme.border;
                                         VerticalLayout {
                                             padding: 8px;
-                                            spacing: 7px;
+                                            spacing: 6px;
                                             HorizontalLayout {
                                                 spacing: 4px;
                                                 Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-accent; }
@@ -443,10 +473,191 @@ export component ConfigWindow inherits Window {
                                                     }
                                                 }
                                             }
+                                            // Espaciador para empujar la fila de botones al fondo de la tarjeta.
+                                            Rectangle { vertical-stretch: 1; }
                                         }
+                                        // TouchArea de toda la tarjeta (aplica el tema al hacer clic). Va ANTES de la
+                                        // fila de botones para que esos botones, declarados después, queden por encima
+                                        // y capturen su propio clic sin disparar también el "aplicar tema".
                                         TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => { root.set-theme(tc.id); }
+                                        }
+                                        // Fila de acciones por tema, anclada al fondo. Builtin → "Personalizar";
+                                        // de usuario → "Editar" + "Eliminar". Cada botón usa su propio TouchArea.
+                                        HorizontalLayout {
+                                            x: 8px;
+                                            y: parent.height - self.height - 8px;
+                                            width: parent.width - 16px;
+                                            height: 22px;
+                                            spacing: 4px;
+                                            // Botón "Personalizar" (solo builtin).
+                                            if tc.is-builtin: Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: custom-touch.has-hover ? Theme.accent : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: Tr.theme-customize;
+                                                    color: custom-touch.has-hover ? white : Theme.text;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                custom-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-customize(tc.id); }
+                                                }
+                                            }
+                                            // Botones "Editar" + "Eliminar" (solo temas de usuario).
+                                            if !tc.is-builtin: Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: edit-touch.has-hover ? Theme.accent : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: Tr.theme-edit;
+                                                    color: edit-touch.has-hover ? white : Theme.text;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                edit-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-edit(tc.id); }
+                                                }
+                                            }
+                                            if !tc.is-builtin: Rectangle {
+                                                width: 26px;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: del-touch.has-hover ? Theme.error : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: "🗑";
+                                                    color: del-touch.has-hover ? white : Theme.text-dim;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                del-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-delete(tc.id); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // ---------- Editor de tema (se muestra cuando hay un tema en edición) ----------
+                                // Vista expandible debajo de la galería: nombre + base + lista de los 11 tokens
+                                // (muestra de color + nombre + hex; clic abre el ColorPicker para ESE token, cuyo
+                                // `changed(hex)` dispara el preview en vivo en TODA la app). Botones guardar/
+                                // restaurar/cancelar al final.
+                                if root.editing-active: Rectangle {
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.accent;
+                                    background: Theme.row-bg;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 8px;
+                                        // Nombre del tema.
+                                        Field {
+                                            label: Tr.theme-name;
+                                            LineEdit {
+                                                width: root.ctl-w;
+                                                text: root.editing-name;
+                                                edited(t) => { root.theme-set-name(t); }
+                                            }
+                                        }
+                                        // Base oscuro/claro.
+                                        Field {
+                                            label: Tr.theme-base;
+                                            ThemeCombo {
+                                                width: root.ctl-w;
+                                                model: [Tr.theme-base-dark, Tr.theme-base-light];
+                                                current-index: root.editing-base-index;
+                                                selected => { root.theme-set-base(self.current-index); }
+                                            }
+                                        }
+                                        // Los 11 tokens. Cada fila: muestra + nombre + hex; clic abre/cierra el picker.
+                                        for tname[ti] in root.token-names: VerticalLayout {
+                                            spacing: 4px;
+                                            Rectangle {
+                                                height: 30px;
+                                                border-radius: 4px;
+                                                background: tok-touch.has-hover ? Theme.row-alt-bg : transparent;
+                                                HorizontalLayout {
+                                                    padding-left: 4px;
+                                                    padding-right: 4px;
+                                                    spacing: 8px;
+                                                    // Muestra del color actual del token.
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 18px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        border-radius: 3px;
+                                                        border-width: 1px;
+                                                        border-color: Theme.border;
+                                                        background: ti < root.editing-token-r.length
+                                                            ? rgb(root.editing-token-r[ti], root.editing-token-g[ti], root.editing-token-b[ti])
+                                                            : black;
+                                                    }
+                                                    Text {
+                                                        text: tname;
+                                                        color: Theme.text;
+                                                        font-size: 12px;
+                                                        vertical-alignment: center;
+                                                        horizontal-stretch: 1;
+                                                    }
+                                                    Text {
+                                                        text: ti < root.editing-token-hex.length ? root.editing-token-hex[ti] : "";
+                                                        color: Theme.text-dim;
+                                                        font-size: 12px;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                                tok-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.editing-open-token = root.editing-open-token == ti ? -1 : ti;
+                                                        // Al abrir, inicializar el picker con el color actual del token.
+                                                        if (root.editing-open-token == ti) {
+                                                            tok-picker.load-rgb(
+                                                                root.editing-token-r[ti],
+                                                                root.editing-token-g[ti],
+                                                                root.editing-token-b[ti]);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Picker para este token (visible cuando es el token abierto).
+                                            tok-picker := ColorPicker {
+                                                visible: root.editing-open-token == ti;
+                                                changed(hex) => { root.theme-set-token(ti, hex); }
+                                            }
+                                        }
+                                        // Acciones del editor.
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-top: 4px;
+                                            CfgBtn {
+                                                label: Tr.theme-save;
+                                                clicked => { root.editing-open-token = -1; root.theme-save(); }
+                                            }
+                                            CfgBtn {
+                                                label: Tr.theme-restore;
+                                                clicked => { root.theme-restore(); }
+                                            }
+                                            CfgBtn {
+                                                label: Tr.theme-cancel;
+                                                clicked => { root.editing-open-token = -1; root.theme-cancel(); }
+                                            }
                                         }
                                     }
                                 }

@@ -13,8 +13,25 @@
 use naygo_core::config::{self, BarPosition, OpsMode, Settings};
 use naygo_core::i18n::{I18n, LangId};
 use naygo_core::keymap::{Action, Chord, KeyCode, KeyMap};
-use naygo_core::theme::{Theme, ThemeCatalog, ThemeId};
+use naygo_core::theme::{
+    is_builtin_id, theme_slug, Theme, ThemeBase, ThemeCatalog, ThemeColor, ThemeId,
+};
 use std::path::PathBuf;
+
+/// Cantidad de tokens de color editables de un tema (orden fijo, ver `set_token_color`).
+pub const THEME_TOKEN_COUNT: usize = 11;
+
+/// Estado del tema que se está editando (duplicado de un builtin o de uno de usuario). El editor
+/// muta este `Theme` en memoria, aplica el preview en vivo, y al guardar lo escribe a disco.
+struct ThemeEditState {
+    /// El tema en construcción (sus 11 tokens + nombre + base se editan en vivo).
+    theme: Theme,
+    /// El tema activo ANTES de entrar al editor; al cancelar se re-aplica para revertir el preview.
+    prev_theme_id: ThemeId,
+    /// Si se duplicó de un builtin, su id (para "Restaurar de fábrica"). `None` si nació de un
+    /// tema de usuario (no hay fábrica a la que volver).
+    src_builtin_id: Option<String>,
+}
 
 /// Estado de configuración de la app: ajustes + idioma + temas + atajos.
 pub struct ConfigCtrl {
@@ -23,6 +40,8 @@ pub struct ConfigCtrl {
     pub themes: ThemeCatalog,
     pub keymap: KeyMap,
     pub config_dir: PathBuf,
+    /// Tema en edición (editor de temas). `None` mientras no haya un editor abierto.
+    editing: Option<ThemeEditState>,
 }
 
 impl ConfigCtrl {
@@ -52,6 +71,7 @@ impl ConfigCtrl {
             themes,
             keymap,
             config_dir,
+            editing: None,
         }
     }
 
@@ -106,6 +126,267 @@ impl ConfigCtrl {
         }
         self.settings.theme = id;
         true
+    }
+
+    // --- Editor de temas (galería de Apariencia) ---
+    //
+    // Los 11 tokens de color de un `Theme` se exponen por un índice estable 0..11. El ORDEN ES
+    // FIJO y debe coincidir entre `editing_token_hex` y `set_token_color` (y con la lista de la
+    // UI): 0=accent, 1=panel_bg, 2=row_bg, 3=row_alt_bg, 4=text, 5=text_dim, 6=selection_bg,
+    // 7=active_bar, 8=error, 9=highlight, 10=border.
+
+    /// Lee el token `idx` (0..11) de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
+    fn token_of(theme: &Theme, idx: usize) -> ThemeColor {
+        match idx {
+            0 => theme.accent,
+            1 => theme.panel_bg,
+            2 => theme.row_bg,
+            3 => theme.row_alt_bg,
+            4 => theme.text,
+            5 => theme.text_dim,
+            6 => theme.selection_bg,
+            7 => theme.active_bar,
+            8 => theme.error,
+            9 => theme.highlight,
+            10 => theme.border,
+            _ => theme.accent,
+        }
+    }
+
+    /// Escribe el token `idx` (0..11) de un tema. Fuera de rango → no hace nada.
+    fn set_token_of(theme: &mut Theme, idx: usize, c: ThemeColor) {
+        match idx {
+            0 => theme.accent = c,
+            1 => theme.panel_bg = c,
+            2 => theme.row_bg = c,
+            3 => theme.row_alt_bg = c,
+            4 => theme.text = c,
+            5 => theme.text_dim = c,
+            6 => theme.selection_bg = c,
+            7 => theme.active_bar = c,
+            8 => theme.error = c,
+            9 => theme.highlight = c,
+            10 => theme.border = c,
+            _ => {}
+        }
+    }
+
+    /// Genera un id-slug único a partir de `name`: el slug base, y si ya existe en el catálogo,
+    /// le agrega un sufijo -2, -3, … hasta encontrar uno libre.
+    fn unique_slug(&self, name: &str) -> String {
+        let base = theme_slug(name);
+        let taken = |id: &str| self.themes.available().iter().any(|t| t.as_str() == id);
+        if !taken(&base) {
+            return base;
+        }
+        let mut n = 2;
+        loop {
+            let cand = format!("{base}-{n}");
+            if !taken(&cand) {
+                return cand;
+            }
+            n += 1;
+        }
+    }
+
+    /// Duplica el tema `src_id` para entrar al editor: clona su paleta, le pone nombre
+    /// "<nombre> (copia)" y un id-slug único, recuerda el tema activo actual (para revertir al
+    /// cancelar) y, si `src_id` es de fábrica, lo recuerda para "Restaurar de fábrica". NO guarda
+    /// nada todavía: el tema queda "en edición". Devuelve el id nuevo (editable).
+    pub fn duplicate_theme(&mut self, src_id: &str) -> String {
+        let src = ThemeId::new(src_id);
+        let mut theme = self.themes.get(&src).clone();
+        theme.name = format!("{} (copia)", theme.name);
+        let new_id = self.unique_slug(&theme.name);
+        let src_builtin_id = if is_builtin_id(src_id) {
+            Some(src_id.to_string())
+        } else {
+            None
+        };
+        self.editing = Some(ThemeEditState {
+            theme,
+            prev_theme_id: self.settings.theme.clone(),
+            src_builtin_id,
+        });
+        new_id
+    }
+
+    /// Abre el editor sobre un tema de USUARIO existente (botón "Editar"): carga su paleta tal
+    /// cual para editarla en sitio (mismo id, se sobrescribe al guardar). Para builtins no hace
+    /// nada (esos se duplican, no se editan). Devuelve el id editado, o vacío si no aplica.
+    pub fn edit_user_theme(&mut self, id: &str) -> String {
+        if is_builtin_id(id) {
+            return String::new();
+        }
+        let tid = ThemeId::new(id);
+        if !self.themes.available().iter().any(|t| t.as_str() == id) {
+            return String::new();
+        }
+        let theme = self.themes.get(&tid).clone();
+        self.editing = Some(ThemeEditState {
+            theme,
+            prev_theme_id: self.settings.theme.clone(),
+            src_builtin_id: None,
+        });
+        id.to_string()
+    }
+
+    /// ¿Hay un tema en edición ahora mismo?
+    pub fn is_editing_theme(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    /// Nombre del tema en edición (vacío si no hay editor abierto).
+    pub fn editing_name(&self) -> String {
+        self.editing
+            .as_ref()
+            .map(|e| e.theme.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// Cambia el nombre del tema en edición (no toca disco).
+    pub fn set_editing_name(&mut self, name: String) {
+        if let Some(e) = self.editing.as_mut() {
+            e.theme.name = name;
+        }
+    }
+
+    /// Base del tema en edición como índice de combo: 0=Oscuro, 1=Claro. Sin editor → 0.
+    pub fn editing_base_index(&self) -> i32 {
+        match self.editing.as_ref().map(|e| e.theme.base) {
+            Some(ThemeBase::Light) => 1,
+            _ => 0,
+        }
+    }
+
+    /// Fija la base del tema en edición desde un índice de combo (1=Claro, resto=Oscuro). La base
+    /// solo decide cómo se rellenan los campos faltantes al deserializar; no re-aplica preview.
+    pub fn set_editing_base(&mut self, idx: i32) {
+        if let Some(e) = self.editing.as_mut() {
+            e.theme.base = if idx == 1 {
+                ThemeBase::Light
+            } else {
+                ThemeBase::Dark
+            };
+        }
+    }
+
+    /// Hex "#rrggbb" del token `idx` (0..11) del tema en edición. Sin editor → "#000000".
+    pub fn editing_token_hex(&self, idx: usize) -> String {
+        self.editing
+            .as_ref()
+            .map(|e| Self::token_of(&e.theme, idx).to_hex())
+            .unwrap_or_else(|| "#000000".to_string())
+    }
+
+    /// Componentes (r, g, b) del token `idx` del tema en edición. Útil para inicializar el picker
+    /// (que toma r/g/b enteros, no parsea hex). Sin editor → (0, 0, 0).
+    pub fn editing_token_rgb(&self, idx: usize) -> (u8, u8, u8) {
+        self.editing
+            .as_ref()
+            .map(|e| {
+                let c = Self::token_of(&e.theme, idx);
+                (c.r, c.g, c.b)
+            })
+            .unwrap_or((0, 0, 0))
+    }
+
+    /// Fija el token `idx` (0..11) del tema en edición desde un hex "#rrggbb". Si el hex es
+    /// inválido o no hay editor, no hace nada. El llamador (main) re-aplica el preview en vivo
+    /// leyendo `editing_theme()` tras esta llamada.
+    pub fn set_token_color(&mut self, idx: usize, hex: &str) {
+        if let Some(c) = ThemeColor::from_hex(hex) {
+            if let Some(e) = self.editing.as_mut() {
+                Self::set_token_of(&mut e.theme, idx, c);
+            }
+        }
+    }
+
+    /// El tema en edición (para aplicar el preview en vivo con `theme_apply::apply`). `None` si no
+    /// hay editor abierto.
+    pub fn editing_theme(&self) -> Option<&Theme> {
+        self.editing.as_ref().map(|e| &e.theme)
+    }
+
+    /// El id del tema activo ANTES de abrir el editor (para revertir el preview al cancelar).
+    /// `None` si no hay editor abierto.
+    pub fn editing_prev_theme_id(&self) -> Option<ThemeId> {
+        self.editing.as_ref().map(|e| e.prev_theme_id.clone())
+    }
+
+    /// Guarda el tema en edición: lo serializa a `<config>/themes/<slug>.json`, recarga el
+    /// catálogo, lo deja activo y persiste settings. Devuelve el id guardado, o `None` si no había
+    /// editor o falló la escritura. Limpia el estado de edición.
+    pub fn save_editing_theme(&mut self) -> Option<ThemeId> {
+        let state = self.editing.take()?;
+        let theme = state.theme;
+        let id = self.unique_slug(&theme.name);
+        let theme_dir = self.config_dir.join("themes");
+        if std::fs::create_dir_all(&theme_dir).is_err() {
+            return None;
+        }
+        let path = theme_dir.join(format!("{id}.json"));
+        let json = serde_json::to_string_pretty(&theme).ok()?;
+        if std::fs::write(&path, json).is_err() {
+            return None;
+        }
+        let new_id = ThemeId::new(&id);
+        self.themes = ThemeCatalog::load(&self.config_dir, &new_id);
+        self.settings.theme = new_id.clone();
+        self.save();
+        Some(new_id)
+    }
+
+    /// Cancela el editor: descarta el tema en edición y devuelve el id del tema que estaba activo
+    /// antes (para que el llamador re-aplique ese tema y revierta el preview). `None` si no había
+    /// editor abierto.
+    pub fn cancel_editing(&mut self) -> Option<ThemeId> {
+        self.editing.take().map(|e| e.prev_theme_id)
+    }
+
+    /// Restaura los 11 tokens del tema en edición a los del builtin del que se duplicó (botón
+    /// "Restaurar de fábrica"). Conserva el nombre/base actuales del editor. No hace nada si el
+    /// tema en edición no proviene de un builtin. El llamador re-aplica el preview tras esto.
+    pub fn restore_factory_editing(&mut self) {
+        let Some(state) = self.editing.as_mut() else {
+            return;
+        };
+        let Some(src_id) = state.src_builtin_id.clone() else {
+            return;
+        };
+        let factory = self.themes.get(&ThemeId::new(&src_id)).clone();
+        let e = self.editing.as_mut().expect("editing recién comprobado");
+        e.theme.accent = factory.accent;
+        e.theme.panel_bg = factory.panel_bg;
+        e.theme.row_bg = factory.row_bg;
+        e.theme.row_alt_bg = factory.row_alt_bg;
+        e.theme.text = factory.text;
+        e.theme.text_dim = factory.text_dim;
+        e.theme.selection_bg = factory.selection_bg;
+        e.theme.active_bar = factory.active_bar;
+        e.theme.error = factory.error;
+        e.theme.highlight = factory.highlight;
+        e.theme.border = factory.border;
+        e.theme.base = factory.base;
+    }
+
+    /// Borra un tema de USUARIO: elimina `<config>/themes/<id>.json`, recarga el catálogo, y si era
+    /// el activo cae al default. Para builtins no hace nada (no son borrables). Devuelve `true` si
+    /// borró algo.
+    pub fn delete_user_theme(&mut self, id: &str) -> bool {
+        if is_builtin_id(id) {
+            return false;
+        }
+        let path = self.config_dir.join("themes").join(format!("{id}.json"));
+        let removed = std::fs::remove_file(&path).is_ok();
+        // Recargar el catálogo (refleja el borrado) y, si el borrado era el activo, caer al default.
+        let active = self.settings.theme.clone();
+        self.themes = ThemeCatalog::load(&self.config_dir, &active);
+        if active.as_str() == id {
+            self.settings.theme = ThemeCatalog::default_id();
+            self.save();
+        }
+        removed
     }
 
     // --- Setters de ajustes (cada uno persiste). Los usa la ventana de configuración. ---
@@ -670,6 +951,131 @@ mod tests {
         // Copy debe estar y traer su chord por defecto (Ctrl+C).
         let copy = rows.iter().find(|(k, _, _)| k == "Copy").unwrap();
         assert_eq!(copy.2, "Ctrl+C");
+    }
+
+    #[test]
+    fn duplicar_builtin_entra_en_edicion_sin_guardar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        let before = c.themes.available().len();
+        let new_id = c.duplicate_theme("dark-blue");
+        // El nuevo id es un slug nuevo (no colisiona) y aún NO está en el catálogo (no se guardó).
+        assert!(!new_id.is_empty());
+        assert!(c.is_editing_theme());
+        assert_eq!(c.themes.available().len(), before, "no debe guardarse aún");
+        // Nombre = "<orig> (copia)".
+        assert!(c.editing_name().ends_with("(copia)"));
+    }
+
+    #[test]
+    fn editar_token_cambia_el_tema_en_edicion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        c.duplicate_theme("dark-blue");
+        // accent = token 0.
+        c.set_token_color(0, "#abcdef");
+        assert_eq!(c.editing_token_hex(0), "#abcdef");
+        assert_eq!(c.editing_token_rgb(0), (0xab, 0xcd, 0xef));
+        // Hex inválido: no cambia nada.
+        c.set_token_color(0, "no-es-hex");
+        assert_eq!(c.editing_token_hex(0), "#abcdef");
+        // El tema en edición refleja el cambio en su campo accent.
+        assert_eq!(c.editing_theme().unwrap().accent.to_hex(), "#abcdef");
+    }
+
+    #[test]
+    fn guardar_tema_escribe_json_y_lo_activa() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let saved_id;
+        {
+            let mut c = ConfigCtrl::new(dir.clone());
+            c.duplicate_theme("dark-blue");
+            c.set_editing_name("Mi Tema".into());
+            c.set_token_color(0, "#112233"); // accent
+            let id = c.save_editing_theme().expect("guarda");
+            saved_id = id.as_str().to_string();
+            assert!(!c.is_editing_theme(), "el editor se cierra al guardar");
+            // Quedó activo y en el catálogo.
+            assert_eq!(c.settings.theme.as_str(), saved_id);
+            assert!(c.themes.available().iter().any(|t| t.as_str() == saved_id));
+            // El archivo existe.
+            assert!(dir.join("themes").join(format!("{saved_id}.json")).exists());
+        }
+        // Reabrir: el tema persiste con su color editado.
+        let c2 = ConfigCtrl::new(dir);
+        let t = c2.themes.get(&ThemeId::new(&saved_id));
+        assert_eq!(t.accent.to_hex(), "#112233");
+        assert_eq!(t.name, "Mi Tema");
+    }
+
+    #[test]
+    fn cancelar_devuelve_el_tema_previo_y_descarta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        c.set_theme(ThemeId::new("winxp"));
+        c.duplicate_theme("dark-blue");
+        c.set_token_color(0, "#ffffff");
+        let prev = c.cancel_editing().expect("hay editor");
+        assert_eq!(prev.as_str(), "winxp", "vuelve al tema previo");
+        assert!(!c.is_editing_theme());
+    }
+
+    #[test]
+    fn restaurar_de_fabrica_resetea_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        let orig_accent = c.themes.get(&ThemeId::new("dark-blue")).accent.to_hex();
+        c.duplicate_theme("dark-blue");
+        c.set_token_color(0, "#000000");
+        assert_eq!(c.editing_token_hex(0), "#000000");
+        c.restore_factory_editing();
+        assert_eq!(c.editing_token_hex(0), orig_accent, "vuelve al accent de fábrica");
+    }
+
+    #[test]
+    fn borrar_tema_de_usuario_y_no_builtin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut c = ConfigCtrl::new(dir.clone());
+        // Crear un tema de usuario guardándolo.
+        c.duplicate_theme("dark-blue");
+        c.set_editing_name("Borrame".into());
+        let id = c.save_editing_theme().unwrap();
+        let id_str = id.as_str().to_string();
+        assert!(c.themes.available().iter().any(|t| t.as_str() == id_str));
+        // Era el activo (save lo dejó activo) → al borrar cae al default.
+        assert!(c.delete_user_theme(&id_str));
+        assert!(!c.themes.available().iter().any(|t| t.as_str() == id_str));
+        assert_eq!(c.settings.theme, ThemeCatalog::default_id());
+        // Un builtin no se borra.
+        assert!(!c.delete_user_theme("dark-blue"));
+        assert!(c.themes.available().iter().any(|t| t.as_str() == "dark-blue"));
+    }
+
+    #[test]
+    fn editar_builtin_no_abre_editor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        assert_eq!(c.edit_user_theme("dark-blue"), "");
+        assert!(!c.is_editing_theme());
+    }
+
+    #[test]
+    fn slug_unico_evita_colision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut c = ConfigCtrl::new(dir);
+        // Guardar dos temas con el mismo nombre → ids distintos (sufijo -2).
+        c.duplicate_theme("dark-blue");
+        c.set_editing_name("Repe".into());
+        let a = c.save_editing_theme().unwrap();
+        c.duplicate_theme("dark-blue");
+        c.set_editing_name("Repe".into());
+        let b = c.save_editing_theme().unwrap();
+        assert_ne!(a.as_str(), b.as_str());
+        assert_eq!(a.as_str(), "repe");
+        assert_eq!(b.as_str(), "repe-2");
     }
 
     #[test]
