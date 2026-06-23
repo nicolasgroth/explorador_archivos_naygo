@@ -624,21 +624,24 @@ export component ConfigWindow inherits Window {
                                                 }
                                                 tok-touch := TouchArea {
                                                     mouse-cursor: pointer;
+                                                    // Solo alterna qué token está abierto (uno a la vez). El color inicial
+                                                    // NO se setea aquí de forma imperativa: el ColorPicker es condicional
+                                                    // (`if` abajo), así que al hacer clic todavía no existe. Arranca con el
+                                                    // color del token por DATA-BINDING (init-r/g/b enlazados al modelo).
                                                     clicked => {
                                                         root.editing-open-token = root.editing-open-token == ti ? -1 : ti;
-                                                        // Al abrir, inicializar el picker con el color actual del token.
-                                                        if (root.editing-open-token == ti) {
-                                                            tok-picker.load-rgb(
-                                                                root.editing-token-r[ti],
-                                                                root.editing-token-g[ti],
-                                                                root.editing-token-b[ti]);
-                                                        }
                                                     }
                                                 }
                                             }
-                                            // Picker para este token (visible cuando es el token abierto).
-                                            tok-picker := ColorPicker {
-                                                visible: root.editing-open-token == ti;
+                                            // Picker para este token. Condicional: SOLO existe en el árbol cuando este token
+                                            // está abierto. Con `if` (en vez de `visible:`) el picker no reserva alto al estar
+                                            // cerrado → las demás filas quedan delgadas (~30px), sin huecos. Queda dentro del
+                                            // VerticalLayout de ESTE token, debajo de la fila, así se despliega bajo ella.
+                                            // El color inicial entra por binding (init-r/g/b ← modelo del token).
+                                            if root.editing-open-token == ti: ColorPicker {
+                                                init-r: ti < root.editing-token-r.length ? root.editing-token-r[ti] : 0;
+                                                init-g: ti < root.editing-token-g.length ? root.editing-token-g[ti] : 0;
+                                                init-b: ti < root.editing-token-b.length ? root.editing-token-b[ti] : 0;
                                                 standard-colors-label: Tr.theme-standard-colors;
                                                 more-colors-label: Tr.theme-more-colors;
                                                 changed(hex) => { root.theme-set-token(ti, hex); }

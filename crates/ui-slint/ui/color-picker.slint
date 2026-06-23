@@ -21,10 +21,23 @@ export component ColorPicker inherits Rectangle {
     in property <string> standard-colors-label: "Colores estándar";
     in property <string> more-colors-label: "Más colores…";
 
+    // Color inicial por DATA-BINDING (0-255 por canal). El editor de temas usa un ColorPicker
+    // condicional (`if token abierto`), así que NO puede llamar imperativamente a `load-rgb` al
+    // hacer clic (el elemento todavía no existe). En su lugar enlaza estas props al color del token;
+    // cuando el picker se construye (el `if` se vuelve true) y las props cambian, los `changed`
+    // de abajo inicializan los sliders SIN emitir `changed(hex)` (no es un cambio del usuario).
+    in property <int> init-r: 0;
+    in property <int> init-g: 0;
+    in property <int> init-b: 0;
+
     // --- Estado interno: la fuente de verdad son estos tres enteros (0-255). ---
-    property <int> r: 0;
-    property <int> g: 0;
-    property <int> b: 0;
+    // Arrancan ligados al color inicial (init-r/g/b). Es un binding de dos vías que se ROMPE en
+    // cuanto el usuario asigna r/g/b al mover un slider o escribir un campo (set-r/g/b, pick): de
+    // ahí en más mandan los enteros. Esto cubre el caso borde de un canal cuyo init sea el mismo
+    // que el default (los `changed init-*` no dispararían), sin notificar `changed(hex)`.
+    property <int> r: root.init-r;
+    property <int> g: root.init-g;
+    property <int> b: root.init-b;
     // Sección "Más colores…" plegable.
     property <bool> expanded: false;
 
@@ -67,6 +80,7 @@ export component ColorPicker inherits Rectangle {
         // Abrir directo en la sección de sliders: el usuario viene a ajustar un color concreto.
         root.expanded = true;
     }
+
     // Atajo: fija un canal acotado a 0-255 y recompone.
     function set-r(v: int) { root.r = Math.clamp(v, 0, 255); root.commit(); }
     function set-g(v: int) { root.g = Math.clamp(v, 0, 255); root.commit(); }
@@ -313,7 +327,10 @@ export component ColorPicker inherits Rectangle {
                     Text { text: "Hex"; color: Theme.text-dim; font-size: 11px; }
                     LineEdit {
                         width: 100px;
-                        text: root.hex;
+                        // Derivado de r/g/b para reflejar SIEMPRE el color vivo (incluido el inicial
+                        // por binding, antes del primer commit). `root.hex` solo se actualiza al
+                        // commitear; el display debe seguir a los sliders/init en todo momento.
+                        text: root.rgb-hex(root.r, root.g, root.b);
                         read-only: true;
                     }
                 }
