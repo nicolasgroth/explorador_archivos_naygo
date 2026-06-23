@@ -40,6 +40,28 @@ pub fn entry_extension(entry: &Entry) -> String {
         .to_ascii_lowercase()
 }
 
+/// ¿El entry debe mostrarse según los toggles de visibilidad? Puro.
+/// - oculto (atributo HIDDEN) se esconde salvo `show_hidden`.
+/// - de sistema (atributo SYSTEM) se esconde salvo `show_system`.
+/// - los que empiezan con punto se esconden si `hide_dotfiles`.
+pub fn is_visible(
+    entry: &Entry,
+    show_hidden: bool,
+    show_system: bool,
+    hide_dotfiles: bool,
+) -> bool {
+    if entry.hidden && !show_hidden {
+        return false;
+    }
+    if entry.system && !show_system {
+        return false;
+    }
+    if hide_dotfiles && entry.name.starts_with('.') {
+        return false;
+    }
+    true
+}
+
 /// `true` si `entry` pasa TODOS los filtros activos (AND). Sin filtros = pasa.
 pub fn matches(entry: &Entry, filters: &BTreeMap<ColumnKind, ColumnFilter>) -> bool {
     filters.iter().all(|(kind, f)| match_one(entry, *kind, f))
@@ -231,6 +253,32 @@ mod tests {
         assert!(matches(&entry("informe.pdf", Some(1)), &f));
         assert!(!matches(&entry("informe.txt", Some(1)), &f));
         assert!(!matches(&entry("otro.pdf", Some(1)), &f));
+    }
+
+    #[test]
+    fn visibilidad_segun_flags() {
+        use crate::fs_model::{Entry, EntryKind};
+        let mk = |name: &str, hidden: bool, system: bool| Entry {
+            name: name.to_string(),
+            path: std::path::PathBuf::from(name),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden,
+            system,
+        };
+        let normal = mk("a.txt", false, false);
+        let oculto = mk("b.txt", true, false);
+        let sis = mk("c.sys", false, true);
+        let dot = mk(".gitignore", false, false);
+        assert!(is_visible(&normal, false, false, false));
+        assert!(!is_visible(&oculto, false, false, false));
+        assert!(is_visible(&oculto, true, false, false));
+        assert!(!is_visible(&sis, true, false, false));
+        assert!(is_visible(&sis, true, true, false));
+        assert!(is_visible(&dot, true, true, false));
+        assert!(!is_visible(&dot, true, true, true));
     }
 
     #[test]
