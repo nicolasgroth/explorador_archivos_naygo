@@ -596,6 +596,7 @@
   "slint.theme.delete": "Eliminar tema",
   "slint.theme.save": "Guardar tema",
   "slint.theme.restore": "Restaurar de fábrica",
+  "slint.theme.copy_suffix": "(copia)",
   "slint.theme.more_colors": "Más colores…",
   "slint.theme.standard_colors": "Colores estándar",
   "slint.theme.name": "Nombre del tema",

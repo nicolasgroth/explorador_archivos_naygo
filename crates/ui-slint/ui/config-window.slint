@@ -639,6 +639,8 @@ export component ConfigWindow inherits Window {
                                             // Picker para este token (visible cuando es el token abierto).
                                             tok-picker := ColorPicker {
                                                 visible: root.editing-open-token == ti;
+                                                standard-colors-label: Tr.theme-standard-colors;
+                                                more-colors-label: Tr.theme-more-colors;
                                                 changed(hex) => { root.theme-set-token(ti, hex); }
                                             }
                                         }

@@ -2707,6 +2707,27 @@ impl WorkspaceCtrl {
         out
     }
 
+    /// Opciones de destino VÁLIDAS para "Mover a…" del nodo seleccionado. Parte de
+    /// `fav_group_options` y, cuando el nodo movido es un GRUPO (`is_group`), excluye los destinos
+    /// inválidos: el propio grupo y todos sus descendientes (un grupo no se mueve dentro de sí
+    /// mismo). El gid llega serializado ("0/2"); un destino `d` es inválido si `d == origen` o si
+    /// `d` es descendiente de `origen` (su ruta de índices empieza con la de `origen`). Para un
+    /// favorito (hoja) no hay restricción: cualquier grupo es destino válido.
+    pub fn fav_move_targets(&self, is_group: bool, src_gid: &str) -> Vec<(String, String)> {
+        let all = self.fav_group_options();
+        if !is_group {
+            return all;
+        }
+        let origin = str_to_group_id(src_gid);
+        all.into_iter()
+            .filter(|(_, gid)| {
+                // `starts_with` cubre también la igualdad: el propio grupo y todos sus descendientes
+                // (cuya ruta de índices empieza con la del origen) quedan excluidos como destino.
+                !str_to_group_id(gid).starts_with(&origin[..])
+            })
+            .collect()
+    }
+
     /// Ruta de nombres ("Trabajo/Sub") del grupo en `id`, o `None` si no existe / no es grupo.
     /// Sirve para mantener el estado de expansión (que se indexa por nombre, no por índice).
     fn fav_group_name_path(&self, id: &[usize]) -> Option<String> {
@@ -6244,6 +6265,53 @@ mod tests {
         c2.fav_delete_node(true, &gid, "");
         assert!(!c2.favorites.contains(&b));
         assert!(c2.favorites.contains(&a));
+    }
+
+    /// "Mover a…" no debe ofrecer mover un grupo dentro de sí mismo ni de sus descendientes.
+    #[test]
+    fn fav_move_targets_excluye_el_grupo_y_sus_descendientes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        let a = tmp.path().join("a");
+        std::fs::create_dir(&a).unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.clone(), cfg);
+        assert!(drain(&mut c));
+        // Estructura: "Trabajo" (root) con subgrupo "Sub"; y "Personal" (root) aparte.
+        c.fav_new_group("", "Trabajo");
+        let trabajo = c
+            .fav_group_options()
+            .into_iter()
+            .find(|(n, _)| n == "Trabajo")
+            .unwrap()
+            .1;
+        c.fav_new_group(&trabajo, "Sub");
+        c.fav_new_group("", "Personal");
+
+        let labels: Vec<String> = c.fav_group_options().into_iter().map(|(n, _)| n).collect();
+        assert!(labels.contains(&"Trabajo".to_string()));
+        assert!(labels.contains(&"Trabajo/Sub".to_string()));
+        assert!(labels.contains(&"Personal".to_string()));
+
+        // Mover el GRUPO "Trabajo": destinos válidos = solo "Personal" (no él mismo, no su "Sub").
+        let targets: Vec<String> = c
+            .fav_move_targets(true, &trabajo)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(!targets.contains(&"Trabajo".to_string()), "no a sí mismo");
+        assert!(
+            !targets.contains(&"Trabajo/Sub".to_string()),
+            "no a un descendiente"
+        );
+        assert!(targets.contains(&"Personal".to_string()), "sí a un hermano");
+
+        // Para una HOJA (favorito): sin restricción, cualquier grupo es destino válido.
+        let leaf_targets = c.fav_move_targets(false, "");
+        assert_eq!(
+            leaf_targets.len(),
+            3,
+            "una hoja puede ir a cualquiera de los 3 grupos"
+        );
     }
 
     /// Expandir una rama del árbol la marca expandida y, tras drenar, puebla sus hijos;

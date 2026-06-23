@@ -16,6 +16,10 @@ export component ColorPicker inherits Rectangle {
     in-out property <string> hex: "#000000";
     // Se emite con el nuevo "#rrggbb" cada vez que cambia el color.
     callback changed(string);
+    // Etiquetas traducidas: el componente es autocontenido (no importa el global `Tr`), así que el
+    // llamador pasa los textos del idioma activo. Defaults en español para verlos en el editor Slint.
+    in property <string> standard-colors-label: "Colores estándar";
+    in property <string> more-colors-label: "Más colores…";
 
     // --- Estado interno: la fuente de verdad son estos tres enteros (0-255). ---
     property <int> r: 0;
@@ -133,7 +137,7 @@ export component ColorPicker inherits Rectangle {
 
         // ---------- Colores estándar ----------
         Text {
-            text: "Colores estándar";
+            text: root.standard-colors-label;
             color: Theme.text-dim;
             font-size: 11px;
         }
@@ -190,7 +194,7 @@ export component ColorPicker inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "Más colores…";
+                    text: root.more-colors-label;
                     color: Theme.text;
                     font-size: 12px;
                     vertical-alignment: center;

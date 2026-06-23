@@ -31,6 +31,10 @@ struct ThemeEditState {
     /// Si se duplicó de un builtin, su id (para "Restaurar de fábrica"). `None` si nació de un
     /// tema de usuario (no hay fábrica a la que volver).
     src_builtin_id: Option<String>,
+    /// El id del tema de USUARIO que se está editando IN-PLACE (botón "Editar"): al guardar se
+    /// sobrescribe ese mismo `<id>.json` en vez de crear uno nuevo. `None` cuando el tema nació de
+    /// un duplicado (builtin o usuario), en cuyo caso el guardado asigna un id-slug nuevo y único.
+    origin_id: Option<ThemeId>,
 }
 
 /// Estado de configuración de la app: ajustes + idioma + temas + atajos.
@@ -196,7 +200,9 @@ impl ConfigCtrl {
     pub fn duplicate_theme(&mut self, src_id: &str) -> String {
         let src = ThemeId::new(src_id);
         let mut theme = self.themes.get(&src).clone();
-        theme.name = format!("{} (copia)", theme.name);
+        // Sufijo traducido ("(copia)" / "(copy)"): nada hardcoded para que el nombre del duplicado
+        // salga en el idioma activo (en inglés no debe quedar "Dark Blue (copia)").
+        theme.name = format!("{} {}", theme.name, self.t("slint.theme.copy_suffix"));
         let new_id = self.unique_slug(&theme.name);
         let src_builtin_id = if is_builtin_id(src_id) {
             Some(src_id.to_string())
@@ -207,6 +213,8 @@ impl ConfigCtrl {
             theme,
             prev_theme_id: self.settings.theme.clone(),
             src_builtin_id,
+            // Un duplicado siempre nace como tema nuevo: el guardado le asigna un id-slug único.
+            origin_id: None,
         });
         new_id
     }
@@ -227,6 +235,8 @@ impl ConfigCtrl {
             theme,
             prev_theme_id: self.settings.theme.clone(),
             src_builtin_id: None,
+            // Edición in-place: al guardar se sobrescribe ESTE id (no se crea un .json nuevo).
+            origin_id: Some(tid),
         });
         id.to_string()
     }
@@ -308,19 +318,32 @@ impl ConfigCtrl {
         self.editing.as_ref().map(|e| &e.theme)
     }
 
-    /// El id del tema activo ANTES de abrir el editor (para revertir el preview al cancelar).
-    /// `None` si no hay editor abierto.
-    pub fn editing_prev_theme_id(&self) -> Option<ThemeId> {
-        self.editing.as_ref().map(|e| e.prev_theme_id.clone())
-    }
-
     /// Guarda el tema en edición: lo serializa a `<config>/themes/<slug>.json`, recarga el
     /// catálogo, lo deja activo y persiste settings. Devuelve el id guardado, o `None` si no había
     /// editor o falló la escritura. Limpia el estado de edición.
     pub fn save_editing_theme(&mut self) -> Option<ThemeId> {
         let state = self.editing.take()?;
         let theme = state.theme;
-        let id = self.unique_slug(&theme.name);
+        // Resolver el id de destino según el origen del editor:
+        //  - Edición IN-PLACE de un tema de usuario (botón "Editar"): se sobrescribe ese mismo id.
+        //    Si el usuario cambió el nombre y el slug ya no coincide, se asigna un slug nuevo
+        //    (único, sin pisar a otro tema) y se borra el `<id viejo>.json` para no dejar huérfanos.
+        //  - Tema nuevo (duplicado): siempre un id-slug único.
+        let new_slug = theme_slug(&theme.name);
+        let (id, old_to_delete): (String, Option<String>) = match &state.origin_id {
+            Some(origin) if origin.as_str() == new_slug => {
+                // Mismo slug → sobrescribir en sitio, sin borrar nada.
+                (origin.as_str().to_string(), None)
+            }
+            Some(origin) => {
+                // Renombrado: id nuevo único + borrar el .json del id viejo.
+                (
+                    self.unique_slug(&theme.name),
+                    Some(origin.as_str().to_string()),
+                )
+            }
+            None => (self.unique_slug(&theme.name), None),
+        };
         let theme_dir = self.config_dir.join("themes");
         if std::fs::create_dir_all(&theme_dir).is_err() {
             return None;
@@ -329,6 +352,11 @@ impl ConfigCtrl {
         let json = serde_json::to_string_pretty(&theme).ok()?;
         if std::fs::write(&path, json).is_err() {
             return None;
+        }
+        // Borrar el .json del id viejo tras escribir el nuevo (ignorando el error, igual que
+        // `delete_user_theme` con `.is_ok()`: si ya no está, no pasa nada).
+        if let Some(old) = old_to_delete {
+            let _ = std::fs::remove_file(theme_dir.join(format!("{old}.json")));
         }
         let new_id = ThemeId::new(&id);
         self.themes = ThemeCatalog::load(&self.config_dir, &new_id);
@@ -1030,7 +1058,11 @@ mod tests {
         c.set_token_color(0, "#000000");
         assert_eq!(c.editing_token_hex(0), "#000000");
         c.restore_factory_editing();
-        assert_eq!(c.editing_token_hex(0), orig_accent, "vuelve al accent de fábrica");
+        assert_eq!(
+            c.editing_token_hex(0),
+            orig_accent,
+            "vuelve al accent de fábrica"
+        );
     }
 
     #[test]
@@ -1050,7 +1082,80 @@ mod tests {
         assert_eq!(c.settings.theme, ThemeCatalog::default_id());
         // Un builtin no se borra.
         assert!(!c.delete_user_theme("dark-blue"));
-        assert!(c.themes.available().iter().any(|t| t.as_str() == "dark-blue"));
+        assert!(c
+            .themes
+            .available()
+            .iter()
+            .any(|t| t.as_str() == "dark-blue"));
+    }
+
+    #[test]
+    fn editar_user_theme_sin_renombrar_sobrescribe_el_mismo_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut c = ConfigCtrl::new(dir.clone());
+        // Crear un tema de usuario.
+        c.duplicate_theme("dark-blue");
+        c.set_editing_name("Mi Tema".into());
+        let id = c.save_editing_theme().unwrap();
+        let id_str = id.as_str().to_string();
+        let themes_dir = dir.join("themes");
+        // Editar IN-PLACE ese tema, cambiar un color, NO renombrar, guardar.
+        assert_eq!(
+            c.edit_user_theme(&id_str),
+            id_str,
+            "abre el editor con su id"
+        );
+        c.set_token_color(0, "#abcdef"); // accent
+        let saved = c.save_editing_theme().unwrap();
+        // Mismo id: NO se creó "<id>-2".
+        assert_eq!(saved.as_str(), id_str, "reusa el mismo id (no duplica)");
+        assert!(themes_dir.join(format!("{id_str}.json")).exists());
+        assert!(
+            !themes_dir.join(format!("{id_str}-2.json")).exists(),
+            "no debe crear un .json huérfano con sufijo -2"
+        );
+        // Solo hay UN .json de usuario en el directorio.
+        let user_jsons = std::fs::read_dir(&themes_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count();
+        assert_eq!(user_jsons, 1, "exactamente un tema de usuario en disco");
+        // El contenido se actualizó.
+        let reread = c.themes.get(&ThemeId::new(&id_str));
+        assert_eq!(reread.accent.to_hex(), "#abcdef");
+    }
+
+    #[test]
+    fn editar_user_theme_y_renombrar_borra_el_json_viejo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut c = ConfigCtrl::new(dir.clone());
+        c.duplicate_theme("dark-blue");
+        c.set_editing_name("Original".into());
+        let old = c.save_editing_theme().unwrap();
+        let old_str = old.as_str().to_string();
+        let themes_dir = dir.join("themes");
+        assert!(themes_dir.join(format!("{old_str}.json")).exists());
+        // Editar y RENOMBRAR (el slug cambia).
+        c.edit_user_theme(&old_str);
+        c.set_editing_name("Renombrado".into());
+        let new = c.save_editing_theme().unwrap();
+        assert_ne!(new.as_str(), old_str, "el id nuevo refleja el nombre nuevo");
+        // El .json viejo se borró; el nuevo existe.
+        assert!(
+            !themes_dir.join(format!("{old_str}.json")).exists(),
+            "el .json del id viejo debe borrarse"
+        );
+        assert!(themes_dir.join(format!("{}.json", new.as_str())).exists());
+        // El catálogo ya no ofrece el id viejo.
+        assert!(!c.themes.available().iter().any(|t| t.as_str() == old_str));
+        assert!(c
+            .themes
+            .available()
+            .iter()
+            .any(|t| t.as_str() == new.as_str()));
     }
 
     #[test]

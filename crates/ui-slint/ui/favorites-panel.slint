@@ -35,6 +35,10 @@ export component FavoritesPanel inherits Rectangle {
     in property <[FavTreeRow]> fav-tree;       // árbol de favoritos aplanado (grupos + hojas)
     in property <[NavRow]> recents;            // carpetas recientes (sección inferior)
     in property <[PathSeg]> group-options;     // grupos para "Mover a…" (label=ruta, path=group-id)
+    // Destinos VÁLIDOS para "Mover a…" del nodo seleccionado (ya filtrado por Rust: sin el propio
+    // grupo ni sus descendientes). Se rellena al abrir el submenú vía `request-move-targets`.
+    in property <[PathSeg]> move-targets;
+    callback request-move-targets(bool, string); // (is-group, group-id) al abrir "Mover a…"
     callback navigate(string);                 // ruta a la que ir (favorito o reciente)
     callback toggle-expand(string);            // expandir/colapsar un grupo por su ruta de nombres
     callback new-group(string, string);        // crear grupo: (parent-group-id, nombre)
@@ -288,10 +292,16 @@ export component FavoritesPanel inherits Rectangle {
                     root.close-menu();
                 }
             }
-            // Mover a… (despliega el submenú de grupos + Raíz).
+            // Mover a… (despliega el submenú de grupos + Raíz). Al abrirlo se pide a Rust la lista
+            // de destinos válidos para ESTE nodo (excluye el propio grupo y sus descendientes).
             FavMenuItem {
                 label: Tr.fav-move-to;
-                clicked => { root.submenu-move = !root.submenu-move; }
+                clicked => {
+                    root.submenu-move = !root.submenu-move;
+                    if root.submenu-move {
+                        root.request-move-targets(root.menu-is-group, root.menu-group-id);
+                    }
+                }
             }
         }
     }
@@ -316,8 +326,8 @@ export component FavoritesPanel inherits Rectangle {
                     root.close-menu();
                 }
             }
-            // Cada grupo existente (label = ruta de nombres; path = group-id serializado).
-            for g[i] in root.group-options: FavMenuItem {
+            // Cada grupo destino VÁLIDO (label = ruta de nombres; path = group-id serializado).
+            for g[i] in root.move-targets: FavMenuItem {
                 label: g.label;
                 clicked => {
                     root.move-node(root.menu-is-group, root.menu-group-id, root.menu-path, g.path);

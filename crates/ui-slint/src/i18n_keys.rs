@@ -339,6 +339,7 @@ where
     tr.set_theme_delete(c.t("slint.theme.delete").into());
     tr.set_theme_save(c.t("slint.theme.save").into());
     tr.set_theme_restore(c.t("slint.theme.restore").into());
+    tr.set_theme_copy_suffix(c.t("slint.theme.copy_suffix").into());
     tr.set_theme_more_colors(c.t("slint.theme.more_colors").into());
     tr.set_theme_standard_colors(c.t("slint.theme.standard_colors").into());
     tr.set_theme_name(c.t("slint.theme.name").into());

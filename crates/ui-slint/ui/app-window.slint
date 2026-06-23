@@ -818,6 +818,11 @@ export component AppWindow inherits Window {
     // Árbol de favoritos editable (panel + menú ▾ del toolbar):
     in property <[FavTreeRow]> fav-tree;          // árbol de favoritos aplanado (menú ▾ del toolbar)
     in property <[PathSeg]> fav-group-options;    // grupos para "Mover a…" (label=ruta, path=group-id)
+    // Destinos VÁLIDOS para "Mover a…" del nodo seleccionado: igual que fav-group-options pero ya
+    // filtrado por Rust para excluir el propio grupo y sus descendientes. El panel pide recalcularlo
+    // (fav-build-move-targets) justo al abrir el submenú con el nodo que se va a mover.
+    in property <[PathSeg]> fav-move-targets;
+    callback fav-build-move-targets(bool, string); // (is-group, src-group-id) → rellena fav-move-targets
     callback fav-toggle-expand(string);           // expandir/colapsar un grupo (ruta de nombres)
     callback fav-new-group(string, string);       // crear grupo: (parent-group-id, nombre)
     callback fav-rename-group(string, string);    // renombrar grupo: (group-id, nombre)
@@ -1488,11 +1493,13 @@ export component AppWindow inherits Window {
                         fav-tree: p.fav-tree;
                         recents: p.recents;
                         group-options: root.fav-group-options;
+                        move-targets: root.fav-move-targets;
                         navigate(path) => { root.nav-navigate(path); }
                         toggle-expand(np) => { root.fav-toggle-expand(np); }
                         new-group(pid, name) => { root.fav-new-group(pid, name); }
                         rename-group(gid, name) => { root.fav-rename-group(gid, name); }
                         delete-node(g, gid, path) => { root.fav-delete-node(g, gid, path); }
+                        request-move-targets(g, gid) => { root.fav-build-move-targets(g, gid); }
                         move-node(g, sgid, spath, dgid) => { root.fav-move-node(g, sgid, spath, dgid); }
                         pin-current() => { root.fav-pin-current(); }
                         focus-pane() => { root.activate(p.id); }

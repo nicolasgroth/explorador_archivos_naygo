@@ -2497,9 +2497,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let cfg_weak = cfg_win.as_weak();
         cfg_win.on_theme_cancel(move || {
-            if let Some(prev) = ctrl.borrow_mut().config.cancel_editing() {
-                ctrl.borrow_mut().config.set_theme(prev);
-            }
+            // Cancelar solo descarta el tema en edición: el tema ACTIVO nunca cambió (el editor solo
+            // hacía preview en vivo, no persistía). No volver a llamar `set_theme` (evita una
+            // escritura redundante de settings.json en el hilo de UI); el `apply(active_theme())` de
+            // abajo revierte el preview al tema activo previo.
+            ctrl.borrow_mut().config.cancel_editing();
             let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
                 theme_apply::apply(&ui, c.config.active_theme());
@@ -3296,7 +3298,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         ui.on_fav_rename_group(move |gid, name| {
-            ctrl.borrow_mut().fav_rename_group(gid.as_str(), name.as_str());
+            ctrl.borrow_mut()
+                .fav_rename_group(gid.as_str(), name.as_str());
             sync_rows();
         });
     }
@@ -3322,6 +3325,27 @@ fn main() -> Result<(), slint::PlatformError> {
                 dest_gid.as_str(),
             );
             sync_rows();
+        });
+    }
+    {
+        // "Mover a…": al abrir el submenú, recalcular los destinos VÁLIDOS para el nodo elegido
+        // (Rust excluye el propio grupo y sus descendientes) y volcarlos en `fav-move-targets`.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_fav_build_move_targets(move |is_group, src_gid| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let targets: Vec<PathSeg> = ctrl
+                .borrow()
+                .fav_move_targets(is_group, src_gid.as_str())
+                .into_iter()
+                .map(|(label, gid)| PathSeg {
+                    label: SharedString::from(label),
+                    path: SharedString::from(gid),
+                })
+                .collect();
+            ui.set_fav_move_targets(ModelRc::from(Rc::new(VecModel::from(targets))));
         });
     }
     {
@@ -3391,7 +3415,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
             };
             if let Some(op_id) = op_id {
-                ctrl.borrow_mut().ops.resolve_conflict(op_id, act, apply_all);
+                ctrl.borrow_mut()
+                    .ops
+                    .resolve_conflict(op_id, act, apply_all);
                 start_timer();
             }
             sync_rows();
