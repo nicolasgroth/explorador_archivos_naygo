@@ -247,6 +247,10 @@ export component FilePanel inherits FocusScope {
     property <bool> col-menu-open: false;
     callback activate(int);                  // (pane-id) al interactuar
     callback key(string, bool, bool, bool);
+    // Soltado de tecla: reporta el estado REAL de los modificadores tras el release, para que
+    // Rust resetee `ctrl_down`/`shift_down`. Sin esto, un Ctrl pegado tras Ctrl+C hacía que el
+    // siguiente doble-clic en carpeta abriera-en-otro-panel en vez de navegar.
+    callback key-release(bool, bool, bool);  // (ctrl, shift, alt) — modificadores vigentes
     // Botones laterales del mouse (atrás/adelante) sobre este panel: navegan su historial.
     callback nav-back(int);                  // (pane-id)
     callback nav-forward(int);               // (pane-id)
@@ -259,6 +263,14 @@ export component FilePanel inherits FocusScope {
     key-pressed(event) => {
         root.activate(root.pane-id);
         root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
+        accept
+    }
+
+    // Al soltar una tecla, reportamos el estado vigente de los modificadores. Cuando se suelta
+    // Ctrl, `event.modifiers.control` ya viene en false, así que Rust limpia `ctrl_down` (idem
+    // Shift). Es la fuente más fiable: rastrea el estado real, no adivina por el texto.
+    key-released(event) => {
+        root.key-release(event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
         accept
     }
 

@@ -1529,6 +1529,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     ui.set_palette_query(SharedString::new());
                     ui.set_palette_selected(0);
                     ui.set_palette_open(true);
+                    // El overlay de la paleta roba el foco al panel: su `key-released` no llega aquí.
+                    // Limpiamos los modificadores para no dejar Ctrl pegado tras Ctrl+P al cerrar.
+                    ctrl.borrow_mut().clear_modifiers();
                 }
             }
             // Atajo "editar ruta" (Ctrl+L / F4): abrir el editor de la path-bar del panel pedido.
@@ -1554,6 +1557,15 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             start_timer();
             sync_layout();
+        });
+    }
+    // Soltado de tecla: resetea `ctrl_down`/`shift_down` en el controlador con los modificadores
+    // vigentes. Sin esto, tras un Ctrl+C el flag quedaba pegado en `true` y el siguiente doble-clic
+    // en carpeta abría-en-otro-panel en vez de navegar. No refresca UI ni timers: sólo estado.
+    {
+        let ctrl = ctrl.clone();
+        ui.on_key_release(move |c, s, a| {
+            ctrl.borrow_mut().on_key_release(c, s, a);
         });
     }
     // Rename inline: confirmar (Enter). Renombra y cierra el editor. (6D)
@@ -2516,9 +2528,13 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let refresh = refresh_config_vm.clone();
         let cfg_weak = cfg_win.as_weak();
+        let ctrl = ctrl.clone();
         ui.on_open_config(move || {
             crate::logging::breadcrumb("abrir configuración");
             refresh();
+            // La ventana de config es otra ventana y roba el foco: el `key-released` no vuelve al
+            // panel. Limpiamos los modificadores para no dejar Ctrl/Shift pegados al volver.
+            ctrl.borrow_mut().clear_modifiers();
             if let Some(cfg) = cfg_weak.upgrade() {
                 let _ = cfg.show();
             }

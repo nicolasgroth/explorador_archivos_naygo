@@ -4047,6 +4047,25 @@ impl WorkspaceCtrl {
         self.run_action(action)
     }
 
+    /// Soltado de tecla: refresca el estado de los modificadores con el que reporta el evento.
+    /// `on_key` sólo SETEA `ctrl_down`/`shift_down` en cada keydown y nunca los baja; sin este
+    /// reset quedaban pegados en `true` tras, por ejemplo, un Ctrl+C, y el siguiente doble-clic en
+    /// una carpeta entraba por la rama "abrir en otro panel" (Ctrl+doble-clic) en vez de navegar.
+    /// Slint entrega en `ctrl`/`shift` el estado YA vigente tras el release (al soltar Ctrl llega
+    /// `ctrl=false`), así que basta con copiarlo: es la fuente más fiable.
+    pub fn on_key_release(&mut self, ctrl: bool, shift: bool, _alt: bool) {
+        self.ctrl_down = ctrl;
+        self.shift_down = shift;
+    }
+
+    /// Baja ambos modificadores. Red de seguridad para cuando un overlay/modal roba el foco
+    /// (config, paleta de comandos, diálogos de operaciones): el `key-released` de la tecla puede
+    /// no llegar al panel, así que limpiamos al abrirlos para no dejar Ctrl/Shift pegados.
+    pub fn clear_modifiers(&mut self) {
+        self.ctrl_down = false;
+        self.shift_down = false;
+    }
+
     /// Ejecuta una `Action` de alto nivel: el cuerpo del `match` que antes vivía dentro de
     /// `on_key`. Se extrajo para que la paleta de comandos (Ctrl+P) pueda disparar la MISMA
     /// acción que el teclado sin duplicar el ruteo (ver `execute_palette_command`). Devuelve

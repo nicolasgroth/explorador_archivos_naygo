@@ -650,6 +650,8 @@ export component AppWindow inherits Window {
     callback colmenu-dismiss();
     callback activate(int);
     callback key(string, bool, bool, bool);
+    // Soltado de tecla: modificadores vigentes tras el release, para resetear ctrl_down/shift_down.
+    callback key-release(bool, bool, bool);  // (ctrl, shift, alt)
     // Botones laterales del mouse (atrás/adelante) sobre un panel: navegan su historial.
     callback nav-back(int);
     callback nav-forward(int);
@@ -1255,6 +1257,7 @@ export component AppWindow inherits Window {
                         column-context(id, kind, cx, cy) => { root.column-context(id, kind, cx, cy); }
                         activate(id) => { root.activate(id); }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
+                        key-release(c, s, a) => { root.key-release(c, s, a); }
                         nav-back(id) => { root.nav-back(id); }
                         nav-forward(id) => { root.nav-forward(id); }
                     }
