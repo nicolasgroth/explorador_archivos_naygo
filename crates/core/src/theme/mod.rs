@@ -211,6 +211,37 @@ impl Theme {
     }
 }
 
+/// Los ids de los 5 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
+pub const BUILTIN_THEME_IDS: &[&str] =
+    &["dark-blue", "winxp", "green-on-blue", "high-contrast", "neon-retro"];
+
+/// ¿Es un tema de fábrica? (no editable/borrable).
+pub fn is_builtin_id(id: &str) -> bool {
+    BUILTIN_THEME_IDS.contains(&id)
+}
+
+/// Convierte un nombre legible a un id-slug: minúsculas, y cualquier secuencia de caracteres
+/// no alfanuméricos se colapsa en un guion. Nombre vacío/sin alfanuméricos → "tema".
+pub fn theme_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in name.trim().chars().flat_map(|c| c.to_lowercase()) {
+        if c.is_alphanumeric() {
+            out.push(c);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let s = out.trim_matches('-').to_string();
+    if s.is_empty() {
+        "tema".to_string()
+    } else {
+        s
+    }
+}
+
 /// Catálogo de temas: 5 embebidos + sueltos de `<config_dir>/themes/*.json`.
 pub struct ThemeCatalog {
     themes: HashMap<String, Theme>,
@@ -281,6 +312,22 @@ impl ThemeCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slug_de_nombre() {
+        assert_eq!(theme_slug("Mi Tema"), "mi-tema");
+        assert_eq!(theme_slug("Azul / Noche 2"), "azul-noche-2");
+        assert!(!theme_slug("").is_empty()); // nombre vacío → algo usable
+        assert!(!theme_slug("///").is_empty());
+    }
+
+    #[test]
+    fn ids_de_fabrica() {
+        assert!(is_builtin_id("dark-blue"));
+        assert!(is_builtin_id("winxp"));
+        assert!(!is_builtin_id("mi-tema"));
+        assert!(!is_builtin_id("macos")); // ya no existe → no es de fábrica vigente
+    }
 
     #[test]
     fn from_hex_con_y_sin_almohadilla() {
