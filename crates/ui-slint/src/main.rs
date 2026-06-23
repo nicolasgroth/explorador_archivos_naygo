@@ -3048,17 +3048,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 2 => ConflictAction::Rename,
                 _ => ConflictAction::Skip,
             };
-            // El op_index del conflicto activo lo guarda el pending_dialog.
-            let idx = {
+            // El id estable de la op en conflicto lo guarda el pending_dialog.
+            let op_id = {
                 let c = ctrl.borrow();
-                if let Some(ops_ctrl::OpDialog::Conflict { op_index, .. }) = &c.ops.pending_dialog {
-                    Some(*op_index)
+                if let Some(ops_ctrl::OpDialog::Conflict { op_id, .. }) = &c.ops.pending_dialog {
+                    Some(*op_id)
                 } else {
                     None
                 }
             };
-            if let Some(idx) = idx {
-                ctrl.borrow_mut().ops.resolve_conflict(idx, act, apply_all);
+            if let Some(op_id) = op_id {
+                ctrl.borrow_mut().ops.resolve_conflict(op_id, act, apply_all);
                 start_timer();
             }
             sync_rows();
@@ -3116,33 +3116,34 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_op_cancel(move |idx| {
-            ctrl.borrow_mut().ops.cancel_op(idx as usize);
+        ui.on_op_cancel(move |id| {
+            // `id` es el id ESTABLE de la op (lo emite `OpRowData.index`), no su posición.
+            ctrl.borrow_mut().ops.cancel_op(id);
             sync_rows();
         });
     }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_op_pause(move |idx| {
-            ctrl.borrow_mut().ops.pause_op(idx as usize);
+        ui.on_op_pause(move |id| {
+            ctrl.borrow_mut().ops.pause_op(id);
             sync_rows();
         });
     }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_op_resume(move |idx| {
-            ctrl.borrow_mut().ops.resume_op(idx as usize);
+        ui.on_op_resume(move |id| {
+            ctrl.borrow_mut().ops.resume_op(id);
             sync_rows();
         });
     }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_op_skip(move |idx| {
+        ui.on_op_skip(move |id| {
             // Saltar el archivo en curso aún no está soportado por el motor (no-op).
-            ctrl.borrow_mut().ops.skip_op(idx as usize);
+            ctrl.borrow_mut().ops.skip_op(id);
             sync_rows();
         });
     }

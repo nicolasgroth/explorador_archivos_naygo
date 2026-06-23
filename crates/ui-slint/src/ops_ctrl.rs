@@ -43,7 +43,10 @@ pub enum OpDialog {
     },
     /// Conflicto por-ítem (ops-B): el motor preguntó por el choque en `prompt`.
     Conflict {
-        op_index: usize,
+        /// Id ESTABLE de la op que espera la decisión (no su posición en `active_ops`). El
+        /// vector se puede reordenar mientras el modal está abierto, así que guardar el id
+        /// garantiza que la resolución vaya a la op correcta.
+        op_id: u64,
         prompt: ConflictPrompt,
     },
     /// Pedir un nombre (nuevo archivo/carpeta, renombrar). `dir` es dónde se crea.
@@ -58,6 +61,11 @@ pub enum OpDialog {
 
 /// Una operación en curso o terminada.
 pub struct ActiveOp {
+    /// Id estable y único en la sesión. NO cambia aunque el vector `active_ops` se reordene
+    /// (poda de terminadas, avance de la cola). Es la clave con la que la UI identifica una
+    /// op: los botones Pausar/Reanudar/Saltar/Cancelar resuelven la op por este id, no por su
+    /// posición en el vector (que es volátil entre el render y el clic del usuario).
+    pub id: u64,
     /// Canal de mensajes del motor; `None` cuando terminó.
     pub rx: Option<Receiver<OpMsg>>,
     /// Extremo de envío de decisiones de conflicto (ops-B).
@@ -110,6 +118,10 @@ pub struct OpsCtrl {
     pub config_dir: PathBuf,
     /// Secuencia para ids de journal únicos en la sesión (`op-N`).
     next_journal_seq: u64,
+    /// Secuencia para ids ESTABLES de operación (campo `ActiveOp::id`). A diferencia de la
+    /// posición en `active_ops`, este id no cambia al reordenar el vector, así que es la clave
+    /// segura para que los botones del panel afecten siempre la op correcta.
+    next_op_id: u64,
 }
 
 impl OpsCtrl {
@@ -123,7 +135,15 @@ impl OpsCtrl {
             ops_mode: OpsMode::Parallel,
             config_dir,
             next_journal_seq: 1,
+            next_op_id: 1,
         }
+    }
+
+    /// Reserva el próximo id estable de operación (monótono, único en la sesión).
+    fn alloc_op_id(&mut self) -> u64 {
+        let id = self.next_op_id;
+        self.next_op_id += 1;
+        id
     }
 
     // --- Clipboard interno (corte visual) ---
@@ -198,7 +218,9 @@ impl OpsCtrl {
         // Modo cola: si hay otra corriendo, encolar sin spawnear.
         if self.ops_mode == OpsMode::Queue && self.any_running() {
             let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+            let id = self.alloc_op_id();
             self.active_ops.push(ActiveOp {
+                id,
                 rx: None,
                 conflict_tx,
                 token: CancellationToken::new(),
@@ -218,7 +240,9 @@ impl OpsCtrl {
             return;
         }
 
+        let id = self.alloc_op_id();
         self.spawn_op(
+            id,
             plan,
             req.kind.clone(),
             conflict,
@@ -229,8 +253,13 @@ impl OpsCtrl {
 
     /// Spawnea el motor para un plan ya resuelto y agrega la `ActiveOp`. Crea un journal
     /// (para retomar tras un cierre inesperado) en Copy/Move/Delete-permanente.
+    ///
+    /// `id` es el id ESTABLE de la op: al lanzar una op nueva, el llamador reserva uno fresco
+    /// con `alloc_op_id()`; al promover una op desde la cola, pasa el id del placeholder para
+    /// CONSERVARLO (el usuario que la veía en cola la sigue refiriendo igual tras arrancar).
     fn spawn_op(
         &mut self,
+        id: u64,
         plan: OpPlan,
         kind: OpKind,
         conflict: ConflictPolicy,
@@ -250,6 +279,7 @@ impl OpsCtrl {
         };
         let (rx, _h) = engine::spawn(plan, kind, conflict, token.clone(), conflict_rx, journal);
         self.active_ops.push(ActiveOp {
+            id,
             rx: Some(rx),
             conflict_tx,
             token,
@@ -370,10 +400,8 @@ impl OpsCtrl {
                 .position(|o| o.awaiting_conflict.is_some())
             {
                 let prompt = self.active_ops[idx].awaiting_conflict.clone().unwrap();
-                self.pending_dialog = Some(OpDialog::Conflict {
-                    op_index: idx,
-                    prompt,
-                });
+                let op_id = self.active_ops[idx].id;
+                self.pending_dialog = Some(OpDialog::Conflict { op_id, prompt });
             }
         }
 
@@ -387,41 +415,52 @@ impl OpsCtrl {
                 let (plan, kind, conflict) = self.active_ops[idx].pending.take().unwrap();
                 let label = self.active_ops[idx].label.clone();
                 let request = self.active_ops[idx].request.take();
+                // CONSERVAR el id estable del placeholder: la op que el usuario veía en cola debe
+                // seguir refiriéndose con el mismo id al arrancar (si no, un clic en su botón ya
+                // no la encontraría). Por eso se reusa `id` en vez de reservar uno nuevo.
+                let id = self.active_ops[idx].id;
                 // Quitar el placeholder en cola y spawnear de verdad.
                 self.active_ops.remove(idx);
-                self.spawn_op(plan, kind, conflict, label, request);
+                self.spawn_op(id, plan, kind, conflict, label, request);
             }
         }
 
         self.active_ops.iter().all(|o| o.rx.is_none())
     }
 
-    /// Resuelve el conflicto pendiente de la op `op_index` con la acción dada.
-    pub fn resolve_conflict(&mut self, op_index: usize, action: ConflictAction, apply_all: bool) {
-        if let Some(op) = self.active_ops.get_mut(op_index) {
+    /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
+    /// posición) con la acción dada. Se busca por id porque el vector se puede haber reordenado
+    /// mientras el modal estaba abierto; resolver por posición mandaría la decisión a otra op.
+    pub fn resolve_conflict(&mut self, op_id: u64, action: ConflictAction, apply_all: bool) {
+        if let Some(op) = self.active_ops.iter_mut().find(|o| o.id == op_id) {
             let _ = op.conflict_tx.send(ConflictDecision { action, apply_all });
             op.awaiting_conflict = None;
         }
         self.pending_dialog = None;
     }
 
-    /// Cancela la op `op_index`.
-    pub fn cancel_op(&mut self, op_index: usize) {
-        if let Some(op) = self.active_ops.get(op_index) {
+    /// Cancela la op identificada por `op_id` (id ESTABLE de `ActiveOp`, no posición). Se
+    /// resuelve por id porque el vector `active_ops` se reordena entre el render del panel y
+    /// el clic del usuario (poda de terminadas, avance de la cola): un índice posicional
+    /// cancelaría otra op real. Si la op ya no existe, no hace nada.
+    pub fn cancel_op(&mut self, op_id: i32) {
+        if let Some(op) = self.active_ops.iter().find(|o| o.id as i32 == op_id) {
             op.token.cancel();
         }
     }
 
-    /// Pausa la op `op_index` (el motor se detiene en el siguiente `wait_if_paused`).
-    pub fn pause_op(&mut self, op_index: usize) {
-        if let Some(op) = self.active_ops.get(op_index) {
+    /// Pausa la op identificada por `op_id` (el motor se detiene en el siguiente
+    /// `wait_if_paused`). Se resuelve por id estable, no por posición (ver `cancel_op`).
+    pub fn pause_op(&mut self, op_id: i32) {
+        if let Some(op) = self.active_ops.iter().find(|o| o.id as i32 == op_id) {
             op.token.pause();
         }
     }
 
-    /// Reanuda la op `op_index` si estaba pausada.
-    pub fn resume_op(&mut self, op_index: usize) {
-        if let Some(op) = self.active_ops.get(op_index) {
+    /// Reanuda la op identificada por `op_id` si estaba pausada. Se resuelve por id estable,
+    /// no por posición (ver `cancel_op`).
+    pub fn resume_op(&mut self, op_id: i32) {
+        if let Some(op) = self.active_ops.iter().find(|o| o.id as i32 == op_id) {
             op.token.resume();
         }
     }
@@ -430,8 +469,9 @@ impl OpsCtrl {
     /// archivo actual a mitad de copia y continuar con el siguiente (el `CancellationToken`
     /// solo cancela la op entera). Implementarlo bien requiere soporte del motor (una señal
     /// "skip-current" análoga a pause/cancel). Se deja como no-op para no introducir un
-    /// mecanismo frágil; la UI puede ofrecerlo deshabilitado hasta entonces.
-    pub fn skip_op(&mut self, _op_index: usize) {
+    /// mecanismo frágil; la UI puede ofrecerlo deshabilitado hasta entonces. La firma recibe
+    /// el id estable por consistencia con los demás handlers.
+    pub fn skip_op(&mut self, _op_id: i32) {
         // No-op intencional: ver el comentario de arriba.
     }
 
@@ -520,8 +560,7 @@ impl OpsCtrl {
         const FMT: SizeFormat = SizeFormat::Auto;
         self.active_ops
             .iter()
-            .enumerate()
-            .map(|(i, o)| {
+            .map(|o| {
                 let running = o.rx.is_some();
                 let in_queue = !o.started;
                 let paused = o.token.is_paused();
@@ -550,7 +589,10 @@ impl OpsCtrl {
                 };
 
                 // Transcurrido + velocidad media + ETA, derivados de `started_at`.
-                let elapsed_secs = o.started_at.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                let elapsed_secs = o
+                    .started_at
+                    .map(|t| t.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
                 let avg_speed = if elapsed_secs > 0.0 {
                     (bytes_done as f64 / elapsed_secs) as u64
                 } else {
@@ -598,7 +640,10 @@ impl OpsCtrl {
                 };
 
                 OpRowData {
-                    index: i as i32,
+                    // `index` lleva el id ESTABLE de la op (no su posición): la UI lo guarda y lo
+                    // devuelve a los handlers, que resuelven la op por id. Así un clic siempre
+                    // afecta a la op correcta aunque el vector se reordene entre render y clic.
+                    index: o.id as i32,
                     label: o.label.clone(),
                     percent,
                     status,
@@ -730,7 +775,9 @@ impl OpsCtrl {
             conflict_rx,
             Some(writer),
         );
+        let op_id = self.alloc_op_id();
         self.active_ops.push(ActiveOp {
+            id: op_id,
             rx: Some(rx),
             conflict_tx,
             token,
@@ -924,8 +971,8 @@ mod tests {
         for _ in 0..4000 {
             c.pump_ops();
             if !resolved {
-                if let Some(OpDialog::Conflict { op_index, .. }) = c.pending_dialog.clone() {
-                    c.resolve_conflict(op_index, ConflictAction::Overwrite, false);
+                if let Some(OpDialog::Conflict { op_id, .. }) = c.pending_dialog.clone() {
+                    c.resolve_conflict(op_id, ConflictAction::Overwrite, false);
                     resolved = true;
                 }
             }
@@ -1014,5 +1061,147 @@ mod tests {
             "scan_resume abre el modal de retomar"
         );
         assert_eq!(c.resume_rows().len(), 1);
+    }
+
+    /// Construye una `ActiveOp` mínima "en curso" con el id dado, sin tocar el motor. Sirve para
+    /// probar la resolución por id tras reordenar el vector, aislada de canales/hilos reales.
+    fn fake_active_op(id: u64) -> ActiveOp {
+        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let (_dummy_tx, rx) = std::sync::mpsc::channel::<OpMsg>();
+        ActiveOp {
+            id,
+            rx: Some(rx),
+            conflict_tx,
+            token: CancellationToken::new(),
+            label: format!("op {id}"),
+            progress: None,
+            summary: None,
+            started: true,
+            pending: None,
+            journal_id: None,
+            request: None,
+            awaiting_conflict: None,
+            resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
+        }
+    }
+
+    #[test]
+    fn cancelar_por_id_afecta_la_op_correcta_tras_reordenar() {
+        // El bug original: los botones del panel resolvían la op por su POSICIÓN en `active_ops`.
+        // Si el vector se reordena entre el render y el clic (poda de terminadas, avance de la
+        // cola), cancelar la op N cancelaba otra transferencia real. Con id estable, el clic
+        // siempre va a la op correcta.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        // Tres ops con ids 10, 20, 30 en las posiciones 0, 1, 2.
+        c.active_ops.push(fake_active_op(10));
+        c.active_ops.push(fake_active_op(20));
+        c.active_ops.push(fake_active_op(30));
+        // Clonar los tokens (comparten estado por Arc) para verificar después del reordenamiento.
+        let tok10 = c.active_ops[0].token.clone();
+        let tok20 = c.active_ops[1].token.clone();
+        let tok30 = c.active_ops[2].token.clone();
+
+        // Reordenar: quitar la primera (como hace `prune_finished`/`pump_ops`). Ahora la op 20
+        // está en la posición 0 y la 30 en la 1. Un índice posicional viejo apuntaría mal.
+        c.active_ops.remove(0);
+        assert_eq!(c.active_ops[0].id, 20);
+        assert_eq!(c.active_ops[1].id, 30);
+
+        // Cancelar la op 30 POR ID: debe cancelar la 30 y solo la 30.
+        c.cancel_op(30);
+        assert!(tok30.is_cancelled(), "cancela la op 30 (la pedida)");
+        assert!(!tok20.is_cancelled(), "NO toca la op 20 (vecina tras reordenar)");
+        assert!(!tok10.is_cancelled(), "NO toca la op 10 (ya quitada del vector)");
+
+        // Pausar la op 20 POR ID: debe pausar la 20 y solo la 20.
+        c.pause_op(20);
+        assert!(tok20.is_paused(), "pausa la op 20 (la pedida)");
+        assert!(!tok30.is_paused(), "NO pausa la op 30");
+
+        // Reanudar la op 20 POR ID.
+        c.resume_op(20);
+        assert!(!tok20.is_paused(), "reanuda la op 20");
+    }
+
+    #[test]
+    fn cancelar_id_inexistente_no_hace_nada() {
+        // Un id que ya no existe (op terminada y podada) es un no-op silencioso, sin pánico.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        c.active_ops.push(fake_active_op(7));
+        let tok = c.active_ops[0].token.clone();
+        c.cancel_op(999);
+        assert!(!tok.is_cancelled(), "un id desconocido no cancela ninguna op");
+    }
+
+    #[test]
+    fn resolve_conflict_por_id_va_a_la_op_correcta_tras_reordenar() {
+        // El conflicto guarda el id estable de la op en el modal; resolverlo debe mandar la
+        // decisión a ESA op aunque el vector se haya reordenado mientras el modal estaba abierto.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        let mut op_a = fake_active_op(100);
+        let mut op_b = fake_active_op(200);
+        // Ambas esperan decisión; capturar el receptor de la decisión de cada una.
+        let (tx_a, rx_a) = std::sync::mpsc::channel::<ConflictDecision>();
+        let (tx_b, rx_b) = std::sync::mpsc::channel::<ConflictDecision>();
+        op_a.conflict_tx = tx_a;
+        op_b.conflict_tx = tx_b;
+        op_a.awaiting_conflict = None;
+        op_b.awaiting_conflict = None;
+        c.active_ops.push(op_a);
+        c.active_ops.push(op_b);
+
+        // Reordenar: quitar la primera. La op 200 queda en la posición 0.
+        c.active_ops.remove(0);
+        assert_eq!(c.active_ops[0].id, 200);
+
+        // Resolver el conflicto de la op 200 POR ID.
+        c.resolve_conflict(200, ConflictAction::Overwrite, false);
+        // La op 200 recibió su decisión; la 100 (ya quitada) no recibió nada por su canal.
+        assert!(rx_b.try_recv().is_ok(), "la op 200 recibe la decisión");
+        assert!(rx_a.try_recv().is_err(), "la op 100 NO recibe decisión ajena");
+    }
+
+    #[test]
+    fn id_estable_se_conserva_al_avanzar_la_cola() {
+        // En modo cola, la 2ª op queda como placeholder con un id. Al terminar la 1ª y avanzar
+        // la cola (`pump_ops` la respawnea), el placeholder debe CONSERVAR su id: el usuario que
+        // la veía en cola la sigue refiriendo con el mismo id en el panel.
+        let tmp = tempfile::tempdir().unwrap();
+        for n in ["a.txt", "b.txt"] {
+            std::fs::write(tmp.path().join(n), b"x").unwrap();
+        }
+        let d1 = tmp.path().join("d1");
+        let d2 = tmp.path().join("d2");
+        std::fs::create_dir(&d1).unwrap();
+        std::fs::create_dir(&d2).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.ops_mode = OpsMode::Queue;
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![tmp.path().join("a.txt")], d1.clone()),
+            "Copiar a".into(),
+            false,
+        );
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![tmp.path().join("b.txt")], d2.clone()),
+            "Copiar b".into(),
+            false,
+        );
+        // El id del placeholder en cola (la op que aún no arrancó).
+        let queued_id = c
+            .active_ops
+            .iter()
+            .find(|o| !o.started)
+            .map(|o| o.id)
+            .expect("hay una op en cola");
+        drain(&mut c);
+        // Tras avanzar la cola, debe seguir existiendo una op con ESE mismo id (la que arrancó).
+        assert!(
+            c.active_ops.iter().any(|o| o.id == queued_id),
+            "el id del placeholder se conserva al respawnear desde la cola"
+        );
+        assert!(d2.join("b.txt").exists(), "la 2ª op se completó");
     }
 }
