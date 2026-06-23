@@ -554,12 +554,12 @@ mod tests {
         let dir = tmp.path().to_path_buf();
         {
             let mut c = ConfigCtrl::new(dir.clone());
-            c.set_theme(ThemeId::new("light"));
-            assert_eq!(c.settings.theme, ThemeId::new("light"));
+            c.set_theme(ThemeId::new("winxp"));
+            assert_eq!(c.settings.theme, ThemeId::new("winxp"));
         }
         // Reabrir: el tema persistió.
         let c2 = ConfigCtrl::new(dir);
-        assert_eq!(c2.settings.theme, ThemeId::new("light"));
+        assert_eq!(c2.settings.theme, ThemeId::new("winxp"));
     }
 
     #[test]
