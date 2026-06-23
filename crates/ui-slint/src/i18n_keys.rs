@@ -63,6 +63,22 @@ where
     tr.set_add_history(c.t("pane.history.title").into());
     tr.set_add_favorites(c.t("pane.favorites.title").into());
     tr.set_add_preview(c.t("pane.preview.title").into());
+    tr.set_add_operations(c.t("ops.menu_label").into());
+    // Panel rico de operaciones.
+    tr.set_ops_title(c.t("ops.title").into());
+    tr.set_ops_in_progress(c.t("ops.in_progress").into());
+    tr.set_ops_queued(c.t("ops.queued").into());
+    tr.set_ops_history(c.t("ops.history").into());
+    tr.set_ops_pause(c.t("ops.pause").into());
+    tr.set_ops_resume(c.t("ops.resume").into());
+    tr.set_ops_skip(c.t("ops.skip").into());
+    tr.set_ops_cancel(c.t("ops.cancel").into());
+    tr.set_ops_copied(c.t("ops.copied").into());
+    tr.set_ops_speed(c.t("ops.speed").into());
+    tr.set_ops_peak(c.t("ops.peak").into());
+    tr.set_ops_elapsed(c.t("ops.elapsed").into());
+    tr.set_ops_remaining(c.t("ops.remaining").into());
+    tr.set_ops_waiting(c.t("ops.waiting").into());
     // Encabezados de columnas.
     tr.set_col_name(c.t("slint.col.name").into());
     tr.set_col_ext(c.t("slint.col.ext").into());

@@ -1,68 +1,435 @@
-// Naygo — panel de progreso de operaciones (Fase 3).
+// Naygo — panel rico de operaciones de archivo (en curso / en cola / historial).
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 //
-// Overlay inferior (sobre la barra de estado): una fila por operación con etiqueta, barra
-// de progreso, estado y botón cancelar. Visible solo si hay operaciones. Sin glifos raros.
-import { ListView } from "std-widgets.slint";
+// Gestor de transferencias (estilo Directory Opus): tres zonas apiladas en un ScrollView.
+//   - EN CURSO (kind==0): archivo actual, barra de progreso, bytes/velocidad/tiempos y los
+//     botones Pausar/Reanudar + Saltar + Cancelar (cada uno emite su callback con el index).
+//   - EN COLA (kind==1): fila compacta "etiqueta — en espera" + cancelar.
+//   - HISTORIAL (kind==2): fila con el `status` ya formateado ("hecho: N copiados, …").
+// Íconos dibujados con Path (NO glifos de fuente: el render por software puede no pintarlos).
+// Todo el texto pasa por Tr (i18n) y los colores por Theme.
+import { ScrollView } from "std-widgets.slint";
 import { OpRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
-export component OpsPanel inherits Rectangle {
-    in property <[OpRowVm]> rows;
-    callback cancel(int);   // índice de la op a cancelar
+// --- Íconos de botón (Path, sin glifos) ---
 
-    visible: root.rows.length > 0;
-    height: root.rows.length > 0 ? min(rows.length * 30px + 8px, 140px) : 0px;
-    background: Theme.panel-bg;
-    border-color: Theme.border;
+// Pausa: dos barras verticales.
+component PauseIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    HorizontalLayout {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        spacing: root.size / 4;
+        Rectangle { background: root.tint; border-radius: 1px; }
+        Rectangle { background: root.tint; border-radius: 1px; }
+    }
+}
+
+// Reanudar: triángulo de "play".
+component PlayIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        fill: root.tint;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2; y: 1; }
+        LineTo { x: 11; y: 6; }
+        LineTo { x: 2; y: 11; }
+        Close { }
+    }
+}
+
+// Saltar: una barra + un triángulo (como "siguiente pista").
+component SkipIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        fill: root.tint;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 1; y: 1; }
+        LineTo { x: 8; y: 6; }
+        LineTo { x: 1; y: 11; }
+        Close { }
+    }
+    Rectangle {
+        width: root.size / 7;
+        height: root.size;
+        x: parent.width / 2 + root.size / 3;
+        y: (parent.height - self.height) / 2;
+        background: root.tint;
+        border-radius: 1px;
+    }
+}
+
+// Cancelar: una X.
+component CancelIcon inherits Rectangle {
+    in property <color> tint: Theme.error;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2; y: 2; }
+        LineTo { x: 10; y: 10; }
+        MoveTo { x: 10; y: 2; }
+        LineTo { x: 2; y: 10; }
+    }
+}
+
+// Botón compacto: ícono + etiqueta, fondo al pasar el mouse. Emite `pressed` al hacer clic.
+component OpButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback pressed();
+    in property <length> icon-size: 12px;
+    // Slot para el ícono (un hijo único que el llamador pasa).
+    in property <bool> show-pause: false;
+    in property <bool> show-play: false;
+    in property <bool> show-skip: false;
+    in property <bool> show-cancel: false;
+
+    height: 24px;
+    border-radius: 4px;
+    background: btn-touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : Theme.row-bg;
     border-width: 1px;
+    border-color: root.danger ? Theme.error : Theme.border;
 
-    ListView {
-        for r in root.rows: Rectangle {
-            height: 30px;
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 6px;
-                padding-top: 4px;
-                padding-bottom: 4px;
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 9px;
+        spacing: 5px;
+        alignment: center;
+        if root.show-pause: PauseIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text; }
+        if root.show-play: PlayIcon { width: root.icon-size; height: root.icon-size; tint: Theme.accent; }
+        if root.show-skip: SkipIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text; }
+        if root.show-cancel: CancelIcon { width: root.icon-size; height: root.icon-size; tint: root.danger && btn-touch.has-hover ? white : Theme.error; }
+        Text {
+            text: root.label;
+            color: root.danger && btn-touch.has-hover ? white : Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+    btn-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.pressed(); }
+    }
+}
+
+// Barra de progreso (track + relleno proporcional). `percent` en 0..100.
+component ProgressBar inherits Rectangle {
+    in property <float> percent;
+    in property <color> fill: Theme.accent;
+    height: 7px;
+    background: Theme.panel-bg;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width * (root.percent / 100);
+        height: parent.height;
+        background: root.fill;
+        border-radius: 3px;
+    }
+}
+
+// Par etiqueta:valor en una línea (para los datos de la op).
+component DataLine inherits HorizontalLayout {
+    in property <string> caption;
+    in property <string> value;
+    spacing: 4px;
+    Text {
+        text: root.caption;
+        color: Theme.text-dim;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text;
+        font-size: 11px;
+        font-weight: 600;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+// Tarjeta de una operación EN CURSO.
+component OpCard inherits Rectangle {
+    in property <OpRowVm> op;
+    callback pause(int);
+    callback resume(int);
+    callback skip(int);
+    callback cancel(int);
+
+    background: Theme.row-bg;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 9px;
+        spacing: 5px;
+
+        // Encabezado: etiqueta de la op + archivo en curso.
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.op.label;
+                color: Theme.text;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: round(root.op.percent) + "%";
+                color: Theme.accent;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+        if root.op.current-file != "": Text {
+            text: root.op.current-file;
+            color: Theme.text-dim;
+            font-size: 11px;
+            overflow: elide;
+        }
+
+        // Barra de progreso (amarilla si está pausada, acento si avanza).
+        ProgressBar {
+            percent: root.op.percent;
+            fill: root.op.paused ? Theme.highlight : Theme.accent;
+        }
+
+        // Datos: copiado, velocidad, tiempos.
+        DataLine {
+            caption: Tr.ops-copied + ":";
+            value: root.op.bytes-done + " / " + root.op.bytes-total;
+        }
+        DataLine {
+            caption: Tr.ops-speed + ":";
+            value: root.op.speed != ""
+                ? root.op.speed + "  (" + Tr.ops-peak + " " + root.op.speed-peak + ")"
+                : "—";
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            DataLine {
+                horizontal-stretch: 1;
+                caption: Tr.ops-elapsed + ":";
+                value: root.op.elapsed != "" ? root.op.elapsed : "—";
+            }
+            DataLine {
+                horizontal-stretch: 1;
+                caption: Tr.ops-remaining + ":";
+                value: root.op.eta != "" ? root.op.eta : "—";
+            }
+        }
+
+        // Botones de control.
+        HorizontalLayout {
+            spacing: 6px;
+            padding-top: 2px;
+            // Pausar / Reanudar según el estado.
+            OpButton {
+                label: root.op.paused ? Tr.ops-resume : Tr.ops-pause;
+                show-pause: !root.op.paused;
+                show-play: root.op.paused;
+                pressed => {
+                    if (root.op.paused) {
+                        root.resume(root.op.index);
+                    } else {
+                        root.pause(root.op.index);
+                    }
+                }
+            }
+            OpButton {
+                label: Tr.ops-skip;
+                show-skip: true;
+                pressed => { root.skip(root.op.index); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            OpButton {
+                label: Tr.ops-cancel;
+                danger: true;
+                show-cancel: true;
+                pressed => { root.cancel(root.op.index); }
+            }
+        }
+    }
+}
+
+// Fila compacta de una op EN COLA.
+component QueuedRow inherits Rectangle {
+    in property <OpRowVm> op;
+    callback cancel(int);
+    height: 30px;
+    background: Theme.row-bg;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 6px;
+        spacing: 8px;
+        Text {
+            text: root.op.label;
+            color: Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: "— " + Tr.ops-waiting;
+            color: Theme.text-dim;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        OpButton {
+            label: Tr.ops-cancel;
+            danger: true;
+            show-cancel: true;
+            pressed => { root.cancel(root.op.index); }
+        }
+    }
+}
+
+// Fila de HISTORIAL: muestra el `status` ya formateado.
+component HistoryRow inherits Rectangle {
+    in property <OpRowVm> op;
+    height: 28px;
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 8px;
+        Text {
+            text: root.op.label;
+            color: Theme.text-dim;
+            font-size: 11px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.op.status;
+            color: Theme.text-dim;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}
+
+// Encabezado de zona ("EN CURSO", "EN COLA", "HISTORIAL").
+component SectionHeader inherits Text {
+    color: Theme.text-dim;
+    font-size: 10px;
+    font-weight: 700;
+    // letter-spacing no está en todas las versiones de Slint; se omite a propósito.
+}
+
+export component OpsPanel inherits Rectangle {
+    // Tres modelos ya separados por zona en Rust (evita filas-fantasma y espaciados sobrantes):
+    // EN CURSO (kind==0), EN COLA (kind==1) e HISTORIAL (kind==2).
+    in property <[OpRowVm]> running-rows;
+    in property <[OpRowVm]> queued-rows;
+    in property <[OpRowVm]> history-rows;
+    // Recuentos para el resumen del encabezado (los provee Rust; equivalen a los largos).
+    in property <int> running-count: 0;
+    in property <int> queued-count: 0;
+    in property <int> history-count: 0;
+    callback pause(int);
+    callback resume(int);
+    callback skip(int);
+    callback cancel(int);
+
+    background: Theme.panel-bg;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        // Encabezado del panel + resumen.
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: Tr.ops-title;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                // Resumen: "N en curso · M en cola". Los conteos se derivan abajo.
+                text: root.running-count + " " + Tr.ops-in-progress
+                    + " · " + root.queued-count + " " + Tr.ops-queued;
+                color: Theme.text-dim;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Cuerpo desplazable: las tres zonas.
+        ScrollView {
+            VerticalLayout {
                 spacing: 8px;
-                // Etiqueta + barra de progreso apiladas.
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    Text {
-                        text: r.label + "   —   " + r.status;
-                        color: Theme.text;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                    // Barra de progreso (track + relleno proporcional).
-                    Rectangle {
-                        height: 6px;
-                        background: Theme.row-bg;
-                        border-radius: 3px;
-                        Rectangle {
-                            x: 0;
-                            y: 0;
-                            width: parent.width * (r.percent / 100);
-                            height: parent.height;
-                            background: r.running ? Theme.accent : Theme.accent;
-                            border-radius: 3px;
-                        }
-                    }
+
+                // ZONA EN CURSO.
+                if root.running-count > 0: SectionHeader { text: Tr.ops-in-progress; }
+                for r in root.running-rows: OpCard {
+                    op: r;
+                    pause(i) => { root.pause(i); }
+                    resume(i) => { root.resume(i); }
+                    skip(i) => { root.skip(i); }
+                    cancel(i) => { root.cancel(i); }
                 }
-                // Cancelar (solo si está corriendo).
-                Rectangle {
-                    width: 22px;
-                    y: (parent.height - self.height) / 2;
-                    height: 22px;
-                    background: x-touch.has-hover ? Theme.error : transparent;
-                    border-radius: 3px;
-                    visible: r.running;
-                    Text { text: "x"; color: Theme.error; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                    x-touch := TouchArea { clicked => { root.cancel(r.index); } }
+
+                // ZONA EN COLA.
+                if root.queued-count > 0: SectionHeader { text: Tr.ops-queued; }
+                for r in root.queued-rows: QueuedRow {
+                    op: r;
+                    cancel(i) => { root.cancel(i); }
                 }
+
+                // ZONA HISTORIAL.
+                if root.history-count > 0: SectionHeader { text: Tr.ops-history; }
+                for r in root.history-rows: HistoryRow {
+                    op: r;
+                }
+
+                // Espaciador para empujar el contenido hacia arriba.
+                Rectangle { vertical-stretch: 1; }
             }
         }
     }

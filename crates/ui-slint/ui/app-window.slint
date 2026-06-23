@@ -706,7 +706,18 @@ export component AppWindow inherits Window {
     in property <MessageVm> message;
     callback message-confirm();
     callback message-cancel();
-    in property <[OpRowVm]> op-rows;
+    // Filas del panel de operaciones, ya separadas por zona en Rust.
+    in property <[OpRowVm]> op-running-rows;
+    in property <[OpRowVm]> op-queued-rows;
+    in property <[OpRowVm]> op-history-rows;
+    // Recuentos por kind (calculados en Rust) para el resumen del panel rico de operaciones.
+    in property <int> op-running-count;
+    in property <int> op-queued-count;
+    in property <int> op-history-count;
+    callback op-cancel(int);
+    callback op-pause(int);
+    callback op-resume(int);
+    callback op-skip(int);
     in property <[ResumeRowVm]> resume-rows;
     callback resume-decide(string, int);
     callback delete-confirm();
@@ -717,7 +728,6 @@ export component AppWindow inherits Window {
     callback name-cancel();
     callback paste-confirm();
     callback paste-cancel();
-    callback op-cancel(int);
     // Menú contextual (clic derecho).
     callback row-context(int, int, length, length);  // (pane-id, pos, x, y)
     in property <ContextMenuVm> ctx-menu;
@@ -1307,6 +1317,22 @@ export component AppWindow inherits Window {
                         open-in-system() => { root.preview-open(p.preview.path); }
                         hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                     }
+                    // Panel rico de operaciones montado como pane (Panel ▾ → Operaciones).
+                    // Reusa el modelo de filas y los recuentos de nivel-ventana.
+                    if p.purpose == 6: OpsPanel {
+                        width: 100%;
+                        height: 100%;
+                        running-rows: root.op-running-rows;
+                        queued-rows: root.op-queued-rows;
+                        history-rows: root.op-history-rows;
+                        running-count: root.op-running-count;
+                        queued-count: root.op-queued-count;
+                        history-count: root.op-history-count;
+                        pause(i) => { root.op-pause(i); }
+                        resume(i) => { root.op-resume(i); }
+                        skip(i) => { root.op-skip(i); }
+                        cancel(i) => { root.op-cancel(i); }
+                    }
                 }
             }
             // Barras de splitter arrastrables. La barra VISIBLE es fina (4px), pero la zona de
@@ -1390,11 +1416,8 @@ export component AppWindow inherits Window {
                 }
             }
         }
-        // Panel de progreso de operaciones (sobre la barra de estado; oculto si no hay ops).
-        OpsPanel {
-            rows: root.op-rows;
-            cancel(idx) => { root.op-cancel(idx); }
-        }
+        // (El antiguo overlay de progreso se reemplazó por el panel rico de Operaciones, que
+        //  se monta como pane —Panel ▾ → Operaciones— y aparece solo al iniciar una operación.)
         // Barra de estado: carpeta activa + recuento de ítems y selección.
         Rectangle {
             height: 22px;
@@ -1714,6 +1737,7 @@ export component AppWindow inherits Window {
             MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-operations; clicked => { root.add-pane-of(6); root.add-menu-open = false; } }
         }
     }
 

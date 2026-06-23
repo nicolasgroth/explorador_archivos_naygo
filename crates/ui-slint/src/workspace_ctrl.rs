@@ -1839,6 +1839,35 @@ impl WorkspaceCtrl {
         self.set_active(new_id);
     }
 
+    /// Asegura que exista un panel de Operaciones en el layout; si ya hay uno, no-op. Se llama
+    /// al iniciar una operación larga para que el panel rico de progreso "aparezca solo" sin que
+    /// el usuario tenga que abrirlo. A diferencia de `add_pane_of`, NO roba el foco: el panel
+    /// Files activo sigue activo (el usuario estaba operando ahí). El usuario puede cerrarlo.
+    pub fn ensure_ops_pane(&mut self) {
+        if self.has_purpose(PanePurpose::Operations) {
+            return;
+        }
+        crate::logging::breadcrumb("auto-aparecer panel de operaciones");
+        // Recordar el activo para restaurarlo (no robar foco al panel donde se opera).
+        let prev_active = self.ws.active_id();
+        let dir = self
+            .ws
+            .active_files()
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("C:/"));
+        let active = self.ws.active_id();
+        let new_id = self.ws.add_pane(PanePurpose::Operations, dir);
+        if let Some(active) = active {
+            self.ws
+                .layout
+                .split_leaf(active, SplitDir::Horizontal, new_id);
+        }
+        // Restaurar el activo previo (el panel de Operaciones no toma el foco).
+        if let Some(prev) = prev_active {
+            self.set_active(prev);
+        }
+    }
+
     /// `true` si el panel `id` se puede cerrar: hay más de uno (nunca dejamos la ventana sin
     /// ningún panel).
     pub fn can_close_pane(&self, id: PaneId) -> bool {
@@ -2206,6 +2235,7 @@ impl WorkspaceCtrl {
         };
         let req = naygo_core::ops::transfer(move_files, sources, dest_dir);
         let label = if move_files { "Mover" } else { "Copiar" };
+        self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
     }
 
@@ -2612,6 +2642,7 @@ impl WorkspaceCtrl {
                 }
                 let label = if cut { "Mover" } else { "Copiar" };
                 let req = naygo_core::ops::transfer(cut, paths, dir);
+                self.ensure_ops_pane();
                 self.ops.start_op(req, label.to_string(), true);
                 self.ops.clear_cut();
                 true
@@ -2685,6 +2716,7 @@ impl WorkspaceCtrl {
         };
         let label = if move_ { "Mover" } else { "Copiar" };
         let req = naygo_core::ops::transfer(move_, sources, dir);
+        self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
         true
     }
@@ -5278,6 +5310,44 @@ mod tests {
         assert!(has(PanePurpose::Tree), "hay árbol");
         assert!(has(PanePurpose::Inspector), "hay propiedades");
         assert!(has(PanePurpose::Preview), "hay vista previa");
+    }
+
+    /// `ensure_ops_pane` agrega un panel de Operaciones si no hay; es idempotente (no agrega un
+    /// segundo) y NO roba el foco al panel Files activo (el usuario estaba operando ahí).
+    #[test]
+    fn ensure_ops_pane_agrega_una_vez_y_no_roba_foco() {
+        use naygo_core::workspace::PanePurpose;
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let files_id = c.ws.active_id();
+        assert!(!c.has_purpose(PanePurpose::Operations), "no hay panel de ops");
+
+        c.ensure_ops_pane();
+        assert!(c.has_purpose(PanePurpose::Operations), "se agregó el panel de ops");
+        assert_eq!(
+            c.ws.active_id(),
+            files_id,
+            "el activo sigue siendo el panel Files (no robó foco)"
+        );
+        let ops_count = c
+            .ws
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Operations)
+            .count();
+        assert_eq!(ops_count, 1, "exactamente un panel de operaciones");
+
+        // Segunda llamada: idempotente, no agrega otro.
+        c.ensure_ops_pane();
+        let ops_count2 = c
+            .ws
+            .panes()
+            .iter()
+            .filter(|p| p.purpose == PanePurpose::Operations)
+            .count();
+        assert_eq!(ops_count2, 1, "sigue habiendo exactamente uno");
     }
 
     /// Cuando NO hay sesión guardada, `load_session` devuelve `false` (señal de primera

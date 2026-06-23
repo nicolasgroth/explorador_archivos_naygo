@@ -413,8 +413,6 @@ impl OpsCtrl {
     }
 
     /// Pausa la op `op_index` (el motor se detiene en el siguiente `wait_if_paused`).
-    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
-    #[allow(dead_code)]
     pub fn pause_op(&mut self, op_index: usize) {
         if let Some(op) = self.active_ops.get(op_index) {
             op.token.pause();
@@ -422,8 +420,6 @@ impl OpsCtrl {
     }
 
     /// Reanuda la op `op_index` si estaba pausada.
-    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
-    #[allow(dead_code)]
     pub fn resume_op(&mut self, op_index: usize) {
         if let Some(op) = self.active_ops.get(op_index) {
             op.token.resume();
@@ -435,8 +431,6 @@ impl OpsCtrl {
     /// solo cancela la op entera). Implementarlo bien requiere soporte del motor (una señal
     /// "skip-current" análoga a pause/cancel). Se deja como no-op para no introducir un
     /// mecanismo frágil; la UI puede ofrecerlo deshabilitado hasta entonces.
-    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
-    #[allow(dead_code)]
     pub fn skip_op(&mut self, _op_index: usize) {
         // No-op intencional: ver el comentario de arriba.
     }

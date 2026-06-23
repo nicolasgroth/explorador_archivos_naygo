@@ -529,7 +529,17 @@ fn main() -> Result<(), slint::PlatformError> {
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
             let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
-            ui.set_op_rows(ModelRc::from(Rc::new(VecModel::from(op_rows))));
+            // El panel rico de operaciones consume tres modelos separados por zona (kind:
+            // 0=en curso 1=en cola 2=historial). Separarlos en Rust evita filas-fantasma en Slint.
+            let running: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 0).cloned().collect();
+            let queued: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 1).cloned().collect();
+            let history: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 2).cloned().collect();
+            ui.set_op_running_count(running.len() as i32);
+            ui.set_op_queued_count(queued.len() as i32);
+            ui.set_op_history_count(history.len() as i32);
+            ui.set_op_running_rows(ModelRc::from(Rc::new(VecModel::from(running))));
+            ui.set_op_queued_rows(ModelRc::from(Rc::new(VecModel::from(queued))));
+            ui.set_op_history_rows(ModelRc::from(Rc::new(VecModel::from(history))));
             let resume_rows: Vec<ResumeRowVm> = c
                 .ops
                 .resume_rows()
@@ -2966,7 +2976,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_delete_confirm(move || {
-            if ctrl.borrow_mut().ops.delete_confirm() {
+            // delete_confirm devuelve true si arrancó una op larga (eliminación permanente por el
+            // motor). La papelera es atómica y no devuelve true, así que el panel no aparece para
+            // ella. Si arrancó algo, asegurar el panel de Operaciones (auto-aparecer).
+            let started = ctrl.borrow_mut().ops.delete_confirm();
+            if started {
+                ctrl.borrow_mut().ensure_ops_pane();
                 start_timer();
             }
             sync_rows();
@@ -3067,12 +3082,39 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        ui.on_op_pause(move |idx| {
+            ctrl.borrow_mut().ops.pause_op(idx as usize);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_op_resume(move |idx| {
+            ctrl.borrow_mut().ops.resume_op(idx as usize);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_op_skip(move |idx| {
+            // Saltar el archivo en curso aún no está soportado por el motor (no-op).
+            ctrl.borrow_mut().ops.skip_op(idx as usize);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_resume_decide(move |id, action| {
             let id = id.to_string();
             let mut c = ctrl.borrow_mut();
             if action == 0 {
                 if c.ops.resume(&id) {
+                    // Retomar arranca una transferencia larga: mostrar el panel de Operaciones.
+                    c.ensure_ops_pane();
                     drop(c);
                     start_timer();
                 }
@@ -3677,6 +3719,7 @@ fn int_to_purpose(p: i32) -> PanePurpose {
         3 => PanePurpose::History,
         4 => PanePurpose::Favorites,
         5 => PanePurpose::Preview,
+        6 => PanePurpose::Operations,
         _ => PanePurpose::Files,
     }
 }
