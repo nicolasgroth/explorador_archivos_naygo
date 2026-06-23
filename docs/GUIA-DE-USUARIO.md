@@ -137,6 +137,25 @@ Navegas con las flechas **↑ / ↓**, **Enter** ejecuta el elemento seleccionad
 cierra. La paleta **no** busca archivos recorriendo subcarpetas del disco; para eso
 está **Ctrl+F** (búsqueda recursiva).
 
+**Mostrar u ocultar archivos (menú del ojo):** el botón con un **ojo** en la barra de
+herramientas despliega tres interruptores:
+
+- **Mostrar archivos ocultos** (los marcados con el atributo *oculto* de Windows).
+- **Mostrar archivos de sistema** (atributo *de sistema*).
+- **Ocultar los que empiezan con punto** (`.algo`, al estilo de Linux).
+
+Cada interruptor es **global** (vale para todos los paneles y el árbol), se aplica **al
+instante** y se recuerda entre sesiones. Por defecto Naygo **muestra todo**; usa el menú
+para esconder lo que no quieras ver.
+
+**Favoritos con grupos:** el botón con una **estrella** en la barra de herramientas
+despliega tus favoritos como un árbol para saltar rápido a cualquiera (clic en un favorito
+navega el panel activo; los grupos se expanden y contraen). Para **organizarlos** usa el
+**panel de Favoritos** (agrégalo desde *Panel ▾*): con **clic derecho** sobre una fila
+puedes crear un **Nuevo grupo**, **Renombrar** un grupo, **Eliminar**, o **Mover a…** otro
+grupo (o a la raíz). La estrella **★** de la barra de ruta sigue anclando la carpeta actual
+a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
+
 ---
 
 ## 4. Seleccionar
@@ -276,10 +295,10 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
   extensión** para forzar un modo de vista a una extensión concreta (estas reglas
   tienen prioridad sobre el resaltado automático).
 - **Apariencia**: el **tema** se elige en una galería de tarjetas (cada una muestra
-  sus colores; la activa lleva borde de acento y ★). Hay temas claros y oscuros
-  (Citrus Glow, Neon Retro, Ocean Midnight, Ember Forge, Polar Graphite, y los
-  clásicos). También: idioma, set de íconos, formato de fecha y tamaño, densidad de
-  fila. Todo se aplica en caliente.
+  sus colores; la activa lleva borde de acento y ★). Vienen **cinco temas de fábrica**
+  (Dark Blue, Windows XP, Verde sobre azul, High Contrast y Neón Retro) y puedes crear
+  los tuyos con el **editor de temas** (ver abajo). También: idioma, set de íconos,
+  formato de fecha y tamaño, densidad de fila. Todo se aplica en caliente.
 - **Atajos**: editor de atajos por acción (cambiar / restablecer / restablecer todo),
   con detección de conflictos.
 - **Importar/Exportar**: packs `.zip` de idioma, tema o configuración.
@@ -303,6 +322,20 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
   `{items}` (elementos), `{files}` (archivos), `{dirs}` (carpetas).
 - La plantilla es **global**: vale para todos los paneles, pero cada panel rellena los
   tokens con **sus propios** datos.
+
+**Editor de temas (en Apariencia):** crea un tema a tu medida sin tocar los de fábrica.
+
+- En cada tarjeta de tema de fábrica hay un botón **"Personalizar"** que crea una copia
+  editable (los cinco originales quedan intactos). Tus temas propios muestran además
+  **"Editar"** y **"Eliminar"**.
+- El editor lista los **once colores** del tema (acento, fondo del panel, fila, texto,
+  selección, borde, etc.). Al tocar uno se abre un **selector tipo paleta**: una grilla
+  de presets, una fila de colores estándar, y **"Más colores…"** para ajustar el valor
+  exacto con tres barras **R/G/B** (0–255) y ver el **hex**.
+- El cambio se **aplica a toda la aplicación en vivo** mientras editas, así ves el
+  resultado real. **Guardar** conserva el tema (queda activo y disponible en la galería),
+  **Cancelar** revierte al tema que tenías, y **Restaurar de fábrica** vuelve los colores
+  a los del tema original del que partiste.
 
 ---
 

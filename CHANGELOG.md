@@ -7,6 +7,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Menú de visibilidad en la barra de herramientas (botón con un ojo): muestra u oculta los
+  archivos y carpetas marcados como ocultos, los de sistema, y los que empiezan con punto (estilo
+  Linux). Cada interruptor es global, se aplica al instante a todos los paneles y al árbol, y se
+  recuerda. Por defecto Naygo los muestra todos.
+- Favoritos organizables en grupos (carpetas) anidados. Un botón con una estrella en la barra de
+  herramientas despliega el árbol de favoritos para saltar rápido a cualquiera. Desde el panel de
+  Favoritos se gestionan con clic derecho: crear un grupo, renombrarlo, eliminarlo, y mover un
+  favorito o grupo a otro grupo. La estrella ★ de la barra de ruta sigue agregando a la raíz.
+- Editor de temas: crea tu propio tema duplicando uno existente y ajustando cada uno de sus colores
+  con un selector tipo paleta (presets, colores estándar y «Más colores…» con valores R/G/B y hex),
+  viendo el cambio aplicado a toda la aplicación en vivo. Guardar lo conserva como tema tuyo y
+  Cancelar revierte. Los temas de fábrica quedan intactos; los temas propios se pueden editar o
+  eliminar.
 - Panel de Operaciones: muestra la copia o el movimiento en curso con todos los datos —archivo
   actual, barra de progreso, copiado X de Y, velocidad media y pico, tiempo transcurrido y
   restante— más los botones Pausar/Reanudar y Cancelar, la cola de operaciones pendientes y un
@@ -67,6 +80,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `--version` muestran la información correspondiente. Útil para accesos directos y para
   "Abrir en Naygo".
 ### Cambiado
+- Los temas de fábrica se redujeron a cinco (Dark Blue, Windows XP, Verde sobre azul, High Contrast
+  y Neón Retro). El resto se puede recrear a gusto con el nuevo editor de temas.
 - Los avisos y confirmaciones internos (confirmar expulsar una unidad USB, errores al
   importar/exportar packs) ahora usan un diálogo con el tema de Naygo en vez del cuadro
   nativo del sistema. El mensaje de cierre por error inesperado es más claro y el detalle
