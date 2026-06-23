@@ -39,6 +39,9 @@ pub enum PanePurpose {
     Favorites,
     /// Vista previa liviana del archivo enfocado del panel activo (texto/imagen).
     Preview,
+    /// Panel de operaciones de archivo en curso (copiar/mover) con progreso y
+    /// cancelación. El panel rico y su cableado llegan en una fase posterior.
+    Operations,
 }
 
 /// Un panel concreto del workspace. Solo los `Files` llevan `FilePaneState`.

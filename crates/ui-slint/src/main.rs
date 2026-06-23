@@ -132,6 +132,7 @@ fn purpose_to_int(p: PanePurpose) -> i32 {
         PanePurpose::History => 3,
         PanePurpose::Favorites => 4,
         PanePurpose::Preview => 5,
+        PanePurpose::Operations => 6,
     }
 }
 

@@ -1743,6 +1743,7 @@ impl WorkspaceCtrl {
             PanePurpose::History => "Historial".to_string(),
             PanePurpose::Favorites => "Favoritos".to_string(),
             PanePurpose::Preview => "Vista previa".to_string(),
+            PanePurpose::Operations => "Operaciones".to_string(),
         }
     }
 
