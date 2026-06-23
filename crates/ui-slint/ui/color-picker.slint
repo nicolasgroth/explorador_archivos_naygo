@@ -1,0 +1,306 @@
+// Naygo — selector de color estilo Office (presets + sliders RGB + hex).
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+//
+// Componente reutilizable y AUTOCONTENIDO: no necesita callbacks a Rust. La fuente
+// de verdad son tres enteros r/g/b (0-255); el hex "#rrggbb" se compone en Slint puro
+// con la tabla `nibble()`. Slint 1.16 no tiene parseo de hex ni acceso por carácter a
+// strings, así que la ENTRADA exacta es por valor R/G/B (sliders arrastrables + tres
+// campos numéricos); el campo hex es de SOLO LECTURA (para copiar/referencia). Eso cubre
+// "elegir cualquier color por presets O por valor exacto" sin nada frágil.
+import { Theme } from "theme.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component ColorPicker inherits Rectangle {
+    // --- API pública ---
+    // Color elegido como "#rrggbb". in-out: el llamador puede fijarlo (vía set-hex) y leerlo.
+    in-out property <string> hex: "#000000";
+    // Se emite con el nuevo "#rrggbb" cada vez que cambia el color.
+    callback changed(string);
+
+    // --- Estado interno: la fuente de verdad son estos tres enteros (0-255). ---
+    property <int> r: 0;
+    property <int> g: 0;
+    property <int> b: 0;
+    // Sección "Más colores…" plegable.
+    property <bool> expanded: false;
+
+    // --- Conversión rgb -> hex en Slint puro (sin Rust). ---
+    // Dígito hexadecimal (0-15) -> carácter. Nibble alto/bajo de un canal y luego se concatena.
+    pure function nibble(v: int) -> string {
+        return v == 0 ? "0" : v == 1 ? "1" : v == 2 ? "2" : v == 3 ? "3"
+            : v == 4 ? "4" : v == 5 ? "5" : v == 6 ? "6" : v == 7 ? "7"
+            : v == 8 ? "8" : v == 9 ? "9" : v == 10 ? "a" : v == 11 ? "b"
+            : v == 12 ? "c" : v == 13 ? "d" : v == 14 ? "e" : "f";
+    }
+    // Un canal 0-255 -> dos dígitos hex.
+    pure function byte-hex(v: int) -> string {
+        return root.nibble(Math.floor(v / 16)) + root.nibble(Math.mod(v, 16));
+    }
+    // r/g/b -> "#rrggbb".
+    pure function rgb-hex(rr: int, gg: int, bb: int) -> string {
+        return "#" + root.byte-hex(rr) + root.byte-hex(gg) + root.byte-hex(bb);
+    }
+    // Color vivo para muestras y pistas de los sliders.
+    pure function rgb-color(rr: int, gg: int, bb: int) -> color {
+        return rgb(rr, gg, bb);
+    }
+
+    // Recalcula hex desde r/g/b y notifica. Lo llaman presets, sliders y campos numéricos.
+    function commit() {
+        root.hex = root.rgb-hex(root.r, root.g, root.b);
+        root.changed(root.hex);
+    }
+    // Atajo: fija un canal acotado a 0-255 y recompone.
+    function set-r(v: int) { root.r = Math.clamp(v, 0, 255); root.commit(); }
+    function set-g(v: int) { root.g = Math.clamp(v, 0, 255); root.commit(); }
+    function set-b(v: int) { root.b = Math.clamp(v, 0, 255); root.commit(); }
+    // Elegir un preset (literal de color Slint): leemos sus canales vía to-hsv no sirve para
+    // RGB exacto, así que cada swatch pasa sus r/g/b enteros directamente.
+    function pick(rr: int, gg: int, bb: int) {
+        root.r = rr; root.g = gg; root.b = bb;
+        root.commit();
+    }
+
+    // Color actualmente compuesto (para la muestra grande y el campo hex).
+    property <color> current: root.rgb-color(root.r, root.g, root.b);
+
+    min-width: 240px;
+    background: Theme.panel-bg;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        // ---------- Grilla de presets estilo Office ----------
+        // Cada fila es una variación (clara -> oscura) de la fila base. Hardcodeada.
+        // Tema base (fila 1) y 4 variaciones. Valores r/g/b para no depender de parsear literales.
+        for row in [
+            // Fila base (tonos medios estilo Office)
+            [ {r: 255, g: 255, b: 255}, {r: 0, g: 0, b: 0}, {r: 238, g: 236, b: 225},
+              {r: 31, g: 73, b: 125}, {r: 79, g: 129, b: 189}, {r: 192, g: 80, b: 77},
+              {r: 155, g: 187, b: 89}, {r: 128, g: 100, b: 162}, {r: 75, g: 172, b: 198},
+              {r: 247, g: 150, b: 70} ],
+            // 80% claridad
+            [ {r: 242, g: 242, b: 242}, {r: 127, g: 127, b: 127}, {r: 221, g: 217, b: 196},
+              {r: 198, g: 217, b: 241}, {r: 220, g: 230, b: 242}, {r: 242, g: 220, b: 219},
+              {r: 235, g: 241, b: 222}, {r: 230, g: 224, b: 236}, {r: 218, g: 238, b: 243},
+              {r: 253, g: 234, b: 218} ],
+            // 60% claridad
+            [ {r: 217, g: 217, b: 217}, {r: 89, g: 89, b: 89}, {r: 196, g: 189, b: 151},
+              {r: 142, g: 180, b: 227}, {r: 184, g: 204, b: 228}, {r: 230, g: 184, b: 183},
+              {r: 215, g: 228, b: 189}, {r: 204, g: 193, b: 218}, {r: 181, g: 221, b: 232},
+              {r: 252, g: 213, b: 180} ],
+            // 40% oscuridad
+            [ {r: 166, g: 166, b: 166}, {r: 38, g: 38, b: 38}, {r: 148, g: 138, b: 84},
+              {r: 31, g: 73, b: 125}, {r: 84, g: 141, b: 212}, {r: 218, g: 150, b: 148},
+              {r: 195, g: 214, b: 155}, {r: 178, g: 162, b: 199}, {r: 146, g: 205, b: 220},
+              {r: 250, g: 192, b: 143} ],
+            // 60% oscuridad
+            [ {r: 89, g: 89, b: 89}, {r: 12, g: 12, b: 12}, {r: 73, g: 67, b: 38},
+              {r: 23, g: 54, b: 93}, {r: 47, g: 90, b: 143}, {r: 149, g: 55, b: 52},
+              {r: 119, g: 147, b: 60}, {r: 96, g: 73, b: 122}, {r: 49, g: 132, b: 155},
+              {r: 227, g: 108, b: 9} ],
+        ]: HorizontalLayout {
+            spacing: 4px;
+            for sw in row: Rectangle {
+                width: 20px;
+                height: 18px;
+                border-radius: 2px;
+                background: root.rgb-color(sw.r, sw.g, sw.b);
+                border-width: sw-touch.has-hover ? 2px : 1px;
+                border-color: sw-touch.has-hover ? Theme.accent : Theme.border;
+                sw-touch := TouchArea {
+                    clicked => { root.pick(sw.r, sw.g, sw.b); }
+                }
+            }
+        }
+
+        // ---------- Colores estándar ----------
+        Text {
+            text: "Colores estándar";
+            color: Theme.text-dim;
+            font-size: 11px;
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            for sw in [
+                {r: 192, g: 0, b: 0},    // rojo oscuro
+                {r: 255, g: 0, b: 0},    // rojo
+                {r: 255, g: 102, b: 0},  // naranja
+                {r: 255, g: 192, b: 0},  // amarillo
+                {r: 146, g: 208, b: 80}, // verde claro
+                {r: 0, g: 176, b: 80},   // verde
+                {r: 0, g: 176, b: 240},  // cian
+                {r: 0, g: 112, b: 192},  // azul
+                {r: 112, g: 48, b: 160}, // morado
+            ]: Rectangle {
+                width: 20px;
+                height: 18px;
+                border-radius: 2px;
+                background: root.rgb-color(sw.r, sw.g, sw.b);
+                border-width: std-touch.has-hover ? 2px : 1px;
+                border-color: std-touch.has-hover ? Theme.accent : Theme.border;
+                std-touch := TouchArea {
+                    clicked => { root.pick(sw.r, sw.g, sw.b); }
+                }
+            }
+        }
+
+        // ---------- "Más colores…" (toggle) ----------
+        Rectangle {
+            height: 26px;
+            border-radius: 4px;
+            background: more-touch.has-hover ? Theme.selection-bg.with-alpha(0.35) : transparent;
+            HorizontalLayout {
+                padding-left: 6px;
+                spacing: 6px;
+                // Flecha ▸/▾ dibujada con Path (sin depender de fuentes/emoji).
+                Rectangle {
+                    width: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        Path {
+                            width: 8px;
+                            height: 8px;
+                            fill: Theme.text-dim;
+                            viewbox-width: 8;
+                            viewbox-height: 8;
+                            // Triángulo: apunta a la derecha (plegado) o abajo (desplegado).
+                            MoveTo { x: root.expanded ? 0 : 0; y: root.expanded ? 0 : 0; }
+                            LineTo { x: root.expanded ? 8 : 0; y: root.expanded ? 0 : 8; }
+                            LineTo { x: root.expanded ? 4 : 8; y: root.expanded ? 8 : 4; }
+                            Close { }
+                        }
+                    }
+                }
+                Text {
+                    text: "Más colores…";
+                    color: Theme.text;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+            more-touch := TouchArea {
+                clicked => { root.expanded = !root.expanded; }
+            }
+        }
+
+        // ---------- Panel expandido: sliders R/G/B + campos numéricos + hex + muestra ----------
+        if root.expanded: VerticalLayout {
+            spacing: 8px;
+            padding-top: 4px;
+
+            // Tres sliders. Cada uno: etiqueta + pista arrastrable + thumb + campo numérico.
+            // El canal se elige por índice (0=R, 1=G, 2=B) para reutilizar una sola plantilla.
+            for ch[idx] in [
+                { name: "R", val: root.r, tint: root.rgb-color(255, 0, 0) },
+                { name: "G", val: root.g, tint: root.rgb-color(0, 200, 0) },
+                { name: "B", val: root.b, tint: root.rgb-color(60, 120, 255) },
+            ]: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: ch.name;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    width: 14px;
+                }
+
+                // Pista del slider. El thumb se posiciona por valor; el TouchArea arrastra.
+                track := Rectangle {
+                    horizontal-stretch: 1;
+                    height: 18px;
+                    property <length> usable: self.width - 12px; // descuenta el ancho del thumb
+                    background: Theme.row-bg;
+                    border-radius: 9px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+
+                    // Relleno teñido hasta el thumb (feedback de magnitud).
+                    Rectangle {
+                        x: 0;
+                        width: 6px + (track.usable * ch.val / 255);
+                        height: parent.height;
+                        background: ch.tint.with-alpha(0.45);
+                        border-radius: 9px;
+                    }
+
+                    // Thumb redondo.
+                    Rectangle {
+                        x: track.usable * ch.val / 255;
+                        width: 12px;
+                        height: 18px;
+                        border-radius: 6px;
+                        background: ch.tint;
+                        border-width: 1px;
+                        border-color: Theme.text;
+                    }
+
+                    drag := TouchArea {
+                        // Calcula el valor por la posición x del puntero sobre la pista.
+                        // valor = clamp(0,255, round((mouse-x - mitad_thumb) / usable * 255)).
+                        function value-from-x() -> int {
+                            return Math.clamp(
+                                Math.round((self.mouse-x - 6px) / track.usable * 255),
+                                0, 255);
+                        }
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) {
+                                if (idx == 0) { root.set-r(self.value-from-x()); }
+                                if (idx == 1) { root.set-g(self.value-from-x()); }
+                                if (idx == 2) { root.set-b(self.value-from-x()); }
+                            }
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                if (idx == 0) { root.set-r(self.value-from-x()); }
+                                if (idx == 1) { root.set-g(self.value-from-x()); }
+                                if (idx == 2) { root.set-b(self.value-from-x()); }
+                            }
+                        }
+                    }
+                }
+
+                // Campo numérico para entrada EXACTA del canal (0-255). Fallback robusto del slider.
+                num := LineEdit {
+                    width: 48px;
+                    text: ch.val;
+                    horizontal-alignment: center;
+                    edited(t) => {
+                        if (t.is-float()) {
+                            if (idx == 0) { root.set-r(Math.round(t.to-float())); }
+                            if (idx == 1) { root.set-g(Math.round(t.to-float())); }
+                            if (idx == 2) { root.set-b(Math.round(t.to-float())); }
+                        }
+                    }
+                }
+            }
+
+            // Muestra grande + hex (solo lectura, para copiar/referencia).
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 64px;
+                    height: 40px;
+                    border-radius: 4px;
+                    background: root.current;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text { text: "Hex"; color: Theme.text-dim; font-size: 11px; }
+                    LineEdit {
+                        width: 100px;
+                        text: root.hex;
+                        read-only: true;
+                    }
+                }
+            }
+        }
+    }
+}
