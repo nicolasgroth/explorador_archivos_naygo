@@ -120,6 +120,10 @@ where
     tr.set_missing_ancestor(c.t("slint.missing.ancestor").into());
     tr.set_missing_choose(c.t("slint.missing.choose").into());
     tr.set_missing_close(c.t("slint.missing.close").into());
+    tr.set_view_hidden_tip(c.t("slint.view.hidden_tip").into());
+    tr.set_view_show_hidden(c.t("slint.view.show_hidden").into());
+    tr.set_view_show_system(c.t("slint.view.show_system").into());
+    tr.set_view_hide_dotfiles(c.t("slint.view.hide_dotfiles").into());
     tr.set_search_title(c.t("slint.search.title").into());
     tr.set_search_tip(c.t("slint.search.tip").into());
     tr.set_search_placeholder(c.t("slint.search.placeholder").into());

@@ -31,6 +31,26 @@ pub struct PlainRow {
     pub depth: u32,
 }
 
+/// Los tres flags de visibilidad (espejo runtime de `Settings`): qué clases de archivo
+/// muestra el panel/árbol. Se pasan juntos a `rows_from_view` y al filtrado del árbol para
+/// llamar a `naygo_core::filter::is_visible`. Default = mostrar todo (no esconde nada).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibilityFlags {
+    pub show_hidden: bool,
+    pub show_system: bool,
+    pub hide_dotfiles: bool,
+}
+
+impl Default for VisibilityFlags {
+    fn default() -> Self {
+        VisibilityFlags {
+            show_hidden: true,
+            show_system: true,
+            hide_dotfiles: false,
+        }
+    }
+}
+
 /// Valor de texto de una celda para un entry y una columna (6C). Name se pinta aparte;
 /// aquí se cubren las demás. Size respeta `size_format`; las fechas, `date_format`+huso.
 pub fn cell_value(
@@ -63,6 +83,7 @@ pub fn cell_value(
 /// VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las entries
 /// completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
 /// Las celdas siguen el orden de las columnas visibles del `TableState` (sin Name).
+#[allow(clippy::too_many_arguments)]
 pub fn rows_from_view(
     f: &FilePaneState,
     is_cut: &dyn Fn(&std::path::Path) -> bool,
@@ -71,6 +92,7 @@ pub fn rows_from_view(
     size_format: naygo_core::format::SizeFormat,
     date_format: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
+    vis: VisibilityFlags,
 ) -> Vec<PlainRow> {
     // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
     let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
@@ -80,6 +102,19 @@ pub fn rows_from_view(
         .enumerate()
         .filter_map(|(pos, &real)| {
             let e = f.entries.get(real)?;
+            // Filtro de visibilidad (ocultos/sistema/dotfiles). Se aplica DESPUÉS de tomar
+            // `pos` de la vista cacheada del core: `pos` sigue siendo la posición de vista que
+            // usan selección/foco (`f.selected`/`f.focused`), así que esconder una fila aquí
+            // (devolver `None`) no desalinea los marcadores de las filas que sí se pintan.
+            // Convive con el filtro de columna del core (AND): un entry debe pasar AMBOS.
+            if !naygo_core::filter::is_visible(
+                e,
+                vis.show_hidden,
+                vis.show_system,
+                vis.hide_dotfiles,
+            ) {
+                return None;
+            }
             let cells = cell_kinds
                 .iter()
                 .map(|k| cell_value(e, *k, size_format, date_format, tz_offset_secs))
@@ -512,6 +547,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            VisibilityFlags::default(),
         );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
@@ -536,6 +572,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            VisibilityFlags::default(),
         );
         assert!(rows[0].cut, "la fila cortada se marca");
     }
@@ -550,9 +587,75 @@ mod tests {
             &mut |_| slint::Image::default(),
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
-            0
+            0,
+            VisibilityFlags::default()
         )
         .is_empty());
+    }
+
+    #[test]
+    fn visibilidad_esconde_filas_sin_desalinear_seleccion() {
+        // Entries: [oculto, visible, sistema, .dot]. El core ordena por nombre/dirs_first,
+        // pero todos son archivos, así que el orden de vista es alfabético:
+        // ".dot", "b_oculto", "c_sys", "d_visible".
+        let mut f = FilePaneState::new(PathBuf::from("C:/x"));
+        let mut oculto = mk("b_oculto.txt", false, Some(1));
+        oculto.hidden = true;
+        let mut sys = mk("c_sys.txt", false, Some(1));
+        sys.system = true;
+        let dot = mk(".dot", false, Some(1));
+        let visible = mk("d_visible.txt", false, Some(1));
+        f.entries = vec![oculto, sys, dot, visible];
+        // Con todo escondido, solo queda el visible.
+        let solo_visible = VisibilityFlags {
+            show_hidden: false,
+            show_system: false,
+            hide_dotfiles: true,
+        };
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            solo_visible,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "d_visible.txt");
+        // Mostrar todo: las cuatro filas.
+        let todo = VisibilityFlags::default();
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            todo,
+        );
+        assert_eq!(rows.len(), 4);
+
+        // La selección/foco usan posición de VISTA. La vista ordenada es:
+        // [".dot"(0), "b_oculto.txt"(1), "c_sys.txt"(2), "d_visible.txt"(3)].
+        // Seleccionar el visible (pos 3) y luego esconder los ocultos NO debe pasar la marca
+        // de selección a otra fila: el `pos` que ve `rows_from_view` se mantiene.
+        f.select_single(3);
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            solo_visible,
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].selected, "la única fila visible sigue marcada");
+        assert!(rows[0].focused);
     }
 
     #[test]

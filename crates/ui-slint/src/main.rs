@@ -526,6 +526,11 @@ fn main() -> Result<(), slint::PlatformError> {
             // mouse, doble-clic, breadcrumbs— no solo al pulsar los botones.
             ui.set_can_go_back(c.can_go_back());
             ui.set_can_go_forward(c.can_go_forward());
+            // Casillas del menú del "ojo" (visibilidad): reflejan los settings. Refresco central
+            // para que queden al día tras alternar, factory-reset o recarga de config.
+            ui.set_show_hidden(c.config.settings.show_hidden);
+            ui.set_show_system(c.config.settings.show_system);
+            ui.set_hide_dotfiles(c.config.settings.hide_dotfiles);
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
             let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
@@ -2663,6 +2668,69 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_fwd_history_menu_open(false);
                 ui.set_history_menu_open(true);
             }
+        });
+    }
+    // Menú del "ojo" (visibilidad): abrir anclado al botón. Cierra los demás menús flotantes.
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_open_view_menu(move |x| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_view_menu_x(x);
+                // No tener dos menús abiertos a la vez.
+                ui.set_history_menu_open(false);
+                ui.set_back_history_menu_open(false);
+                ui.set_fwd_history_menu_open(false);
+                ui.set_drive_menu_path("".into());
+                ui.set_view_menu_open(true);
+            }
+        });
+    }
+    // Toggles del menú del "ojo": alternan el flag (persiste), re-arman los árboles (las
+    // subcarpetas se re-listan filtradas) y refrescan la vista. Los paneles se refiltran solos en
+    // el próximo `sync_rows`; el menú queda abierto para alternar varios de una.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_toggle_show_hidden(move || {
+            {
+                let mut c = ctrl.borrow_mut();
+                let v = c.config.settings.show_hidden;
+                c.config.set_show_hidden(!v);
+                c.refresh_trees_visibility();
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_toggle_show_system(move || {
+            {
+                let mut c = ctrl.borrow_mut();
+                let v = c.config.settings.show_system;
+                c.config.set_show_system(!v);
+                c.refresh_trees_visibility();
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_toggle_hide_dotfiles(move || {
+            {
+                let mut c = ctrl.borrow_mut();
+                let v = c.config.settings.hide_dotfiles;
+                c.config.set_hide_dotfiles(!v);
+                c.refresh_trees_visibility();
+            }
+            start_timer();
+            sync_rows();
         });
     }
     // Elegir una carpeta del menú de historial: navega el panel activo.

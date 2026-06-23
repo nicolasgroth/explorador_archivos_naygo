@@ -4,7 +4,7 @@
 
 use crate::bridge::{
     favorite_rows, history_rows, inspector_info, recent_rows, rows_from_view, tree_rows, HistRow,
-    InspectorInfo, NavRow, PlainRow, TreeRow,
+    InspectorInfo, NavRow, PlainRow, TreeRow, VisibilityFlags,
 };
 use crate::listing::Listing;
 use naygo_core::favorites::Favorites;
@@ -902,6 +902,17 @@ impl WorkspaceCtrl {
 
     /// Filas a pintar del panel `id` (marca las cortadas para atenuarlas y las recién
     /// aparecidas para resaltarlas durante `highlight_secs` segundos).
+    /// Los tres flags de visibilidad actuales, leídos de los settings. Los usan el panel
+    /// (`rows_of`/`rows_from_view`), la vista profunda y el filtrado del árbol (`pump_tree`)
+    /// para llamar a `naygo_core::filter::is_visible`. Globales y persistentes.
+    pub fn visibility_flags(&self) -> VisibilityFlags {
+        VisibilityFlags {
+            show_hidden: self.config.settings.show_hidden,
+            show_system: self.config.settings.show_system,
+            hide_dotfiles: self.config.settings.hide_dotfiles,
+        }
+    }
+
     pub fn rows_of(
         &mut self,
         id: PaneId,
@@ -910,6 +921,7 @@ impl WorkspaceCtrl {
     ) -> Vec<PlainRow> {
         let date_format = self.config.settings.date_format;
         let size_format = self.config.settings.size_format;
+        let vis = self.visibility_flags();
         let tz = naygo_platform::time::local_utc_offset_secs();
 
         // Vista profunda activa: construir filas desde deep_items con depth real.
@@ -933,6 +945,14 @@ impl WorkspaceCtrl {
             let WorkspaceCtrl { ops, icons, .. } = self;
             return deep_items
                 .iter()
+                .filter(|(e, _)| {
+                    naygo_core::filter::is_visible(
+                        e,
+                        vis.show_hidden,
+                        vis.show_system,
+                        vis.hide_dotfiles,
+                    )
+                })
                 .map(|(e, depth)| {
                     let cells = cell_kinds
                         .iter()
@@ -970,6 +990,7 @@ impl WorkspaceCtrl {
                 size_format,
                 date_format,
                 tz,
+                vis,
             ),
             None => Vec::new(),
         }
@@ -2762,9 +2783,11 @@ impl WorkspaceCtrl {
         // Soltar sobre la propia carpeta de origen es no-op: si todas las rutas ya viven en
         // `dest_dir`, no hay nada que copiar/mover. (Comparar el padre de cada ruta con el
         // destino; basta con que alguna venga de otra carpeta para proceder.)
-        let all_from_dest = paths
-            .iter()
-            .all(|p| p.parent().map(|par| par == dest_dir.as_path()).unwrap_or(false));
+        let all_from_dest = paths.iter().all(|p| {
+            p.parent()
+                .map(|par| par == dest_dir.as_path())
+                .unwrap_or(false)
+        });
         if all_from_dest {
             return false;
         }
@@ -3316,6 +3339,44 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Re-arma TODOS los árboles tras cambiar la visibilidad (ocultos/sistema/dotfiles). Las
+    /// subcarpetas se filtran al LISTARSE (en `pump_tree`), pero las ya cargadas conservan lo que
+    /// se listó con los flags anteriores. Aquí re-listamos cada rama actualmente expandida (con
+    /// hijos cargados): se cancela su worker si quedara alguno, se vacía y se vuelve a lanzar el
+    /// listado solo-dirs. El reveal de la carpeta activa se mantiene. Los paneles Files NO
+    /// necesitan nada: `rows_of` aplica `is_visible` en cada `sync_rows`.
+    pub fn refresh_trees_visibility(&mut self) {
+        let ids: Vec<PaneId> = self.trees.keys().copied().collect();
+        for id in ids {
+            // Ramas expandidas y ya cargadas (las que muestran hijos): hay que re-listarlas.
+            let to_reload: Vec<PathBuf> = match self.trees.get(&id) {
+                Some(t) => t
+                    .flat_paths()
+                    .into_iter()
+                    .filter(|p| {
+                        t.node_at(p)
+                            .map(|n| n.expanded && n.children.is_some())
+                            .unwrap_or(false)
+                    })
+                    .collect(),
+                None => continue,
+            };
+            for path in to_reload {
+                // Cancelar un worker en vuelo de esa rama (si lo hubiera) para no mezclar lotes.
+                if let Some(l) = self.tree_listings.remove(&(id, path.clone())) {
+                    l.cancel();
+                }
+                if let Some(t) = self.trees.get_mut(&id) {
+                    // Vacía los hijos y marca Loading+expandido: el nuevo lote (ya filtrado en
+                    // `pump_tree`) los repuebla.
+                    t.begin_loading(&path);
+                }
+                self.tree_listings
+                    .insert((id, path.clone()), Listing::start_dirs_only(path));
+            }
+        }
+    }
+
     /// El cursor de teclado del árbol `id` (para resaltar la fila enfocada). Si no hay cursor
     /// fijado, cae a la carpeta activa del árbol, o a su primera raíz.
     pub fn tree_cursor_of(&self, id: PaneId) -> Option<PathBuf> {
@@ -3402,6 +3463,9 @@ impl WorkspaceCtrl {
     /// Drena los workers de árbol en vuelo (asocia hijos por path). Devuelve true si NO
     /// queda ninguno (para que el timer pueda apagarse). Quita los terminados.
     pub fn pump_tree(&mut self) -> bool {
+        // Flags de visibilidad: el árbol esconde las subcarpetas ocultas/sistema/dotfile
+        // igual que el panel. Se leen una vez (los `push_child` van detrás de `get_mut`).
+        let vis = self.visibility_flags();
         let keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
         for key in keys {
             let (batch, done) = match self.tree_listings.get(&key) {
@@ -3411,6 +3475,18 @@ impl WorkspaceCtrl {
             let (id, parent) = (key.0, &key.1);
             if let Some(t) = self.trees.get_mut(&id) {
                 for e in batch {
+                    // Filtro de visibilidad: una subcarpeta entra al árbol solo si pasa
+                    // `is_visible` (oculta/sistema/dotfile según los flags). `TreeNode` no
+                    // guarda esos atributos, así que el filtro va aquí, donde aún tenemos el
+                    // `Entry` con `hidden`/`system`.
+                    if !naygo_core::filter::is_visible(
+                        &e,
+                        vis.show_hidden,
+                        vis.show_system,
+                        vis.hide_dotfiles,
+                    ) {
+                        continue;
+                    }
                     t.push_child(parent, e.path);
                 }
                 if done {
@@ -5380,31 +5456,35 @@ mod tests {
         let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
         assert!(drain(&mut c));
         let files_id = c.ws.active_id();
-        assert!(!c.has_purpose(PanePurpose::Operations), "no hay panel de ops");
+        assert!(
+            !c.has_purpose(PanePurpose::Operations),
+            "no hay panel de ops"
+        );
 
         c.ensure_ops_pane();
-        assert!(c.has_purpose(PanePurpose::Operations), "se agregó el panel de ops");
+        assert!(
+            c.has_purpose(PanePurpose::Operations),
+            "se agregó el panel de ops"
+        );
         assert_eq!(
             c.ws.active_id(),
             files_id,
             "el activo sigue siendo el panel Files (no robó foco)"
         );
-        let ops_count = c
-            .ws
-            .panes()
-            .iter()
-            .filter(|p| p.purpose == PanePurpose::Operations)
-            .count();
+        let ops_count =
+            c.ws.panes()
+                .iter()
+                .filter(|p| p.purpose == PanePurpose::Operations)
+                .count();
         assert_eq!(ops_count, 1, "exactamente un panel de operaciones");
 
         // Segunda llamada: idempotente, no agrega otro.
         c.ensure_ops_pane();
-        let ops_count2 = c
-            .ws
-            .panes()
-            .iter()
-            .filter(|p| p.purpose == PanePurpose::Operations)
-            .count();
+        let ops_count2 =
+            c.ws.panes()
+                .iter()
+                .filter(|p| p.purpose == PanePurpose::Operations)
+                .count();
         assert_eq!(ops_count2, 1, "sigue habiendo exactamente uno");
     }
 

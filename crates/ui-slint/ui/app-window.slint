@@ -101,6 +101,8 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-forward: false;
     // Si true, dibuja una CASITA (ir al inicio / carpeta Home) con Path: techo + cuerpo.
     in property <bool> draw-home: false;
+    // Si true, dibuja un OJO (menú de visibilidad de archivos) con Path: óvalo + iris central.
+    in property <bool> draw-eye: false;
     // Si false, el botón se ve atenuado y no dispara `clicked` (Atrás/Adelante sin historial).
     in property <bool> enabled: true;
     // Color del ícono dibujado por Path. Atenuado cuando el botón está deshabilitado.
@@ -327,7 +329,42 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 11.5; y: 7; }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home: Text {
+        // Ojo dibujado: «menú de visibilidad». Un óvalo horizontal (los dos párpados, dos
+        // arcos) + un círculo central (el iris). Dibujado con Path (el render por software no
+        // pinta glifos de fuente).
+        if root.draw-eye: Rectangle {
+            width: 16px;
+            height: 16px;
+            // Contorno del ojo: óvalo formado por dos arcos (arriba y abajo).
+            Path {
+                width: 16px;
+                height: 16px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                // Párpado superior (de izquierda a derecha, curvando hacia arriba).
+                MoveTo { x: 2; y: 8; }
+                ArcTo { radius-x: 7; radius-y: 5; x: 14; y: 8; sweep: true; }
+                // Párpado inferior (de derecha a izquierda, curvando hacia abajo).
+                ArcTo { radius-x: 7; radius-y: 5; x: 2; y: 8; sweep: true; }
+                Close { }
+            }
+            // Iris (círculo central) relleno con el tinte.
+            Path {
+                width: 16px;
+                height: 16px;
+                fill: root.icon-tint;
+                viewbox-width: 16;
+                viewbox-height: 16;
+                MoveTo { x: 5.5; y: 8; }
+                ArcTo { radius-x: 2.5; radius-y: 2.5; x: 10.5; y: 8; sweep: true; }
+                ArcTo { radius-x: 2.5; radius-y: 2.5; x: 5.5; y: 8; sweep: true; }
+                Close { }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -492,6 +529,57 @@ component MenuItem inherits Rectangle {
     }
 }
 
+// Ítem de menú con CASILLA (check) a la izquierda + etiqueta. Para el menú del "ojo"
+// (visibilidad): clic alterna el flag. La casilla se dibuja con Path (marco + tilde) porque el
+// render por software no pinta glifos. `checked` lo controla la AppWindow (props in-out).
+component CheckMenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    callback clicked();
+    height: 26px;
+    background: cmi-touch.has-hover ? Theme.selection-bg : transparent;
+    border-radius: 4px;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        // Casilla: marco siempre; tilde solo si está marcada.
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            border-width: 1.2px;
+            border-color: root.checked ? Theme.selection-bg : Theme.text-dim;
+            border-radius: 3px;
+            background: root.checked ? Theme.selection-bg : transparent;
+            if root.checked: Path {
+                width: 12px;
+                height: 12px;
+                x: 2px;
+                y: 2px;
+                stroke: white;
+                stroke-width: 1.6px;
+                fill: transparent;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                MoveTo { x: 2.5; y: 6.5; }
+                LineTo { x: 5; y: 9; }
+                LineTo { x: 9.5; y: 3.5; }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    cmi-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 // Ítem de dos líneas para los menús ▾ de historial de Atrás/Adelante: nombre de la carpeta arriba
 // (normal) y ruta completa abajo (atenuada, fuente menor). Clic ↦ saltar a esa carpeta.
 component HistoryMenuItem inherits Rectangle {
@@ -596,6 +684,17 @@ export component AppWindow inherits Window {
     in-out property <bool> back-history-menu-open: false;
     in-out property <length> fwd-history-menu-x: 0;
     in-out property <bool> fwd-history-menu-open: false;
+    // --- Menú del "ojo" (visibilidad de archivos) ---
+    // Flags de visibilidad (espejo de Settings; los alimenta main.rs al iniciar y al alternar).
+    in-out property <bool> show-hidden: true;
+    in-out property <bool> show-system: true;
+    in-out property <bool> hide-dotfiles: false;
+    in-out property <length> view-menu-x: 0;
+    in-out property <bool> view-menu-open: false;
+    callback open-view-menu(length);     // x de anclaje del menú del ojo
+    callback toggle-show-hidden();       // alternar mostrar ocultos → Rust persiste + re-arma
+    callback toggle-show-system();       // alternar mostrar de sistema
+    callback toggle-hide-dotfiles();     // alternar esconder dotfiles
     callback add-pane();
     callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
                                       // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
@@ -1046,6 +1145,19 @@ export component AppWindow inherits Window {
                     tip: Tr.search-tip;
                     btn-width: 34px;
                     clicked => { root.search-toggle(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Visibilidad: el ojo abre un menú flotante con 3 casillas (ocultos / sistema /
+                // dotfiles). Se ancla al botón (su x de centro). Estilo combobox: resalta abierto.
+                view-btn := ToolBtn {
+                    draw-eye: true;
+                    icon-only: true;
+                    tip: Tr.view-hidden-tip;
+                    btn-width: 34px;
+                    highlight: root.view-menu-open;
+                    clicked => {
+                        root.open-view-menu(view-btn.absolute-position.x + view-btn.width / 2);
+                    }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 // Historial de carpetas recientes: ícono de reloj abre menú flotante.
@@ -1681,6 +1793,43 @@ export component AppWindow inherits Window {
                     root.go-forward-history(i);
                     root.fwd-history-menu-open = false;
                 }
+            }
+        }
+    }
+
+    // Menú del "ojo" (visibilidad de archivos). Flota anclado al botón del ojo, justo debajo de
+    // la barra. Un velo invisible lo cierra al clic afuera. Tres casillas (global, persistente):
+    // mostrar ocultos / mostrar de sistema / esconder dotfiles. Clic en una fila alterna el flag
+    // → callback a Rust (persiste y re-arma las vistas al instante).
+    if root.view-menu-open: TouchArea {
+        clicked => { root.view-menu-open = false; }
+    }
+    if root.view-menu-open: Rectangle {
+        x: min(root.width - self.width - 4px, max(4px, root.view-menu-x - self.width / 2));
+        y: root.top-bar-h + 2px;
+        width: 320px;
+        height: view-menu-items.preferred-height + 8px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 6px;
+        view-menu-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            CheckMenuItem {
+                label: Tr.view-show-hidden;
+                checked: root.show-hidden;
+                clicked => { root.toggle-show-hidden(); }
+            }
+            CheckMenuItem {
+                label: Tr.view-show-system;
+                checked: root.show-system;
+                clicked => { root.toggle-show-system(); }
+            }
+            CheckMenuItem {
+                label: Tr.view-hide-dotfiles;
+                checked: root.hide-dotfiles;
+                clicked => { root.toggle-hide-dotfiles(); }
             }
         }
     }

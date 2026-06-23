@@ -288,6 +288,41 @@ impl ConfigCtrl {
         self.save();
     }
 
+    // --- Visibilidad de archivos (menú del "ojo" en la toolbar) ---
+
+    /// ¿Mostrar los archivos/carpetas con atributo OCULTO?
+    pub fn show_hidden(&self) -> bool {
+        self.settings.show_hidden
+    }
+
+    /// Alterna mostrar ocultos y persiste. El llamador re-arma las vistas (refresco al instante).
+    pub fn set_show_hidden(&mut self, v: bool) {
+        self.settings.show_hidden = v;
+        self.save();
+    }
+
+    /// ¿Mostrar los archivos/carpetas con atributo de SISTEMA?
+    pub fn show_system(&self) -> bool {
+        self.settings.show_system
+    }
+
+    /// Alterna mostrar de sistema y persiste. El llamador re-arma las vistas.
+    pub fn set_show_system(&mut self, v: bool) {
+        self.settings.show_system = v;
+        self.save();
+    }
+
+    /// ¿Esconder los archivos/carpetas cuyo nombre empieza con punto?
+    pub fn hide_dotfiles(&self) -> bool {
+        self.settings.hide_dotfiles
+    }
+
+    /// Alterna esconder dotfiles y persiste. El llamador re-arma las vistas.
+    pub fn set_hide_dotfiles(&mut self, v: bool) {
+        self.settings.hide_dotfiles = v;
+        self.save();
+    }
+
     // --- Pie de panel (footer) ---
 
     /// ¿Mostrar el pie (barra inferior) en cada panel de archivos?
@@ -565,6 +600,26 @@ mod tests {
         assert!(c2.settings.new_items_at_end);
         assert!(!c2.settings.tray_enabled);
         assert!(c2.settings.close_to_tray);
+    }
+
+    #[test]
+    fn visibilidad_setters_persisten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        {
+            let mut c = ConfigCtrl::new(dir.clone());
+            // Defaults: mostrar todo, no esconder dotfiles.
+            assert!(c.show_hidden());
+            assert!(c.show_system());
+            assert!(!c.hide_dotfiles());
+            c.set_show_hidden(false);
+            c.set_show_system(false);
+            c.set_hide_dotfiles(true);
+        }
+        let c2 = ConfigCtrl::new(dir);
+        assert!(!c2.show_hidden());
+        assert!(!c2.show_system());
+        assert!(c2.hide_dotfiles());
     }
 
     #[test]
