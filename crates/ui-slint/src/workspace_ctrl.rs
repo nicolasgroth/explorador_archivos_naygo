@@ -839,6 +839,10 @@ impl WorkspaceCtrl {
     /// Drena los lotes de TODOS los listados activos. Devuelve true si TODOS terminaron
     /// (para apagar el timer). Quita del mapa los que terminan.
     pub fn pump_listings(&mut self) -> bool {
+        // Flags de visibilidad globales: se empujan al panel al sembrar sus entries, así un
+        // panel recién listado (arranque, navegación, refresh) ya nace con la vista filtrada
+        // correcta sin depender de que el usuario abra el menú "ojo".
+        let vis = self.visibility_flags();
         let ids: Vec<PaneId> = self.listings.keys().copied().collect();
         for id in ids {
             let (batch, done) = match self.listings.get(&id) {
@@ -846,6 +850,7 @@ impl WorkspaceCtrl {
                 None => continue,
             };
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.set_visibility(vis);
                 if !batch.is_empty() {
                     f.entries.extend(batch);
                 }
@@ -997,7 +1002,6 @@ impl WorkspaceCtrl {
                 size_format,
                 date_format,
                 tz,
-                vis,
             ),
             None => Vec::new(),
         }
@@ -3512,13 +3516,27 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Re-arma TODOS los árboles tras cambiar la visibilidad (ocultos/sistema/dotfiles). Las
-    /// subcarpetas se filtran al LISTARSE (en `pump_tree`), pero las ya cargadas conservan lo que
-    /// se listó con los flags anteriores. Aquí re-listamos cada rama actualmente expandida (con
-    /// hijos cargados): se cancela su worker si quedara alguno, se vacía y se vuelve a lanzar el
-    /// listado solo-dirs. El reveal de la carpeta activa se mantiene. Los paneles Files NO
-    /// necesitan nada: `rows_of` aplica `is_visible` en cada `sync_rows`.
+    /// Propaga los flags de visibilidad actuales (de los settings) a TODOS los paneles Files y
+    /// re-arma TODOS los árboles. Lo invocan los toggles del menú "ojo".
+    ///
+    /// Paneles Files: cada `FilePaneState` guarda su propio espejo de los flags y los aplica
+    /// DENTRO de `compute_view_indices`, de modo que la VISTA, la selección, el foco y el
+    /// teclado compartan el mismo conjunto filtrado. Por eso hay que empujar los flags aquí (no
+    /// basta filtrar al pintar). Si la selección/foco quedan fuera de rango al esconder filas,
+    /// `set_visibility` los reacomoda.
+    ///
+    /// Árboles: las subcarpetas se filtran al LISTARSE (en `pump_tree`), pero las ya cargadas
+    /// conservan lo que se listó con los flags anteriores. Aquí re-listamos cada rama
+    /// actualmente expandida (con hijos cargados): se cancela su worker si quedara alguno, se
+    /// vacía y se vuelve a lanzar el listado solo-dirs. El reveal de la carpeta activa se mantiene.
     pub fn refresh_trees_visibility(&mut self) {
+        // Empujar los flags a cada panel Files (el árbol filtra aparte en `pump_tree`).
+        let vis = self.visibility_flags();
+        for pane in self.ws.panes_mut() {
+            if let Some(f) = pane.files.as_mut() {
+                f.set_visibility(vis);
+            }
+        }
         let ids: Vec<PaneId> = self.trees.keys().copied().collect();
         for id in ids {
             // Ramas expandidas y ya cargadas (las que muestran hijos): hay que re-listarlas.
@@ -6202,7 +6220,9 @@ mod tests {
         let rows = c.fav_tree_rows();
         assert!(rows.iter().any(|r| r.is_group && r.name == "Proyectos"));
         // Sigue expandido: la hoja interna se ve.
-        assert!(rows.iter().any(|r| r.path == b.display().to_string() && r.depth == 1));
+        assert!(rows
+            .iter()
+            .any(|r| r.path == b.display().to_string() && r.depth == 1));
 
         // Persistió: un controlador nuevo (mismo config_dir) ve el grupo renombrado con su hoja.
         let mut c2 = WorkspaceCtrl::new_in(a.clone(), cfg.clone());

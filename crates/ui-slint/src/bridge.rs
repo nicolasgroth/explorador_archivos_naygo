@@ -32,24 +32,12 @@ pub struct PlainRow {
 }
 
 /// Los tres flags de visibilidad (espejo runtime de `Settings`): qué clases de archivo
-/// muestra el panel/árbol. Se pasan juntos a `rows_from_view` y al filtrado del árbol para
-/// llamar a `naygo_core::filter::is_visible`. Default = mostrar todo (no esconde nada).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VisibilityFlags {
-    pub show_hidden: bool,
-    pub show_system: bool,
-    pub hide_dotfiles: bool,
-}
-
-impl Default for VisibilityFlags {
-    fn default() -> Self {
-        VisibilityFlags {
-            show_hidden: true,
-            show_system: true,
-            hide_dotfiles: false,
-        }
-    }
-}
+/// muestra el panel/árbol. El tipo vive en `core` (`naygo_core::filter::VisibilityFlags`)
+/// porque `FilePaneState` los usa para filtrar la VISTA; aquí se reexporta para el árbol
+/// (`pump_tree`) y la vista profunda, que filtran aparte con `is_visible`. Default = mostrar
+/// todo. El panel normal YA no re-filtra: el core entrega la vista filtrada (ver
+/// `rows_from_view`).
+pub use naygo_core::filter::VisibilityFlags;
 
 /// Valor de texto de una celda para un entry y una columna (6C). Name se pinta aparte;
 /// aquí se cubren las demás. Size respeta `size_format`; las fechas, `date_format`+huso.
@@ -79,10 +67,14 @@ pub fn cell_value(
 }
 
 /// Construye las filas a pintar desde el estado del panel: usa los índices de vista
-/// CACHEADOS del core (filtrados+ordenados), y marca selección/foco por POSICIÓN DE
-/// VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las entries
-/// completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
+/// CACHEADOS del core (filtrados+ordenados, INCLUIDA la visibilidad), y marca selección/foco
+/// por POSICIÓN DE VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las
+/// entries completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
 /// Las celdas siguen el orden de las columnas visibles del `TableState` (sin Name).
+///
+/// IMPORTANTE: aquí NO se re-filtra por visibilidad. El core ya aplica `is_visible` dentro de
+/// `compute_view_indices`, así que las filas que llegan corresponden 1:1 con las posiciones de
+/// vista (`i == pos`): esconder ocultos no desalinea selección/foco/teclado.
 #[allow(clippy::too_many_arguments)]
 pub fn rows_from_view(
     f: &FilePaneState,
@@ -92,7 +84,6 @@ pub fn rows_from_view(
     size_format: naygo_core::format::SizeFormat,
     date_format: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
-    vis: VisibilityFlags,
 ) -> Vec<PlainRow> {
     // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
     let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
@@ -102,19 +93,6 @@ pub fn rows_from_view(
         .enumerate()
         .filter_map(|(pos, &real)| {
             let e = f.entries.get(real)?;
-            // Filtro de visibilidad (ocultos/sistema/dotfiles). Se aplica DESPUÉS de tomar
-            // `pos` de la vista cacheada del core: `pos` sigue siendo la posición de vista que
-            // usan selección/foco (`f.selected`/`f.focused`), así que esconder una fila aquí
-            // (devolver `None`) no desalinea los marcadores de las filas que sí se pintan.
-            // Convive con el filtro de columna del core (AND): un entry debe pasar AMBOS.
-            if !naygo_core::filter::is_visible(
-                e,
-                vis.show_hidden,
-                vis.show_system,
-                vis.hide_dotfiles,
-            ) {
-                return None;
-            }
             let cells = cell_kinds
                 .iter()
                 .map(|k| cell_value(e, *k, size_format, date_format, tz_offset_secs))
@@ -667,7 +645,6 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            VisibilityFlags::default(),
         );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
@@ -692,7 +669,6 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            VisibilityFlags::default(),
         );
         assert!(rows[0].cut, "la fila cortada se marca");
     }
@@ -708,7 +684,6 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            VisibilityFlags::default()
         )
         .is_empty());
     }
@@ -726,12 +701,15 @@ mod tests {
         let dot = mk(".dot", false, Some(1));
         let visible = mk("d_visible.txt", false, Some(1));
         f.entries = vec![oculto, sys, dot, visible];
-        // Con todo escondido, solo queda el visible.
-        let solo_visible = VisibilityFlags {
+
+        // El filtro de visibilidad vive en el CORE: se setea en el estado y queda dentro de la
+        // vista. `rows_from_view` ya NO re-filtra; sirve 1:1 lo que el core entrega. Con todo
+        // escondido, solo queda el visible.
+        f.set_visibility(VisibilityFlags {
             show_hidden: false,
             show_system: false,
             hide_dotfiles: true,
-        };
+        });
         let rows = rows_from_view(
             &f,
             &|_| false,
@@ -740,12 +718,12 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            solo_visible,
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "d_visible.txt");
+
         // Mostrar todo: las cuatro filas.
-        let todo = VisibilityFlags::default();
+        f.set_visibility(VisibilityFlags::default());
         let rows = rows_from_view(
             &f,
             &|_| false,
@@ -754,15 +732,19 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            todo,
         );
         assert_eq!(rows.len(), 4);
 
-        // La selección/foco usan posición de VISTA. La vista ordenada es:
-        // [".dot"(0), "b_oculto.txt"(1), "c_sys.txt"(2), "d_visible.txt"(3)].
-        // Seleccionar el visible (pos 3) y luego esconder los ocultos NO debe pasar la marca
-        // de selección a otra fila: el `pos` que ve `rows_from_view` se mantiene.
-        f.select_single(3);
+        // Núcleo del fix C-1: con la vista filtrada por el core, la POSICIÓN que la UI envía al
+        // clicar (índice en la lista pintada) cuadra con la posición de vista del core. Esconder
+        // todo menos el visible y seleccionar la "pos 0" (la única fila pintada) debe caer sobre
+        // "d_visible.txt", no sobre el oculto que antes ordenaba primero (".dot").
+        f.set_visibility(VisibilityFlags {
+            show_hidden: false,
+            show_system: false,
+            hide_dotfiles: true,
+        });
+        f.select_single(0);
         let rows = rows_from_view(
             &f,
             &|_| false,
@@ -771,10 +753,13 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
-            solo_visible,
         );
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].selected, "la única fila visible sigue marcada");
+        assert_eq!(rows[0].name, "d_visible.txt");
+        assert!(
+            rows[0].selected,
+            "la fila visible (pos 0) queda marcada, no la oculta"
+        );
         assert!(rows[0].focused);
     }
 
@@ -832,7 +817,9 @@ mod tests {
         let rows = fav_tree_rows(&f, &collapsed, &slint::Image::default());
         // raíz: "uno" (favorito) + "Trabajo" (grupo colapsado). "dos" oculto.
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|r| r.name == "uno" && !r.is_group && r.depth == 0));
+        assert!(rows
+            .iter()
+            .any(|r| r.name == "uno" && !r.is_group && r.depth == 0));
         let grp = rows.iter().find(|r| r.name == "Trabajo").unwrap();
         assert!(grp.is_group && grp.has_children && !grp.expanded);
         assert_eq!(grp.group_id, "1"); // segundo nodo raíz

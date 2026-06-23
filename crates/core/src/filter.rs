@@ -40,6 +40,40 @@ pub fn entry_extension(entry: &Entry) -> String {
         .to_ascii_lowercase()
 }
 
+/// Los tres flags de visibilidad: qué clases de archivo muestra la vista del panel
+/// (y el árbol). Vive en `core` para que `FilePaneState::compute_view_indices` filtre
+/// por visibilidad junto a los filtros de columna, de modo que la vista, la selección,
+/// el foco y la navegación por teclado compartan EXACTAMENTE el mismo conjunto. La UI
+/// reusa este tipo (no lo duplica). Default = mostrar todo (no esconde nada).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VisibilityFlags {
+    pub show_hidden: bool,
+    pub show_system: bool,
+    pub hide_dotfiles: bool,
+}
+
+impl Default for VisibilityFlags {
+    fn default() -> Self {
+        VisibilityFlags {
+            show_hidden: true,
+            show_system: true,
+            hide_dotfiles: false,
+        }
+    }
+}
+
+impl VisibilityFlags {
+    /// ¿El entry pasa estos flags? Atajo sobre `is_visible` con los campos del struct.
+    pub fn allows(&self, entry: &Entry) -> bool {
+        is_visible(
+            entry,
+            self.show_hidden,
+            self.show_system,
+            self.hide_dotfiles,
+        )
+    }
+}
+
 /// ¿El entry debe mostrarse según los toggles de visibilidad? Puro.
 /// - oculto (atributo HIDDEN) se esconde salvo `show_hidden`.
 /// - de sistema (atributo SYSTEM) se esconde salvo `show_system`.

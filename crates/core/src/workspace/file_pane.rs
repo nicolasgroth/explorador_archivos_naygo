@@ -8,6 +8,7 @@
 use crate::columns::{ColumnKind, TableState};
 use crate::filter::matches as filter_matches;
 use crate::filter::ColumnFilter;
+use crate::filter::VisibilityFlags;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::NavHistory;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,11 @@ pub struct FilePaneState {
     /// persiste (vive en settings.json); existe para que `view_indices` agrupe IGUAL
     /// que el render y los índices nunca se desalineen.
     pub group_new_at_end: bool,
+    /// Espejo runtime de los flags de visibilidad globales (ocultos/sistema/dotfiles). Lo
+    /// setea la UI cuando cambia el menú "ojo". NO se persiste (vive en settings.json).
+    /// `compute_view_indices` lo aplica junto a los filtros de columna, así la VISTA (y por
+    /// tanto selección/foco/teclado) comparte EXACTAMENTE el conjunto filtrado que se pinta.
+    pub visibility: VisibilityFlags,
     /// Caché de los índices de vista (filtrados+ordenados). Recompute PEREZOSO bajo
     /// `&self` vía `RefCell`; se invalida comparando una firma O(1) de los inputs. NO se
     /// clona (cada panel reconstruye el suyo) ni se persiste. Efímero de presentación.
@@ -68,6 +74,7 @@ impl Clone for FilePaneState {
             table: self.table.clone(),
             highlighted: self.highlighted.clone(),
             group_new_at_end: self.group_new_at_end,
+            visibility: self.visibility,
             // El caché NO se arrastra: el clon lo reconstruye a demanda.
             view_cache: std::cell::RefCell::new(None),
             #[cfg(test)]
@@ -110,6 +117,7 @@ impl FilePaneState {
             table: TableState::default(),
             highlighted: std::collections::HashSet::new(),
             group_new_at_end: false,
+            visibility: VisibilityFlags::default(),
             view_cache: std::cell::RefCell::new(None),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
@@ -124,6 +132,39 @@ impl FilePaneState {
     /// Limpia todo el resaltado (al interactuar o re-listar).
     pub fn clear_highlight(&mut self) {
         self.highlighted.clear();
+    }
+
+    /// Actualiza los flags de visibilidad (los setea la UI al cambiar el menú "ojo"). Cambia
+    /// el conjunto de la vista; el caché se invalida solo (la firma incluye `visibility`). Si
+    /// la selección/foco quedaran fuera de rango tras esconder filas, se reacomodan.
+    pub fn set_visibility(&mut self, flags: VisibilityFlags) {
+        if self.visibility == flags {
+            return;
+        }
+        self.visibility = flags;
+        self.clamp_selection_to_view();
+    }
+
+    /// Reacomoda foco/selección/ancla para que no apunten fuera de la vista actual (p.ej.
+    /// tras esconder filas con el menú "ojo"). El foco se clampa al último válido; la
+    /// selección descarta posiciones que ya no existen.
+    fn clamp_selection_to_view(&mut self) {
+        let len = self.view_indices().len();
+        if len == 0 {
+            self.focused = None;
+            self.selected.clear();
+            self.anchor = None;
+            return;
+        }
+        if let Some(f) = self.focused {
+            self.focused = Some(f.min(len - 1));
+        }
+        self.selected.retain(|&p| p < len);
+        if let Some(a) = self.anchor {
+            if a >= len {
+                self.anchor = self.focused;
+            }
+        }
     }
 
     /// Firma O(1) de los inputs que determinan la vista. Si no cambia entre llamadas, el
@@ -141,6 +182,8 @@ impl FilePaneState {
             v.hash(&mut h);
         }
         self.group_new_at_end.hash(&mut h);
+        // Los flags de visibilidad cambian qué entries entran a la vista: parte de la firma.
+        self.visibility.hash(&mut h);
         // El conjunto de resaltadas solo cambia el orden si se agrupan al final.
         if self.group_new_at_end {
             self.highlighted.len().hash(&mut h);
@@ -181,17 +224,21 @@ impl FilePaneState {
     /// Cálculo CRUDO de los índices de vista (filtrar → ordenar → agrupar-al-final).
     /// No cachea; lo invoca `view_indices`. Si `new_items_at_end`, las filas resaltadas
     /// van al final de forma ESTABLE (conservando su orden relativo).
+    ///
+    /// Filtra por DOS criterios en AND: los flags de visibilidad (ocultos/sistema/dotfiles)
+    /// y los filtros de columna activos. Aplicar la visibilidad AQUÍ (no solo al pintar) es
+    /// clave: así la VISTA, y por tanto las posiciones de selección/foco/teclado, comparten
+    /// EXACTAMENTE el conjunto que se pinta y nunca quedan desfasadas por filas ocultas.
     fn compute_view_indices(&self, new_items_at_end: bool) -> Vec<usize> {
-        let mut idx: Vec<usize> = if self.table.filters.is_empty() {
-            (0..self.entries.len()).collect()
-        } else {
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| filter_matches(e, &self.table.filters))
-                .map(|(i, _)| i)
-                .collect()
-        };
+        let has_col_filters = !self.table.filters.is_empty();
+        let mut idx: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| self.visibility.allows(e))
+            .filter(|(_, e)| !has_col_filters || filter_matches(e, &self.table.filters))
+            .map(|(i, _)| i)
+            .collect();
         let sort = self.sort;
         idx.sort_by(|&a, &b| crate::sort::cmp_entries(&self.entries[a], &self.entries[b], &sort));
         if new_items_at_end && !self.highlighted.is_empty() {
@@ -608,6 +655,93 @@ mod tests {
         // foco fuera de la vista → None.
         s.focused = Some(5);
         assert!(s.focused_view_entry().is_none());
+    }
+
+    #[test]
+    fn visibilidad_excluye_de_la_vista_y_no_desalinea_seleccion() {
+        use crate::filter::VisibilityFlags;
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("C:/x"));
+        let mk = |name: &str, hidden: bool| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("C:/x/{name}")),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden,
+            system: false,
+        };
+        // El ".oculto" ordena ALFABÉTICAMENTE PRIMERO (idx 0 en entries y, sin filtrar, en la
+        // vista). Es justo el caso que disparaba el bug C-1: una fila oculta arriba desplazaba
+        // todas las posiciones de selección/foco.
+        s.entries = vec![mk(".oculto", true), mk("visible.txt", false)];
+
+        // Con todo visible (default): la vista incluye ambos, ".oculto" en pos 0.
+        assert_eq!(s.view_indices(), vec![0, 1]);
+
+        // Esconder los ocultos: la vista YA NO contiene el índice de ".oculto".
+        s.set_visibility(VisibilityFlags {
+            show_hidden: false,
+            show_system: false,
+            hide_dotfiles: false,
+        });
+        let view = s.view_indices();
+        assert_eq!(view, vec![1], "el oculto (idx 0) no entra a la vista");
+
+        // Seleccionar la "posición 0" de la vista debe caer sobre la primera entry VISIBLE
+        // ("visible.txt"), no sobre el oculto.
+        s.select_single(0);
+        assert_eq!(
+            s.focused_view_entry().map(|e| e.name.as_str()),
+            Some("visible.txt"),
+            "pos 0 de la vista = primera fila visible, no la oculta"
+        );
+        assert_eq!(
+            s.view_entry_at(0).map(|e| e.name.as_str()),
+            Some("visible.txt")
+        );
+        assert_eq!(s.view_len(), 1);
+    }
+
+    #[test]
+    fn set_visibility_reacomoda_foco_y_seleccion_fuera_de_rango() {
+        use crate::filter::VisibilityFlags;
+        use crate::fs_model::{Entry, EntryKind};
+        let mut s = FilePaneState::new(p("C:/x"));
+        let mk = |name: &str, hidden: bool| Entry {
+            name: name.into(),
+            path: PathBuf::from(format!("C:/x/{name}")),
+            kind: EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden,
+            system: false,
+        };
+        // Vista (todo visible): [a.txt(0), b_oculto.txt(1), c.txt(2)].
+        s.entries = vec![
+            mk("a.txt", false),
+            mk("b_oculto.txt", true),
+            mk("c.txt", false),
+        ];
+        s.select_single(2); // foco/selección en la última (c.txt)
+        assert_eq!(s.focused, Some(2));
+
+        // Esconder ocultos → vista pasa a [a.txt, c.txt] (len 2). La pos 2 ya no existe: el
+        // foco se clampa a la última válida (1 = c.txt) y la selección descarta lo inválido.
+        s.set_visibility(VisibilityFlags {
+            show_hidden: false,
+            show_system: false,
+            hide_dotfiles: false,
+        });
+        assert_eq!(s.view_len(), 2);
+        assert_eq!(s.focused, Some(1));
+        assert!(s.selected.iter().all(|&p| p < 2));
+        assert_eq!(
+            s.focused_view_entry().map(|e| e.name.as_str()),
+            Some("c.txt")
+        );
     }
 
     #[test]
