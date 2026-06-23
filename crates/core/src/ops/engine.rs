@@ -112,6 +112,14 @@ pub fn run_plan(
             current: step.to.clone(),
         }));
 
+        // Acumulados en este punto: lo ya copiado (archivos previos) es el piso del
+        // progreso por bytes que emitirá la copia de este archivo.
+        let progress = ProgressCtx {
+            prev_bytes: summary.bytes_done,
+            bytes_total: plan.total_bytes,
+            files_done,
+            files_total: plan.total_files,
+        };
         let (record_path, outcome, bytes_added, counts_as_file) = exec_step(
             step,
             kind,
@@ -120,6 +128,7 @@ pub fn run_plan(
             tx,
             conflict_rx,
             &mut applied_all,
+            progress,
         );
         summary.bytes_done += bytes_added;
         if counts_as_file && matches!(outcome, OpOutcome::Done) {
@@ -146,6 +155,20 @@ pub fn run_plan(
     summary
 }
 
+/// Acumulados de la operación en el momento de copiar este archivo, para que el
+/// progreso por bytes refleje el avance total (no solo el del archivo actual).
+#[derive(Clone, Copy)]
+struct ProgressCtx {
+    /// Bytes de los archivos YA terminados de esta operación.
+    prev_bytes: u64,
+    /// Total de bytes del plan completo.
+    bytes_total: u64,
+    /// Archivos ya terminados.
+    files_done: usize,
+    /// Total de archivos del plan.
+    files_total: usize,
+}
+
 /// Ejecuta un paso individual. Devuelve `(ruta_registrada, resultado, bytes_sumados,
 /// cuenta_como_archivo)`.
 #[allow(clippy::too_many_arguments)]
@@ -157,10 +180,15 @@ fn exec_step(
     tx: &Sender<OpMsg>,
     conflict_rx: &Receiver<ConflictDecision>,
     applied_all: &mut Option<ConflictAction>,
+    progress: ProgressCtx,
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     match kind {
-        OpKind::Copy => exec_copy_step(step, conflict, token, false, tx, conflict_rx, applied_all),
-        OpKind::Move => exec_copy_step(step, conflict, token, true, tx, conflict_rx, applied_all),
+        OpKind::Copy => exec_copy_step(
+            step, conflict, token, false, tx, conflict_rx, applied_all, progress,
+        ),
+        OpKind::Move => exec_copy_step(
+            step, conflict, token, true, tx, conflict_rx, applied_all, progress,
+        ),
         OpKind::Delete { to_trash } => {
             if *to_trash {
                 // El motor solo hace borrado permanente; la papelera la maneja platform.
@@ -203,6 +231,7 @@ fn exec_copy_step(
     tx: &Sender<OpMsg>,
     conflict_rx: &Receiver<ConflictDecision>,
     applied_all: &mut Option<ConflictAction>,
+    progress: ProgressCtx,
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     // Paso de carpeta: asegurar el directorio destino, no cuenta como archivo.
     if step.is_dir {
@@ -284,7 +313,20 @@ fn exec_copy_step(
         return (to, OpOutcome::Done, step.bytes, true);
     }
 
-    match copy_buffered(&from, &to, token) {
+    // Closure que arma y envía el progreso por bytes durante la copia. `this_file`
+    // son los bytes de ESTE archivo copiados hasta ahora; se suman a los bytes de
+    // los archivos ya terminados (`prev_bytes`) para el total acumulado de la op.
+    let on_bytes = |this_file: u64| {
+        let _ = tx.send(OpMsg::Progress(OpProgress {
+            bytes_done: progress.prev_bytes + this_file,
+            bytes_total: progress.bytes_total,
+            files_done: progress.files_done,
+            files_total: progress.files_total,
+            current: from.clone(),
+        }));
+    };
+
+    match copy_buffered(&from, &to, token, on_bytes) {
         Ok(true) => {
             if is_move {
                 // Borrar el origen tras una copia exitosa (fin del move cross-volume).
@@ -312,14 +354,28 @@ fn exec_copy_step(
     }
 }
 
-/// Copia `from` → `to` por bloques de 256KB, chequeando la cancelación entre bloques.
-/// Devuelve `Ok(true)` si copió todo, `Ok(false)` si se canceló a media copia,
-/// `Err` ante un error de I/O.
-fn copy_buffered(from: &Path, to: &Path, token: &CancellationToken) -> std::io::Result<bool> {
+/// Copia `from` → `to` por bloques de 256KB, chequeando la cancelación y la pausa
+/// entre bloques. Devuelve `Ok(true)` si copió todo, `Ok(false)` si se canceló a
+/// media copia, `Err` ante un error de I/O.
+///
+/// `on_bytes` recibe los bytes copiados de ESTE archivo hasta el momento. Se llama
+/// con throttle (cada ~100 ms, no por bloque) durante la copia y una vez al final
+/// con el total del archivo; así una copia larga emite progreso en vivo sin inundar
+/// el canal. El llamador arma el `OpProgress` sumando los bytes de archivos previos.
+fn copy_buffered(
+    from: &Path,
+    to: &Path,
+    token: &CancellationToken,
+    mut on_bytes: impl FnMut(u64),
+) -> std::io::Result<bool> {
     let mut reader = std::fs::File::open(from)?;
     let mut writer = std::fs::File::create(to)?;
     let mut buf = vec![0u8; BUF_SIZE];
+    let mut copied: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
     loop {
+        // Pausa: suspende sin cerrar el archivo; retorna al reanudar o cancelar.
+        token.wait_if_paused();
         if token.is_cancelled() {
             return Ok(false);
         }
@@ -328,8 +384,16 @@ fn copy_buffered(from: &Path, to: &Path, token: &CancellationToken) -> std::io::
             break;
         }
         writer.write_all(&buf[..n])?;
+        copied += n as u64;
+        if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+            on_bytes(copied);
+            last_emit = std::time::Instant::now();
+        }
     }
     writer.flush()?;
+    // Emisión final con el total del archivo (asegura un Progress aunque la copia
+    // haya tardado menos que el intervalo del throttle).
+    on_bytes(copied);
     Ok(true)
 }
 
@@ -401,6 +465,45 @@ mod tests {
         drop(tx);
         let msgs: Vec<OpMsg> = rx.into_iter().collect();
         (msgs, summary)
+    }
+
+    #[test]
+    fn copia_grande_emite_progreso_durante_la_copia() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("big.bin");
+        // 2 MiB → 8 bloques de 256K → debe emitir más de un Progress durante la copia.
+        fs::write(&src, vec![7u8; 2 * 1024 * 1024]).unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let req = OpRequest {
+            kind: OpKind::Copy,
+            sources: vec![src],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+        let progresos = rx
+            .iter()
+            .filter(|m| matches!(m, OpMsg::Progress(_)))
+            .count();
+        assert!(
+            progresos >= 2,
+            "esperaba >=2 Progress durante la copia, hubo {progresos}"
+        );
+        assert_eq!(fs::read(dest.join("big.bin")).unwrap().len(), 2 * 1024 * 1024);
     }
 
     #[test]
