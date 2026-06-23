@@ -1081,6 +1081,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 std::time::Duration::from_millis(30),
                 move || {
                     let now = std::time::Instant::now();
+                    // Cinturón de seguridad anti-reentrancia: el bucle modal de `DoDragDrop`
+                    // (arrastre OLE hacia afuera) corre dentro del mismo hilo de UI y RE-ENTRA
+                    // este timer mientras dura el arrastre. Si en ese momento ya hay un
+                    // `borrow_mut` de `ctrl` vivo más arriba en la pila, repintar aquí
+                    // reventaría con «already borrowed». Probamos con `try_borrow_mut`: si el
+                    // controlador está prestado, SALTAMOS este tick por completo (el siguiente
+                    // tick repinta; perder un frame de 30ms es invisible). El probe es solo de
+                    // liveness: soltamos el préstamo de inmediato.
+                    if ctrl.try_borrow_mut().is_err() {
+                        return;
+                    }
                     // Registrar el destino de drop OLE una sola vez, cuando el HWND ya es válido
                     // (primer tick con la ventana realizada). El guard vive toda la sesión.
                     if drop_guard.borrow().is_none() {
@@ -1339,15 +1350,38 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         // Arrastre OLE hacia afuera (Fase 5C): saca los archivos seleccionados del panel
-        // hacia el Explorer/escritorio/otra app. `start_drag` es BLOQUEANTE (corre el bucle OLE
-        // de Windows hasta soltar), que es el comportamiento nativo esperado.
+        // hacia el Explorer/escritorio/otra app —o a otro panel de Naygo—. `start_drag` es
+        // BLOQUEANTE: `DoDragDrop` corre su propio bucle modal de mensajes de Windows hasta
+        // que el usuario suelta. Ese bucle modal RE-ENTRA los callbacks de Slint (el timer
+        // que repinta, `sync_rows`, etc.) mientras dura el arrastre.
+        //
+        // Por eso NO podemos llamar `start_drag` aquí adentro: este callback lo invoca el
+        // event loop de Slint dentro de un frame, y si `start_drag` entra a su bucle modal
+        // con CUALQUIER `RefCell` del controlador prestado (o lo pide un re-entry), revienta
+        // con «already borrowed». La causa raíz del crash al arrastrar entre paneles.
+        //
+        // Fix: capturar las rutas con un `borrow()` CORTO que termina YA, y diferir
+        // `start_drag` al próximo turno del event loop con `invoke_from_event_loop`. Cuando
+        // ese turno corre, garantizadamente no hay ningún borrow de `ctrl` vivo (el frame que
+        // disparó este callback ya cerró), así el bucle modal de `DoDragDrop` no choca con
+        // nadie. El cinturón de seguridad complementario está en el tick del timer, que ahora
+        // usa `try_borrow_mut` y se salta el tick si el controlador está prestado.
         let ctrl = ctrl.clone();
         ui.on_row_drag_out(move |_id| {
+            // Borrow corto: clonar las rutas seleccionadas y soltar el préstamo de inmediato.
             let paths = ctrl.borrow().selected_paths();
             if paths.is_empty() {
                 return;
             }
-            let _ = naygo_platform::dnd::start_drag(&paths);
+            crate::logging::breadcrumb(&format!(
+                "drag_out: iniciar arrastre ({} ítems)",
+                paths.len()
+            ));
+            // Diferir el arrastre fuera de este frame. `paths` se mueve al closure; ya no hay
+            // ningún borrow de `ctrl` en juego cuando `DoDragDrop` arranca su bucle modal.
+            let _ = slint::invoke_from_event_loop(move || {
+                let _ = naygo_platform::dnd::start_drag(&paths);
+            });
         });
     }
     // Rubber-band (6F): selección por rectángulo arrastrando desde una fila no seleccionada.
