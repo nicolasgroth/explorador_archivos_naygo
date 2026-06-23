@@ -2721,6 +2721,64 @@ impl WorkspaceCtrl {
         true
     }
 
+    /// Recibe un drop OLE en el PUNTO `(content_x, content_y)` (coordenadas de contenido, el
+    /// mismo sistema que usa `pane_rects`/`drop_hit`): enruta al panel Files que está BAJO el
+    /// cursor, no al panel activo. Decide mover/copiar con las reglas del Explorador
+    /// (`decide_drop_action`: Shift→mover, Ctrl→copiar, si no según mismo disco); el `move_hint`
+    /// del OLE es secundario (Ctrl/Shift + mismo disco mandan, igual que en `drop_external`).
+    ///
+    /// No-op (devuelve false) si: no hay rutas, el punto no cae sobre ningún panel, el panel
+    /// destino no es Files, o el destino ES la misma carpeta de origen de las rutas (soltar
+    /// sobre la propia carpeta). Devuelve true si arrancó la operación.
+    pub fn drop_at(
+        &mut self,
+        content_x: f32,
+        content_y: f32,
+        ctrl: bool,
+        shift: bool,
+        paths: Vec<std::path::PathBuf>,
+        _move_hint: bool,
+    ) -> bool {
+        use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
+        use naygo_core::workspace::layout::drop_hit;
+        if paths.is_empty() {
+            return false;
+        }
+        // Panel bajo el cursor, reusando la maquinaria de hit-testing del docking. `last_area`
+        // es el área de contenido que la UI mantiene actualizada con `set_area`.
+        let panes = self.pane_rects(self.last_area);
+        let Some((target, _zone)) = drop_hit(&panes, content_x, content_y) else {
+            return false;
+        };
+        // El destino debe ser un panel Files con carpeta resoluble.
+        let Some(dest_dir) = self
+            .ws
+            .pane(target)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+        else {
+            return false;
+        };
+        // Soltar sobre la propia carpeta de origen es no-op: si todas las rutas ya viven en
+        // `dest_dir`, no hay nada que copiar/mover. (Comparar el padre de cada ruta con el
+        // destino; basta con que alguna venga de otra carpeta para proceder.)
+        let all_from_dest = paths
+            .iter()
+            .all(|p| p.parent().map(|par| par == dest_dir.as_path()).unwrap_or(false));
+        if all_from_dest {
+            return false;
+        }
+        // Acción según modificadores + mismo disco (Ctrl/Shift mandan; el move_hint del OLE es
+        // secundario, coherente con drop_external).
+        let same = same_drive(&paths[0], &dest_dir);
+        let is_move = matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
+        let label = if is_move { "Mover" } else { "Copiar" };
+        let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
+        self.ensure_ops_pane();
+        self.ops.start_op(req, label.to_string(), true);
+        true
+    }
+
     /// Eliminar la selección: abre el modal de confirmación.
     pub fn op_delete(&mut self, permanent: bool) {
         {

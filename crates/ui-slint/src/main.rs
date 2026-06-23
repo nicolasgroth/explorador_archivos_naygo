@@ -1067,12 +1067,54 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
-                    // Drag&drop OLE — RECIBIR (F5D): archivos soltados sobre la ventana → copiar
-                    // (o mover si Shift) a la carpeta del panel activo (fallback del diseño).
+                    // Drag&drop OLE — RECIBIR: archivos soltados sobre la ventana → copiar (o
+                    // mover) a la carpeta del panel que está BAJO el cursor. El payload trae el
+                    // punto del cursor en coords de PANTALLA (físicas); lo convertimos a coords de
+                    // CONTENIDO (el mismo sistema que usa pane_rects/drop_hit) y enrutamos con
+                    // `drop_at`. Sirve tanto para drags intra-app (entre paneles) como para drags
+                    // desde el Explorador de Windows (ahora caen en el panel apuntado, no en el
+                    // activo).
+                    //
+                    // Conversión pantalla→contenido:
+                    //   win_fis = pantalla - window().position()   (ambos en píxeles físicos)
+                    //   win_log = win_fis / scale_factor           (a coords lógicas)
+                    //   content = win_log - (0, TOP_BAR_H)         (descontar la barra superior)
+                    // El área de contenido tiene origen (0,0) bajo la barra (ver `area_of`), así
+                    // que en X no hay offset lateral. SUPUESTO a confirmar en la VM: la altura de
+                    // la barra superior es 34px lógicos (top-bar-h). Si la geometría real difiere,
+                    // se afina este offset.
+                    const TOP_BAR_H: f32 = 34.0;
                     while let Ok(payload) = drop_rx.try_recv() {
-                        if let Some(active) = ctrl.borrow().active_id() {
-                            ctrl.borrow_mut()
-                                .drop_external(active, payload.paths, payload.move_);
+                        let mut routed = false;
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let pos = ui.window().position();
+                            let scale = ui.window().scale_factor().max(0.01);
+                            let cx = (payload.screen_x - pos.x) as f32 / scale;
+                            let cy = (payload.screen_y - pos.y) as f32 / scale - TOP_BAR_H;
+                            let (ctrl_down, shift_down) = {
+                                let c = ctrl.borrow();
+                                (c.ctrl_down, c.shift_down)
+                            };
+                            routed = ctrl.borrow_mut().drop_at(
+                                cx,
+                                cy,
+                                ctrl_down,
+                                shift_down,
+                                payload.paths.clone(),
+                                payload.move_,
+                            );
+                        }
+                        // Fallback: si no se pudo enrutar por el punto (sin ventana, o el cursor
+                        // no cayó sobre un panel Files), caer al panel activo como antes para no
+                        // perder el drop.
+                        if !routed {
+                            if let Some(active) = ctrl.borrow().active_id() {
+                                ctrl.borrow_mut().drop_external(
+                                    active,
+                                    payload.paths,
+                                    payload.move_,
+                                );
+                            }
                         }
                     }
                     // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y

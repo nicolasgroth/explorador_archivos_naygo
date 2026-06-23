@@ -23,13 +23,19 @@ use crate::dir_watch::Waker;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
-/// Un drop recibido: las rutas soltadas y si el usuario pidió MOVER (tecla Shift) en vez de
-/// copiar.
+/// Un drop recibido: las rutas soltadas, si el usuario pidió MOVER (tecla Shift) en vez de
+/// copiar, y el PUNTO del cursor al soltar (en coordenadas de PANTALLA, píxeles físicos) para
+/// que la UI enrute el drop al panel que está bajo el cursor (no al panel activo).
 pub struct DropPayload {
     /// Rutas absolutas de los archivos/carpetas soltados.
     pub paths: Vec<PathBuf>,
     /// `true` si `MK_SHIFT` estaba activo al soltar (mover); `false` = copiar.
     pub move_: bool,
+    /// X del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). El SO lo entrega
+    /// en `IDropTarget::Drop`. La UI lo convierte a coords de contenido para hit-testear paneles.
+    pub screen_x: i32,
+    /// Y del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos).
+    pub screen_y: i32,
 }
 
 /// Guard RAII: al dropearse, revoca el registro (`RevokeDragDrop`) y libera el target.
@@ -167,9 +173,12 @@ mod windows_impl {
             &self,
             pdataobj: Ref<IDataObject>,
             grfkeystate: MODIFIERKEYS_FLAGS,
-            _pt: &POINTL,
+            pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
+            // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
+            // usa para enrutar el drop al panel bajo el cursor.
+            let (screen_x, screen_y) = (pt.x, pt.y);
             let effect = effect_for(grfkeystate);
             // Reflejar el efecto elegido en la salida (el SO lo usa para la animación final).
             // SAFETY: puntero del SO a un DROPEFFECT escribible.
@@ -209,7 +218,12 @@ mod windows_impl {
 
                 if !paths.is_empty() {
                     // Enviar el payload; si el receptor ya colgó, lo ignoramos.
-                    let _ = self.tx.send(DropPayload { paths, move_ });
+                    let _ = self.tx.send(DropPayload {
+                        paths,
+                        move_,
+                        screen_x,
+                        screen_y,
+                    });
                     (self.waker)();
                 }
             }
