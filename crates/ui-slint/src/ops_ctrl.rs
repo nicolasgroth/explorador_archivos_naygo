@@ -79,6 +79,14 @@ pub struct ActiveOp {
     /// Cuántos orígenes se omitieron al RETOMAR porque cambiaron/desaparecieron desde el
     /// journal (0 en una op normal). Se muestra en el estado para no perderlos en silencio.
     pub resume_skipped: usize,
+    /// Instante del primer progreso recibido (arranque efectivo de la transferencia). Se usa
+    /// para el transcurrido, la velocidad media y la ETA. `None` hasta el primer `Progress`.
+    pub started_at: Option<std::time::Instant>,
+    /// Última muestra (instante, bytes_done) para derivar la velocidad instantánea entre
+    /// dos `Progress` y, de ahí, el pico.
+    pub last_sample: Option<(std::time::Instant, u64)>,
+    /// Velocidad pico observada (bytes/s): el máximo de las velocidades instantáneas.
+    pub peak_speed: u64,
 }
 
 /// Modo de ejecución de operaciones múltiples.
@@ -203,6 +211,9 @@ impl OpsCtrl {
                 request: record_undo.then_some(req),
                 awaiting_conflict: None,
                 resume_skipped: 0,
+                started_at: None,
+                last_sample: None,
+                peak_speed: 0,
             });
             return;
         }
@@ -251,6 +262,9 @@ impl OpsCtrl {
             request,
             awaiting_conflict: None,
             resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
         });
     }
 
@@ -297,7 +311,23 @@ impl OpsCtrl {
                 }
             }
             if let Some(p) = last_progress {
-                self.active_ops[i].progress = Some(p);
+                let now = std::time::Instant::now();
+                let op = &mut self.active_ops[i];
+                // Primer progreso = arranque efectivo de la transferencia.
+                if op.started_at.is_none() {
+                    op.started_at = Some(now);
+                }
+                // Velocidad instantánea = Δbytes / Δt respecto de la última muestra; el pico
+                // es el máximo de todas. (La media y la ETA se derivan al vuelo en op_rows.)
+                if let Some((prev_t, prev_bytes)) = op.last_sample {
+                    let dt = now.duration_since(prev_t).as_secs_f64();
+                    if dt > 0.0 && p.bytes_done >= prev_bytes {
+                        let inst = ((p.bytes_done - prev_bytes) as f64 / dt) as u64;
+                        op.peak_speed = op.peak_speed.max(inst);
+                    }
+                }
+                op.last_sample = Some((now, p.bytes_done));
+                op.progress = Some(p);
             }
             if let Some(prompt) = new_conflict {
                 self.active_ops[i].awaiting_conflict = Some(prompt);
@@ -382,11 +412,59 @@ impl OpsCtrl {
         }
     }
 
-    /// Quita las ops terminadas (sin canal y con resumen ya mostrado). El llamador decide
-    /// cuándo podar (p. ej. al ocultar el panel).
+    /// Pausa la op `op_index` (el motor se detiene en el siguiente `wait_if_paused`).
+    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
+    #[allow(dead_code)]
+    pub fn pause_op(&mut self, op_index: usize) {
+        if let Some(op) = self.active_ops.get(op_index) {
+            op.token.pause();
+        }
+    }
+
+    /// Reanuda la op `op_index` si estaba pausada.
+    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
+    #[allow(dead_code)]
+    pub fn resume_op(&mut self, op_index: usize) {
+        if let Some(op) = self.active_ops.get(op_index) {
+            op.token.resume();
+        }
+    }
+
+    /// Saltar el archivo en curso en vivo: PENDIENTE. El motor no soporta hoy abortar el
+    /// archivo actual a mitad de copia y continuar con el siguiente (el `CancellationToken`
+    /// solo cancela la op entera). Implementarlo bien requiere soporte del motor (una señal
+    /// "skip-current" análoga a pause/cancel). Se deja como no-op para no introducir un
+    /// mecanismo frágil; la UI puede ofrecerlo deshabilitado hasta entonces.
+    // El cableado del callback desde el panel rico llega en la Task 7 (render del panel).
+    #[allow(dead_code)]
+    pub fn skip_op(&mut self, _op_index: usize) {
+        // No-op intencional: ver el comentario de arriba.
+    }
+
+    /// Tope de operaciones terminadas que se conservan como historial reciente.
+    const HISTORY_CAP: usize = 20;
+
+    /// Poda las ops terminadas viejas, conservando como historial las `HISTORY_CAP` más
+    /// recientes (con su resumen). Las en curso y las en cola se conservan siempre. El
+    /// llamador decide cuándo podar (al iniciar una op nueva).
     pub fn prune_finished(&mut self) {
-        self.active_ops
-            .retain(|o| o.rx.is_some() || !o.started || o.pending.is_some());
+        // Una op cuenta como "terminada" (historial) si ya no tiene canal y arrancó alguna vez.
+        let is_finished = |o: &ActiveOp| o.rx.is_none() && o.started && o.pending.is_none();
+        let finished_total = self.active_ops.iter().filter(|o| is_finished(o)).count();
+        if finished_total <= Self::HISTORY_CAP {
+            return;
+        }
+        // Hay que descartar las más viejas: se conservan las últimas HISTORY_CAP terminadas
+        // (las del final del vector, que es el orden de llegada) y todas las activas/en cola.
+        let mut to_drop = finished_total - Self::HISTORY_CAP;
+        self.active_ops.retain(|o| {
+            if is_finished(o) && to_drop > 0 {
+                to_drop -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     // --- Datos para la UI (modal activo + filas de progreso) ---
@@ -439,21 +517,67 @@ impl OpsCtrl {
         }
     }
 
-    /// Filas del panel de progreso (una por op activa o terminada con resumen).
+    /// Filas del panel de progreso (una por op activa, en cola o terminada/historial).
+    /// Calcula al vuelo el transcurrido, la velocidad media (bytes_done/elapsed), la velocidad
+    /// pico (acumulada en el poll) y la ETA (bytes restantes / velocidad media). Los tamaños se
+    /// formatean con `SizeFormat::Auto` (el OpsCtrl no tiene acceso a Settings).
     pub fn op_rows(&self) -> Vec<OpRowData> {
+        use naygo_core::format::{format_duration, format_size, format_speed, SizeFormat};
+        const FMT: SizeFormat = SizeFormat::Auto;
         self.active_ops
             .iter()
             .enumerate()
             .map(|(i, o)| {
                 let running = o.rx.is_some();
-                let percent = match &o.progress {
-                    Some(p) if p.bytes_total > 0 => {
-                        (p.bytes_done as f32 / p.bytes_total as f32) * 100.0
-                    }
-                    _ if o.summary.is_some() => 100.0,
-                    _ => 0.0,
+                let in_queue = !o.started;
+                let paused = o.token.is_paused();
+
+                let (bytes_done, bytes_total, files_done, files_total, current_file) =
+                    match &o.progress {
+                        Some(p) => (
+                            p.bytes_done,
+                            p.bytes_total,
+                            p.files_done as i32,
+                            p.files_total as i32,
+                            p.current
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        ),
+                        None => (0, 0, 0, 0, String::new()),
+                    };
+
+                let percent = if bytes_total > 0 {
+                    (bytes_done as f32 / bytes_total as f32) * 100.0
+                } else if o.summary.is_some() {
+                    100.0
+                } else {
+                    0.0
                 };
-                let status = if !o.started {
+
+                // Transcurrido + velocidad media + ETA, derivados de `started_at`.
+                let elapsed_secs = o.started_at.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                let avg_speed = if elapsed_secs > 0.0 {
+                    (bytes_done as f64 / elapsed_secs) as u64
+                } else {
+                    0
+                };
+                let eta = if avg_speed > 0 && bytes_total > bytes_done {
+                    format_duration((bytes_total - bytes_done) / avg_speed)
+                } else {
+                    String::new()
+                };
+
+                // 0=en curso 1=en cola 2=historial (terminada con resumen).
+                let kind = if o.summary.is_some() {
+                    2
+                } else if in_queue {
+                    1
+                } else {
+                    0
+                };
+
+                let status = if in_queue {
                     "en cola".to_string()
                 } else if let Some(s) = &o.summary {
                     let mut t = format!(
@@ -471,17 +595,31 @@ impl OpsCtrl {
                         ));
                     }
                     t
+                } else if paused {
+                    "pausada".to_string()
                 } else if o.awaiting_conflict.is_some() {
                     "esperando decisión…".to_string()
                 } else {
                     "en curso…".to_string()
                 };
+
                 OpRowData {
                     index: i as i32,
                     label: o.label.clone(),
                     percent,
                     status,
                     running,
+                    paused,
+                    bytes_done: format_size(bytes_done, FMT),
+                    bytes_total: format_size(bytes_total, FMT),
+                    files_done,
+                    files_total,
+                    current_file,
+                    speed: format_speed(avg_speed),
+                    speed_peak: format_speed(o.peak_speed),
+                    eta,
+                    elapsed: format_duration(elapsed_secs as u64),
+                    kind,
                 }
             })
             .collect()
@@ -611,6 +749,9 @@ impl OpsCtrl {
             request: None,
             awaiting_conflict: None,
             resume_skipped,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
         });
         self.drop_resume_item(id);
         true
@@ -648,6 +789,7 @@ pub struct OpDialogVmData {
 }
 
 /// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
+/// Los campos de tamaño/velocidad/tiempo vienen ya formateados como String (listos para la UI).
 #[derive(Clone, Debug)]
 pub struct OpRowData {
     pub index: i32,
@@ -655,6 +797,18 @@ pub struct OpRowData {
     pub percent: f32,
     pub status: String,
     pub running: bool,
+    pub paused: bool,
+    pub bytes_done: String,
+    pub bytes_total: String,
+    pub files_done: i32,
+    pub files_total: i32,
+    pub current_file: String,
+    pub speed: String,
+    pub speed_peak: String,
+    pub eta: String,
+    pub elapsed: String,
+    /// 0=en curso 1=en cola 2=historial.
+    pub kind: i32,
 }
 
 /// Segundos desde la época Unix (para el timestamp del UndoEntry).

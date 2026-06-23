@@ -221,13 +221,24 @@ export struct NewFolderVm {
     can-create: bool,   // hay al menos una línea válida
 }
 
-// Fila del panel de progreso: una operación en curso/terminada.
+// Fila del panel de progreso: una operación en curso/en cola/terminada (historial).
 export struct OpRowVm {
     index: int,
     label: string,
-    percent: float,    // 0..100
-    status: string,    // "en cola" / "copiando…" / "hecho: N" / "cancelada"
+    percent: float,        // 0..100
+    status: string,        // "en cola" / "en curso…" / "pausada" / "hecho: N…" / "cancelada"
     running: bool,
+    paused: bool,          // la op está pausada (token.is-paused)
+    bytes-done: string,    // ya formateado, p. ej. "12,4 GB"
+    bytes-total: string,   // ya formateado, p. ej. "94,9 GB"
+    files-done: int,
+    files-total: int,
+    current-file: string,  // nombre del archivo en curso
+    speed: string,         // velocidad media, p. ej. "123 MB/s"
+    speed-peak: string,    // velocidad pico, p. ej. "126 MB/s"
+    eta: string,           // tiempo restante estimado, p. ej. "11:08" o ""
+    elapsed: string,       // transcurrido, p. ej. "01:48"
+    kind: int,             // 0=en curso 1=en cola 2=historial
 }
 
 // Fila del historial de deshacer.

@@ -3975,6 +3975,17 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         percent: r.percent,
         status: SharedString::from(r.status.as_str()),
         running: r.running,
+        paused: r.paused,
+        bytes_done: SharedString::from(r.bytes_done.as_str()),
+        bytes_total: SharedString::from(r.bytes_total.as_str()),
+        files_done: r.files_done,
+        files_total: r.files_total,
+        current_file: SharedString::from(r.current_file.as_str()),
+        speed: SharedString::from(r.speed.as_str()),
+        speed_peak: SharedString::from(r.speed_peak.as_str()),
+        eta: SharedString::from(r.eta.as_str()),
+        elapsed: SharedString::from(r.elapsed.as_str()),
+        kind: r.kind,
     }
 }
 
