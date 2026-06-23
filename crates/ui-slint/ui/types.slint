@@ -418,6 +418,10 @@ export struct PaneVm {
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
     rows: [RowData],          // Files
+    // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`; el
+    // FilePanel observa su cambio (`changed focused-row`) para que el scroll siga al cursor al
+    // navegar por teclado (la ListView ya no es interactiva, así que no auto-scrollea sola).
+    focused-row: int,
     columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
     col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
     is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)

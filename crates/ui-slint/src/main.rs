@@ -516,6 +516,15 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.deep_active = deep;
                             changed = true;
                         }
+                        // Fila enfocada (índice de vista): al navegar por teclado cambia `f.focused`
+                        // y la UI (changed focused-row) arrastra el scroll para revelarla (C1). Va
+                        // en el refresco central para cubrir TODO lo que mueve el foco (↑↓, Re/Av
+                        // Pág, Inicio/Fin, typeahead, saltar desde la paleta), no solo un atajo.
+                        let focused = c.focused_view_of(id);
+                        if pv.focused_row != focused {
+                            pv.focused_row = focused;
+                            changed = true;
+                        }
                         // Footer (barra inferior): selección + disco. Vacío si está deshabilitado.
                         // El disco se cachea por unidad dentro del controlador (no pega a WinAPI
                         // en cada tick).
@@ -841,6 +850,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             missing_path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
                             // "Subir un nivel" solo tiene sentido si hay un ancestro existente real.
                             missing_has_ancestor: ctrl.borrow().pane_has_existing_ancestor(*id),
+                            // Fila enfocada (índice de vista) para el auto-scroll por teclado (C1).
+                            focused_row: ctrl.borrow().focused_view_of(*id),
                             deep_active: ctrl.borrow().is_deep_active(*id),
                             // El footer se llena en el primer `sync_rows` (necesita `&mut` por la
                             // caché de disco). Aquí nace vacío.

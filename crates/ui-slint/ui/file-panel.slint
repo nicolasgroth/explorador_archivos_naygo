@@ -197,11 +197,18 @@ export component FilePanel inherits FocusScope {
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
     in property <length> row-h: 22px;        // alto de fila (densidad configurable)
     in property <length> scroll-y;
+    // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`. Al
+    // cambiar, el cuerpo ajusta `wheel-scroll` para REVELAR esa fila (ver `changed focused-row`):
+    // así navegar con ↑↓/Re-Av Pág/Inicio-Fin/typeahead/paleta vuelve a arrastrar la vista tras
+    // el cursor. La ListView dejó de ser interactiva y ya no auto-scrollea sola.
+    in property <int> focused-row: -1;
     // Desplazamiento por rueda del cuerpo de la lista. El ListView va con `interactive: false`
     // (su Flickable se tragaba los `move` con botón apretado y cancelaba el TouchArea hijo, así
     // que ni el arrastre ni el rubber-band funcionaban). Ahora un único TouchArea exterior
     // captura todo y la rueda mueve `wheel-scroll`; `viewport-y` lo lee de una sola vía (sin
-    // ciclo de binding). 0 = arriba; crece hacia abajo (viewport-y es su negativo).
+    // ciclo de binding). 0 = arriba; crece hacia abajo (viewport-y es su negativo). Es la ÚNICA
+    // fuente de scroll del cuerpo: la rueda lo mueve por delta y el auto-scroll por teclado lo
+    // clampa para revelar la fila enfocada (una sola verdad → rueda y teclado no se pelean).
     property <length> wheel-scroll: 0;
     // Fila bajo el cursor según el TouchArea exterior (-1 = ninguna/zona vacía). La pinta el
     // fondo de cada fila para el efecto hover (antes lo daba el `has-hover` del row-touch).
@@ -209,6 +216,30 @@ export component FilePanel inherits FocusScope {
     // Al cambiar el contenido (navegar / refrescar), el scroll por rueda vuelve a arriba: si no,
     // una carpeta nueva quedaría desplazada con el offset de la anterior.
     changed rows => { root.wheel-scroll = 0; }
+    // Auto-scroll por teclado (C1): cuando el foco se mueve, ajusta `wheel-scroll` lo mínimo para
+    // que la fila enfocada quede completamente visible dentro del viewport del ListView.
+    //   · ventana visible = [wheel-scroll, wheel-scroll + visible-height]
+    //   · borde superior de la fila = focused-row * row-h ; inferior = (focused-row + 1) * row-h
+    // Si la fila está por ENCIMA de la ventana → llevar el scroll a su borde superior; si está por
+    // DEBAJO → llevar el fondo de la fila al borde inferior. Si ya se ve, no se toca. Todo se
+    // recorta a [0, alto-total - alto-visible]. `visible-height` puede ser 0 antes del primer
+    // layout: en ese caso no movemos nada (al asentarse, el siguiente movimiento de foco corrige).
+    changed focused-row => {
+        if (root.focused-row >= 0 && list.visible-height > 0px) {
+            // Tope inferior posible del scroll (no pasar del final de la lista).
+            root.wheel-scroll = clamp(
+                // ¿La fila cae por debajo del borde inferior? Empujar para revelarla por abajo.
+                ((root.focused-row + 1) * root.row-h > root.wheel-scroll + list.visible-height)
+                    ? (root.focused-row + 1) * root.row-h - list.visible-height
+                    // ¿Por encima del borde superior? Subir hasta su borde superior.
+                    : (root.focused-row * root.row-h < root.wheel-scroll
+                        ? root.focused-row * root.row-h
+                        // Ya visible: dejar el scroll como está.
+                        : root.wheel-scroll),
+                0px,
+                max(0px, root.rows.length * root.row-h - list.visible-height));
+        }
+    }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
     in property <bool> editing;              // este panel está editando su ruta
@@ -285,6 +316,12 @@ export component FilePanel inherits FocusScope {
         root.key-release(event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
         accept
     }
+
+    // C2: al entrar a rename el `body-touch` se desmonta y `hover-row` se queda congelado en la
+    // última fila bajo el cursor → quedaría una fila con el fondo de hover pegado. Lo limpiamos al
+    // empezar a editar (y también al salir, por simetría: el puntero pudo moverse con el editor
+    // tapando el cuerpo).
+    changed rename-pos => { root.hover-row = -1; }
 
     // Cuando este panel pasa a ser el activo, tomar el foco de teclado para que las teclas
     // lleguen sin necesidad de un clic previo (p. ej. tras Tab o al arrancar).
@@ -518,6 +555,22 @@ export component FilePanel inherits FocusScope {
             // ENCIMA en z-order) captura TODOS los eventos crudos y deduce la fila por la `y` + el
             // scroll. La rueda se re-implementa con `scroll-event` moviendo `wheel-scroll`.
             Rectangle {
+                // I5: durante el rename, un TouchArea de fondo de BAJA prioridad (primer hijo → por
+                // DEBAJO del ListView en z-order) que existe SOLO mientras se edita. La fila-editor
+                // es un LineEdit real que queda POR ENCIMA, así que sigue recibiendo sus clics; pero
+                // un clic en el resto del cuerpo (zona vacía / otra fila) cae a este TouchArea —el
+                // Flickable del ListView no es interactivo y reenvía el clic— y le quita el foco al
+                // editor (lo lleva al FocusScope raíz). Eso dispara el `changed has-focus` del
+                // LineEdit, que CONFIRMA el rename. Así clic-fuera cierra el rename como espera el
+                // usuario. (No usamos `body-touch` aquí porque va por ENCIMA y taparía el editor.)
+                if root.rename-pos != -1: TouchArea {
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down) {
+                            root.activate(root.pane-id);
+                            root.focus();
+                        }
+                    }
+                }
                 list := ListView {
                 // El ListView (std-widgets) NO expone `interactive`; su Flickable interno ya viene
                 // con `interactive: false` en el estilo fluent, pero igual interceptaba el `move`
@@ -567,6 +620,16 @@ export component FilePanel inherits FocusScope {
                                 font-size: 13px;
                                 init => { self.focus(); self.select-all(); }
                                 accepted => { root.rename-commit(i, self.text); }
+                                // I5: perder el foco (clic fuera del editor) CONFIRMA el rename con
+                                // el texto actual, igual que el editor de la path-bar. `rename-commit`
+                                // es idempotente (nombre igual/ inválido = no-op), así que esto es
+                                // seguro incluso cuando el cierre lo provoca Esc (cancel) o ↑/↓
+                                // (chain, que ya commiteó): no dispara renames duplicados ni ops vacías.
+                                changed has-focus => {
+                                    if (!self.has-focus) {
+                                        root.rename-commit(i, self.text);
+                                    }
+                                }
                                 key-pressed(ev) => {
                                     if (ev.text == Key.Escape) {
                                         root.rename-cancel();

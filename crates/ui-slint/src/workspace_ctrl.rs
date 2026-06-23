@@ -710,6 +710,19 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
     }
 
+    /// Índice de VISTA de la fila enfocada del panel `id`, o -1 si no hay foco / no es un panel
+    /// Files. Lo consume el builder del PaneVm: la UI lo observa (`changed focused-row`) para que
+    /// el scroll del listado siga a la fila enfocada al navegar por teclado (la ListView ya no es
+    /// interactiva y no auto-scrollea sola, ver C1).
+    pub fn focused_view_of(&self, id: PaneId) -> i32 {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .and_then(|f| f.focused)
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
     /// ¿La carpeta del panel `id` dejó de existir / es ilegible? Lo consulta el builder del
     /// PaneVm para mostrar el aviso DENTRO de ese panel (in-place), con sus opciones.
     pub fn pane_dir_missing(&self, id: PaneId) -> bool {
