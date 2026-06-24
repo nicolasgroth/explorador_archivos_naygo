@@ -439,6 +439,22 @@ impl OpsCtrl {
         self.pending_dialog = None;
     }
 
+    /// Cancela TODA la operación identificada por `op_id` desde el diálogo de conflicto, SIN
+    /// decidir el choque pendiente. Espeja `cancel_op` (cancela el token) más la limpieza que
+    /// hace `resolve_conflict` (borra `awaiting_conflict` y cierra el modal), pero NO envía una
+    /// `ConflictDecision`. El worker está bloqueado esperando la decisión con
+    /// `recv_timeout(50ms)` y, entre timeouts, revisa el token (ver `engine::exec_copy_step`):
+    /// al cancelarlo despierta dentro de ~50ms y aborta limpio (devuelve `Skipped`). Por eso
+    /// basta cancelar el token; no hace falta cerrar el sender ni mandar una variante especial.
+    /// Resuelve por id ESTABLE (no posición) por la misma razón que `cancel_op`/`resolve_conflict`.
+    pub fn cancel_conflict(&mut self, op_id: u64) {
+        if let Some(op) = self.active_ops.iter_mut().find(|o| o.id == op_id) {
+            op.token.cancel();
+            op.awaiting_conflict = None;
+        }
+        self.pending_dialog = None;
+    }
+
     /// Cancela la op identificada por `op_id` (id ESTABLE de `ActiveOp`, no posición). Se
     /// resuelve por id porque el vector `active_ops` se reordena entre el render del panel y
     /// el clic del usuario (poda de terminadas, avance de la cola): un índice posicional
@@ -1113,8 +1129,14 @@ mod tests {
         // Cancelar la op 30 POR ID: debe cancelar la 30 y solo la 30.
         c.cancel_op(30);
         assert!(tok30.is_cancelled(), "cancela la op 30 (la pedida)");
-        assert!(!tok20.is_cancelled(), "NO toca la op 20 (vecina tras reordenar)");
-        assert!(!tok10.is_cancelled(), "NO toca la op 10 (ya quitada del vector)");
+        assert!(
+            !tok20.is_cancelled(),
+            "NO toca la op 20 (vecina tras reordenar)"
+        );
+        assert!(
+            !tok10.is_cancelled(),
+            "NO toca la op 10 (ya quitada del vector)"
+        );
 
         // Pausar la op 20 POR ID: debe pausar la 20 y solo la 20.
         c.pause_op(20);
@@ -1133,7 +1155,10 @@ mod tests {
         c.active_ops.push(fake_active_op(7));
         let tok = c.active_ops[0].token.clone();
         c.cancel_op(999);
-        assert!(!tok.is_cancelled(), "un id desconocido no cancela ninguna op");
+        assert!(
+            !tok.is_cancelled(),
+            "un id desconocido no cancela ninguna op"
+        );
     }
 
     #[test]
@@ -1161,7 +1186,68 @@ mod tests {
         c.resolve_conflict(200, ConflictAction::Overwrite, false);
         // La op 200 recibió su decisión; la 100 (ya quitada) no recibió nada por su canal.
         assert!(rx_b.try_recv().is_ok(), "la op 200 recibe la decisión");
-        assert!(rx_a.try_recv().is_err(), "la op 100 NO recibe decisión ajena");
+        assert!(
+            rx_a.try_recv().is_err(),
+            "la op 100 NO recibe decisión ajena"
+        );
+    }
+
+    #[test]
+    fn cancel_conflict_cancela_el_token_sin_decidir() {
+        // Cancelar toda la operación desde el modal de conflicto: el token de ESA op queda
+        // cancelado (el worker bloqueado en `recv_timeout` lo verá y abortará), el conflicto
+        // pendiente se limpia y el modal se cierra. Crucial: NO se envía ninguna `ConflictDecision`
+        // por el canal (cancelar ≠ decidir el choque).
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(42);
+        let (tx, rx) = std::sync::mpsc::channel::<ConflictDecision>();
+        op.conflict_tx = tx;
+        op.awaiting_conflict = Some(ConflictPrompt {
+            existing: PathBuf::from("C:/dst/a.txt"),
+            incoming: PathBuf::from("C:/src/a.txt"),
+        });
+        let token = op.token.clone();
+        c.active_ops.push(op);
+        // El modal de conflicto está abierto apuntando a esta op.
+        c.pending_dialog = Some(OpDialog::Conflict {
+            op_id: 42,
+            prompt: ConflictPrompt {
+                existing: PathBuf::from("C:/dst/a.txt"),
+                incoming: PathBuf::from("C:/src/a.txt"),
+            },
+        });
+
+        c.cancel_conflict(42);
+
+        assert!(token.is_cancelled(), "el token de la op quedó cancelado");
+        assert!(
+            c.active_ops[0].awaiting_conflict.is_none(),
+            "el conflicto pendiente se limpió"
+        );
+        assert!(c.pending_dialog.is_none(), "el modal se cerró");
+        assert!(
+            rx.try_recv().is_err(),
+            "NO se envió ninguna decisión por el canal (cancelar no decide el choque)"
+        );
+    }
+
+    #[test]
+    fn cancel_conflict_id_inexistente_solo_cierra_el_modal() {
+        // Un id que ya no existe (op terminada/podada) no debe entrar en pánico: solo cierra el
+        // modal sin tocar otras ops.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        c.active_ops.push(fake_active_op(7));
+        let tok = c.active_ops[0].token.clone();
+        c.pending_dialog = Some(OpDialog::Conflict {
+            op_id: 999,
+            prompt: ConflictPrompt {
+                existing: PathBuf::from("C:/x/a.txt"),
+                incoming: PathBuf::from("C:/y/a.txt"),
+            },
+        });
+        c.cancel_conflict(999);
+        assert!(!tok.is_cancelled(), "no toca la op 7 (id distinto)");
+        assert!(c.pending_dialog.is_none(), "igual cierra el modal");
     }
 
     #[test]

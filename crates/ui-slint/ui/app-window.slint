@@ -877,6 +877,7 @@ export component AppWindow inherits Window {
     callback delete-confirm();
     callback delete-cancel();
     callback conflict-decide(int, bool);   // (action, apply-all)
+    callback conflict-cancel();            // cancelar toda la operación desde el conflicto
     callback name-changed(string);
     callback name-confirm();
     callback name-cancel();
@@ -1638,6 +1639,7 @@ export component AppWindow inherits Window {
         delete-confirm() => { root.delete-confirm(); }
         delete-cancel() => { root.delete-cancel(); }
         conflict-decide(a, all) => { root.conflict-decide(a, all); }
+        conflict-cancel() => { root.conflict-cancel(); }
         name-changed(v) => { root.name-changed(v); }
         name-confirm() => { root.name-confirm(); }
         name-cancel() => { root.name-cancel(); }

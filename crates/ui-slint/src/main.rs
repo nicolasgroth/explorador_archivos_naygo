@@ -3487,6 +3487,32 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_conflict_cancel(move || {
+            // Cancelar TODA la operación desde el modal de conflicto (botón "Cancelar todo",
+            // Esc o clic fuera). Toma el id estable de la op en conflicto del pending_dialog,
+            // igual que `on_conflict_decide`, y cancela su token sin enviar una decisión: el
+            // worker está esperando con `recv_timeout` y, al ver el token cancelado, aborta.
+            let op_id = {
+                let c = ctrl.borrow();
+                if let Some(ops_ctrl::OpDialog::Conflict { op_id, .. }) = &c.ops.pending_dialog {
+                    Some(*op_id)
+                } else {
+                    None
+                }
+            };
+            if let Some(op_id) = op_id {
+                ctrl.borrow_mut().ops.cancel_conflict(op_id);
+                // Mantener el timer vivo para que `pump_ops` drene el `Cancelled`/`Skipped` del
+                // worker y cierre la op (progreso → historial), igual que un cancel normal.
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
         ui.on_name_changed(move |v| {
             ctrl.borrow_mut().ops.name_changed(v.to_string());
         });

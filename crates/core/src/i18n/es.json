@@ -412,6 +412,7 @@
   "slint.dialog.skip": "Saltar",
   "slint.dialog.rename": "Renombrar",
   "slint.dialog.overwrite": "Sobrescribir",
+  "slint.dialog.conflict_cancel_all": "Cancelar todo",
   "slint.dialog.invalid_name": "Nombre no válido.",
   "slint.dialog.accept": "Aceptar",
   "slint.dialog.create": "Crear",

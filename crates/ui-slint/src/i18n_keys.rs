@@ -92,6 +92,7 @@ where
     tr.set_dlg_skip(c.t("slint.dialog.skip").into());
     tr.set_dlg_rename(c.t("slint.dialog.rename").into());
     tr.set_dlg_overwrite(c.t("slint.dialog.overwrite").into());
+    tr.set_dlg_conflict_cancel_all(c.t("slint.dialog.conflict_cancel_all").into());
     tr.set_dlg_invalid_name(c.t("slint.dialog.invalid_name").into());
     tr.set_dlg_accept(c.t("slint.dialog.accept").into());
     tr.set_dlg_create(c.t("slint.dialog.create").into());
