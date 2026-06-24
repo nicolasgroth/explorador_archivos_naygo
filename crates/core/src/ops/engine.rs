@@ -108,6 +108,27 @@ pub fn run_plan(
         if token.is_cancelled() {
             break;
         }
+        // CINTURÓN Y TIRANTES (red de seguridad última antes del borrado destructivo): JAMÁS
+        // borrar un `target` que sea igual a, o ancestro de, algún `step.from` del plan. Si lo
+        // fuera, `remove_dir_all` se llevaría por delante un ORIGEN de la copia (pérdida total de
+        // datos). Aunque `folder_conflicts` ya descarta `dest_root == src`, esta guarda protege
+        // ante CUALQUIER camino que contamine `pre_delete`. No se borra; se registra el aviso.
+        let borraria_un_origen = plan.steps.iter().any(|s| {
+            s.from
+                .as_ref()
+                .is_some_and(|from| from == target || from.starts_with(target))
+        });
+        if borraria_un_origen {
+            summary.items.push((
+                target.clone(),
+                OpOutcome::Failed(
+                    "borrado omitido: el destino a reemplazar es (o contiene) un origen de la \
+                     operación; nunca se borra un origen"
+                        .to_string(),
+                ),
+            ));
+            continue;
+        }
         // Solo borrar si existe; si ya no está, no es un error (objetivo cumplido).
         if target.exists() {
             if let Err(e) = std::fs::remove_dir_all(target) {
@@ -643,6 +664,120 @@ mod tests {
         assert!(src.join("a.txt").exists(), "el origen no se tocó");
         assert_eq!(fs::read(src.join("a.txt")).unwrap(), b"nuevo");
         assert!(summary.count_failed() == 0, "sin fallos");
+    }
+
+    #[test]
+    fn pre_delete_jamas_borra_un_origen_del_plan() {
+        // RED DE SEGURIDAD CRÍTICA (cinturón-y-tirantes del motor): si por CUALQUIER camino el
+        // `pre_delete` viene contaminado con una ruta que ES un `step.from` (o un ancestro de uno),
+        // el motor JAMÁS debe ejecutar `remove_dir_all` sobre ella: borraría el ORIGEN de la copia
+        // (pérdida total de datos). Simulamos ese plan envenenado a mano y verificamos que tras
+        // `run_plan` el origen sigue intacto con su contenido.
+        let dir = tempfile::tempdir().unwrap();
+        // Origen: carpeta/ con a.txt.
+        let origen = dir.path().join("carpeta");
+        fs::create_dir(&origen).unwrap();
+        fs::write(origen.join("a.txt"), b"datos-importantes").unwrap();
+        // Destino donde se copiaría el árbol del origen.
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let dest_root = dest.join("carpeta");
+
+        // Plan ENVENENADO: copia desde DENTRO del origen, pero pre_delete apunta al origen MISMO
+        // (lo que ocurriría si folder_conflicts no descartara dest_root==src y se eligiera Replace).
+        let plan = OpPlan {
+            steps: vec![
+                OpStep {
+                    from: None,
+                    to: dest_root.clone(),
+                    bytes: 0,
+                    is_dir: true,
+                },
+                OpStep {
+                    from: Some(origen.join("a.txt")),
+                    to: dest_root.join("a.txt"),
+                    bytes: 17,
+                    is_dir: false,
+                },
+            ],
+            total_bytes: 17,
+            total_files: 1,
+            // El origen entero, marcado (erróneamente) para borrar antes de copiar.
+            pre_delete: vec![origen.clone()],
+        };
+
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let _summary = run_plan(
+            &plan,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+
+        // LO CRUCIAL: el origen NUNCA se borró. Sigue existiendo con su contenido.
+        assert!(
+            origen.exists(),
+            "el motor borró el ORIGEN (pre_delete contaminado): pérdida total de datos"
+        );
+        assert!(
+            origen.join("a.txt").exists(),
+            "el contenido del origen sigue intacto"
+        );
+        assert_eq!(
+            fs::read(origen.join("a.txt")).unwrap(),
+            b"datos-importantes"
+        );
+    }
+
+    #[test]
+    fn pre_delete_no_borra_un_ancestro_de_un_origen() {
+        // Variante: pre_delete apunta a un ANCESTRO de un `step.from` (no al from exacto). El motor
+        // debe igual abstenerse: borrar el ancestro se llevaría el origen por delante.
+        let dir = tempfile::tempdir().unwrap();
+        // Ancestro/ contiene origen/ que contiene a.txt; el step copia desde origen/a.txt.
+        let ancestro = dir.path().join("ancestro");
+        let origen = ancestro.join("origen");
+        fs::create_dir_all(&origen).unwrap();
+        fs::write(origen.join("a.txt"), b"x").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        let plan = OpPlan {
+            steps: vec![OpStep {
+                from: Some(origen.join("a.txt")),
+                to: dest.join("a.txt"),
+                bytes: 1,
+                is_dir: false,
+            }],
+            total_bytes: 1,
+            total_files: 1,
+            pre_delete: vec![ancestro.clone()],
+        };
+
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let _ = run_plan(
+            &plan,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+
+        assert!(
+            origen.join("a.txt").exists(),
+            "el motor borró un ancestro del origen: pérdida de datos"
+        );
     }
 
     #[test]

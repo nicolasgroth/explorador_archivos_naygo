@@ -26,7 +26,7 @@ pub use plan::{plan, PlanError};
 pub use plan_async::{spawn_plan, PlanMsg};
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Qué operación se pide.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +179,13 @@ pub fn folder_conflicts(req: &OpRequest) -> Vec<FolderConflict> {
             continue;
         };
         let dest_root = dest.join(name);
+        // GUARDA CRÍTICA: copiar/mover una carpeta a SU PROPIO directorio padre hace que
+        // `dest_root == src` (la carpeta de origen MISMA). Eso NO es un conflicto: reportarlo
+        // permitiría que el usuario eligiera "Reemplazar" y el motor borrara el origen entero
+        // (pérdida total de datos). Lo descartamos antes de siquiera tocar el FS.
+        if dest_root == *src {
+            continue;
+        }
         if dest_root.is_dir() {
             out.push(FolderConflict {
                 name: name.to_string_lossy().into_owned(),
@@ -201,7 +208,7 @@ pub fn folder_conflicts(req: &OpRequest) -> Vec<FolderConflict> {
 ///
 /// `dest_root` es la ruta destino exacta (`dest_dir.join(nombre)`): solo se filtra/borra ESE
 /// destino, nunca el origen ni otra carpeta.
-pub fn apply_folder_decision(plan: &mut OpPlan, dest_root: &PathBuf, decision: FolderDecision) {
+pub fn apply_folder_decision(plan: &mut OpPlan, dest_root: &Path, decision: FolderDecision) {
     match decision {
         FolderDecision::Merge => {}
         FolderDecision::Skip => {
@@ -209,8 +216,8 @@ pub fn apply_folder_decision(plan: &mut OpPlan, dest_root: &PathBuf, decision: F
             recompute_totals(plan);
         }
         FolderDecision::Replace => {
-            if !plan.pre_delete.contains(dest_root) {
-                plan.pre_delete.push(dest_root.clone());
+            if !plan.pre_delete.iter().any(|p| p.as_path() == dest_root) {
+                plan.pre_delete.push(dest_root.to_path_buf());
             }
         }
     }
@@ -328,6 +335,25 @@ mod folder_conflict_tests {
         fs::create_dir(&dest).unwrap();
         let req = transfer(false, vec![src], dest);
         assert!(folder_conflicts(&req).is_empty());
+    }
+
+    #[test]
+    fn folder_conflicts_ignora_carpeta_a_su_propio_lugar() {
+        // BUG CRÍTICO: copiar/mover una carpeta a SU PROPIO directorio padre hace que
+        // `dest.join(nombre) == src` (el origen MISMO). Eso NO es un conflicto: si se reportara,
+        // el usuario podría elegir Reemplazar y el motor borraría el origen. folder_conflicts
+        // DEBE descartar ese caso.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("carpeta");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"origen").unwrap();
+        // dest == padre del origen → dest.join("carpeta") == src.
+        let dest = dir.path().to_path_buf();
+        let req = transfer(false, vec![src], dest);
+        assert!(
+            folder_conflicts(&req).is_empty(),
+            "copiar una carpeta a su propio lugar no es un conflicto"
+        );
     }
 
     #[test]

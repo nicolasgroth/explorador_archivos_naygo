@@ -175,6 +175,12 @@ pub(super) fn plan_transfer_with(
             break;
         }
         let base_to = dest.join(src.file_name().unwrap_or_default());
+        // Copiar/mover un origen a SU PROPIO lugar (`dest.join(name) == src`) es un no-op: no
+        // generamos pasos `from == to` (que serían ruidosos y, en el caso de carpeta, podrían
+        // alimentar un `pre_delete` peligroso aguas arriba). Saltamos ese origen.
+        if base_to == *src {
+            continue;
+        }
         expand(
             src,
             &base_to,
@@ -334,6 +340,48 @@ mod tests {
         fs::create_dir(&dest).unwrap();
         let e = plan(&req(OpKind::Copy, vec![src], Some(dest))).unwrap_err();
         assert_eq!(e, PlanError::DestInsideSource);
+    }
+
+    #[test]
+    fn copy_carpeta_a_su_propio_lugar_no_genera_pasos() {
+        // Copiar/mover una carpeta a SU PROPIO directorio padre (`dest.join(name) == src`) es un
+        // no-op para ese origen: no debe producir pasos `from == to` raros. El plan queda vacío.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("carpeta");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"datos").unwrap();
+        // dest == padre del origen.
+        let dest = dir.path().to_path_buf();
+        let plan = plan(&req(OpKind::Copy, vec![src], Some(dest))).unwrap();
+        assert!(
+            plan.steps.is_empty(),
+            "copiar a su propio lugar no genera pasos"
+        );
+        assert_eq!(plan.total_files, 0);
+        assert_eq!(plan.total_bytes, 0);
+    }
+
+    #[test]
+    fn copy_a_su_propio_lugar_no_descarta_los_otros_origenes() {
+        // Si un origen es no-op (a su propio lugar) pero hay OTRO origen que vive en otra carpeta,
+        // el plan sigue expandiendo el otro. dest = padre del primer origen (lo hace no-op), pero
+        // el segundo origen está en una subcarpeta distinta, así que SÍ se copia.
+        let dir = tempfile::tempdir().unwrap();
+        // mismo/ se "copia" a su propio padre (dir) → no-op.
+        let same = dir.path().join("mismo");
+        fs::create_dir(&same).unwrap();
+        fs::write(same.join("a.txt"), b"aa").unwrap();
+        // otro.txt vive en una subcarpeta `fuente/`, no en `dir`, así que copiarlo a `dir` SÍ es real.
+        let fuente = dir.path().join("fuente");
+        fs::create_dir(&fuente).unwrap();
+        let otro = fuente.join("otro.txt");
+        fs::write(&otro, b"bbb").unwrap();
+        let dest = dir.path().to_path_buf();
+        let plan = plan(&req(OpKind::Copy, vec![same, otro], Some(dest.clone()))).unwrap();
+        // Solo el archivo "otro.txt" produjo un paso.
+        assert_eq!(plan.total_files, 1);
+        assert_eq!(plan.total_bytes, 3);
+        assert!(plan.steps.iter().any(|s| s.to == dest.join("otro.txt")));
     }
 
     #[test]
