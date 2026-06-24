@@ -7,6 +7,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 ### Añadido
+- Al copiar o mover una carpeta que ya existe en el destino, Naygo pregunta una sola vez qué hacer:
+  **Fusionar** (copia dentro, preguntando solo por los archivos que choquen), **Reemplazar** (deja la
+  carpeta destino con el contenido del origen), **Saltar** o **Cancelar**. Con varias carpetas en
+  conflicto, una casilla aplica la misma decisión a todas.
+- El cálculo previo de una copia grande (recorrer la carpeta para saber cuánto pesa) ahora ocurre en
+  segundo plano: la aplicación ya no se congela. Mientras tanto, el panel de Operaciones muestra
+  «Calculando…» con los archivos y el tamaño contados hasta el momento, y se puede cancelar desde ahí.
 - Menú de visibilidad en la barra de herramientas (botón con un ojo): muestra u oculta los
   archivos y carpetas marcados como ocultos, los de sistema, y los que empiezan con punto (estilo
   Linux). Cada interruptor es global, se aplica al instante a todos los paneles y al árbol, y se
@@ -95,6 +102,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
+- El diálogo «Ya existe…» que aparece al copiar sobre un archivo existente ahora permite **cancelar
+  toda la operación** (botón «Cancelar todo», además de Escape). Antes el aviso atrapaba: solo dejaba
+  Saltar/Renombrar/Sobrescribir y su fondo tapaba el botón Cancelar del panel. Cerrar el aviso por
+  fuera (Escape o clic afuera) salta solo ese archivo y continúa.
+- Arrastrar las filas de archivos entre paneles vuelve a funcionar (la lista capturaba mal el gesto
+  del mouse). También se recuperó la selección por rectángulo arrastrando sobre la lista.
 - Copiar o mover archivos grandes ya muestra el avance real (antes la copia en curso parecía
   detenerse): el progreso se actualiza por bytes con velocidad y tiempo restante. Resuelve el caso
   en que pegar y sobrescribir un archivo grande parecía copiar solo unos megas.

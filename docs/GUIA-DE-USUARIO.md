@@ -207,6 +207,9 @@ líneas inválidas se avisan y se omiten; las válidas se crean.
 iniciar una operación (también se puede agregar a mano desde el menú **Panel ▾**).
 Tiene tres zonas:
 
+- **Calculando…:** antes de copiar una carpeta, Naygo la recorre para saber cuánto pesa.
+  Eso ahora ocurre **en segundo plano** (la aplicación no se congela) y se muestra como
+  *"Calculando… N archivos, M GB"* con su propio botón **Cancelar**.
 - **En curso:** la operación que se está ejecutando. Muestra el archivo actual, una
   **barra de progreso**, *"Copiado X de Y"*, la **velocidad** (media y pico), el
   **tiempo transcurrido** y el **restante** estimado. Trae botones **Pausar/Reanudar**,
@@ -227,6 +230,21 @@ panel a otro. Dentro del **mismo disco** la operación **mueve**; hacia **otro d
 **copia**. Mantener **Ctrl** mientras arrastras **fuerza copiar**; mantener **Shift**
 **fuerza mover**. (Arrastrar archivos **fuera** de Naygo, al Explorador de Windows,
 sigue funcionando como antes.)
+
+**Cuando algo ya existe en el destino:**
+
+- **Un archivo** que choca abre el aviso *"Ya existe «…»"* con **Saltar**, **Renombrar**,
+  **Sobrescribir** y **Cancelar todo** (este último aborta la operación entera). La casilla
+  *"Aplicar a todos los conflictos"* repite tu elección para los demás archivos. Cerrar el
+  aviso con **Escape** o un clic afuera **salta** ese archivo y sigue.
+- **Una carpeta** que ya existe pregunta una sola vez qué hacer:
+  - **Fusionar:** copia dentro de la carpeta existente; si algún archivo choca, pregunta por él.
+  - **Reemplazar:** deja la carpeta destino con **solo** el contenido del origen (borra lo que
+    había). Es una acción destructiva, por eso el botón está marcado en rojo.
+  - **Saltar:** no copia esa carpeta y continúa con el resto.
+  - **Cancelar:** aborta toda la operación.
+
+  Con varias carpetas en conflicto, *"Aplicar a todas las carpetas"* repite la decisión.
 
 ---
 
