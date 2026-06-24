@@ -11,6 +11,7 @@ pub mod engine;
 pub mod journal;
 pub mod names;
 pub mod plan;
+pub mod plan_async;
 pub mod undo;
 
 pub use actions::{
@@ -22,6 +23,7 @@ pub use journal::{
 };
 pub use names::{dedup_name, is_valid_name};
 pub use plan::{plan, PlanError};
+pub use plan_async::{spawn_plan, PlanMsg};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

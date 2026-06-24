@@ -864,10 +864,12 @@ export component AppWindow inherits Window {
     in property <[OpRowVm]> op-running-rows;
     in property <[OpRowVm]> op-queued-rows;
     in property <[OpRowVm]> op-history-rows;
+    in property <[OpRowVm]> op-planning-rows;
     // Recuentos por kind (calculados en Rust) para el resumen del panel rico de operaciones.
     in property <int> op-running-count;
     in property <int> op-queued-count;
     in property <int> op-history-count;
+    in property <int> op-planning-count;
     callback op-cancel(int);
     callback op-pause(int);
     callback op-resume(int);
@@ -1522,9 +1524,11 @@ export component AppWindow inherits Window {
                         running-rows: root.op-running-rows;
                         queued-rows: root.op-queued-rows;
                         history-rows: root.op-history-rows;
+                        planning-rows: root.op-planning-rows;
                         running-count: root.op-running-count;
                         queued-count: root.op-queued-count;
                         history-count: root.op-history-count;
+                        planning-count: root.op-planning-count;
                         pause(i) => { root.op-pause(i); }
                         resume(i) => { root.op-resume(i); }
                         skip(i) => { root.op-skip(i); }

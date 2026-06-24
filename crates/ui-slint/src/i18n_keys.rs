@@ -79,6 +79,7 @@ where
     tr.set_ops_elapsed(c.t("ops.elapsed").into());
     tr.set_ops_remaining(c.t("ops.remaining").into());
     tr.set_ops_waiting(c.t("ops.waiting").into());
+    tr.set_ops_calculating(c.t("ops.calculating").into());
     // Encabezados de columnas.
     tr.set_col_name(c.t("slint.col.name").into());
     tr.set_col_ext(c.t("slint.col.ext").into());

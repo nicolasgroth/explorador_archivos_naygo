@@ -138,6 +138,18 @@ component OpButton inherits Rectangle {
     }
 }
 
+// Indicador indeterminado para la fase "Calculando…": un punto de acento (no hay % aún porque
+// no se conoce el total hasta terminar el escaneo). La SENSACIÓN de avance la dan los contadores
+// (archivos/bytes) que suben en vivo. Se evita una animación continua a propósito: la app prioriza
+// bajo consumo y corre con render por software; un spinner girando quemaría CPU sin aportar dato.
+component ScanDot inherits Rectangle {
+    in property <length> dot: 9px;
+    width: root.dot;
+    height: root.dot;
+    border-radius: self.width / 2;
+    background: Theme.accent;
+}
+
 // Barra de progreso (track + relleno proporcional). `percent` en 0..100.
 component ProgressBar inherits Rectangle {
     in property <float> percent;
@@ -287,6 +299,69 @@ component OpCard inherits Rectangle {
     }
 }
 
+// Tarjeta de una operación en fase "Calculando…" (escaneo del plan en segundo plano). No hay
+// barra de % (aún no se conoce el total); el avance lo dan los contadores en vivo (op.status,
+// p. ej. "1.234 archivos · 5,6 GB"). Lleva el botón Cancelar para abortar el ESCANEO.
+component PlanningCard inherits Rectangle {
+    in property <OpRowVm> op;
+    callback cancel(int);
+
+    background: Theme.row-bg;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 9px;
+        spacing: 5px;
+
+        // Encabezado: etiqueta de la op + estado "Calculando…" con el punto de acento.
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.op.label;
+                color: Theme.text;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            ScanDot {
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: Tr.ops-calculating;
+                color: Theme.accent;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        // Contadores del escaneo (suben en vivo). Si aún no llegó el primer Progress, "—".
+        Text {
+            text: root.op.status != "" ? root.op.status : "—";
+            color: Theme.text-dim;
+            font-size: 11px;
+            overflow: elide;
+        }
+
+        // Botón Cancelar (aborta el escaneo: el worker ve el token y corta).
+        HorizontalLayout {
+            spacing: 6px;
+            padding-top: 2px;
+            Rectangle { horizontal-stretch: 1; }
+            OpButton {
+                label: Tr.ops-cancel;
+                danger: true;
+                show-cancel: true;
+                pressed => { root.cancel(root.op.index); }
+            }
+        }
+    }
+}
+
 // Fila compacta de una op EN COLA.
 component QueuedRow inherits Rectangle {
     in property <OpRowVm> op;
@@ -364,10 +439,13 @@ export component OpsPanel inherits Rectangle {
     in property <[OpRowVm]> running-rows;
     in property <[OpRowVm]> queued-rows;
     in property <[OpRowVm]> history-rows;
+    // Ops en fase "Calculando…" (escaneo del plan en segundo plano), kind==3.
+    in property <[OpRowVm]> planning-rows;
     // Recuentos para el resumen del encabezado (los provee Rust; equivalen a los largos).
     in property <int> running-count: 0;
     in property <int> queued-count: 0;
     in property <int> history-count: 0;
+    in property <int> planning-count: 0;
     callback pause(int);
     callback resume(int);
     callback skip(int);
@@ -391,8 +469,12 @@ export component OpsPanel inherits Rectangle {
             }
             Rectangle { horizontal-stretch: 1; }
             Text {
-                // Resumen: "N en curso · M en cola". Los conteos se derivan abajo.
-                text: root.running-count + " " + Tr.ops-in-progress
+                // Resumen: "[K calculando · ]N en curso · M en cola". El tramo "calculando" solo
+                // aparece si hay alguna op escaneando su plan.
+                text: (root.planning-count > 0
+                        ? root.planning-count + " " + Tr.ops-calculating + " · "
+                        : "")
+                    + root.running-count + " " + Tr.ops-in-progress
                     + " · " + root.queued-count + " " + Tr.ops-queued;
                 color: Theme.text-dim;
                 font-size: 11px;
@@ -400,10 +482,17 @@ export component OpsPanel inherits Rectangle {
             }
         }
 
-        // Cuerpo desplazable: las tres zonas.
+        // Cuerpo desplazable: las zonas (Calculando… / en curso / en cola / historial).
         ScrollView {
             VerticalLayout {
                 spacing: 8px;
+
+                // ZONA CALCULANDO… (escaneo del plan en segundo plano, antes de copiar).
+                if root.planning-count > 0: SectionHeader { text: Tr.ops-calculating; }
+                for r in root.planning-rows: PlanningCard {
+                    op: r;
+                    cancel(i) => { root.cancel(i); }
+                }
 
                 // ZONA EN CURSO.
                 if root.running-count > 0: SectionHeader { text: Tr.ops-in-progress; }

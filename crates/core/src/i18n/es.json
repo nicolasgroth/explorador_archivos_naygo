@@ -141,6 +141,7 @@
   "ops.elapsed": "Transcurrido",
   "ops.remaining": "Restante",
   "ops.waiting": "en espera",
+  "ops.calculating": "Calculando…",
   "preview.empty": "Enfoca un archivo para previsualizarlo.",
   "preview.none": "Sin vista previa para este tipo de archivo.",
   "preview.too_big": "Imagen muy grande para previsualizar.",

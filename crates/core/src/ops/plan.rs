@@ -10,7 +10,7 @@ use super::{OpKind, OpPlan, OpRequest, OpStep};
 use std::path::{Path, PathBuf};
 
 /// Error de planificación (antes de empezar a ejecutar).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PlanError {
     /// El destino está dentro de uno de los orígenes (copia recursiva infinita).
     DestInsideSource,
@@ -140,6 +140,24 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
 }
 
 fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
+    // Sin sink de progreso ni cancelación: el camino síncrono clásico.
+    plan_transfer_with(req, &mut |_, _| {}, &|| false)
+}
+
+/// Núcleo de `plan_transfer` parametrizado por un `sink` de progreso y un predicado de
+/// cancelación, para que el worker asíncrono (`plan_async::spawn_plan`) REUSE exactamente
+/// este recorrido en vez de duplicarlo. El camino síncrono pasa un sink vacío y un
+/// `cancelled` que siempre es `false`, así que se comporta igual que antes.
+///
+/// - `sink(total_files, total_bytes)`: se invoca tras expandir cada origen de primer nivel
+///   con los acumulados hasta ese punto (el worker lo usa para emitir `Progress` con throttle).
+/// - `cancelled()`: se consulta antes de expandir cada origen; si devuelve `true`, se corta y
+///   se devuelve `Ok` con lo acumulado (el worker decide entonces emitir `Cancelled`).
+pub(super) fn plan_transfer_with(
+    req: &OpRequest,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<OpPlan, PlanError> {
     let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
     for src in &req.sources {
         if src.is_dir() && is_inside(&dest, src) {
@@ -150,6 +168,9 @@ fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
     let mut total_bytes = 0u64;
     let mut total_files = 0usize;
     for src in &req.sources {
+        if cancelled() {
+            break;
+        }
         let base_to = dest.join(src.file_name().unwrap_or_default());
         expand(
             src,
@@ -157,6 +178,8 @@ fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
             &mut steps,
             &mut total_bytes,
             &mut total_files,
+            sink,
+            cancelled,
         )?;
     }
     Ok(OpPlan {
@@ -188,13 +211,20 @@ fn plan_delete(req: &OpRequest) -> Result<OpPlan, PlanError> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand(
     src: &Path,
     to: &Path,
     steps: &mut Vec<OpStep>,
     total_bytes: &mut u64,
     total_files: &mut usize,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), PlanError> {
+    // Cortar limpio si se canceló a mitad del recorrido (el worker emitirá `Cancelled`).
+    if cancelled() {
+        return Ok(());
+    }
     let meta =
         std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
     if meta.is_dir() {
@@ -207,9 +237,20 @@ fn expand(
         let entries =
             std::fs::read_dir(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
         for entry in entries.flatten() {
+            if cancelled() {
+                return Ok(());
+            }
             let child = entry.path();
             let child_to = to.join(entry.file_name());
-            expand(&child, &child_to, steps, total_bytes, total_files)?;
+            expand(
+                &child,
+                &child_to,
+                steps,
+                total_bytes,
+                total_files,
+                sink,
+                cancelled,
+            )?;
         }
     } else {
         let bytes = meta.len();
@@ -221,6 +262,9 @@ fn expand(
         });
         *total_bytes += bytes;
         *total_files += 1;
+        // Avisar el avance tras CADA archivo: el worker lo aprovecha con throttle para no
+        // inundar el canal. El recorrido síncrono pasa un sink vacío (sin costo real).
+        sink(*total_files, *total_bytes);
     }
     Ok(())
 }

@@ -565,17 +565,20 @@ fn main() -> Result<(), slint::PlatformError> {
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
             let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
-            // El panel rico de operaciones consume tres modelos separados por zona (kind:
-            // 0=en curso 1=en cola 2=historial). Separarlos en Rust evita filas-fantasma en Slint.
+            // El panel rico de operaciones consume modelos separados por zona (kind: 0=en curso
+            // 1=en cola 2=historial 3=calculando). Separarlos en Rust evita filas-fantasma en Slint.
             let running: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 0).cloned().collect();
             let queued: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 1).cloned().collect();
             let history: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 2).cloned().collect();
+            let planning: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 3).cloned().collect();
             ui.set_op_running_count(running.len() as i32);
             ui.set_op_queued_count(queued.len() as i32);
             ui.set_op_history_count(history.len() as i32);
+            ui.set_op_planning_count(planning.len() as i32);
             ui.set_op_running_rows(ModelRc::from(Rc::new(VecModel::from(running))));
             ui.set_op_queued_rows(ModelRc::from(Rc::new(VecModel::from(queued))));
             ui.set_op_history_rows(ModelRc::from(Rc::new(VecModel::from(history))));
+            ui.set_op_planning_rows(ModelRc::from(Rc::new(VecModel::from(planning))));
             let resume_rows: Vec<ResumeRowVm> = c
                 .ops
                 .resume_rows()

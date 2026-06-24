@@ -12,7 +12,7 @@ use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
 use naygo_core::ops::undo::{self, UndoEntry};
 use naygo_core::ops::{
     ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpKind, OpMsg, OpPlan,
-    OpProgress, OpRequest, OpSummary,
+    OpProgress, OpRequest, OpSummary, PlanMsg,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -95,6 +95,31 @@ pub struct ActiveOp {
     pub last_sample: Option<(std::time::Instant, u64)>,
     /// Velocidad pico observada (bytes/s): el máximo de las velocidades instantáneas.
     pub peak_speed: u64,
+    // --- Fase "Calculando…" (planificación en segundo plano) ---
+    /// Canal del worker de planificación (`spawn_plan`). `Some` mientras la op está en fase
+    /// Planning: el escaneo del árbol corre en su hilo y por aquí llegan `PlanMsg`. Se pone en
+    /// `None` al transicionar a la copia (o al cerrar la op). Mientras es `Some`, la op se pinta
+    /// como "Calculando…" y NO tiene aún canal del motor (`rx`).
+    pub plan_rx: Option<Receiver<PlanMsg>>,
+    /// Datos para arrancar la copia cuando llegue `PlanMsg::Done`: el request original y si se
+    /// registra el deshacer. Se consumen al transicionar de Planning a la fase de copia.
+    pub plan_kind: OpKind,
+    pub plan_record_undo: bool,
+    /// Avance del escaneo (archivos/bytes contabilizados hasta ahora) para el VM "Calculando…".
+    pub scan_files: u64,
+    pub scan_bytes: u64,
+    /// Op Copy/Move encolada que AÚN NO se planificó (modo cola): guarda el request crudo y si
+    /// registra undo. Cuando le toca el turno, `pump_ops` lanza su `spawn_plan` (entra en fase
+    /// "Calculando…") en vez de spawnear el motor directo. `None` en ops ya planificadas.
+    pub pending_req: Option<(OpRequest, bool)>,
+}
+
+impl ActiveOp {
+    /// `true` si la op está en fase de planificación ("Calculando…"): el árbol se está
+    /// recorriendo en segundo plano y aún no arrancó el motor de copia.
+    pub fn is_planning(&self) -> bool {
+        self.plan_rx.is_some()
+    }
 }
 
 /// Modo de ejecución de operaciones múltiples.
@@ -192,6 +217,12 @@ impl OpsCtrl {
     /// Lanza una operación. `record_undo` indica si registrar el deshacer al terminar.
     /// La papelera (Delete to_trash) se hace directo (atómica, fuera del motor) — el
     /// llamador debe refrescar el panel tras esto.
+    ///
+    /// Copy/Move NO planifican en línea: recorrer un árbol grande con `read_dir`/`metadata`
+    /// congelaría el hilo de UI (viola la regla de oro). En su lugar se crea la op en fase
+    /// "Calculando…" (`plan_rx`) y un worker (`spawn_plan`) escanea el árbol en segundo plano;
+    /// `pump_ops` recoge el plan terminado y recién entonces arranca el motor. El resto de
+    /// operaciones planifican en O(1) (no recorren árbol) y siguen el camino síncrono directo.
     pub fn start_op(&mut self, req: OpRequest, label: String, record_undo: bool) {
         // Al comenzar una operación nueva, descartar las terminadas del panel (sus
         // resúmenes ya se vieron); las en curso/en cola se conservan.
@@ -203,43 +234,40 @@ impl OpsCtrl {
             return;
         }
 
+        // Copy/Move: planificar en segundo plano (puede recorrer un árbol enorme).
+        if matches!(req.kind, OpKind::Copy | OpKind::Move) {
+            // Modo cola: si ya hay otra op trabajando (escaneando o copiando), encolar el request
+            // CRUDO sin planificar todavía (no se corren dos escaneos pesados a la vez). Su
+            // `spawn_plan` arrancará cuando le toque el turno, en `pump_ops`.
+            if self.ops_mode == OpsMode::Queue && self.any_running() {
+                self.push_queued_req(req, label, record_undo);
+                return;
+            }
+            let id = self.alloc_op_id();
+            self.start_planning(id, req, label, record_undo);
+            return;
+        }
+
+        // Resto (Delete-permanente/Rename/Create/BatchRename): plan O(1) síncrono, no congela.
         let plan = match naygo_core::ops::plan(&req) {
             Ok(p) => p,
             Err(_) => return, // error de planificación: se ignora discreto (TODO: avisar)
         };
-
-        // Pre-check de conflicto: si choca, el motor pregunta por ítem (Ask); si no, va directo.
         let conflict = if self.first_collision(&req) {
             ConflictPolicy::Ask
         } else {
             ConflictPolicy::Overwrite
         };
-
-        // Modo cola: si hay otra corriendo, encolar sin spawnear.
         if self.ops_mode == OpsMode::Queue && self.any_running() {
-            let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
-            let id = self.alloc_op_id();
-            self.active_ops.push(ActiveOp {
-                id,
-                rx: None,
-                conflict_tx,
-                token: CancellationToken::new(),
+            self.push_queued(
+                plan,
+                req.kind.clone(),
+                conflict,
                 label,
-                progress: None,
-                summary: None,
-                started: false,
-                pending: Some((plan, req.kind.clone(), conflict)),
-                journal_id: None,
-                request: record_undo.then_some(req),
-                awaiting_conflict: None,
-                resume_skipped: 0,
-                started_at: None,
-                last_sample: None,
-                peak_speed: 0,
-            });
+                record_undo.then_some(req),
+            );
             return;
         }
-
         let id = self.alloc_op_id();
         self.spawn_op(
             id,
@@ -249,6 +277,108 @@ impl OpsCtrl {
             label,
             record_undo.then_some(req),
         );
+    }
+
+    /// Crea una op en fase "Calculando…" y lanza el worker de planificación (`spawn_plan`). El
+    /// token se crea aquí, de modo que el botón Cancelar del panel puede abortar el ESCANEO
+    /// (no solo la copia). `pump_ops` drenará el `plan_rx` y, al llegar `Done`, decidirá
+    /// conflicto/cola y arrancará el motor con `spawn_op`.
+    fn start_planning(&mut self, id: u64, req: OpRequest, label: String, record_undo: bool) {
+        let token = CancellationToken::new();
+        let (rx, _h) = naygo_core::ops::spawn_plan(req.clone(), token.clone());
+        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        self.active_ops.push(ActiveOp {
+            id,
+            rx: None,
+            conflict_tx,
+            token,
+            label,
+            progress: None,
+            summary: None,
+            started: true, // ocupa el lugar de "la que corre" para el modo cola
+            pending: None,
+            journal_id: None,
+            request: Some(req.clone()),
+            awaiting_conflict: None,
+            resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
+            plan_rx: Some(rx),
+            plan_kind: req.kind.clone(),
+            plan_record_undo: record_undo,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
+        });
+    }
+
+    /// Empuja una op a la cola (placeholder sin spawnear) con su plan ya resuelto.
+    fn push_queued(
+        &mut self,
+        plan: OpPlan,
+        kind: OpKind,
+        conflict: ConflictPolicy,
+        label: String,
+        request: Option<OpRequest>,
+    ) {
+        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let id = self.alloc_op_id();
+        self.active_ops.push(ActiveOp {
+            id,
+            rx: None,
+            conflict_tx,
+            token: CancellationToken::new(),
+            label,
+            progress: None,
+            summary: None,
+            started: false,
+            pending: Some((plan, kind, conflict)),
+            journal_id: None,
+            request,
+            awaiting_conflict: None,
+            resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
+            plan_rx: None,
+            plan_kind: OpKind::Copy,
+            plan_record_undo: false,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
+        });
+    }
+
+    /// Empuja una op Copy/Move a la cola SIN planificar todavía (guarda el request crudo). Su
+    /// `spawn_plan` arranca cuando le toque el turno en `pump_ops` (fase "Calculando…").
+    fn push_queued_req(&mut self, req: OpRequest, label: String, record_undo: bool) {
+        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let id = self.alloc_op_id();
+        self.active_ops.push(ActiveOp {
+            id,
+            rx: None,
+            conflict_tx,
+            token: CancellationToken::new(),
+            label,
+            progress: None,
+            summary: None,
+            started: false,
+            pending: None,
+            journal_id: None,
+            request: None,
+            awaiting_conflict: None,
+            resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
+            plan_rx: None,
+            plan_kind: req.kind.clone(),
+            plan_record_undo: record_undo,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: Some((req, record_undo)),
+        });
     }
 
     /// Spawnea el motor para un plan ya resuelto y agrega la `ActiveOp`. Crea un journal
@@ -295,7 +425,47 @@ impl OpsCtrl {
             started_at: None,
             last_sample: None,
             peak_speed: 0,
+            plan_rx: None,
+            plan_kind: OpKind::Copy,
+            plan_record_undo: false,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
         });
+    }
+
+    /// Promueve una op que YA está en el vector (en fase Planning) a la fase de copia: spawnea el
+    /// motor con el plan recién calculado, REUSANDO el id, token y posición de la op. A diferencia
+    /// de `spawn_op` (que agrega una op nueva), esto MUTA la op existente en `idx` para que el
+    /// usuario que la veía "Calculando…" la siga refiriendo con el mismo id al pasar a copiar.
+    fn promote_planning_to_copy(
+        &mut self,
+        idx: usize,
+        plan: OpPlan,
+        kind: OpKind,
+        conflict: ConflictPolicy,
+        request: Option<OpRequest>,
+    ) {
+        let token = self.active_ops[idx].token.clone();
+        let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
+        let (journal, journal_id) = if Self::journalable(&kind) {
+            let jid = format!("op-{}", self.next_journal_seq);
+            self.next_journal_seq += 1;
+            let j = OpJournal::new(jid.clone(), kind.clone(), conflict, plan.clone());
+            (Some(JournalWriter::new(&self.config_dir, j)), Some(jid))
+        } else {
+            (None, None)
+        };
+        let (rx, _h) = engine::spawn(plan, kind, conflict, token, conflict_rx, journal);
+        let op = &mut self.active_ops[idx];
+        op.rx = Some(rx);
+        op.conflict_tx = conflict_tx;
+        op.journal_id = journal_id;
+        op.request = request;
+        // Salir de la fase Planning: limpiar el canal de plan y los contadores de escaneo.
+        op.plan_rx = None;
+        op.scan_files = 0;
+        op.scan_bytes = 0;
     }
 
     /// ¿La operación amerita journal (es larga y se puede retomar)?
@@ -306,15 +476,102 @@ impl OpsCtrl {
         )
     }
 
-    /// ¿Hay alguna op realmente corriendo (con canal vivo)?
+    /// ¿Hay alguna op realmente trabajando? Cuenta tanto las que copian (canal del motor vivo)
+    /// como las que están "Calculando…" (canal de planificación vivo): ambas ocupan el turno en
+    /// modo cola, así una segunda op espera a que la primera termine de escanear Y de copiar.
     fn any_running(&self) -> bool {
-        self.active_ops.iter().any(|o| o.started && o.rx.is_some())
+        self.active_ops
+            .iter()
+            .any(|o| o.started && (o.rx.is_some() || o.plan_rx.is_some()))
+    }
+
+    /// Drena el canal de planificación (`spawn_plan`) de cada op en fase "Calculando…".
+    /// `Progress` actualiza los contadores de escaneo del VM; `Done(plan)` decide conflicto/cola
+    /// y arranca el motor (o deja la op en cola); `Cancelled`/`Failed` cierran la op a historial.
+    /// Es la transición Planning → copia: el escaneo terminó SIN haber congelado el hilo de UI.
+    fn pump_planning(&mut self) {
+        for i in 0..self.active_ops.len() {
+            if self.active_ops[i].plan_rx.is_none() {
+                continue;
+            }
+            // Drenar sin retener el préstamo del receptor mientras mutamos la op.
+            let mut last_scan: Option<(u64, u64)> = None;
+            let mut done_plan: Option<OpPlan> = None;
+            let mut cancelled = false;
+            let mut failed = false;
+            if let Some(rx) = self.active_ops[i].plan_rx.as_ref() {
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        PlanMsg::Progress { files, bytes } => last_scan = Some((files, bytes)),
+                        PlanMsg::Done(p) => {
+                            done_plan = Some(p);
+                            break;
+                        }
+                        PlanMsg::Cancelled => {
+                            cancelled = true;
+                            break;
+                        }
+                        PlanMsg::Failed(_) => {
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some((files, bytes)) = last_scan {
+                self.active_ops[i].scan_files = files;
+                self.active_ops[i].scan_bytes = bytes;
+            }
+
+            if cancelled || failed {
+                // El escaneo se canceló o falló: cerrar la op (va a historial). Sin journal aún
+                // (no se creó hasta arrancar el motor) ni undo (no se copió nada).
+                let op = &mut self.active_ops[i];
+                op.plan_rx = None;
+                op.request = None;
+                op.summary = Some(OpSummary::default());
+                continue;
+            }
+
+            if let Some(plan) = done_plan {
+                // Reconstruir el request para el pre-check de conflicto y el undo.
+                let req = self.active_ops[i].request.clone();
+                let kind = self.active_ops[i].plan_kind.clone();
+                let record_undo = self.active_ops[i].plan_record_undo;
+                let conflict = match &req {
+                    Some(r) if self.first_collision(r) => ConflictPolicy::Ask,
+                    _ => ConflictPolicy::Overwrite,
+                };
+                let undo_req = if record_undo { req } else { None };
+
+                // Modo cola: si YA hay otra copiando, esta op vuelve a la cola (placeholder) con
+                // su plan resuelto, conservando su id. Si no, arranca el motor en su mismo lugar.
+                let another_copying = self
+                    .active_ops
+                    .iter()
+                    .enumerate()
+                    .any(|(j, o)| j != i && o.started && o.rx.is_some());
+                if self.ops_mode == OpsMode::Queue && another_copying {
+                    let op = &mut self.active_ops[i];
+                    op.plan_rx = None;
+                    op.started = false; // pasa a "en cola"
+                    op.pending = Some((plan, kind, conflict));
+                    op.request = undo_req;
+                    op.scan_files = 0;
+                    op.scan_bytes = 0;
+                } else {
+                    self.promote_planning_to_copy(i, plan, kind, conflict, undo_req);
+                }
+            }
+        }
     }
 
     /// Drena los mensajes de todas las ops en curso. Abre el modal de conflicto si alguna
     /// op lo pide. Registra el undo de las que terminan. Lanza la siguiente de la cola si
     /// nada corre. Devuelve true si TODO está en reposo (para apagar el timer).
     pub fn pump_ops(&mut self) -> bool {
+        // Primero, la fase "Calculando…": recoger planes terminados y arrancar/encolar.
+        self.pump_planning();
         for i in 0..self.active_ops.len() {
             if self.active_ops[i].rx.is_none() {
                 continue;
@@ -405,27 +662,49 @@ impl OpsCtrl {
             }
         }
 
-        // Si nada corre y hay una en cola, lanzarla.
+        // Si nada corre y hay una en cola, lanzarla. Una op en cola puede ser:
+        //  - `pending_req`: Copy/Move que aún no se planificó → arrancar su `spawn_plan` (fase
+        //    "Calculando…") en su mismo lugar, conservando el id.
+        //  - `pending`: op ya planificada → spawnear el motor.
         if !self.any_running() {
             if let Some(idx) = self
                 .active_ops
                 .iter()
-                .position(|o| !o.started && o.pending.is_some())
+                .position(|o| !o.started && (o.pending.is_some() || o.pending_req.is_some()))
             {
-                let (plan, kind, conflict) = self.active_ops[idx].pending.take().unwrap();
-                let label = self.active_ops[idx].label.clone();
-                let request = self.active_ops[idx].request.take();
                 // CONSERVAR el id estable del placeholder: la op que el usuario veía en cola debe
                 // seguir refiriéndose con el mismo id al arrancar (si no, un clic en su botón ya
-                // no la encontraría). Por eso se reusa `id` en vez de reservar uno nuevo.
+                // no la encontraría).
                 let id = self.active_ops[idx].id;
-                // Quitar el placeholder en cola y spawnear de verdad.
-                self.active_ops.remove(idx);
-                self.spawn_op(id, plan, kind, conflict, label, request);
+                let label = self.active_ops[idx].label.clone();
+                if let Some((req, record_undo)) = self.active_ops[idx].pending_req.take() {
+                    // Copy/Move sin planificar: arrancar el escaneo EN SU LUGAR (reusa id/posición).
+                    let token = self.active_ops[idx].token.clone();
+                    let (rx, _h) = naygo_core::ops::spawn_plan(req.clone(), token);
+                    let op = &mut self.active_ops[idx];
+                    op.started = true;
+                    op.plan_rx = Some(rx);
+                    op.request = Some(req.clone());
+                    op.plan_kind = req.kind.clone();
+                    op.plan_record_undo = record_undo;
+                    op.scan_files = 0;
+                    op.scan_bytes = 0;
+                } else {
+                    let (plan, kind, conflict) = self.active_ops[idx].pending.take().unwrap();
+                    let request = self.active_ops[idx].request.take();
+                    // Quitar el placeholder en cola y spawnear de verdad.
+                    self.active_ops.remove(idx);
+                    self.spawn_op(id, plan, kind, conflict, label, request);
+                }
             }
         }
 
-        self.active_ops.iter().all(|o| o.rx.is_none())
+        // "En reposo" (apagar el timer) solo si NINGUNA op tiene canal vivo: ni del motor (`rx`)
+        // ni de planificación (`plan_rx`). Una op "Calculando…" mantiene el timer encendido para
+        // que `pump_planning` siga drenando su progreso y, al terminar, arranque la copia.
+        self.active_ops
+            .iter()
+            .all(|o| o.rx.is_none() && o.plan_rx.is_none())
     }
 
     /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
@@ -498,8 +777,16 @@ impl OpsCtrl {
     /// recientes (con su resumen). Las en curso y las en cola se conservan siempre. El
     /// llamador decide cuándo podar (al iniciar una op nueva).
     pub fn prune_finished(&mut self) {
-        // Una op cuenta como "terminada" (historial) si ya no tiene canal y arrancó alguna vez.
-        let is_finished = |o: &ActiveOp| o.rx.is_none() && o.started && o.pending.is_none();
+        // Una op cuenta como "terminada" (historial) si ya no tiene NINGÚN canal (ni del motor ni
+        // de planificación), arrancó alguna vez y no quedó en cola. Excluir las "Calculando…"
+        // (plan_rx vivo): aún están trabajando, no son historial.
+        let is_finished = |o: &ActiveOp| {
+            o.rx.is_none()
+                && o.plan_rx.is_none()
+                && o.started
+                && o.pending.is_none()
+                && o.pending_req.is_none()
+        };
         let finished_total = self.active_ops.iter().filter(|o| is_finished(o)).count();
         if finished_total <= Self::HISTORY_CAP {
             return;
@@ -620,16 +907,32 @@ impl OpsCtrl {
                     String::new()
                 };
 
-                // 0=en curso 1=en cola 2=historial (terminada con resumen).
+                let planning = o.is_planning();
+
+                // 0=en curso 1=en cola 2=historial 3=calculando (escaneo del plan en curso).
                 let kind = if o.summary.is_some() {
                     2
+                } else if planning {
+                    3
                 } else if in_queue {
                     1
                 } else {
                     0
                 };
 
-                let status = if in_queue {
+                let status = if planning {
+                    // "Calculando… N archivos, M tamaño". El texto base "Calculando…" lo pinta el
+                    // panel con Tr; aquí van los contadores del escaneo (ya formateados).
+                    if o.scan_files > 0 {
+                        format!(
+                            "{} archivos · {}",
+                            o.scan_files,
+                            format_size(o.scan_bytes, FMT)
+                        )
+                    } else {
+                        String::new()
+                    }
+                } else if in_queue {
                     "en cola".to_string()
                 } else if let Some(s) = &o.summary {
                     let mut t = format!(
@@ -809,6 +1112,12 @@ impl OpsCtrl {
             started_at: None,
             last_sample: None,
             peak_speed: 0,
+            plan_rx: None,
+            plan_kind: OpKind::Copy,
+            plan_record_undo: false,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
         });
         self.drop_resume_item(id);
         true
@@ -924,6 +1233,72 @@ mod tests {
         c.start_op(req, "Copiar".to_string(), true);
         drain(&mut c);
         assert!(dst.join("a.txt").exists());
+    }
+
+    #[test]
+    fn copia_arranca_en_fase_calculando_y_luego_copia() {
+        // Una copia entra primero en fase "Calculando…" (escaneo del plan en segundo plano): la
+        // op existe con plan_rx vivo y SIN canal del motor. Tras pump_ops (que recoge el plan y
+        // arranca el motor) la copia se completa. Esto prueba que el escaneo NO corre inline.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("carpeta");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"hola").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        // Justo tras start_op: la op está en fase Planning (plan_rx vivo, rx aún None).
+        assert_eq!(c.active_ops.len(), 1);
+        assert!(
+            c.active_ops[0].is_planning(),
+            "la copia arranca en fase Calculando…"
+        );
+        assert!(
+            c.active_ops[0].rx.is_none(),
+            "aún no hay canal del motor (el plan no terminó)"
+        );
+        // pump_ops mientras planifica NO debe reportar reposo (mantiene el timer vivo).
+        // Drenar hasta completar: el plan termina, arranca el motor y la copia finaliza.
+        drain(&mut c);
+        assert!(dst.join("carpeta/a.txt").exists(), "la copia se completó");
+    }
+
+    #[test]
+    fn cancelar_durante_calculando_aborta_sin_copiar() {
+        // Cancelar la op (botón Cancelar del panel) mientras está en fase Planning aborta el
+        // escaneo: la op se cierra a historial y no se copia nada.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("carpeta");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"hola").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        let id = c.active_ops[0].id;
+        assert!(c.active_ops[0].is_planning());
+        // Cancelar por id (lo que hace el botón del panel) mientras escanea.
+        c.cancel_op(id as i32);
+        // Drenar: el worker ve el token cancelado, emite Cancelled; pump la cierra a historial.
+        drain(&mut c);
+        assert!(
+            !dst.join("carpeta").exists(),
+            "no se copió nada al cancelar el escaneo"
+        );
+        // La op queda como historial (con resumen), sin canal vivo.
+        assert!(c
+            .active_ops
+            .iter()
+            .all(|o| o.rx.is_none() && !o.is_planning()));
     }
 
     #[test]
@@ -1101,6 +1476,12 @@ mod tests {
             started_at: None,
             last_sample: None,
             peak_speed: 0,
+            plan_rx: None,
+            plan_kind: OpKind::Copy,
+            plan_record_undo: false,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
         }
     }
 
