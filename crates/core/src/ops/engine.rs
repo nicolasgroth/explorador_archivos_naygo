@@ -98,6 +98,26 @@ pub fn run_plan(
     // sea `Some`, los choques siguientes la usan sin volver a preguntar.
     let mut applied_all: Option<ConflictAction> = None;
 
+    // Borrado previo de carpetas destino marcadas por una decisión "Reemplazar" en un conflicto
+    // de carpeta. Se hace ANTES de copiar y de forma cancelable: si el token ya está cancelado no
+    // se borra nada; un error de borrado (permiso/archivo en uso) NO tumba la op (se registra como
+    // Failed con la ruta del destino y se sigue). `remove_dir_all` solo toca la ruta EXACTA del
+    // destino (`dest.join(nombre)`), nunca el origen. Idempotente bajo retomar: el plan retomado
+    // trae `pre_delete` vacío, así no se re-borra lo ya copiado.
+    for target in &plan.pre_delete {
+        if token.is_cancelled() {
+            break;
+        }
+        // Solo borrar si existe; si ya no está, no es un error (objetivo cumplido).
+        if target.exists() {
+            if let Err(e) = std::fs::remove_dir_all(target) {
+                summary
+                    .items
+                    .push((target.clone(), OpOutcome::Failed(e.to_string())));
+            }
+        }
+    }
+
     for (idx, step) in plan.steps.iter().enumerate() {
         if token.is_cancelled() {
             break;
@@ -184,10 +204,24 @@ fn exec_step(
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     match kind {
         OpKind::Copy => exec_copy_step(
-            step, conflict, token, false, tx, conflict_rx, applied_all, progress,
+            step,
+            conflict,
+            token,
+            false,
+            tx,
+            conflict_rx,
+            applied_all,
+            progress,
         ),
         OpKind::Move => exec_copy_step(
-            step, conflict, token, true, tx, conflict_rx, applied_all, progress,
+            step,
+            conflict,
+            token,
+            true,
+            tx,
+            conflict_rx,
+            applied_all,
+            progress,
         ),
         OpKind::Delete { to_trash } => {
             if *to_trash {
@@ -503,7 +537,10 @@ mod tests {
             progresos >= 2,
             "esperaba >=2 Progress durante la copia, hubo {progresos}"
         );
-        assert_eq!(fs::read(dest.join("big.bin")).unwrap().len(), 2 * 1024 * 1024);
+        assert_eq!(
+            fs::read(dest.join("big.bin")).unwrap().len(),
+            2 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -560,6 +597,150 @@ mod tests {
         };
         let (_m, _s) = run(req);
         assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"nuevo");
+    }
+
+    #[test]
+    fn replace_borra_el_destino_y_deja_solo_el_origen_con_origen_intacto() {
+        // Conflicto de carpeta resuelto con "Reemplazar": el destino existe y tiene un archivo
+        // EXTRA que no está en el origen. Tras aplicar Replace (pre_delete) + copiar, el destino
+        // debe quedar con SOLO el contenido del origen (el extra desapareció) y el ORIGEN intacto.
+        use crate::ops::{apply_folder_decision, folder_conflicts, FolderDecision};
+        let dir = tempfile::tempdir().unwrap();
+        // Origen: carpeta/ con a.txt ("nuevo").
+        let src = dir.path().join("carpeta");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"nuevo").unwrap();
+        // Destino: dst/carpeta/ con extra.txt ("viejo") — archivo que solo existe en el destino.
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let dest_root = dest.join("carpeta");
+        fs::create_dir(&dest_root).unwrap();
+        fs::write(dest_root.join("extra.txt"), b"viejo").unwrap();
+
+        let req = super::super::transfer(false, vec![src.clone()], dest.clone());
+        // Detectar el conflicto y aplicar Replace al plan.
+        let conflicts = folder_conflicts(&req);
+        assert_eq!(conflicts.len(), 1);
+        let mut p = plan(&req).unwrap();
+        apply_folder_decision(&mut p, &conflicts[0].dest_root, FolderDecision::Replace);
+        assert_eq!(p.pre_delete, vec![dest_root.clone()]);
+
+        // Ejecutar el plan (con el pre_delete dentro del motor).
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(&p, &req.kind, req.conflict, &token, &tx, &crx, None);
+        drop(tx);
+
+        // El destino quedó con SOLO a.txt (el extra.txt se borró con el Replace).
+        assert!(dest_root.join("a.txt").exists(), "se copió el origen");
+        assert_eq!(fs::read(dest_root.join("a.txt")).unwrap(), b"nuevo");
+        assert!(
+            !dest_root.join("extra.txt").exists(),
+            "el archivo extra del destino desapareció (Replace borró la carpeta)"
+        );
+        // El ORIGEN sigue intacto: NUNCA se borra el origen.
+        assert!(src.join("a.txt").exists(), "el origen no se tocó");
+        assert_eq!(fs::read(src.join("a.txt")).unwrap(), b"nuevo");
+        assert!(summary.count_failed() == 0, "sin fallos");
+    }
+
+    #[test]
+    fn pre_delete_de_destino_ausente_no_falla() {
+        // Si la carpeta a borrar ya no existe (objetivo cumplido), no es un error: la op corre OK.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"x").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let mut p = plan(&super::super::transfer(false, vec![src], dest.clone())).unwrap();
+        // pre_delete apunta a una carpeta inexistente.
+        p.pre_delete.push(dest.join("no_existe"));
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+        assert_eq!(summary.count_failed(), 0, "borrar lo ausente no falla");
+        assert!(dest.join("a.txt").exists(), "la copia siguió normal");
+    }
+
+    #[test]
+    fn pre_delete_que_falla_no_paniquea_y_la_op_sigue() {
+        // El borrado del destino falla (lo simulamos apuntando a un ARCHIVO, no a una carpeta:
+        // remove_dir_all sobre un archivo da Err). La op NO debe paniquear: registra un Failed y
+        // continúa copiando los pasos.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"hola").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        // Un archivo (no carpeta) que será el blanco "no borrable como dir".
+        let archivo_no_dir = dest.join("soy_un_archivo");
+        fs::write(&archivo_no_dir, b"no soy carpeta").unwrap();
+        let mut p = plan(&super::super::transfer(false, vec![src], dest.clone())).unwrap();
+        p.pre_delete.push(archivo_no_dir.clone());
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let _summary = run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+        // En Windows remove_dir_all sobre un archivo falla → un Failed registrado, sin pánico.
+        // (Defensivo: en plataformas donde no falle, simplemente habrá 0 fallos; lo crucial es que
+        // la copia siguió y no hubo pánico.)
+        assert!(
+            dest.join("a.txt").exists(),
+            "la copia siguió pese al pre_delete"
+        );
+    }
+
+    #[test]
+    fn pre_delete_no_corre_si_ya_se_cancelo() {
+        // Si el token ya está cancelado, el pre_delete NO borra el destino (cancelación universal).
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"x").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let dest_root = dest.join("carpeta");
+        fs::create_dir(&dest_root).unwrap();
+        fs::write(dest_root.join("keep.txt"), b"conservar").unwrap();
+        let mut p = plan(&super::super::transfer(false, vec![src], dest.clone())).unwrap();
+        p.pre_delete.push(dest_root.clone());
+        let token = CancellationToken::new();
+        token.cancel(); // cancelado ANTES de correr
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let _summary = run_plan(
+            &p,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+        assert!(
+            dest_root.join("keep.txt").exists(),
+            "cancelado antes → el pre_delete no borró el destino"
+        );
     }
 
     #[test]
@@ -672,6 +853,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
             total_bytes: 9,
             total_files: 3,
+            pre_delete: Vec::new(),
         };
         let cfg = dir.path();
         let journal = OpJournal::new(
@@ -798,7 +980,10 @@ mod tests {
         assert_eq!(summary.count_done(), 1, "debió completar la copia");
         let copied = fs::read(dst.join("big.bin")).unwrap();
         assert_eq!(copied.len(), size, "copió {} bytes de {size}", copied.len());
-        assert_eq!(copied, payload, "el contenido copiado no coincide byte a byte");
+        assert_eq!(
+            copied, payload,
+            "el contenido copiado no coincide byte a byte"
+        );
     }
 
     #[test]

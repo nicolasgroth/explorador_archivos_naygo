@@ -46,6 +46,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 }],
                 total_bytes: 0,
                 total_files: 1,
+                pre_delete: Vec::new(),
             })
         }
         OpKind::BatchRename { new_names } => plan_batch_rename(req, new_names),
@@ -64,6 +65,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 }],
                 total_bytes: 0,
                 total_files: if is_dir { 0 } else { 1 },
+                pre_delete: Vec::new(),
             })
         }
     }
@@ -136,6 +138,7 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
         steps,
         total_bytes: 0,
         total_files: n,
+        pre_delete: Vec::new(),
     })
 }
 
@@ -186,6 +189,7 @@ pub(super) fn plan_transfer_with(
         steps,
         total_bytes,
         total_files,
+        pre_delete: Vec::new(),
     })
 }
 
@@ -208,6 +212,7 @@ fn plan_delete(req: &OpRequest) -> Result<OpPlan, PlanError> {
         steps,
         total_bytes: 0,
         total_files: n,
+        pre_delete: Vec::new(),
     })
 }
 

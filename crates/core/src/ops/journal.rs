@@ -218,6 +218,10 @@ pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
             steps,
             total_bytes,
             total_files,
+            // Al retomar NO se re-borra el destino: un Replace ya ocurrió (o no) en la corrida
+            // original; lo parcial que haya quedado se conserva (se sobrescribe archivo a
+            // archivo). Re-ejecutar `remove_dir_all` aquí borraría lo ya copiado.
+            pre_delete: Vec::new(),
         },
         skipped_changed,
     }
@@ -245,6 +249,7 @@ mod tests {
                 steps: vec![step],
                 total_bytes: 4,
                 total_files: 1,
+                pre_delete: Vec::new(),
             },
             src,
         )
@@ -381,6 +386,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
             total_bytes: 9,
             total_files: 3,
+            pre_delete: Vec::new(),
         };
         let mut j = OpJournal::new("p1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         j.done_through = 1;
@@ -407,6 +413,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3)],
             total_bytes: 5,
             total_files: 2,
+            pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p2".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         fs::write(&src_b, b"bbbbbbbb").unwrap(); // cambia tamaño
@@ -430,6 +437,7 @@ mod tests {
             steps: vec![mk],
             total_bytes: 2,
             total_files: 1,
+            pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p3".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         fs::remove_file(&src).unwrap();
@@ -459,6 +467,7 @@ mod tests {
             steps: vec![dir_step, file_step],
             total_bytes: 2,
             total_files: 1,
+            pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p4".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
         let r = resume_plan(&j);

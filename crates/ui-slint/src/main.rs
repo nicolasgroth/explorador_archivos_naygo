@@ -3516,6 +3516,57 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_folder_conflict_decide(move |decision, apply_all| {
+            // Conflicto de CARPETA (P3): aplicar la decisión (0=fusionar 1=reemplazar 2=saltar) a
+            // la op detenida en el conflicto. El id estable lo guarda el pending_dialog.
+            let op_id = {
+                let c = ctrl.borrow();
+                if let Some(ops_ctrl::OpDialog::FolderConflict { op_id, .. }) =
+                    &c.ops.pending_dialog
+                {
+                    Some(*op_id)
+                } else {
+                    None
+                }
+            };
+            if let Some(op_id) = op_id {
+                ctrl.borrow_mut()
+                    .ops
+                    .resolve_folder_conflict(op_id, decision, apply_all);
+                // Reactivar el timer: si quedan más carpetas, `pump_ops` reabre el modal; si no,
+                // arranca el motor (o el escaneo de la cola) y hay que drenarlo.
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_folder_conflict_cancel(move || {
+            // Cancelar TODA la operación desde el conflicto de carpeta (botón, Esc o velo).
+            let op_id = {
+                let c = ctrl.borrow();
+                if let Some(ops_ctrl::OpDialog::FolderConflict { op_id, .. }) =
+                    &c.ops.pending_dialog
+                {
+                    Some(*op_id)
+                } else {
+                    None
+                }
+            };
+            if let Some(op_id) = op_id {
+                ctrl.borrow_mut().ops.cancel_folder_conflict(op_id);
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
         ui.on_name_changed(move |v| {
             ctrl.borrow_mut().ops.name_changed(v.to_string());
         });
@@ -4501,6 +4552,8 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         name_valid: d.name_valid,
         paste_name: SharedString::from(d.paste_name.as_str()),
         paste_is_image: d.paste_is_image,
+        folder_name: SharedString::from(d.folder_name.as_str()),
+        folder_more: d.folder_more,
     }
 }
 

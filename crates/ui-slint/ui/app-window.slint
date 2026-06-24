@@ -880,6 +880,8 @@ export component AppWindow inherits Window {
     callback delete-cancel();
     callback conflict-decide(int, bool);   // (action, apply-all)
     callback conflict-cancel();            // cancelar toda la operación desde el conflicto
+    callback folder-conflict-decide(int, bool); // (decision, apply-all) conflicto de carpeta (P3)
+    callback folder-conflict-cancel();          // cancelar toda la operación desde el conflicto de carpeta
     callback name-changed(string);
     callback name-confirm();
     callback name-cancel();
@@ -1644,6 +1646,8 @@ export component AppWindow inherits Window {
         delete-cancel() => { root.delete-cancel(); }
         conflict-decide(a, all) => { root.conflict-decide(a, all); }
         conflict-cancel() => { root.conflict-cancel(); }
+        folder-conflict-decide(d, all) => { root.folder-conflict-decide(d, all); }
+        folder-conflict-cancel() => { root.folder-conflict-cancel(); }
         name-changed(v) => { root.name-changed(v); }
         name-confirm() => { root.name-confirm(); }
         name-cancel() => { root.name-cancel(); }

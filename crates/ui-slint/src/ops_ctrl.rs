@@ -11,8 +11,9 @@ use naygo_core::ops::engine;
 use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
 use naygo_core::ops::undo::{self, UndoEntry};
 use naygo_core::ops::{
-    ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpKind, OpMsg, OpPlan,
-    OpProgress, OpRequest, OpSummary, PlanMsg,
+    apply_folder_decision, folder_conflicts, ConflictAction, ConflictDecision, ConflictPolicy,
+    ConflictPrompt, FolderConflict, FolderDecision, OpKind, OpMsg, OpPlan, OpProgress, OpRequest,
+    OpSummary, PlanMsg,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,16 @@ pub enum OpDialog {
         op_id: u64,
         prompt: ConflictPrompt,
     },
+    /// Conflicto por-CARPETA (P3): al copiar/mover una carpeta cuyo destino ya existe, se
+    /// pregunta UNA vez a nivel de carpeta (Fusionar/Reemplazar/Saltar/Cancelar). Esto pasa tras
+    /// el escaneo (antes de copiar), mientras la op está en fase "esperando decisión de carpeta".
+    /// `op_id` resuelve la op por id estable (igual que `Conflict`); `name` es la carpeta actual a
+    /// mostrar; `remaining` es cuántas carpetas más quedan por decidir (para el texto/checkbox).
+    FolderConflict {
+        op_id: u64,
+        name: String,
+        remaining: usize,
+    },
     /// Pedir un nombre (nuevo archivo/carpeta, renombrar). `dir` es dónde se crea.
     NameInput {
         purpose: NamePurpose,
@@ -57,6 +68,23 @@ pub enum OpDialog {
     },
     /// Retomar operaciones journaleadas tras un cierre inesperado.
     Resume { items: Vec<OpJournal> },
+}
+
+/// Estado de una op detenida en el conflicto de CARPETA (P3): tras el escaneo se detectó que
+/// una o más carpetas de origen ya existen en el destino. La op espera la decisión del usuario
+/// (Fusionar/Reemplazar/Saltar por carpeta, o Cancelar toda la op). A medida que se decide cada
+/// carpeta, `plan` se va ajustando (`apply_folder_decision`) y la carpeta sale de `conflicts`;
+/// cuando `conflicts` queda vacío, se arranca el motor con el plan ajustado.
+pub struct PendingFolderPlan {
+    /// Plan ya escaneado, que se ajusta con cada decisión (Skip filtra pasos, Replace agrega
+    /// borrado, Merge no toca).
+    pub plan: OpPlan,
+    pub kind: OpKind,
+    pub conflict: ConflictPolicy,
+    /// Request para el undo al terminar (None si no se registra deshacer).
+    pub undo_req: Option<OpRequest>,
+    /// Carpetas en conflicto aún sin decidir (se consumen de a una, o todas con "aplicar a todas").
+    pub conflicts: Vec<FolderConflict>,
 }
 
 /// Una operación en curso o terminada.
@@ -84,6 +112,11 @@ pub struct ActiveOp {
     pub request: Option<OpRequest>,
     /// Si el motor está esperando una decisión de conflicto, el prompt pendiente.
     pub awaiting_conflict: Option<ConflictPrompt>,
+    /// Si la op está detenida en el conflicto de CARPETA (P3): el plan escaneado + las carpetas
+    /// que aún hay que decidir. `Some` mientras se espera la decisión del usuario; al resolver
+    /// todas (o cancelar) se pone en `None`. Una op con esto en `Some` ya NO está "Calculando…"
+    /// (el escaneo terminó) pero tampoco copia aún: muestra "esperando decisión…".
+    pub awaiting_folders: Option<PendingFolderPlan>,
     /// Cuántos orígenes se omitieron al RETOMAR porque cambiaron/desaparecieron desde el
     /// journal (0 en una op normal). Se muestra en el estado para no perderlos en silencio.
     pub resume_skipped: usize,
@@ -300,6 +333,7 @@ impl OpsCtrl {
             journal_id: None,
             request: Some(req.clone()),
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped: 0,
             started_at: None,
             last_sample: None,
@@ -337,6 +371,7 @@ impl OpsCtrl {
             journal_id: None,
             request,
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped: 0,
             started_at: None,
             last_sample: None,
@@ -368,6 +403,7 @@ impl OpsCtrl {
             journal_id: None,
             request: None,
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped: 0,
             started_at: None,
             last_sample: None,
@@ -421,6 +457,7 @@ impl OpsCtrl {
             journal_id,
             request,
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped: 0,
             started_at: None,
             last_sample: None,
@@ -480,9 +517,9 @@ impl OpsCtrl {
     /// como las que están "Calculando…" (canal de planificación vivo): ambas ocupan el turno en
     /// modo cola, así una segunda op espera a que la primera termine de escanear Y de copiar.
     fn any_running(&self) -> bool {
-        self.active_ops
-            .iter()
-            .any(|o| o.started && (o.rx.is_some() || o.plan_rx.is_some()))
+        self.active_ops.iter().any(|o| {
+            o.started && (o.rx.is_some() || o.plan_rx.is_some() || o.awaiting_folders.is_some())
+        })
     }
 
     /// Drena el canal de planificación (`spawn_plan`) de cada op en fase "Calculando…".
@@ -542,8 +579,30 @@ impl OpsCtrl {
                     Some(r) if self.first_collision(r) => ConflictPolicy::Ask,
                     _ => ConflictPolicy::Overwrite,
                 };
-                let undo_req = if record_undo { req } else { None };
+                let undo_req = if record_undo { req.clone() } else { None };
 
+                // P3: ¿alguna carpeta de origen ya existe (como carpeta) en el destino? Si sí, la
+                // op se detiene a esperar la decisión de carpeta (Fusionar/Reemplazar/Saltar/
+                // Cancelar) ANTES de copiar. El escaneo ya terminó (sale de "Calculando…"), pero
+                // no arranca el motor todavía: queda en `awaiting_folders` y `pump_ops` abrirá el
+                // modal FolderConflict.
+                let fconflicts = req.as_ref().map(folder_conflicts).unwrap_or_default();
+                if !fconflicts.is_empty() {
+                    let op = &mut self.active_ops[i];
+                    op.plan_rx = None;
+                    op.scan_files = 0;
+                    op.scan_bytes = 0;
+                    op.awaiting_folders = Some(PendingFolderPlan {
+                        plan,
+                        kind,
+                        conflict,
+                        undo_req,
+                        conflicts: fconflicts,
+                    });
+                    continue;
+                }
+
+                // Sin conflicto de carpeta: arrancar/encolar como siempre.
                 // Modo cola: si YA hay otra copiando, esta op vuelve a la cola (placeholder) con
                 // su plan resuelto, conservando su id. Si no, arranca el motor en su mismo lugar.
                 let another_copying = self
@@ -649,7 +708,31 @@ impl OpsCtrl {
             }
         }
 
-        // Abrir el modal de conflicto si alguna op lo espera y no hay otro modal abierto.
+        // Abrir el modal de conflicto de CARPETA (P3) si alguna op está parada esperando esa
+        // decisión y no hay otro modal abierto. Se prioriza sobre el conflicto por archivo porque
+        // ocurre antes en el ciclo (tras el escaneo, antes de copiar): una op no puede tener ambos.
+        if self.pending_dialog.is_none() {
+            if let Some(idx) = self
+                .active_ops
+                .iter()
+                .position(|o| o.awaiting_folders.is_some())
+            {
+                let op_id = self.active_ops[idx].id;
+                let pf = self.active_ops[idx].awaiting_folders.as_ref().unwrap();
+                if let Some(first) = pf.conflicts.first() {
+                    let name = first.name.clone();
+                    // "restantes" = cuántas carpetas MÁS hay después de esta (para el checkbox).
+                    let remaining = pf.conflicts.len().saturating_sub(1);
+                    self.pending_dialog = Some(OpDialog::FolderConflict {
+                        op_id,
+                        name,
+                        remaining,
+                    });
+                }
+            }
+        }
+
+        // Abrir el modal de conflicto por archivo si alguna op lo espera y no hay otro modal.
         if self.pending_dialog.is_none() {
             if let Some(idx) = self
                 .active_ops
@@ -700,11 +783,13 @@ impl OpsCtrl {
         }
 
         // "En reposo" (apagar el timer) solo si NINGUNA op tiene canal vivo: ni del motor (`rx`)
-        // ni de planificación (`plan_rx`). Una op "Calculando…" mantiene el timer encendido para
-        // que `pump_planning` siga drenando su progreso y, al terminar, arranque la copia.
+        // ni de planificación (`plan_rx`), NI está parada esperando una decisión de carpeta
+        // (`awaiting_folders`). Una op "Calculando…" mantiene el timer encendido para que
+        // `pump_planning` siga drenando; una op parada en el conflicto de carpeta lo mantiene para
+        // que el modal siga vivo y la decisión se procese al volver.
         self.active_ops
             .iter()
-            .all(|o| o.rx.is_none() && o.plan_rx.is_none())
+            .all(|o| o.rx.is_none() && o.plan_rx.is_none() && o.awaiting_folders.is_none())
     }
 
     /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
@@ -732,6 +817,90 @@ impl OpsCtrl {
             op.awaiting_conflict = None;
         }
         self.pending_dialog = None;
+    }
+
+    /// Resuelve el conflicto de CARPETA (P3) de la op `op_id` con la `decision` dada. Resuelve por
+    /// id ESTABLE (no posición). `decision_int`: 0=Fusionar 1=Reemplazar 2=Saltar. Con `apply_all`,
+    /// la misma decisión se aplica a TODAS las carpetas en conflicto de esa op; si no, solo a la
+    /// primera (la que muestra el modal) y, si quedan más, el modal se reabre para la siguiente.
+    /// Cuando ya no quedan carpetas por decidir, se arranca el motor con el plan ajustado.
+    pub fn resolve_folder_conflict(&mut self, op_id: u64, decision_int: i32, apply_all: bool) {
+        let decision = match decision_int {
+            1 => FolderDecision::Replace,
+            2 => FolderDecision::Skip,
+            _ => FolderDecision::Merge,
+        };
+        self.pending_dialog = None;
+        let Some(idx) = self.active_ops.iter().position(|o| o.id == op_id) else {
+            return;
+        };
+        let Some(mut pf) = self.active_ops[idx].awaiting_folders.take() else {
+            return;
+        };
+        if apply_all {
+            // Aplicar la decisión a TODAS las carpetas en conflicto, en orden.
+            let roots: Vec<PathBuf> = pf.conflicts.iter().map(|c| c.dest_root.clone()).collect();
+            for root in &roots {
+                apply_folder_decision(&mut pf.plan, root, decision);
+            }
+            pf.conflicts.clear();
+        } else if !pf.conflicts.is_empty() {
+            // Solo la primera carpeta (la del modal); el resto sigue pendiente.
+            let root = pf.conflicts.remove(0).dest_root;
+            apply_folder_decision(&mut pf.plan, &root, decision);
+        }
+
+        if pf.conflicts.is_empty() {
+            // Todas decididas: arrancar el motor con el plan ajustado.
+            self.launch_resolved_folder_plan(idx, pf);
+        } else {
+            // Quedan carpetas: volver a parquear la op; `pump_ops` reabrirá el modal para la
+            // siguiente.
+            self.active_ops[idx].awaiting_folders = Some(pf);
+        }
+    }
+
+    /// Cancela TODA la operación parada en el conflicto de carpeta (botón "Cancelar", Esc o velo).
+    /// A diferencia de `cancel_conflict` (que cancela un worker vivo), aquí NO hay motor lanzado
+    /// todavía: la op estaba esperando la decisión de carpeta tras el escaneo. Se cancela el token
+    /// (por prolijidad), se descarta el plan pendiente y se cierra la op a historial (sin copiar
+    /// nada, sin journal ni undo). Resuelve por id ESTABLE.
+    pub fn cancel_folder_conflict(&mut self, op_id: u64) {
+        if let Some(op) = self.active_ops.iter_mut().find(|o| o.id == op_id) {
+            op.token.cancel();
+            op.awaiting_folders = None;
+            op.request = None;
+            // Cerrar a historial: la op no llegó a copiar nada.
+            op.summary = Some(OpSummary::default());
+        }
+        self.pending_dialog = None;
+    }
+
+    /// Arranca el motor para una op cuyo conflicto de carpeta ya se resolvió (plan ajustado). En
+    /// modo cola, si ya hay otra copiando, vuelve la op a la cola (placeholder con su plan),
+    /// conservando su id; si no, la promueve a copia en su mismo lugar. Espeja la rama de
+    /// `pump_planning` que arranca/encola tras el escaneo.
+    fn launch_resolved_folder_plan(&mut self, idx: usize, pf: PendingFolderPlan) {
+        let PendingFolderPlan {
+            plan,
+            kind,
+            conflict,
+            undo_req,
+            ..
+        } = pf;
+        let another_copying = self
+            .active_ops
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != idx && o.started && o.rx.is_some());
+        if self.ops_mode == OpsMode::Queue && another_copying {
+            let op = &mut self.active_ops[idx];
+            op.started = false; // pasa a "en cola" con su plan ya resuelto
+            op.pending = Some((plan, kind, conflict));
+            op.request = undo_req;
+        } else {
+            self.promote_planning_to_copy(idx, plan, kind, conflict, undo_req);
+        }
     }
 
     /// Cancela la op identificada por `op_id` (id ESTABLE de `ActiveOp`, no posición). Se
@@ -783,6 +952,7 @@ impl OpsCtrl {
         let is_finished = |o: &ActiveOp| {
             o.rx.is_none()
                 && o.plan_rx.is_none()
+                && o.awaiting_folders.is_none()
                 && o.started
                 && o.pending.is_none()
                 && o.pending_req.is_none()
@@ -807,7 +977,7 @@ impl OpsCtrl {
     // --- Datos para la UI (modal activo + filas de progreso) ---
 
     /// Datos planos del modal activo para Slint. `kind`: 0=ninguno 1=borrado 2=conflicto
-    /// 3=nombre 4=pegar. (Resume=5 lo agrega la fase de journal.)
+    /// 3=nombre 4=pegar 5=retomar 6=conflicto de carpeta (P3).
     pub fn dialog_vm(&self) -> OpDialogVmData {
         match &self.pending_dialog {
             Some(OpDialog::ConfirmDelete { sources, permanent }) => OpDialogVmData {
@@ -823,6 +993,15 @@ impl OpsCtrl {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                ..Default::default()
+            },
+            Some(OpDialog::FolderConflict {
+                name, remaining, ..
+            }) => OpDialogVmData {
+                kind: 6,
+                folder_name: name.clone(),
+                // Solo ofrecer "aplicar a todas" cuando hay MÁS de una carpeta en conflicto.
+                folder_more: *remaining > 0,
                 ..Default::default()
             },
             Some(OpDialog::NameInput { purpose, buf, .. }) => OpDialogVmData {
@@ -952,7 +1131,7 @@ impl OpsCtrl {
                     t
                 } else if paused {
                     "pausada".to_string()
-                } else if o.awaiting_conflict.is_some() {
+                } else if o.awaiting_conflict.is_some() || o.awaiting_folders.is_some() {
                     "esperando decisión…".to_string()
                 } else {
                     "en curso…".to_string()
@@ -1108,6 +1287,7 @@ impl OpsCtrl {
             journal_id: Some(journal.id.clone()),
             request: None,
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped,
             started_at: None,
             last_sample: None,
@@ -1152,6 +1332,10 @@ pub struct OpDialogVmData {
     pub name_valid: bool,
     pub paste_name: String,
     pub paste_is_image: bool,
+    /// Conflicto de carpeta (P3): nombre de la carpeta que ya existe.
+    pub folder_name: String,
+    /// `true` si hay MÁS de una carpeta en conflicto (muestra el checkbox "aplicar a todas").
+    pub folder_more: bool,
 }
 
 /// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
@@ -1345,6 +1529,137 @@ mod tests {
     }
 
     #[test]
+    fn conflicto_de_carpeta_replace_borra_y_copia() {
+        // Flujo P3 completo por el controlador: copiar una carpeta cuyo destino ya existe (con un
+        // archivo extra) → tras el escaneo aparece el modal FolderConflict → se resuelve con
+        // Reemplazar → el destino queda con SOLO el contenido del origen y el origen intacto.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("carpeta");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"nuevo").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let dest_root = dst.join("carpeta");
+        std::fs::create_dir(&dest_root).unwrap();
+        std::fs::write(dest_root.join("extra.txt"), b"viejo").unwrap();
+
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src.clone()], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        // Pump hasta que aparezca el modal de conflicto de carpeta; resolver con Reemplazar (1).
+        let mut resolved = false;
+        for _ in 0..4000 {
+            c.pump_ops();
+            if !resolved {
+                if let Some(OpDialog::FolderConflict { op_id, .. }) = c.pending_dialog.clone() {
+                    c.resolve_folder_conflict(op_id, 1, false); // 1 = Reemplazar
+                    resolved = true;
+                }
+            }
+            if resolved && c.active_ops.iter().all(|o| o.summary.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(resolved, "se abrió y resolvió el conflicto de carpeta");
+        assert!(dest_root.join("a.txt").exists(), "se copió el origen");
+        assert!(
+            !dest_root.join("extra.txt").exists(),
+            "Reemplazar borró el archivo extra del destino"
+        );
+        assert!(src.join("a.txt").exists(), "el origen quedó intacto");
+    }
+
+    #[test]
+    fn conflicto_de_carpeta_skip_no_copia_la_carpeta() {
+        // Saltar: la carpeta en conflicto NO se copia; el destino conserva su contenido original.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("carpeta");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"nuevo").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let dest_root = dst.join("carpeta");
+        std::fs::create_dir(&dest_root).unwrap();
+        std::fs::write(dest_root.join("solo_destino.txt"), b"viejo").unwrap();
+
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        let mut resolved = false;
+        for _ in 0..4000 {
+            c.pump_ops();
+            if !resolved {
+                if let Some(OpDialog::FolderConflict { op_id, .. }) = c.pending_dialog.clone() {
+                    c.resolve_folder_conflict(op_id, 2, false); // 2 = Saltar
+                    resolved = true;
+                }
+            }
+            if resolved && c.active_ops.iter().all(|o| o.summary.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(resolved, "se resolvió con Saltar");
+        // No se copió a.txt; el archivo solo-del-destino sigue ahí.
+        assert!(
+            !dest_root.join("a.txt").exists(),
+            "Saltar no copió la carpeta"
+        );
+        assert!(
+            dest_root.join("solo_destino.txt").exists(),
+            "el destino quedó intacto"
+        );
+    }
+
+    #[test]
+    fn cancel_folder_conflict_cierra_la_op_sin_copiar() {
+        // Cancelar desde el conflicto de carpeta: la op se cierra a historial sin copiar nada.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("carpeta");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"nuevo").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        std::fs::create_dir(dst.join("carpeta")).unwrap();
+
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        let mut cancelled = false;
+        for _ in 0..4000 {
+            c.pump_ops();
+            if let Some(OpDialog::FolderConflict { op_id, .. }) = c.pending_dialog.clone() {
+                c.cancel_folder_conflict(op_id);
+                cancelled = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(cancelled, "apareció el modal y se canceló");
+        c.pump_ops();
+        // No se copió a.txt; la op queda como historial (con resumen).
+        assert!(
+            !dst.join("carpeta/a.txt").exists(),
+            "cancelar no copió nada"
+        );
+        assert!(c.pending_dialog.is_none(), "el modal se cerró");
+        assert!(c
+            .active_ops
+            .iter()
+            .all(|o| o.summary.is_some() || !o.started));
+    }
+
+    #[test]
     fn conflicto_se_resuelve_con_overwrite() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("a.txt");
@@ -1472,6 +1787,7 @@ mod tests {
             journal_id: None,
             request: None,
             awaiting_conflict: None,
+            awaiting_folders: None,
             resume_skipped: 0,
             started_at: None,
             last_sample: None,
