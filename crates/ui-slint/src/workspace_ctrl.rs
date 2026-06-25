@@ -5913,6 +5913,55 @@ mod tests {
         );
     }
 
+    /// Regla del Explorador: soltar SIN modificadores ni move_hint, dentro del MISMO disco, MUEVE
+    /// por defecto (no copia). `a` y `b` son tempdirs del mismo volumen del sistema, así que
+    /// `same_drive` es true y `decide_drop_action(false, false, true)` = Move. El archivo aterriza
+    /// en el destino y desaparece del origen. (El test de ruteo fuerza Ctrl=copia justo para evitar
+    /// esta ambigüedad; este test fija el comportamiento por defecto del mismo disco.)
+    #[test]
+    fn drop_at_mismo_disco_sin_modificadores_mueve_por_defecto() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let panes = c.pane_rects(area);
+        let (_, dest_rect) = panes
+            .iter()
+            .find(|(id, _)| *id == dest)
+            .copied()
+            .expect("el panel destino tiene rect");
+        let cx = dest_rect.x + dest_rect.w / 2.0;
+        let cy = dest_rect.y + dest_rect.h / 2.0;
+        // ctrl=false, shift=false, move_hint=false → la decisión depende del disco. Mismo disco → Mover.
+        let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], false);
+        assert!(routed, "drop_at debe enrutar");
+        for _ in 0..2000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(b.path().join("doc.txt").exists(), "aterrizó en el destino");
+        assert!(
+            !a.path().join("doc.txt").exists(),
+            "mismo disco sin modificadores: se MOVIÓ (el original ya no está)"
+        );
+    }
+
     /// El batch-rename: abrir con la selección, editar el spec (plantilla + contador) y aplicar.
     /// La op renombra los archivos en disco (verificado tras drenar las ops).
     #[test]

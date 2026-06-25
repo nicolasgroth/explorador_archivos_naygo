@@ -1825,6 +1825,56 @@ mod tests {
     }
 
     #[test]
+    fn conflicto_overwrite_aplicar_a_todos_no_vuelve_a_preguntar() {
+        // Flujo "aplicar a todos": copiar DOS archivos que chocan ambos en el destino. Al primer
+        // conflicto se resuelve Overwrite con apply_all=true → el segundo conflicto NO debe abrir
+        // otro modal; ambos quedan sobrescritos en disco. Cubre que la decisión global se propaga
+        // por el controlador (no solo en el motor) y que el modal aparece UNA sola vez.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"NUEVO-A").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"NUEVO-B").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        std::fs::write(dst.join("a.txt"), b"VIEJO-A").unwrap();
+        std::fs::write(dst.join("b.txt"), b"VIEJO-B").unwrap();
+
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(
+                false,
+                vec![tmp.path().join("a.txt"), tmp.path().join("b.txt")],
+                dst.clone(),
+            ),
+            "Copiar".into(),
+            true,
+        );
+        let mut prompts = 0;
+        for _ in 0..4000 {
+            c.pump_ops();
+            if let Some(OpDialog::Conflict { op_id, .. }) = c.pending_dialog.clone() {
+                prompts += 1;
+                // La primera (y única) vez: Overwrite + aplicar a todos.
+                c.resolve_conflict(op_id, ConflictAction::Overwrite, true);
+            }
+            if c.active_ops.iter().all(|o| o.summary.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Solo se preguntó UNA vez (apply_all silenció el segundo choque).
+        assert_eq!(prompts, 1, "el modal de conflicto apareció una sola vez");
+        // Ambos archivos quedaron sobrescritos con el contenido nuevo.
+        assert_eq!(
+            std::fs::read_to_string(dst.join("a.txt")).unwrap(),
+            "NUEVO-A"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("b.txt")).unwrap(),
+            "NUEVO-B"
+        );
+    }
+
+    #[test]
     fn cola_lanza_la_segunda_al_terminar_la_primera() {
         let tmp = tempfile::tempdir().unwrap();
         for n in ["a.txt", "b.txt"] {
