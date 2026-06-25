@@ -1207,6 +1207,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     while let Ok(payload) = drop_rx.try_recv() {
                         let mut routed = false;
                         if let Some(ui) = ui_weak.upgrade() {
+                            // Tras el bucle modal de `DoDragDrop` (OLE), la ventana de Naygo deja
+                            // de ser la foreground del SO: el primer clic en el modal de conflicto
+                            // que pueda levantar `drop_at` solo reactivaría la ventana en vez de
+                            // accionar el botón. La traemos al frente AQUÍ, antes de procesar el
+                            // drop, para que el modal aparezca con la ventana ya enfocada y el
+                            // primer clic vaya al botón. No toca `ctrl`, así que no hay riesgo de
+                            // doble-préstamo.
+                            if let Some(hwnd) = naygo_hwnd(&ui) {
+                                naygo_platform::window::bring_to_front(hwnd);
+                            }
                             // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
                             // HWND o ScreenToClient falla, caemos al fallback del panel activo.
                             let client = naygo_hwnd(&ui).and_then(|hwnd| {

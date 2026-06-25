@@ -48,6 +48,39 @@ pub fn screen_to_client(_hwnd: isize, _screen_x: i32, _screen_y: i32) -> Option<
     None
 }
 
+/// Trae la ventana `hwnd` al frente y le da el foco del teclado (`SetForegroundWindow` +
+/// `BringWindowToTop`). Lo necesita el flujo de drag&drop: tras el bucle modal de
+/// `DoDragDrop` (OLE), la ventana de Naygo deja de ser la *foreground window* del SO, así que
+/// el primer clic en un modal de operación solo REACTIVA la ventana y no llega al botón.
+/// Llamando esto justo después de recibir el drop, la ventana ya está al frente cuando aparece
+/// el modal y el primer clic acciona el botón.
+///
+/// Tolerante: si `hwnd` es nulo no hace nada. `SetForegroundWindow` devuelve un BOOL que el SO
+/// puede poner en FALSE si el proceso no tiene derecho a robar el foco (regla anti-robo de
+/// foco de Windows); se ignora a propósito — nunca paniquea. En la práctica funciona aquí
+/// porque Naygo ERA el foreground antes del arrastre (el usuario arrastró desde su panel), y
+/// `BringWindowToTop` ayuda a re-elevar la ventana aun cuando el cambio de foreground sea
+/// denegado. En no-Windows es un stub no-op.
+#[cfg(windows)]
+pub fn bring_to_front(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    // Ambas pueden ser ignoradas por el SO; no nos importa el resultado, solo el efecto.
+    unsafe {
+        let _ = SetForegroundWindow(hwnd);
+        let _ = BringWindowToTop(hwnd);
+    }
+}
+
+/// Stub no-Windows: traer la ventana al frente es específico de Win32.
+#[cfg(not(windows))]
+pub fn bring_to_front(_hwnd: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
