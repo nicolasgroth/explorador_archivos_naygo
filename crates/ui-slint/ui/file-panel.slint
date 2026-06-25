@@ -192,6 +192,9 @@ component MissingOpButton inherits Rectangle {
 export component FilePanel inherits FocusScope {
     in property <int> pane-id;
     in property <bool> active;
+    // Se está ARRASTRANDO un archivo sobre ESTE panel ahora mismo: borde marcado + path-bar
+    // remarcada, para indicar dónde caerá el drop. Manda sobre `active` mientras dura el arrastre.
+    in property <bool> drag-over: false;
     in property <[RowData]> rows;
     in property <[ColumnVm]> columns;        // columnas visibles (orden/ancho/alineación) (6C)
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
@@ -333,18 +336,25 @@ export component FilePanel inherits FocusScope {
 
     // Marca del panel activo: borde de acento MÁS marcado (2px) + una sutil bruma de acento de
     // fondo, para que se distinga claramente del panel inactivo de un vistazo.
+    // DRAG-OVER (arrastrando un archivo sobre este panel): borde AÚN más grueso (3px) de acento a
+    // plena intensidad + bruma más notoria, para gritar "aquí soltarás". Manda sobre `active`.
     Rectangle {
-        border-width: root.active ? 2px : 1px;
-        border-color: root.active ? Theme.accent : Theme.border;
+        border-width: root.drag-over ? 3px : (root.active ? 2px : 1px);
+        border-color: (root.drag-over || root.active) ? Theme.accent : Theme.border;
         border-radius: 4px;
-        background: root.active ? Theme.accent.with-alpha(0.05) : transparent;
+        background: root.drag-over
+            ? Theme.accent.with-alpha(0.14)
+            : (root.active ? Theme.accent.with-alpha(0.05) : transparent);
         VerticalLayout {
             // --- Barra de ruta: breadcrumbs (modo normal) o editor con autocompletado. ---
             Rectangle {
                 height: 26px;
                 // Cuando el panel está activo, la path-bar lleva un fondo de acento tenue para
-                // resaltar dónde está el foco.
-                background: root.active ? Theme.accent.with-alpha(0.18) : Theme.row-bg;
+                // resaltar dónde está el foco. Al arrastrar encima (drag-over) se remarca más fuerte
+                // para reforzar que ese es el destino del drop.
+                background: root.drag-over
+                    ? Theme.accent.with-alpha(0.32)
+                    : (root.active ? Theme.accent.with-alpha(0.18) : Theme.row-bg);
                 border-radius: 4px;
                 // Modo BREADCRUMB: segmentos clicables; clic en el hueco entra a edición.
                 if !root.editing: HorizontalLayout {

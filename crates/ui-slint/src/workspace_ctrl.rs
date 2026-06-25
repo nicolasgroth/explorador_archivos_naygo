@@ -110,6 +110,12 @@ pub struct WorkspaceCtrl {
     /// Última área de contenido conocida (la setea la UI en cada layout) para resolver
     /// destinos por orden visual desde gestos que no traen el área (p. ej. teclado).
     pub last_area: Rect,
+    /// Panel Files que está BAJO el cursor mientras se ARRASTRAN archivos sobre la ventana
+    /// (resaltado en vivo: borde + título). Lo actualiza la UI desde los eventos de hover del
+    /// `IDropTarget` (`DragHover`), y se limpia al salir/soltar. `None` = no se está arrastrando
+    /// sobre ningún panel Files. Estado de UI transitorio: no se persiste. La UI lo refleja en
+    /// `PaneVm.drag-over` (true solo para el panel cuyo id coincide).
+    pub drag_over_pane: Option<PaneId>,
     /// Último clic (panel, posición de vista, instante) para detectar el doble-clic en Rust
     /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
     /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
@@ -363,6 +369,7 @@ impl WorkspaceCtrl {
                 w: 0.0,
                 h: 0.0,
             },
+            drag_over_pane: None,
             last_click: None,
             last_open: None,
             typeahead: String::new(),
@@ -929,6 +936,40 @@ impl WorkspaceCtrl {
     /// destinos por orden visual desde gestos sin área (teclado).
     pub fn set_area(&mut self, area: Rect) {
         self.last_area = area;
+    }
+
+    /// Panel FILES que está bajo el punto `(content_x, content_y)` (coords de contenido, el mismo
+    /// sistema que usan `pane_rects`/`drop_hit`/`drop_at`). Reusa el hit-testing del docking. Solo
+    /// devuelve paneles Files: si el punto cae sobre un panel auxiliar (Árbol/Inspector/Preview/…)
+    /// o fuera de todo panel, devuelve `None`. Lo usa la UI para resaltar EN VIVO el panel bajo el
+    /// cursor mientras se arrastran archivos (mismo destino que recibiría `drop_at`). No ejecuta
+    /// nada ni muta estado: es un puro hit-test.
+    pub fn pane_at(&self, content_x: f32, content_y: f32) -> Option<PaneId> {
+        use naygo_core::workspace::layout::drop_hit;
+        let panes = self.pane_rects(self.last_area);
+        let (target, _zone) = drop_hit(&panes, content_x, content_y)?;
+        // Filtrar a paneles Files: el resaltado de drop solo aplica donde se puede soltar.
+        self.ws
+            .pane(target)
+            .and_then(|p| p.files.as_ref())
+            .map(|_| target)
+    }
+
+    /// Fija el panel resaltado por arrastre (hover de drop). Devuelve `true` si CAMBIÓ respecto del
+    /// valor anterior (la UI solo re-pinta cuando cambia, para no inundar con cada `DragOver`).
+    pub fn set_drag_over(&mut self, pane: Option<PaneId>) -> bool {
+        if self.drag_over_pane != pane {
+            self.drag_over_pane = pane;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// El panel actualmente resaltado por arrastre, si lo hay. Lo lee `sync_rows` para poblar el
+    /// `drag-over` de cada `PaneVm`.
+    pub fn drag_over_pane(&self) -> Option<PaneId> {
+        self.drag_over_pane
     }
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
@@ -3076,8 +3117,8 @@ impl WorkspaceCtrl {
         // aunque el usuario tenga Shift presionado. Por eso, si el OLE reporta Shift
         // (`move_hint`), MOVEMOS; si no, caemos a decide_drop_action (default por disco + Ctrl).
         let same = same_drive(&paths[0], &dest_dir);
-        let is_move = move_hint
-            || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
+        let is_move =
+            move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
         let label = if is_move { "Mover" } else { "Copiar" };
         crate::logging::breadcrumb(&format!(
             "drop_at: {} {} ítem(s) → {}",
@@ -5747,6 +5788,55 @@ mod tests {
             a.path().join("doc.txt").exists(),
             "el original sigue (copia)"
         );
+    }
+
+    /// `pane_at` resuelve el panel Files bajo un punto de contenido (mismo hit-test que `drop_at`,
+    /// para resaltar EN VIVO el panel mientras se arrastra encima). El centro de cada panel cae en
+    /// ESE panel; un punto fuera de toda área devuelve `None`. Además `set_drag_over` solo reporta
+    /// `true` cuando el valor CAMBIA (la UI re-pinta solo en el cambio, no en cada `DragOver`).
+    #[test]
+    fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        c.set_area(area);
+        let panes = c.pane_rects(area);
+        let center = |id| {
+            let (_, r) = panes.iter().find(|(p, _)| *p == id).copied().unwrap();
+            (r.x + r.w / 2.0, r.y + r.h / 2.0)
+        };
+        // El centro de cada panel resuelve a ESE panel.
+        let (ox, oy) = center(origin);
+        let (dx, dy) = center(dest);
+        assert_eq!(
+            c.pane_at(ox, oy),
+            Some(origin),
+            "centro del origen → origen"
+        );
+        assert_eq!(
+            c.pane_at(dx, dy),
+            Some(dest),
+            "centro del destino → destino"
+        );
+        // Fuera de toda área → None (no se resalta nada).
+        assert_eq!(c.pane_at(-50.0, -50.0), None, "fuera de todo panel → None");
+        // set_drag_over solo cambia (true) cuando el valor es distinto.
+        assert!(c.set_drag_over(Some(dest)), "primera vez: cambia");
+        assert!(!c.set_drag_over(Some(dest)), "mismo valor: no cambia");
+        assert!(c.set_drag_over(None), "limpiar: cambia");
+        assert_eq!(c.drag_over_pane(), None);
     }
 
     /// El `move_hint` del OLE (Shift presionado al SOLTAR) fuerza MOVER aunque los flags de

@@ -1337,15 +1337,18 @@ export component AppWindow inherits Window {
                     width: 100%;
                     height: parent.bar-h;
                     // Título del panel activo con fondo de acento, para marcar el foco claramente.
-                    background: p.active ? Theme.accent : Theme.row-bg;
+                    // Si se está ARRASTRANDO un archivo sobre este panel (`drag-over`), el título se
+                    // remarca con acento aunque el panel no sea el activo, para indicar dónde caerá
+                    // el drop. drag-over manda sobre active (durante el arrastre es lo relevante).
+                    background: (p.active || p.drag-over) ? Theme.accent : Theme.row-bg;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 6px;
                         spacing: 6px;
                         Text {
                             text: p.title;
-                            color: p.active ? white : Theme.text-dim;
-                            font-weight: p.active ? 800 : 600;
+                            color: (p.active || p.drag-over) ? white : Theme.text-dim;
+                            font-weight: (p.active || p.drag-over) ? 800 : 600;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                             overflow: elide;
@@ -1388,7 +1391,7 @@ export component AppWindow inherits Window {
                             width: 9px; height: 9px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            stroke: closex-touch.has-hover ? white : (p.active ? white : Theme.text-dim);
+                            stroke: closex-touch.has-hover ? white : ((p.active || p.drag-over) ? white : Theme.text-dim);
                             stroke-width: 1.5px;
                             viewbox-width: 10; viewbox-height: 10;
                             MoveTo { x: 1; y: 1; }
@@ -1413,6 +1416,7 @@ export component AppWindow inherits Window {
                         height: 100%;
                         pane-id: p.id;
                         active: p.active;
+                        drag-over: p.drag-over;
                         rows: p.rows;
                         columns: p.columns;
                         col-menu: p.col-menu;

@@ -38,6 +38,24 @@ pub struct DropPayload {
     pub screen_y: i32,
 }
 
+/// Evento de HOVER durante un arrastre, para resaltar EN VIVO el panel bajo el cursor (borde +
+/// título) mientras el usuario arrastra archivos sobre la ventana. Viaja por un canal HERMANO
+/// (`drag_tx`), SEPARADO del [`DropPayload`] final (`drop_tx`): el hover es de alta frecuencia y
+/// puramente visual; el drop es el commit. Mezclarlos obligaría a la UI a distinguir variantes en
+/// el mismo canal y arriesgaría que un hover se cuele como si fuera un drop.
+///
+/// `Over` se emite en `DragEnter`/`DragOver` (el SO los dispara MUCHÍSIMO, en cada movimiento);
+/// `Leave` en `DragLeave` y en `Drop` (al salir o al soltar, el resaltado debe quitarse). El punto
+/// va en coordenadas de PANTALLA (píxeles físicos), igual que `DropPayload`, y la UI lo convierte a
+/// coords de contenido con la MISMA fórmula. No hay throttle aquí: el lado UI recalcula el panel y
+/// solo re-pinta si CAMBIÓ respecto del último (un hit-test + comparación, barato).
+pub enum DragHover {
+    /// El cursor está sobre la ventana en este punto de PANTALLA (físico) durante un arrastre.
+    Over { screen_x: i32, screen_y: i32 },
+    /// El cursor salió de la ventana (o se soltó): limpiar cualquier resaltado de hover.
+    Leave,
+}
+
 /// Guard RAII: al dropearse, revoca el registro (`RevokeDragDrop`) y libera el target.
 /// El campo interno solo existe para mantener vivo el registro mientras viva el guard.
 pub struct DropTargetGuard {
@@ -52,17 +70,28 @@ pub struct DropTargetGuard {
 
 /// Stub no-Windows: recibir drops del SO no existe fuera de Windows. Guard inerte.
 #[cfg(not(windows))]
-pub fn register(_hwnd: isize, _tx: Sender<DropPayload>, _waker: Waker) -> DropTargetGuard {
+pub fn register(
+    _hwnd: isize,
+    _tx: Sender<DropPayload>,
+    _drag_tx: Sender<DragHover>,
+    _waker: Waker,
+) -> DropTargetGuard {
     DropTargetGuard { _priv: () }
 }
 
 /// Registra `hwnd` como destino de drop OLE. Cuando el usuario suelta archivos, envía un
-/// [`DropPayload`] por `tx` y despierta la UI con `waker`. `hwnd` es el handle nativo
-/// (`isize`). Tolerante: si OLE/registro falla, devuelve un guard inerte (no crashea;
-/// simplemente no llegarán drops). Debe llamarse en el **hilo de UI** (apartamento STA).
+/// [`DropPayload`] por `tx`; mientras arrastra sobre la ventana, envía eventos [`DragHover`] por
+/// `drag_tx` (para resaltar el panel bajo el cursor). En ambos casos despierta la UI con `waker`.
+/// `hwnd` es el handle nativo (`isize`). Tolerante: si OLE/registro falla, devuelve un guard inerte
+/// (no crashea; simplemente no llegarán drops). Debe llamarse en el **hilo de UI** (apartamento STA).
 #[cfg(windows)]
-pub fn register(hwnd: isize, tx: Sender<DropPayload>, waker: Waker) -> DropTargetGuard {
-    match windows_impl::register(hwnd, tx, waker) {
+pub fn register(
+    hwnd: isize,
+    tx: Sender<DropPayload>,
+    drag_tx: Sender<DragHover>,
+    waker: Waker,
+) -> DropTargetGuard {
+    match windows_impl::register(hwnd, tx, drag_tx, waker) {
         Some(reg) => DropTargetGuard { inner: Some(reg) },
         None => {
             tracing::warn!(
@@ -76,7 +105,7 @@ pub fn register(hwnd: isize, tx: Sender<DropPayload>, waker: Waker) -> DropTarge
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::{DropPayload, Waker};
+    use super::{DragHover, DropPayload, Waker};
     use std::sync::mpsc::Sender;
     use windows::core::{implement, Ref};
     use windows::Win32::Foundation::{HWND, POINTL};
@@ -124,16 +153,20 @@ mod windows_impl {
     #[implement(IDropTarget)]
     struct NaygoDropTarget {
         tx: Sender<DropPayload>,
+        /// Canal hermano para los eventos de HOVER (resaltar el panel bajo el cursor). Separado de
+        /// `tx` a propósito: el hover es de alta frecuencia y visual; el drop es el commit.
+        drag_tx: Sender<DragHover>,
         waker: Waker,
     }
 
     impl IDropTarget_Impl for NaygoDropTarget_Impl {
-        /// El cursor entra en la ventana durante un arrastre: indicamos el efecto a pintar.
+        /// El cursor entra en la ventana durante un arrastre: indicamos el efecto a pintar y
+        /// reportamos el punto para resaltar el panel bajo el cursor.
         fn DragEnter(
             &self,
             _pdataobj: Ref<IDataObject>,
             grfkeystate: MODIFIERKEYS_FLAGS,
-            _pt: &POINTL,
+            pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             // SAFETY: el SO entrega un puntero válido a un DROPEFFECT escribible.
@@ -142,15 +175,16 @@ mod windows_impl {
                     *eff = effect_for(grfkeystate);
                 }
             }
+            self.emit_hover(pt);
             Ok(())
         }
 
         /// El cursor se mueve dentro de la ventana: refrescamos el efecto (Shift puede
-        /// cambiar a mitad del arrastre).
+        /// cambiar a mitad del arrastre) y reportamos el nuevo punto para el resaltado.
         fn DragOver(
             &self,
             grfkeystate: MODIFIERKEYS_FLAGS,
-            _pt: &POINTL,
+            pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             // SAFETY: igual que en DragEnter; puntero del SO a un DROPEFFECT escribible.
@@ -159,11 +193,13 @@ mod windows_impl {
                     *eff = effect_for(grfkeystate);
                 }
             }
+            self.emit_hover(pt);
             Ok(())
         }
 
-        /// El cursor sale de la ventana sin soltar: nada que hacer.
+        /// El cursor sale de la ventana sin soltar: limpiar el resaltado del panel.
         fn DragLeave(&self) -> windows::core::Result<()> {
+            self.emit_leave();
             Ok(())
         }
 
@@ -235,7 +271,30 @@ mod windows_impl {
                 ReleaseStgMedium(&mut medium);
             }
 
+            // El arrastre terminó (soltó): limpiar el resaltado del panel bajo el cursor.
+            self.emit_leave();
+
             Ok(())
+        }
+    }
+
+    impl NaygoDropTarget_Impl {
+        /// Reportar el punto actual del cursor (PANTALLA, físico) por el canal de hover y despertar
+        /// la UI para que recalcule y re-pinte el panel resaltado. Tolerante: si el receptor colgó,
+        /// se ignora. El SO llama a esto MUCHÍSIMO (cada movimiento); el costo del lado UI es un
+        /// hit-test + comparación, así que no hace falta throttle aquí.
+        fn emit_hover(&self, pt: &POINTL) {
+            let _ = self.drag_tx.send(DragHover::Over {
+                screen_x: pt.x,
+                screen_y: pt.y,
+            });
+            (self.waker)();
+        }
+
+        /// Avisar que el arrastre dejó la ventana (o se soltó): la UI limpia el resaltado.
+        fn emit_leave(&self) {
+            let _ = self.drag_tx.send(DragHover::Leave);
+            (self.waker)();
         }
     }
 
@@ -260,7 +319,12 @@ mod windows_impl {
 
     /// Inicializa OLE en este hilo (idempotente/tolerante) y registra el `IDropTarget`.
     /// Devuelve `Some(Registration)` si el registro fue exitoso, o `None` si algo falló.
-    pub fn register(hwnd: isize, tx: Sender<DropPayload>, waker: Waker) -> Option<Registration> {
+    pub fn register(
+        hwnd: isize,
+        tx: Sender<DropPayload>,
+        drag_tx: Sender<DragHover>,
+        waker: Waker,
+    ) -> Option<Registration> {
         let hwnd = hwnd_from_isize(hwnd);
         if hwnd.0.is_null() {
             return None;
@@ -274,7 +338,7 @@ mod windows_impl {
             let _ = OleInitialize(None);
         }
 
-        let target: IDropTarget = NaygoDropTarget { tx, waker }.into();
+        let target: IDropTarget = NaygoDropTarget { tx, drag_tx, waker }.into();
 
         // winit (sobre el que corre Slint) ya registró SU PROPIO IDropTarget al crear la
         // ventana: tiene drag&drop ON por defecto y Slint 1.16 no lo desactiva. Una ventana
@@ -319,7 +383,8 @@ mod tests {
     #[test]
     fn register_hwnd_nulo_o_no_windows_es_inerte() {
         let (tx, _rx) = channel::<DropPayload>();
-        let guard = register(0, tx, noop_waker());
+        let (drag_tx, _drag_rx) = channel::<DragHover>();
+        let guard = register(0, tx, drag_tx, noop_waker());
         // El guard se dropea aquí sin panic.
         drop(guard);
     }

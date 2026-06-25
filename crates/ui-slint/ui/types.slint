@@ -417,6 +417,11 @@ export struct PaneVm {
     h: length,
     path: string,
     active: bool,
+    // Se está ARRASTRANDO un archivo sobre ESTE panel (Files) ahora mismo: la UI lo resalta con un
+    // borde marcado + el título remarcado, para indicar dónde caerá el drop. Solo true para el
+    // panel bajo el cursor durante el arrastre; se limpia al salir/soltar. Lo puebla `sync_rows`
+    // desde `drag_over_pane` del controlador (true sii el id coincide).
+    drag-over: bool,
     purpose: int,
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):

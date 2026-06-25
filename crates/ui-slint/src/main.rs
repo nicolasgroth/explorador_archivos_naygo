@@ -387,6 +387,8 @@ fn main() -> Result<(), slint::PlatformError> {
             // `borrow_mut` porque `rows_of` necesita mutar el IconCache (decodifica on-demand).
             let mut c = ctrl.borrow_mut();
             let active = c.active_id();
+            // Panel resaltado por arrastre (hover de drop): se refleja en `PaneVm.drag-over`.
+            let drag_over = c.drag_over_pane();
             let hl_secs = c.highlight_secs();
             let hl_now = std::time::Instant::now();
             // Datos compartidos (no dependen del panel concreto): favoritos, recientes,
@@ -459,6 +461,12 @@ fn main() -> Result<(), slint::PlatformError> {
                     let mut changed = false;
                     if pv.active != is_active {
                         pv.active = is_active;
+                        changed = true;
+                    }
+                    // Resaltado de arrastre: true solo para el panel bajo el cursor durante el drag.
+                    let is_drag_over = drag_over == Some(id);
+                    if pv.drag_over != is_drag_over {
+                        pv.drag_over = is_drag_over;
                         changed = true;
                     }
                     if pv.path != path {
@@ -841,6 +849,10 @@ fn main() -> Result<(), slint::PlatformError> {
                             h: r.h,
                             path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
                             active: Some(*id) == active,
+                            // Resaltado de arrastre: true solo para el panel bajo el cursor mientras
+                            // se arrastran archivos encima. `drag_over_pane()` es transitorio (lo
+                            // setea el drenado del canal de hover en el tick).
+                            drag_over: ctrl.borrow().drag_over_pane() == Some(*id),
                             purpose,
                             title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
                             rows: ModelRc::from(pm.rows.clone()),
@@ -1039,6 +1051,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // diseño: no se mapea el punto de drop a un panel concreto).
     let (drop_tx, drop_rx) = std::sync::mpsc::channel::<naygo_platform::drop_target::DropPayload>();
     let drop_rx = Rc::new(drop_rx);
+    // Canal HERMANO para los eventos de HOVER durante el arrastre (resaltar el panel bajo el
+    // cursor: borde + título). Separado de `drop_*` a propósito: el hover es de alta frecuencia y
+    // visual; el drop es el commit. El `IDropTarget` emite `Over`/`Leave` por aquí (ver
+    // drop_target.rs) y despierta la UI con el mismo waker; el tick lo drena abajo.
+    let (drag_tx, drag_rx) = std::sync::mpsc::channel::<naygo_platform::drop_target::DragHover>();
+    let drag_rx = Rc::new(drag_rx);
     let drop_guard: Rc<RefCell<Option<naygo_platform::drop_target::DropTargetGuard>>> =
         Rc::new(RefCell::new(None));
 
@@ -1076,6 +1094,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let drop_tx = drop_tx.clone();
         let drop_rx = drop_rx.clone();
+        let drag_tx = drag_tx.clone();
+        let drag_rx = drag_rx.clone();
         let drop_guard = drop_guard.clone();
         let tray = tray.clone();
         Rc::new(move || {
@@ -1088,6 +1108,8 @@ fn main() -> Result<(), slint::PlatformError> {
             let ui_weak = ui_weak.clone();
             let drop_tx = drop_tx.clone();
             let drop_rx = drop_rx.clone();
+            let drag_tx = drag_tx.clone();
+            let drag_rx = drag_rx.clone();
             let drop_guard = drop_guard.clone();
             let tray = tray.clone();
             timer.start(
@@ -1114,6 +1136,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                 let g = naygo_platform::drop_target::register(
                                     hwnd,
                                     drop_tx.clone(),
+                                    drag_tx.clone(),
                                     waker.clone(),
                                 );
                                 *drop_guard.borrow_mut() = Some(g);
@@ -1139,6 +1162,48 @@ fn main() -> Result<(), slint::PlatformError> {
                     // ScreenToClient ya quitó el marco del SO: NO restar nada más por ese lado.
                     // TOP_BAR_H = 34px lógicos (alto de la barra superior de Naygo).
                     const TOP_BAR_H: f32 = 34.0;
+                    // HOVER del arrastre (resaltar el panel bajo el cursor: borde + título). Drenar
+                    // ANTES del drop. `Over{screen}` → coords de contenido (MISMA fórmula que el
+                    // drop) → `pane_at` (solo paneles Files) → `set_drag_over`. `Leave` (salir o
+                    // soltar) limpia. Coalescemos a la ÚLTIMA posición del lote: el SO dispara
+                    // `DragOver` muchísimo y solo importa dónde está el cursor AHORA. `set_drag_over`
+                    // solo marca cambio si el panel difiere, así no re-pintamos en cada movimiento.
+                    // RE-ENTRANCIA: cada acceso a `ctrl` va en su propio statement (el `Ref`/`RefMut`
+                    // temporal muere al terminar la línea) para no solapar borrow con borrow_mut.
+                    {
+                        let mut last: Option<naygo_platform::drop_target::DragHover> = None;
+                        while let Ok(msg) = drag_rx.try_recv() {
+                            last = Some(msg);
+                        }
+                        if let Some(msg) = last {
+                            let new_over = match msg {
+                                naygo_platform::drop_target::DragHover::Leave => None,
+                                naygo_platform::drop_target::DragHover::Over {
+                                    screen_x,
+                                    screen_y,
+                                } => ui_weak.upgrade().and_then(|ui| {
+                                    let client = naygo_hwnd(&ui).and_then(|hwnd| {
+                                        naygo_platform::window::screen_to_client(
+                                            hwnd, screen_x, screen_y,
+                                        )
+                                    });
+                                    client.and_then(|(client_x, client_y)| {
+                                        let scale = ui.window().scale_factor().max(0.01);
+                                        let cx = client_x as f32 / scale;
+                                        let cy = client_y as f32 / scale - TOP_BAR_H;
+                                        // `pane_at` es &self; el Ref temporal muere al ligar el let.
+                                        ctrl.borrow().pane_at(cx, cy)
+                                    })
+                                }),
+                            };
+                            // Si cambió el panel resaltado, repintar (sync_rows lo refleja en cada
+                            // PaneVm). El borrow_mut va solo, tras soltar el borrow de arriba.
+                            let changed = ctrl.borrow_mut().set_drag_over(new_over);
+                            if changed {
+                                sync_rows();
+                            }
+                        }
+                    }
                     while let Ok(payload) = drop_rx.try_recv() {
                         let mut routed = false;
                         if let Some(ui) = ui_weak.upgrade() {
@@ -1186,6 +1251,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                     payload.move_,
                                 );
                             }
+                        }
+                        // Tras soltar, el resaltado de arrastre debe irse aunque el `Leave` del
+                        // OLE no haya llegado/procesado todavía (defensa: que el borde no se quede
+                        // pegado). Si ya estaba limpio, `set_drag_over` no marca cambio.
+                        if ctrl.borrow_mut().set_drag_over(None) {
+                            sync_rows();
                         }
                     }
                     // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y
