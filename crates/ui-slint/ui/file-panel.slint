@@ -195,6 +195,11 @@ export component FilePanel inherits FocusScope {
     // Se está ARRASTRANDO un archivo sobre ESTE panel ahora mismo: borde marcado + path-bar
     // remarcada, para indicar dónde caerá el drop. Manda sobre `active` mientras dura el arrastre.
     in property <bool> drag-over: false;
+    // Hay un MODAL de operación abierto (conflicto/eliminar/aviso, etc.). Mientras sea true se
+    // DESMONTA el `body-touch` exterior (ver más abajo) para que NO robe hover/clic/arrastre al
+    // velo del modal: sin esto el popup queda con el hover muerto hasta el primer clic, y arrastrar
+    // resalta filas que no debería. Al cerrar el modal vuelve a false → el TouchArea se re-monta.
+    in property <bool> modal-open: false;
     in property <[RowData]> rows;
     in property <[ColumnVm]> columns;        // columnas visibles (orden/ancho/alineación) (6C)
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
@@ -675,8 +680,9 @@ export component FilePanel inherits FocusScope {
                 // TouchArea exterior: ÚLTIMO hijo del cuerpo (por ENCIMA del ListView en z-order),
                 // captura TODOS los eventos crudos y deduce la fila por la `y` + el scroll. Se
                 // oculta durante el rename inline para no tapar el editor de la celda Name (durante
-                // el rename no se necesita clic-en-vacío).
-                if root.rename-pos == -1: body-touch := TouchArea {
+                // el rename no se necesita clic-en-vacío). También se DESMONTA si hay un modal abierto
+                // (`modal-open`): así no roba hover/clic al velo del modal; vuelve al cerrarse este.
+                if root.rename-pos == -1 && !root.modal-open: body-touch := TouchArea {
                     // Estado del gesto en curso. `pressed-here`: hay un press de botón izquierdo
                     // vivo. `dragging`: ya se disparó el arrastre OLE (no repetir). `press-x/y`:
                     // dónde empezó (umbral clic-vs-arrastre). `start-row`: fila bajo el press.

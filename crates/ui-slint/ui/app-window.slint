@@ -1418,6 +1418,11 @@ export component AppWindow inherits Window {
                         pane-id: p.id;
                         active: p.active;
                         drag-over: p.drag-over;
+                        // Mientras haya un modal de operación (conflicto/eliminar/nombre/carpeta) o un
+                        // aviso (USB/errores) abierto, el panel DESMONTA su TouchArea exterior para no
+                        // robarle hover/clic al velo del modal (si no, el popup tiene el hover muerto
+                        // hasta el primer clic y arrastrar resalta filas que no debería). > 0 = visible.
+                        modal-open: root.op-dialog.kind > 0 || root.message.kind > 0;
                         rows: p.rows;
                         columns: p.columns;
                         col-menu: p.col-menu;
@@ -1640,32 +1645,9 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Modales de operaciones (overlay sobre toda la ventana; visible solo si hay uno).
-    OpDialogs {
-        width: 100%;
-        height: 100%;
-        vm: root.op-dialog;
-        resume-rows: root.resume-rows;
-        resume-decide(id, a) => { root.resume-decide(id, a); }
-        delete-confirm() => { root.delete-confirm(); }
-        delete-cancel() => { root.delete-cancel(); }
-        conflict-decide(a, all) => { root.conflict-decide(a, all); }
-        conflict-cancel() => { root.conflict-cancel(); }
-        conflict-rename() => { root.conflict-rename(); }
-        folder-conflict-decide(d, all) => { root.folder-conflict-decide(d, all); }
-        folder-conflict-cancel() => { root.folder-conflict-cancel(); }
-        name-changed(v) => { root.name-changed(v); }
-        name-confirm() => { root.name-confirm(); }
-        name-cancel() => { root.name-cancel(); }
-        paste-confirm() => { root.paste-confirm(); }
-        paste-cancel() => { root.paste-cancel(); }
-    }
-
-    MessageModal {
-        vm: root.message;
-        message-confirm() => { root.message-confirm(); }
-        message-cancel() => { root.message-cancel(); }
-    }
+    // NOTA: los modales de operaciones (OpDialogs) y el aviso (MessageModal) se montan como los
+    // ÚLTIMOS hijos del componente raíz (al final del archivo), para que queden por DELANTE de
+    // todos los demás overlays (menús, paleta, etc.) en el z-order de Slint. Ver el final.
 
     // Tooltip de la toolbar: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido,
     // así no queda tapado por los paneles). Aparece justo bajo la barra, centrado en el botón.
@@ -2273,5 +2255,36 @@ export component AppWindow inherits Window {
         query-changed(q) => { root.palette-query-changed(q); }
         run(i) => { root.palette-run(i); }
         dismiss => { root.palette-dismiss(); }
+    }
+
+    // Modales de operaciones (overlay sobre toda la ventana; visible solo si hay uno) y aviso
+    // (USB/errores). Se montan COMO ÚLTIMOS HIJOS del raíz a propósito: en Slint el último hijo
+    // queda al frente en el z-order, así estos modales tapan a TODOS los demás overlays (menús,
+    // paleta, etc.). Cuando están abiertos, los paneles desmontan su `body-touch` (`modal-open`),
+    // por lo que el velo recibe hover/clic de inmediato (sin clic de despertar).
+    OpDialogs {
+        width: 100%;
+        height: 100%;
+        vm: root.op-dialog;
+        resume-rows: root.resume-rows;
+        resume-decide(id, a) => { root.resume-decide(id, a); }
+        delete-confirm() => { root.delete-confirm(); }
+        delete-cancel() => { root.delete-cancel(); }
+        conflict-decide(a, all) => { root.conflict-decide(a, all); }
+        conflict-cancel() => { root.conflict-cancel(); }
+        conflict-rename() => { root.conflict-rename(); }
+        folder-conflict-decide(d, all) => { root.folder-conflict-decide(d, all); }
+        folder-conflict-cancel() => { root.folder-conflict-cancel(); }
+        name-changed(v) => { root.name-changed(v); }
+        name-confirm() => { root.name-confirm(); }
+        name-cancel() => { root.name-cancel(); }
+        paste-confirm() => { root.paste-confirm(); }
+        paste-cancel() => { root.paste-cancel(); }
+    }
+
+    MessageModal {
+        vm: root.message;
+        message-confirm() => { root.message-confirm(); }
+        message-cancel() => { root.message-cancel(); }
     }
 }
