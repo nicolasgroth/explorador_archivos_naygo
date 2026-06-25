@@ -1140,6 +1140,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     // TOP_BAR_H = 34px lógicos (alto de la barra superior de Naygo).
                     const TOP_BAR_H: f32 = 34.0;
                     while let Ok(payload) = drop_rx.try_recv() {
+                        // DIAG drag (temporal): un drop llegó por el canal del IDropTarget. Quitar
+                        // junto con el resto de la instrumentación "DRAG:".
+                        crate::logging::log_line(&format!(
+                            "DRAG: payload recibido, screen=({},{}), {} paths, move_={}",
+                            payload.screen_x,
+                            payload.screen_y,
+                            payload.paths.len(),
+                            payload.move_
+                        ));
                         let mut routed = false;
                         if let Some(ui) = ui_weak.upgrade() {
                             // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
@@ -1155,6 +1164,10 @@ fn main() -> Result<(), slint::PlatformError> {
                                 let scale = ui.window().scale_factor().max(0.01);
                                 let cx = client_x as f32 / scale;
                                 let cy = client_y as f32 / scale - TOP_BAR_H;
+                                // DIAG drag (temporal): coords ya convertidas a sistema de contenido.
+                                crate::logging::log_line(&format!(
+                                    "DRAG: drop_at content=({cx:.1},{cy:.1})"
+                                ));
                                 let (ctrl_down, shift_down) = {
                                     let c = ctrl.borrow();
                                     (c.ctrl_down, c.shift_down)
@@ -1387,8 +1400,17 @@ fn main() -> Result<(), slint::PlatformError> {
         // usa `try_borrow_mut` y se salta el tick si el controlador está prestado.
         let ctrl = ctrl.clone();
         ui.on_row_drag_out(move |_id| {
+            // DIAG drag (temporal): primer eslabón del lado Rust. Va ANTES del borrow y del
+            // posible return por selección vacía, para confirmar que el gesto llegó hasta acá.
+            crate::logging::log_line("DRAG: on_row_drag_out ENTRÓ");
             // Borrow corto: clonar las rutas seleccionadas y soltar el préstamo de inmediato.
             let paths = ctrl.borrow().selected_paths();
+            // DIAG drag (temporal): cuántas rutas se capturaron (0 = se corta acá por selección
+            // vacía, la causa más común de "no pasa nada").
+            crate::logging::log_line(&format!(
+                "DRAG: on_row_drag_out capturó {} ruta(s)",
+                paths.len()
+            ));
             if paths.is_empty() {
                 return;
             }
@@ -1396,11 +1418,38 @@ fn main() -> Result<(), slint::PlatformError> {
                 "drag_out: iniciar arrastre ({} ítems)",
                 paths.len()
             ));
+            // DIAG drag (temporal): justo antes de diferir el arrastre al event loop.
+            crate::logging::log_line(&format!(
+                "DRAG: on_row_drag_out programando start_drag ({} ruta(s))",
+                paths.len()
+            ));
             // Diferir el arrastre fuera de este frame. `paths` se mueve al closure; ya no hay
             // ningún borrow de `ctrl` en juego cuando `DoDragDrop` arranca su bucle modal.
             let _ = slint::invoke_from_event_loop(move || {
-                let _ = naygo_platform::dnd::start_drag(&paths);
+                // DIAG drag (temporal): ya dentro del turno diferido, antes de entrar al OLE.
+                crate::logging::log_line(&format!(
+                    "DRAG: llamando start_drag con {} paths",
+                    paths.len()
+                ));
+                let outcome = naygo_platform::dnd::start_drag(&paths);
+                // DIAG drag (temporal): qué devolvió el OLE (Copied/Moved/Cancelled o error).
+                crate::logging::log_line(&format!("DRAG: start_drag devolvió {outcome:?}"));
             });
+        });
+    }
+    // DIAG drag (temporal): callbacks de depuración del gesto en file-panel.slint → log a disco.
+    // Permiten ver el press y el cruce de umbral cuando Slint NO llamó a row-drag-out. Quitar
+    // junto con el resto de la instrumentación "DRAG:".
+    {
+        ui.on_dbg_down(move |row| {
+            crate::logging::log_line(&format!("DRAG: down en fila {row}"));
+        });
+    }
+    {
+        ui.on_dbg_threshold(move |selected| {
+            crate::logging::log_line(&format!(
+                "DRAG: umbral cruzado, fila selected={selected} → drag-out o rubber-band"
+            ));
         });
     }
     // Rubber-band (6F): selección por rectángulo arrastrando desde una fila no seleccionada.

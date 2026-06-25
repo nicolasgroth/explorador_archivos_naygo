@@ -275,6 +275,12 @@ export component FilePanel inherits FocusScope {
     callback row-clicked(int, int);          // (pane-id, pos)
     callback row-double-clicked(int, int);
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
+    // DIAG drag (temporal): callbacks de depuración del gesto, cableados en Rust a log_line a
+    // disco (Slint no puede escribir el log directo). Quitar junto con el resto de la
+    // instrumentación "DRAG:". dbg-down: press izq sobre fila; dbg-threshold: se cruzó el
+    // umbral de 6px (selected = la fila de inicio estaba seleccionada → OLE vs rubber-band).
+    callback dbg-down(int);                   // (start-row) press izquierdo
+    callback dbg-threshold(bool);             // (start-selected) cruzó umbral de 6px
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
     // Clic derecho en la ZONA VACÍA del panel: menú contextual de la CARPETA (Explorador,
@@ -675,6 +681,9 @@ export component FilePanel inherits FocusScope {
                     property <length> press-x;
                     property <length> press-y;
                     property <int> start-row: -1;
+                    // DIAG drag (temporal): para que `dbg-threshold` se dispare UNA sola vez por
+                    // gesto (los `moved` llueven). Se rearma en cada press. Quitar con la instr.
+                    property <bool> dbg-moved-once: false;
                     // Fila ABSOLUTA bajo el cursor. `viewport-y` es 0 arriba y NEGATIVO al bajar, así
                     // que `mouse-y - viewport-y` = posición absoluta en el contenido. Puede caer
                     // fuera de rango (zona vacía): el llamador valida contra `rows.length`.
@@ -693,6 +702,14 @@ export component FilePanel inherits FocusScope {
                     moved => {
                         root.hover-row = (self.has-hover && self.cur-row >= 0 && self.cur-row < root.rows.length)
                             ? self.cur-row : -1;
+                        // DIAG drag (temporal): al CRUZAR el umbral de 6px por primera vez en este
+                        // gesto, loguear si la fila de inicio estaba seleccionada (decide OLE vs
+                        // rubber-band). Una sola vez (dbg-moved-once). Quitar con la instrumentación.
+                        if (self.pressed-here && !self.dbg-moved-once
+                            && (abs(self.mouse-x - self.press-x) > 6px || abs(self.mouse-y - self.press-y) > 6px)) {
+                            self.dbg-moved-once = true;
+                            root.dbg-threshold(self.start-selected);
+                        }
                         // Inicio de ARRASTRE OLE: botón abajo, movimiento > umbral, sobre una fila YA
                         // seleccionada → sacar lo elegido. Solo desde selección (para no pisar el
                         // clic-para-seleccionar ni el rubber-band).
@@ -720,6 +737,10 @@ export component FilePanel inherits FocusScope {
                             self.press-x = self.mouse-x;
                             self.press-y = self.mouse-y;
                             self.start-row = self.cur-row;
+                            // DIAG drag (temporal): rearmar el flag y avisar el press a Rust. Quitar
+                            // junto con el resto de la instrumentación "DRAG:".
+                            self.dbg-moved-once = false;
+                            root.dbg-down(self.cur-row);
                             root.activate(root.pane-id);
                             root.focus();
                         }

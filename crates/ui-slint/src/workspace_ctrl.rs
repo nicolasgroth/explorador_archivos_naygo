@@ -3020,8 +3020,15 @@ impl WorkspaceCtrl {
     ) -> bool {
         use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
+        // DIAG drag (temporal): último eslabón. Pasamos los breadcrumbs (solo memoria) también a
+        // log_line (disco) para ver el ruteo en un arrastre normal. Quitar con la instrumentación.
+        crate::logging::log_line(&format!(
+            "DRAG: drop_at ENTRÓ content=({content_x:.1},{content_y:.1}) rutas={}",
+            paths.len()
+        ));
         if paths.is_empty() {
             crate::logging::breadcrumb("drop_at: sin rutas, no-op");
+            crate::logging::log_line("DRAG: drop_at no-op (sin rutas)");
             return false;
         }
         // Panel bajo el cursor, reusando la maquinaria de hit-testing del docking. `last_area`
@@ -3033,17 +3040,24 @@ impl WorkspaceCtrl {
         let hit_idx = hit
             .as_ref()
             .and_then(|(id, _)| panes.iter().position(|(pid, _)| pid == id));
+        let hit_idx_str = hit_idx
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "None".to_string());
         crate::logging::breadcrumb(&format!(
             "drop_at: content=({:.1},{:.1}) rutas={} move_hint={} → panel={}",
             content_x,
             content_y,
             paths.len(),
             _move_hint,
-            hit_idx
-                .map(|i| i.to_string())
-                .unwrap_or_else(|| "None".to_string()),
+            hit_idx_str,
+        ));
+        // DIAG drag (temporal): mismo dato a disco (panel_hit = índice visual o None). Quitar
+        // junto con la instrumentación "DRAG:".
+        crate::logging::log_line(&format!(
+            "DRAG: drop_at content=({content_x:.1},{content_y:.1}) panel_hit={hit_idx_str}"
         ));
         let Some((target, _zone)) = hit else {
+            crate::logging::log_line("DRAG: drop_at no-op (el punto no cayó sobre ningún panel)");
             return false;
         };
         // El destino debe ser un panel Files con carpeta resoluble.
@@ -3054,6 +3068,7 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
         else {
             crate::logging::breadcrumb("drop_at: el panel destino no es Files, no-op");
+            crate::logging::log_line("DRAG: drop_at no-op (el panel destino no es Files)");
             return false;
         };
         // Soltar sobre la propia carpeta de origen es no-op: si todas las rutas ya viven en
@@ -3066,6 +3081,7 @@ impl WorkspaceCtrl {
         });
         if all_from_dest {
             crate::logging::breadcrumb("drop_at: soltado sobre la propia carpeta, no-op");
+            crate::logging::log_line("DRAG: drop_at no-op (soltado sobre la propia carpeta)");
             return false;
         }
         // Acción según modificadores + mismo disco (Ctrl/Shift mandan; el move_hint del OLE es
@@ -3075,6 +3091,13 @@ impl WorkspaceCtrl {
         let label = if is_move { "Mover" } else { "Copiar" };
         crate::logging::breadcrumb(&format!(
             "drop_at: {} {} ítem(s) → {}",
+            label,
+            paths.len(),
+            dest_dir.display(),
+        ));
+        // DIAG drag (temporal): el ruteo prosperó y se lanza la operación. Quitar con la instr.
+        crate::logging::log_line(&format!(
+            "DRAG: drop_at lanzó operación: {} {} ítem(s) → {}",
             label,
             paths.len(),
             dest_dir.display(),

@@ -284,6 +284,13 @@ mod windows_impl {
     /// de render de egui (el bucle modal toma el control del mouse mientras dura). Devuelve
     /// el efecto resultante. Tolerante: nunca hace panic; cualquier fallo → `DndError`.
     pub fn start_drag(paths: &[PathBuf]) -> Result<DragOutcome, DndError> {
+        // DIAG drag (temporal): platform NO puede usar el log_line de ui-slint (no depende de
+        // ese crate), así que volcamos a stderr con prefijo "DRAG:". Correr naygo.exe desde una
+        // consola para capturarlo. Quitar junto con el resto de la instrumentación.
+        eprintln!(
+            "DRAG: start_drag inicia DoDragDrop con {} rutas",
+            paths.len()
+        );
         if paths.is_empty() {
             return Err(DndError::NoItems);
         }
@@ -308,6 +315,13 @@ mod windows_impl {
                 &drop_source,
                 DROPEFFECT_COPY | DROPEFFECT_MOVE,
                 &mut effect,
+            );
+
+            // DIAG drag (temporal): el bucle modal terminó. hr distingue drop/cancel/error y
+            // effect dice copy/move. A stderr con prefijo "DRAG:". Quitar con la instrumentación.
+            eprintln!(
+                "DRAG: DoDragDrop retornó hr={:?} effect={:?}",
+                result, effect
             );
 
             // Mapear el HRESULT + efecto a nuestro DragOutcome.
