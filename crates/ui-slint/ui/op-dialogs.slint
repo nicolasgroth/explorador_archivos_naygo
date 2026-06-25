@@ -46,6 +46,9 @@ export component OpDialogs inherits Rectangle {
     callback conflict-decide(int, bool);
     // Conflicto: cancelar TODA la operación sin decidir el choque (cierra el modal y aborta).
     callback conflict-cancel();
+    // Conflicto: "Renombrar" pidiendo el NOMBRE nuevo (BUG 1). NO decide el choque: abre el modal
+    // de nombre (kind==3) precargado con una sugerencia; al confirmar ahí se resuelve con el nombre.
+    callback conflict-rename();
     // Conflicto de CARPETA (P3): decision 0=fusionar 1=reemplazar 2=saltar; all=aplicar a todas.
     callback folder-conflict-decide(int, bool);
     // Conflicto de carpeta: cancelar TODA la operación (cierra el modal y aborta).
@@ -140,7 +143,9 @@ export component OpDialogs inherits Rectangle {
                     spacing: 8px;
                     DlgBtn { label: Tr.dlg-conflict-cancel-all; clicked => { root.conflict-cancel(); } }
                     DlgBtn { label: Tr.dlg-skip; clicked => { root.conflict-decide(1, apply-all-row.checked); } }
-                    DlgBtn { label: Tr.dlg-rename; clicked => { root.conflict-decide(2, apply-all-row.checked); } }
+                    // "Renombrar" abre el modal de nombre (no aplica a todos: cada archivo necesita
+                    // su propio nombre), por eso ignora la casilla "aplicar a todas".
+                    DlgBtn { label: Tr.dlg-rename; clicked => { root.conflict-rename(); } }
                     DlgBtn { label: Tr.dlg-overwrite; danger: true; clicked => { root.conflict-decide(0, apply-all-row.checked); } }
                 }
             }
@@ -185,7 +190,16 @@ export component OpDialogs inherits Rectangle {
             // --- 3: Pedir nombre ---
             if root.vm.kind == 3: VerticalLayout {
                 spacing: 12px;
-                Text { text: root.vm.name-title; color: white; }
+                // Si el modal es para "Renombrar" un conflicto (BUG 1), el título es i18n
+                // ("Nuevo nombre para «X»", con X = name-conflict-for); si no, usa name-title
+                // (nuevo archivo/carpeta/pegar), que ya viene formado desde el controlador.
+                Text {
+                    text: root.vm.name-conflict-for != ""
+                        ? Tr.dlg-rename-to-pre + root.vm.name-conflict-for + Tr.dlg-rename-to-suf
+                        : root.vm.name-title;
+                    color: white;
+                    wrap: word-wrap;
+                }
                 Rectangle {
                     height: 30px;
                     background: Theme.panel-bg;

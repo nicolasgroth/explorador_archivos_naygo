@@ -3604,6 +3604,30 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        ui.on_conflict_rename(move || {
+            // BUG 1: "Renombrar" en el conflicto NO decide el choque; abre el modal de nombre
+            // (precargado con la sugerencia "(N)") para que el usuario escriba el nombre nuevo. La
+            // resolución real ocurre al confirmar ese modal (ver `name_confirm` → RenameTo). El id
+            // estable de la op en conflicto lo guarda el pending_dialog, igual que `conflict_decide`.
+            let op_id = {
+                let c = ctrl.borrow();
+                if let Some(ops_ctrl::OpDialog::Conflict { op_id, .. }) = &c.ops.pending_dialog {
+                    Some(*op_id)
+                } else {
+                    None
+                }
+            };
+            if let Some(op_id) = op_id {
+                ctrl.borrow_mut().ops.begin_conflict_rename(op_id);
+            }
+            // No se arranca ni reanuda nada todavía (el motor sigue esperando); solo cambió el
+            // modal activo. `sync_rows` repinta el VM del diálogo (de conflicto a nombre).
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_folder_conflict_decide(move |decision, apply_all| {
             // Conflicto de CARPETA (P3): aplicar la decisión (0=fusionar 1=reemplazar 2=saltar) a
@@ -4637,6 +4661,7 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         name_title: SharedString::from(d.name_title.as_str()),
         name_value: SharedString::from(d.name_value.as_str()),
         name_valid: d.name_valid,
+        name_conflict_for: SharedString::from(d.name_conflict_for.as_str()),
         paste_name: SharedString::from(d.paste_name.as_str()),
         paste_is_image: d.paste_is_image,
         folder_name: SharedString::from(d.folder_name.as_str()),

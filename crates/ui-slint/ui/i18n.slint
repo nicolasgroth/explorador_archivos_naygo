@@ -88,6 +88,10 @@ export global Tr {
     in property <string> dlg-rename: "Renombrar";
     in property <string> dlg-overwrite: "Sobrescribir";
     in property <string> dlg-conflict-cancel-all: "Cancelar todo";
+    // Título del modal de nombre al renombrar un conflicto (BUG 1). El nombre original va entre
+    // `pre` y `suf` (Slint no tiene replace).
+    in property <string> dlg-rename-to-pre: "Nuevo nombre para «";
+    in property <string> dlg-rename-to-suf: "»:";
     // Conflicto de carpeta (P3). El nombre va entre `pre` y `suf` (Slint no tiene replace).
     in property <string> dlg-folder-exists-pre: "La carpeta «";
     in property <string> dlg-folder-exists-suf: "» ya existe. ¿Qué hacer?";

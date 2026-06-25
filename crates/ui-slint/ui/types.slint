@@ -149,6 +149,10 @@ export struct OpDialogVm {
     name-title: string,
     name-value: string,
     name-valid: bool,
+    // Nombre original del archivo en conflicto cuando el modal de nombre se abre para
+    // "Renombrar" un choque (BUG 1). Vacío en los demás casos; la UI lo usa para el título
+    // traducido "Nuevo nombre para «X»".
+    name-conflict-for: string,
     // Pegar preview (texto/imagen):
     paste-name: string,
     paste-is-image: bool,

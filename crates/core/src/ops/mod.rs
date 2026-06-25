@@ -115,7 +115,10 @@ pub struct ConflictPrompt {
 }
 
 /// Decisión que la UI devuelve al motor ante un conflicto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No es `Copy` porque `ConflictAction::RenameTo` lleva un `String` (el nombre elegido por el
+/// usuario). Se clona donde haga falta.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictDecision {
     pub action: ConflictAction,
     /// Aplicar esta decisión a todos los conflictos siguientes de la op.
@@ -123,11 +126,19 @@ pub struct ConflictDecision {
 }
 
 /// Acción concreta de un conflicto resuelto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConflictAction {
     Overwrite,
     Skip,
+    /// Renombrar con sufijo automático " (N)" (`dedup_name`). Es la red de seguridad y el
+    /// comportamiento "rápido": no pide nada al usuario.
     Rename,
+    /// Renombrar con un nombre ELEGIDO por el usuario (el que escribió en el modal de nombre).
+    /// El destino pasa a ser `step.to.with_file_name(nombre)`. Si ese nombre TAMBIÉN choca, el
+    /// motor aplica `dedup_name` sobre él como salvaguarda (nunca falla ni pisa). No tiene
+    /// sentido con "aplicar a todos" (cada archivo necesita su propio nombre); la UI lo
+    /// deshabilita en ese caso.
+    RenameTo(String),
 }
 
 /// Qué hacer cuando una CARPETA de origen ya existe (como carpeta) en el destino. A

@@ -414,6 +414,8 @@
   "slint.dialog.rename": "Renombrar",
   "slint.dialog.overwrite": "Sobrescribir",
   "slint.dialog.conflict_cancel_all": "Cancelar todo",
+  "slint.dialog.rename_to_pre": "Nuevo nombre para «",
+  "slint.dialog.rename_to_suf": "»:",
   "slint.dialog.folder_exists_pre": "La carpeta «",
   "slint.dialog.folder_exists_suf": "» ya existe. ¿Qué hacer?",
   "slint.dialog.folder_merge": "Fusionar",

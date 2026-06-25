@@ -319,7 +319,8 @@ fn exec_copy_step(
             ConflictPolicy::Overwrite => ConflictAction::Overwrite,
             ConflictPolicy::Rename => ConflictAction::Rename,
             ConflictPolicy::Ask => {
-                if let Some(prev) = *applied_all {
+                // `applied_all` se clona (la acción puede ser `RenameTo(String)`, no `Copy`).
+                if let Some(prev) = applied_all.clone() {
                     prev
                 } else {
                     let _ = tx.send(OpMsg::Conflict(ConflictPrompt {
@@ -339,8 +340,11 @@ fn exec_copy_step(
                             }
                         }
                     };
-                    if decision.apply_all {
-                        *applied_all = Some(decision.action);
+                    // "Aplicar a todos" no aplica a `RenameTo` (cada archivo necesita su propio
+                    // nombre). La UI ya lo deshabilita ahí; por las dudas, no lo memorizamos.
+                    if decision.apply_all && !matches!(decision.action, ConflictAction::RenameTo(_))
+                    {
+                        *applied_all = Some(decision.action.clone());
                     }
                     decision.action
                 }
@@ -350,6 +354,18 @@ fn exec_copy_step(
             ConflictAction::Skip => return (step.to.clone(), OpOutcome::Skipped, 0, true),
             ConflictAction::Rename => super::dedup_name(&step.to, &|p: &Path| p.exists()),
             ConflictAction::Overwrite => step.to.clone(),
+            // Nombre elegido por el usuario: destino = mismo directorio, nombre nuevo. Si ESE
+            // nombre también existe, `dedup_name` lo desambigua (salvaguarda: nunca pisar). Si el
+            // nombre quedó vacío/inválido (no debería: la UI valida), se cae a `dedup_name` del
+            // destino original para no fallar.
+            ConflictAction::RenameTo(name) => {
+                let chosen = if name.trim().is_empty() {
+                    step.to.clone()
+                } else {
+                    step.to.with_file_name(name)
+                };
+                super::dedup_name(&chosen, &|p: &Path| p.exists())
+            }
         }
     } else {
         step.to.clone()
@@ -1055,7 +1071,9 @@ mod tests {
             while let Ok(msg) = rx.recv() {
                 if let OpMsg::Conflict(_) = msg {
                     conflicts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let _ = ctx.send(decision);
+                    // `ConflictDecision` ya no es `Copy` (puede llevar un nombre en `RenameTo`);
+                    // se clona para responder a cada conflicto.
+                    let _ = ctx.send(decision.clone());
                 }
             }
         });
@@ -1163,6 +1181,93 @@ mod tests {
         // El original intacto; la copia con sufijo " (2)".
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
         assert_eq!(fs::read_to_string(dst.join("a (2).txt")).unwrap(), "NUEVO");
+    }
+
+    #[test]
+    fn ask_rename_to_usa_el_nombre_elegido() {
+        // BUG 1: "Renombrar" con nombre custom escribe en el nombre ELEGIDO (no en un sufijo
+        // automático). El original queda intacto; el nuevo aparece con el nombre del usuario.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::RenameTo("elegido.txt".to_string()),
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
+        assert_eq!(
+            fs::read_to_string(dst.join("elegido.txt")).unwrap(),
+            "NUEVO"
+        );
+        // No debe haber creado el sufijo automático.
+        assert!(!dst.join("a (2).txt").exists());
+    }
+
+    #[test]
+    fn ask_rename_to_choca_aplica_dedup_como_salvaguarda() {
+        // Si el nombre elegido TAMBIÉN existe, el motor NO pisa: desambigua con " (N)".
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        // El nombre elegido ya está ocupado en el destino.
+        fs::write(dst.join("ocupado.txt"), b"YA-ESTABA").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::RenameTo("ocupado.txt".to_string()),
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_done(), 1);
+        // El ocupado intacto; el nuevo desambiguado a "ocupado (2).txt".
+        assert_eq!(
+            fs::read_to_string(dst.join("ocupado.txt")).unwrap(),
+            "YA-ESTABA"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("ocupado (2).txt")).unwrap(),
+            "NUEVO"
+        );
+    }
+
+    #[test]
+    fn ask_rename_to_respeta_el_move() {
+        // RenameTo en un MOVER: el origen se borra (es mover) y el destino lleva el nombre nuevo.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        // is_move = true.
+        let req = super::super::transfer(true, vec![src.clone()], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::RenameTo("movido.txt".to_string()),
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(fs::read_to_string(dst.join("movido.txt")).unwrap(), "NUEVO");
+        // El existente quedó intacto y el ORIGEN se borró (era mover).
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "VIEJO");
+        assert!(!src.exists(), "el origen debe borrarse en un mover");
     }
 
     #[test]

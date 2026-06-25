@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
-/// el modal queda para crear archivo/carpeta y para confirmar el nombre al pegar.)
+/// el modal queda para crear archivo/carpeta, confirmar el nombre al pegar y renombrar un
+/// archivo en conflicto.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamePurpose {
     NewFile,
@@ -31,6 +32,15 @@ pub enum NamePurpose {
     Paste {
         ext: String,
         bytes: Vec<u8>,
+    },
+    /// Renombrar un archivo en CONFLICTO (BUG 1): el usuario eligió "Renombrar" en el modal de
+    /// conflicto y se le pide el nombre nuevo (con una sugerencia "(2)" precargada). Al confirmar,
+    /// el destino del modal NO es crear un archivo nuevo sino resolver el conflicto de la op
+    /// `op_id` con `ConflictAction::RenameTo(nombre)`. `display` es el nombre original en conflicto
+    /// (para el título "Nuevo nombre para «X»").
+    ConflictRename {
+        op_id: u64,
+        display: String,
     },
 }
 
@@ -803,6 +813,45 @@ impl OpsCtrl {
         self.pending_dialog = None;
     }
 
+    /// BUG 1: el usuario eligió "Renombrar" en el modal de conflicto. En vez de resolver con un
+    /// sufijo automático, abrimos el modal de NOMBRE (kind==3) precargado con una sugerencia "(N)"
+    /// para que escriba el nombre nuevo. El conflicto sigue pendiente en el motor (no se envía
+    /// ninguna decisión todavía); se resolverá al confirmar el modal de nombre, en `name_confirm`,
+    /// con `ConflictAction::RenameTo`. Si no hay un conflicto abierto para `op_id`, no hace nada.
+    pub fn begin_conflict_rename(&mut self, op_id: u64) {
+        // Tomar el prompt del conflicto activo (el modal abierto es el de ESTA op).
+        let existing = match &self.pending_dialog {
+            Some(OpDialog::Conflict { op_id: did, prompt }) if *did == op_id => {
+                prompt.existing.clone()
+            }
+            _ => return,
+        };
+        // Sugerencia precargada: el primer nombre libre "(N)" para ese destino (p. ej. "a (2).txt").
+        let suggestion = naygo_core::ops::dedup_name(&existing, &|p: &Path| p.exists());
+        let suggested_name = suggestion
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Nombre original (para el título "Nuevo nombre para «X»").
+        let display = existing
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Carpeta donde vive el archivo en conflicto (el destino del rename).
+        let dir = existing
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        // Reemplazar el modal de conflicto por el de nombre. NO se borra `awaiting_conflict` de la
+        // op: el motor sigue esperando la decisión; cancelar este modal debe volver a ofrecer el
+        // conflicto (ver `name_cancel_reopens_conflict`).
+        self.pending_dialog = Some(OpDialog::NameInput {
+            purpose: NamePurpose::ConflictRename { op_id, display },
+            dir,
+            buf: suggested_name,
+        });
+    }
+
     /// Cancela TODA la operación identificada por `op_id` desde el diálogo de conflicto, SIN
     /// decidir el choque pendiente. Espeja `cancel_op` (cancela el token) más la limpieza que
     /// hace `resolve_conflict` (borra `awaiting_conflict` y cierra el modal), pero NO envía una
@@ -1010,6 +1059,17 @@ impl OpsCtrl {
                     NamePurpose::NewFile => "Nuevo archivo".to_string(),
                     NamePurpose::NewDir => "Nueva carpeta".to_string(),
                     NamePurpose::Paste { ext, .. } => format!("Pegar como nombre.{ext}"),
+                    // El título lo arma la UI (i18n) a partir de `name_conflict_for`; aquí solo
+                    // dejamos un texto de respaldo por si se mostrara sin traducir.
+                    NamePurpose::ConflictRename { display, .. } => {
+                        format!("Nuevo nombre para «{display}»")
+                    }
+                },
+                // Nombre original en conflicto: la UI lo usa para el título traducido
+                // "Nuevo nombre para «X»". Vacío para los demás propósitos.
+                name_conflict_for: match purpose {
+                    NamePurpose::ConflictRename { display, .. } => display.clone(),
+                    _ => String::new(),
                 },
                 name_value: buf.clone(),
                 name_valid: naygo_core::ops::names::is_valid_name(buf),
@@ -1171,8 +1231,8 @@ impl OpsCtrl {
         }
     }
 
-    /// Confirma el modal de nombre: crea archivo/carpeta o renombra. Devuelve true si
-    /// arrancó una op (para reactivar el timer).
+    /// Confirma el modal de nombre: crea archivo/carpeta, pega, o resuelve un conflicto con el
+    /// nombre elegido (BUG 1). Devuelve true si arrancó/empujó una op (para reactivar el timer).
     pub fn name_confirm(&mut self) -> bool {
         let Some(OpDialog::NameInput { purpose, dir, buf }) = self.pending_dialog.take() else {
             return false;
@@ -1192,13 +1252,41 @@ impl OpsCtrl {
                 let _ = std::fs::write(&path, &bytes);
                 return true;
             }
+            NamePurpose::ConflictRename { op_id, .. } => {
+                // BUG 1: resolver el conflicto pendiente de la op con el nombre elegido. NO se
+                // crea una op nueva: se manda la decisión al motor que está esperando. apply_all
+                // es SIEMPRE false (cada archivo necesita su propio nombre).
+                self.resolve_conflict(op_id, ConflictAction::RenameTo(buf), false);
+                // Reactivar el timer: el motor reanuda y `pump_ops` debe drenar su progreso.
+                return true;
+            }
         };
         self.start_op(req, label.to_string(), true);
         true
     }
 
     /// Cancela el modal activo (botón Cancelar o Esc).
+    ///
+    /// Caso especial (BUG 1): si se cancela el modal de NOMBRE abierto para renombrar un conflicto
+    /// (`ConflictRename`), el motor sigue BLOQUEADO esperando la decisión del choque. Cerrar a secas
+    /// dejaría la op colgada. En su lugar, se REABRE el modal de conflicto de esa op (con su prompt
+    /// original) para que el usuario elija otra opción (Saltar/Sobrescribir/Cancelar todo). El
+    /// prompt sigue guardado en `op.awaiting_conflict` (no se borró al abrir el modal de nombre).
     pub fn dialog_cancel(&mut self) {
+        if let Some(OpDialog::NameInput {
+            purpose: NamePurpose::ConflictRename { op_id, .. },
+            ..
+        }) = &self.pending_dialog
+        {
+            let op_id = *op_id;
+            // Recuperar el prompt del conflicto que seguía pendiente y reabrir el modal de conflicto.
+            if let Some(op) = self.active_ops.iter().find(|o| o.id == op_id) {
+                if let Some(prompt) = op.awaiting_conflict.clone() {
+                    self.pending_dialog = Some(OpDialog::Conflict { op_id, prompt });
+                    return;
+                }
+            }
+        }
         self.pending_dialog = None;
     }
 
@@ -1328,6 +1416,10 @@ pub struct OpDialogVmData {
     pub del_permanent: bool,
     pub conflict_name: String,
     pub name_title: String,
+    /// Nombre original del archivo en conflicto cuando el modal de nombre se abre para "Renombrar"
+    /// un choque (BUG 1). Vacío en los demás casos (nuevo archivo/carpeta/pegar). La UI lo usa para
+    /// armar el título traducido "Nuevo nombre para «X»".
+    pub name_conflict_for: String,
     pub name_value: String,
     pub name_valid: bool,
     pub paste_name: String,
@@ -1945,6 +2037,106 @@ mod tests {
         c.cancel_conflict(999);
         assert!(!tok.is_cancelled(), "no toca la op 7 (id distinto)");
         assert!(c.pending_dialog.is_none(), "igual cierra el modal");
+    }
+
+    /// Arma un OpsCtrl con UNA op (id 42) detenida en un conflicto cuyo destino `dst/a.txt` YA
+    /// existe en disco (para que `dedup_name` sugiera "a (2).txt"). Devuelve (ctrl, rx_decisión,
+    /// tempdir). El tempdir se conserva vivo para que las rutas existan durante el test.
+    fn ctrl_en_conflicto_de_archivo() -> (
+        OpsCtrl,
+        std::sync::mpsc::Receiver<ConflictDecision>,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let existing = dst.join("a.txt");
+        std::fs::write(&existing, b"VIEJO").unwrap();
+        let incoming = tmp.path().join("a.txt");
+        std::fs::write(&incoming, b"NUEVO").unwrap();
+
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        let mut op = fake_active_op(42);
+        let (tx, rx) = std::sync::mpsc::channel::<ConflictDecision>();
+        op.conflict_tx = tx;
+        op.awaiting_conflict = Some(ConflictPrompt {
+            existing: existing.clone(),
+            incoming: incoming.clone(),
+        });
+        c.active_ops.push(op);
+        c.pending_dialog = Some(OpDialog::Conflict {
+            op_id: 42,
+            prompt: ConflictPrompt { existing, incoming },
+        });
+        (c, rx, tmp)
+    }
+
+    #[test]
+    fn begin_conflict_rename_abre_modal_de_nombre_con_sugerencia() {
+        // BUG 1: "Renombrar" en el conflicto abre el modal de NOMBRE (kind 3) precargado con la
+        // sugerencia "(2)" (el primer nombre libre), en modo ConflictRename ligado a la op.
+        let (mut c, _rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        c.begin_conflict_rename(42);
+        match &c.pending_dialog {
+            Some(OpDialog::NameInput { purpose, buf, .. }) => {
+                assert_eq!(
+                    *purpose,
+                    NamePurpose::ConflictRename {
+                        op_id: 42,
+                        display: "a.txt".to_string()
+                    }
+                );
+                assert_eq!(buf, "a (2).txt", "sugiere el primer nombre libre");
+            }
+            other => panic!("esperaba el modal de nombre, hay {other:?}"),
+        }
+        // El VM expone el nombre original para el título traducido.
+        assert_eq!(c.dialog_vm().name_conflict_for, "a.txt");
+        assert_eq!(c.dialog_vm().kind, 3);
+    }
+
+    #[test]
+    fn name_confirm_en_conflict_rename_envia_rename_to() {
+        // Al confirmar el modal de nombre en modo ConflictRename, el motor recibe una
+        // ConflictDecision con RenameTo(nombre escrito) y apply_all=false.
+        let (mut c, rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        c.begin_conflict_rename(42);
+        // El usuario edita el nombre sugerido.
+        c.name_changed("elegido.txt".to_string());
+        let started = c.name_confirm();
+        assert!(started, "name_confirm devuelve true (la op se reanuda)");
+        let got = rx.try_recv().expect("el motor recibe la decisión");
+        assert_eq!(
+            got,
+            ConflictDecision {
+                action: ConflictAction::RenameTo("elegido.txt".to_string()),
+                apply_all: false,
+            }
+        );
+        assert!(c.pending_dialog.is_none(), "el modal se cierra");
+        assert!(
+            c.active_ops[0].awaiting_conflict.is_none(),
+            "el conflicto pendiente se limpió al resolver"
+        );
+    }
+
+    #[test]
+    fn cancelar_modal_de_nombre_reabre_el_conflicto() {
+        // Cancelar el modal de nombre (ConflictRename) NO deja la op colgada: reabre el modal de
+        // conflicto (el motor sigue esperando la decisión).
+        let (mut c, rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        c.begin_conflict_rename(42);
+        assert!(matches!(c.pending_dialog, Some(OpDialog::NameInput { .. })));
+        c.dialog_cancel();
+        match &c.pending_dialog {
+            Some(OpDialog::Conflict { op_id, .. }) => assert_eq!(*op_id, 42),
+            other => panic!("esperaba reabrir el conflicto, hay {other:?}"),
+        }
+        // No se mandó ninguna decisión al motor (sigue esperando).
+        assert!(
+            rx.try_recv().is_err(),
+            "no se decidió el choque al cancelar"
+        );
     }
 
     #[test]
