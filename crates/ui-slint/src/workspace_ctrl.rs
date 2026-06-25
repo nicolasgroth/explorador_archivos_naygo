@@ -7066,3 +7066,689 @@ mod tests {
         assert!(!c.any_modal_open());
     }
 }
+
+/// SIMULAR USUARIO — tests de integración de gestos de punta a punta.
+///
+/// Cada test crea archivos/carpetas REALES en un tempdir AISLADO (más un `config_dir`
+/// propio), simula al usuario operándolos con ATAJOS DE TECLADO, CLIC/MOUSE y ARRASTRE
+/// llamando al MISMO código del controlador (`WorkspaceCtrl` / `OpsCtrl`) que disparan esos
+/// gestos en la app real (headless, sin abrir ventana) y verifica el resultado en DISCO.
+/// Nada toca archivos del sistema del usuario: todo vive bajo `tempfile::tempdir()` y se borra
+/// al caer del scope.
+///
+/// Estos tests cierran el lazo gesto → controlador → motor de ops → filesystem. La resolución de
+/// los modales (confirmar nombre, confirmar borrado, resolver conflicto) se hace por la API de
+/// `OpsCtrl`, porque `on_key` SUSPENDE las acciones globales mientras hay un modal abierto (igual
+/// que en la app: el teclado lo controla el modal Slint). Por eso el teclado simula el DISPARO del
+/// gesto (p. ej. Ctrl+Shift+N abre el modal de carpeta nueva) y el "Aceptar" del modal va por
+/// `name_confirm()` / `delete_confirm()` / `resolve_conflict()`, espejando el cableado de `main.rs`.
+#[cfg(test)]
+mod simular_usuario {
+    use super::*;
+    use naygo_core::ops::ConflictAction;
+
+    // --- Helpers (copiados del mod `tests` de arriba y de keys.rs: los mods hermanos no se ven
+    //     entre sí, así que se replican aquí para que esta suite sea autocontenida) ---
+
+    /// Drena los listados hasta que todos terminan (con timeout), simulando los ticks del Timer.
+    fn drain(c: &mut WorkspaceCtrl) -> bool {
+        for _ in 0..2000 {
+            if c.pump_listings() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// Drena las operaciones de archivo en curso hasta que TODAS terminan (summary presente) o se
+    /// agota el timeout. Devuelve true si terminaron limpio. NO resuelve modales: para flujos con
+    /// conflicto, usar `drain_ops_resolving`.
+    fn drain_ops(c: &mut WorkspaceCtrl) -> bool {
+        for _ in 0..4000 {
+            c.ops.pump_ops();
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// Posición de VISTA del ítem llamado `name` en el panel activo (índice contra `view_indices`,
+    /// que es el mismo que consumen el clic y el teclado).
+    fn active_pos_of(c: &WorkspaceCtrl, name: &str) -> Option<usize> {
+        let f = c.ws.active_files()?;
+        f.view_indices()
+            .iter()
+            .position(|&real| f.entries[real].name == name)
+    }
+
+    /// El char unicode de una tecla especial de Slint, como String (lo que llega a `on_key`).
+    /// Copiado de keys.rs:92.
+    fn key_char(k: slint::platform::Key) -> String {
+        let s: slint::SharedString = k.into();
+        s.to_string()
+    }
+
+    /// Área de trabajo conocida y estable para el hit-testing de paneles (clic/arrastre).
+    fn area() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        }
+    }
+
+    /// Centro (cx, cy) del rect del panel `id` dentro de `a` (para apuntar clic/drop a ESE panel).
+    fn pane_center(c: &WorkspaceCtrl, a: Rect, id: PaneId) -> (f32, f32) {
+        let (_, r) = c
+            .pane_rects(a)
+            .into_iter()
+            .find(|(p, _)| *p == id)
+            .expect("el panel tiene rect");
+        (r.x + r.w / 2.0, r.y + r.h / 2.0)
+    }
+
+    /// Arranca un controlador AISLADO apuntando a `start`, con un `config_dir` temporal propio, y
+    /// drena el primer listado. Devuelve `(ctrl, tmp_cfg)`; el `tmp_cfg` se retiene para que el dir
+    /// no se borre antes de tiempo.
+    fn ctrl_en(start: &std::path::Path) -> (WorkspaceCtrl, tempfile::TempDir) {
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(start.to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c), "el listado inicial debe terminar");
+        (c, cfg)
+    }
+
+    /// Abre un SEGUNDO panel apuntando a `dir` (split) y deja el ORIGEN activo. Devuelve
+    /// `(origin_id, dest_id)`. Espeja `split_for_target` + `open_in_pane`, el camino de "abrir en
+    /// otro panel".
+    fn split_a(c: &mut WorkspaceCtrl, dir: &std::path::Path) -> (PaneId, PaneId) {
+        let origin = c.ws.active_id().unwrap();
+        let dest = c
+            .split_for_target()
+            .expect("se pudo dividir en dos paneles");
+        c.open_in_pane(dest, dir.to_path_buf());
+        assert!(drain(c), "el listado del segundo panel debe terminar");
+        c.ws.set_active(origin);
+        (origin, dest)
+    }
+
+    // ============================ 1. Crear carpeta con Ctrl+Shift+N ============================
+
+    /// GESTO: el usuario pulsa Ctrl+Shift+N (atajo de "nueva carpeta"), escribe el nombre y
+    /// confirma. RESULTADO: la carpeta existe en disco. Cubre on_key(chord NewDir) → modal
+    /// NameInput(NewDir) → name_changed → name_confirm → motor → refresh.
+    #[test]
+    fn crear_carpeta_con_ctrl_shift_n() {
+        let work = tempfile::tempdir().unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+
+        // Atajo Ctrl+Shift+N: abre el modal de nombre para NUEVA CARPETA.
+        c.on_key("n", true, true, false);
+        assert!(
+            matches!(
+                c.ops.pending_dialog,
+                Some(crate::ops_ctrl::OpDialog::NameInput {
+                    purpose: crate::ops_ctrl::NamePurpose::NewDir,
+                    ..
+                })
+            ),
+            "Ctrl+Shift+N debe abrir el modal de NUEVA CARPETA"
+        );
+
+        // El usuario escribe el nombre y confirma (Aceptar / Enter del modal).
+        c.ops.name_changed("Documentos".into());
+        c.ops.name_confirm();
+        assert!(drain_ops(&mut c), "la creación de la carpeta debe terminar");
+        c.refresh_active();
+        assert!(drain(&mut c));
+
+        let creada = work.path().join("Documentos");
+        assert!(creada.is_dir(), "la carpeta nueva debe existir en disco");
+        assert!(
+            active_pos_of(&c, "Documentos").is_some(),
+            "la carpeta nueva aparece en la vista tras refrescar"
+        );
+    }
+
+    // ============================== 2. Crear archivo con Ctrl+N ===============================
+
+    /// GESTO: Ctrl+N (atajo "nuevo archivo"), nombre, confirmar. RESULTADO: el archivo existe.
+    #[test]
+    fn crear_archivo_con_ctrl_n() {
+        let work = tempfile::tempdir().unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+
+        c.on_key("n", true, false, false); // Ctrl+N → nuevo archivo
+        assert!(
+            matches!(
+                c.ops.pending_dialog,
+                Some(crate::ops_ctrl::OpDialog::NameInput {
+                    purpose: crate::ops_ctrl::NamePurpose::NewFile,
+                    ..
+                })
+            ),
+            "Ctrl+N debe abrir el modal de NUEVO ARCHIVO"
+        );
+
+        c.ops.name_changed("apuntes.txt".into());
+        c.ops.name_confirm();
+        assert!(drain_ops(&mut c), "la creación del archivo debe terminar");
+        c.refresh_active();
+        assert!(drain(&mut c));
+
+        let creado = work.path().join("apuntes.txt");
+        assert!(creado.is_file(), "el archivo nuevo debe existir en disco");
+    }
+
+    // ===================== 3. Crear varias carpetas anidadas (a\b\c) ==========================
+
+    /// GESTO: abrir el cuadro "nueva(s) carpeta(s)" (botón de la toolbar) y escribir varias líneas,
+    /// cada una una carpeta SUELTA, y aplicar. RESULTADO: todas existen en disco. Cubre el alta
+    /// MULTILÍNEA (varias carpetas de una vez), que es el camino distinto del modal de nombre simple.
+    #[test]
+    fn crear_varias_carpetas_multilinea() {
+        let work = tempfile::tempdir().unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+
+        c.new_folder_open_active();
+        assert!(
+            c.new_folder_open(),
+            "el cuadro de nuevas carpetas debe abrir"
+        );
+        // Tres carpetas en tres líneas (más una línea en blanco, que se ignora).
+        c.new_folder_set_text("alfa\nbeta\n\ngamma");
+        assert_eq!(
+            c.new_folder_counts(),
+            (3, 0),
+            "tres líneas válidas (la vacía no cuenta)"
+        );
+        c.new_folder_apply();
+        assert!(drain_ops(&mut c), "la creación múltiple debe terminar");
+
+        for n in ["alfa", "beta", "gamma"] {
+            assert!(
+                work.path().join(n).is_dir(),
+                "la carpeta '{n}' de la línea correspondiente debe existir"
+            );
+        }
+    }
+
+    /// GESTO: en el cuadro de nuevas carpetas, escribir una RUTA anidada con separadores
+    /// (`a\b\c`) y aplicar. RESULTADO ESPERADO: la cadena anidada existe en disco.
+    ///
+    /// IGNORADO — BUG REAL DETECTADO. `new_folder_apply` parsea la línea con
+    /// `ops::parse_new_folders`, que la acepta como `FolderSpec::Valid("nivel1\\nivel2\\nivel3")`
+    /// (anidada, separada por `\`), y luego se la pasa TAL CUAL a `ops::create(dir, rel, true)`.
+    /// Pero `ops::plan()` valida ese nombre con `ops::names::is_valid_name`, que PROHÍBE el `\`
+    /// (está en FORBIDDEN), así que devuelve `Err(InvalidName)` y `start_op` la descarta en
+    /// silencio: la carpeta anidada NUNCA se crea. Las carpetas SUELTAS (sin `\`) sí se crean,
+    /// por eso el alta multilínea de arriba pasa y este caso no.
+    /// Reparación sugerida (en producción, fuera de esta tarea de tests): que el motor de
+    /// `CreateDir` valide por-componente (como `parse_new_folders`) en vez de con `is_valid_name`
+    /// sobre la ruta completa, o que `new_folder_apply` cree la cadena con `create_dir_all` por
+    /// segmentos. Quitar `#[ignore]` cuando se arregle.
+    #[test]
+    #[ignore = "BUG: crear carpetas anidadas (a\\b\\c) por el cuadro de nuevas carpetas no \
+                funciona: plan()/is_valid_name rechaza el '\\' de la ruta relativa anidada"]
+    fn crear_carpetas_anidadas_con_separadores() {
+        let work = tempfile::tempdir().unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+
+        c.new_folder_open_active();
+        c.new_folder_set_text("nivel1\\nivel2\\nivel3");
+        assert_eq!(
+            c.new_folder_counts(),
+            (1, 0),
+            "la línea anidada se considera válida en el parseo del cuadro"
+        );
+        c.new_folder_apply();
+        assert!(drain_ops(&mut c), "la creación anidada debe terminar");
+
+        let anidada = work.path().join("nivel1").join("nivel2").join("nivel3");
+        assert!(
+            anidada.is_dir(),
+            "la cadena de carpetas anidadas debe existir: {}",
+            anidada.display()
+        );
+    }
+
+    // ===================== 4. Mover archivo entre 2 paneles con F6 ============================
+
+    /// GESTO: con dos paneles, seleccionar un archivo en el origen y pulsar F6 (mover al otro
+    /// panel). RESULTADO: el archivo está en el destino y YA NO en el origen.
+    #[test]
+    fn mover_archivo_al_otro_panel_con_f6() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("informe.txt"), b"contenido").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (origin, _dest) = split_a(&mut c, dst.path());
+        c.set_area(area()); // F6 resuelve el otro panel con `last_area`: fijarla hace el test determinista
+
+        // Seleccionar el archivo en el panel origen (clic de fila simple).
+        c.ws.set_active(origin);
+        let pos = active_pos_of(&c, "informe.txt").unwrap();
+        c.on_row_clicked(origin, pos, std::time::Instant::now());
+
+        // F6 = MoveToOther. Con dos paneles, el destino se resuelve directo y la op arranca.
+        c.on_key(&key_char(slint::platform::Key::F6), false, false, false);
+        assert!(drain_ops(&mut c), "el movimiento debe terminar");
+
+        assert!(
+            dst.path().join("informe.txt").exists(),
+            "el archivo aterrizó en el panel destino"
+        );
+        assert!(
+            !src.path().join("informe.txt").exists(),
+            "el archivo se MOVIÓ (ya no está en el origen)"
+        );
+    }
+
+    // ===================== 5. Copiar archivo entre 2 paneles =================================
+
+    /// GESTO: con dos paneles, seleccionar un archivo y disparar "copiar al otro panel"
+    /// (`op_to_other(false)`, la acción CopyToOther). RESULTADO: el archivo está en AMBOS paneles.
+    #[test]
+    fn copiar_archivo_al_otro_panel() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("foto.txt"), b"data").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (origin, _dest) = split_a(&mut c, dst.path());
+        c.set_area(area()); // que `op_to_other` resuelva el otro panel por geometría (como en la app)
+
+        c.ws.set_active(origin);
+        let pos = active_pos_of(&c, "foto.txt").unwrap();
+        c.on_row_clicked(origin, pos, std::time::Instant::now());
+
+        // Copiar al otro panel (CopyToOther no trae atajo por defecto; se dispara por el método,
+        // igual que el botón/menú lo cablea en main.rs). `op_to_other` devuelve false para Transfer
+        // por diseño (no arranca un LISTADO), así que la op se verifica por el resultado en disco.
+        c.op_to_other(false);
+        assert!(drain_ops(&mut c), "la copia debe terminar");
+
+        assert!(
+            dst.path().join("foto.txt").exists(),
+            "la copia aterrizó en el destino"
+        );
+        assert!(
+            src.path().join("foto.txt").exists(),
+            "el original sigue en el origen (es COPIA, no movimiento)"
+        );
+    }
+
+    // ===================== 6. Mover archivo arrastrando (drop con move_hint) ==================
+
+    /// GESTO: arrastrar un archivo del origen y SOLTARLO sobre el centro del panel destino, con el
+    /// `move_hint` del OLE (Shift al soltar) → mover. RESULTADO: el archivo está en el destino y no
+    /// en el origen. Apunta el drop por hit-testing al rect del panel destino (como en la app).
+    #[test]
+    fn mover_archivo_arrastrando_al_panel_destino() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("clip.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (_origin, dest) = split_a(&mut c, dst.path());
+
+        let a = area();
+        c.set_area(a);
+        let (cx, cy) = pane_center(&c, a, dest);
+
+        // Soltar sobre el panel destino con move_hint=true (Shift real del OLE) → MOVER.
+        let routed = c.drop_at(
+            cx,
+            cy,
+            false,
+            false,
+            vec![src.path().join("clip.txt")],
+            true,
+        );
+        assert!(routed, "el drop debe enrutar al panel destino");
+        assert!(
+            drain_ops(&mut c),
+            "el movimiento por arrastre debe terminar"
+        );
+
+        assert!(
+            dst.path().join("clip.txt").exists(),
+            "el archivo arrastrado aterrizó en el destino"
+        );
+        assert!(
+            !src.path().join("clip.txt").exists(),
+            "el archivo se MOVIÓ por el arrastre"
+        );
+    }
+
+    // ============== 7. Arrastrar en el mismo disco sin modificadores = mover ==================
+
+    /// GESTO: soltar SIN Ctrl/Shift ni move_hint sobre el panel destino, en el MISMO disco
+    /// (tempdirs del mismo volumen). RESULTADO: regla del Explorador → MUEVE por defecto.
+    #[test]
+    fn arrastrar_mismo_disco_sin_modificadores_mueve() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("nota.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (_origin, dest) = split_a(&mut c, dst.path());
+
+        let a = area();
+        c.set_area(a);
+        let (cx, cy) = pane_center(&c, a, dest);
+
+        // ctrl=false, shift=false, move_hint=false → mismo disco → Mover.
+        let routed = c.drop_at(
+            cx,
+            cy,
+            false,
+            false,
+            vec![src.path().join("nota.txt")],
+            false,
+        );
+        assert!(routed, "el drop debe enrutar");
+        assert!(drain_ops(&mut c), "la operación debe terminar");
+
+        assert!(
+            dst.path().join("nota.txt").exists(),
+            "aterrizó en el destino"
+        );
+        assert!(
+            !src.path().join("nota.txt").exists(),
+            "mismo disco sin modificadores: se MOVIÓ"
+        );
+    }
+
+    // ============== 8. Eliminar permanente con Shift+Supr ====================================
+
+    /// GESTO: seleccionar una fila y pulsar Shift+Supr (borrado PERMANENTE), luego confirmar.
+    /// RESULTADO: el archivo ya no existe en disco. Se usa `permanent` para que el borrado quede
+    /// DENTRO del tempdir (no toca la papelera real del SO; aislado e irreversible pero seguro).
+    #[test]
+    fn eliminar_permanente_con_shift_supr() {
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("basura.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("queda.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+        let id = c.ws.active_id().unwrap();
+
+        // Seleccionar la fila a borrar (clic simple).
+        let pos = active_pos_of(&c, "basura.txt").unwrap();
+        c.on_row_clicked(id, pos, std::time::Instant::now());
+
+        // Shift+Supr → DeletePermanent: abre el modal de confirmación de borrado permanente.
+        c.on_key(&key_char(slint::platform::Key::Delete), false, true, false);
+        assert!(
+            matches!(
+                c.ops.pending_dialog,
+                Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+                    permanent: true,
+                    ..
+                })
+            ),
+            "Shift+Supr debe pedir confirmación de borrado PERMANENTE"
+        );
+
+        // Confirmar el borrado (botón Eliminar del modal).
+        c.ops.delete_confirm();
+        assert!(drain_ops(&mut c), "el borrado debe terminar");
+
+        assert!(
+            !work.path().join("basura.txt").exists(),
+            "el archivo borrado ya no existe en disco"
+        );
+        assert!(
+            work.path().join("queda.txt").exists(),
+            "el otro archivo NO se tocó"
+        );
+    }
+
+    // ============== 9. Seleccionar todo con Ctrl+A ===========================================
+
+    /// GESTO: Ctrl+A (seleccionar todo). RESULTADO: la selección abarca TODAS las filas de la vista.
+    #[test]
+    fn seleccionar_todo_con_ctrl_a() {
+        let work = tempfile::tempdir().unwrap();
+        for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            std::fs::write(work.path().join(n), b"x").unwrap();
+        }
+        let (mut c, _cfg) = ctrl_en(work.path());
+        let total = c.ws.active_files().unwrap().view_len();
+        assert_eq!(total, 4, "precondición: 4 filas en la vista");
+
+        c.on_key("a", true, false, false); // Ctrl+A → SelectAll
+
+        let f = c.ws.active_files().unwrap();
+        assert_eq!(
+            f.selection_count(),
+            total,
+            "Ctrl+A selecciona todas las filas de la vista"
+        );
+        assert_eq!(
+            c.selected_paths().len(),
+            total,
+            "todas las rutas quedan en la selección efectiva"
+        );
+    }
+
+    // ============== 10. Selección por rectángulo (rubber-band) ===============================
+
+    /// GESTO: arrastre de selección por rectángulo sobre un rango de filas (`select_rect_range`).
+    /// RESULTADO: queda seleccionado exactamente ese rango inclusivo, y nada fuera de él.
+    #[test]
+    fn seleccion_por_rectangulo_marca_un_rango() {
+        let work = tempfile::tempdir().unwrap();
+        // Nombres con prefijo numérico para un orden estable y predecible en la vista.
+        for n in ["1.txt", "2.txt", "3.txt", "4.txt", "5.txt"] {
+            std::fs::write(work.path().join(n), b"x").unwrap();
+        }
+        let (mut c, _cfg) = ctrl_en(work.path());
+        let id = c.ws.active_id().unwrap();
+        assert_eq!(c.ws.active_files().unwrap().view_len(), 5);
+
+        // Rubber-band desde la fila 1 hasta la 3 (inclusive), sin Ctrl (reemplaza la selección).
+        c.select_rect_range(id, 1, 3, false);
+
+        let f = c.ws.active_files().unwrap();
+        assert_eq!(
+            f.selection_count(),
+            3,
+            "el rectángulo abarca 3 filas (1..=3)"
+        );
+        assert!(!f.is_selected(0), "la fila 0 queda fuera del rango");
+        assert!(f.is_selected(1) && f.is_selected(2) && f.is_selected(3));
+        assert!(!f.is_selected(4), "la fila 4 queda fuera del rango");
+    }
+
+    // ============== 11. Doble clic en carpeta + Backspace para volver ========================
+
+    /// GESTO: doble clic sobre una CARPETA (entra) y luego Backspace (sube/vuelve). RESULTADO: el
+    /// panel cambió a la subcarpeta y volvió a la carpeta original. (Doble clic SOLO sobre carpetas
+    /// en tests: sobre un archivo abriría el programa del SO.)
+    #[test]
+    fn navegar_con_doble_clic_y_volver_con_backspace() {
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("subcarpeta");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("dentro.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+        let id = c.ws.active_id().unwrap();
+        assert_eq!(c.active_dir().as_deref(), Some(work.path()));
+
+        // Doble clic sobre la carpeta → navega dentro.
+        let pos = active_pos_of(&c, "subcarpeta").unwrap();
+        c.on_row_double_clicked(id, pos);
+        assert!(drain(&mut c), "el listado de la subcarpeta debe terminar");
+        assert_eq!(
+            c.active_dir().as_deref(),
+            Some(sub.as_path()),
+            "el doble clic entró a la subcarpeta"
+        );
+
+        // Backspace = GoUp → vuelve a la carpeta de arriba.
+        c.on_key(
+            &key_char(slint::platform::Key::Backspace),
+            false,
+            false,
+            false,
+        );
+        assert!(drain(&mut c), "el listado al volver debe terminar");
+        assert_eq!(
+            c.active_dir().as_deref(),
+            Some(work.path()),
+            "Backspace volvió a la carpeta original"
+        );
+    }
+
+    // ============== 12. Conflicto al mover: Sobrescribir =====================================
+
+    /// GESTO: mover un archivo a un panel donde YA existe ese nombre → aparece el conflicto por
+    /// ítem → el usuario elige "Sobrescribir". RESULTADO: el contenido del origen queda en el
+    /// destino (pisó al viejo). Cubre el lazo conflicto → resolve_conflict(Overwrite).
+    #[test]
+    fn conflicto_al_mover_sobrescribir() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("dato.txt"), b"NUEVO").unwrap();
+        std::fs::write(dst.path().join("dato.txt"), b"VIEJO").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (origin, _dest) = split_a(&mut c, dst.path());
+        c.set_area(area());
+
+        c.ws.set_active(origin);
+        let pos = active_pos_of(&c, "dato.txt").unwrap();
+        c.on_row_clicked(origin, pos, std::time::Instant::now());
+
+        // Mover al otro panel (F6 / op_to_other(true)): arranca la op, que chocará en el destino.
+        // (op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.)
+        c.op_to_other(true);
+
+        // Bucle de drenado que resuelve el conflicto por ítem con Sobrescribir en cuanto aparece.
+        let mut resuelto = false;
+        let mut termino = false;
+        for _ in 0..4000 {
+            c.ops.pump_ops();
+            if !resuelto {
+                if let Some(crate::ops_ctrl::OpDialog::Conflict { op_id, .. }) =
+                    c.ops.pending_dialog.clone()
+                {
+                    c.ops
+                        .resolve_conflict(op_id, ConflictAction::Overwrite, false);
+                    resuelto = true;
+                }
+            }
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
+            {
+                termino = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(resuelto, "debe aparecer y resolverse el conflicto");
+        assert!(termino, "la operación debe terminar tras resolver");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.path().join("dato.txt")).unwrap(),
+            "NUEVO",
+            "Sobrescribir dejó el contenido del ORIGEN en el destino"
+        );
+        assert!(
+            !src.path().join("dato.txt").exists(),
+            "al mover, el origen desaparece tras resolver"
+        );
+    }
+
+    // ============== 13. Conflicto al mover: Renombrar con nombre nuevo =======================
+
+    /// GESTO: mover un archivo a un panel donde ya existe el nombre → conflicto → el usuario elige
+    /// un NOMBRE NUEVO (RenameTo). RESULTADO: existe el nombre nuevo en el destino con el contenido
+    /// del origen y el archivo ORIGINAL del destino queda intacto.
+    #[test]
+    fn conflicto_al_mover_renombrar_con_nombre_nuevo() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("doc.txt"), b"ORIGEN").unwrap();
+        std::fs::write(dst.path().join("doc.txt"), b"DESTINO").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (origin, _dest) = split_a(&mut c, dst.path());
+        c.set_area(area());
+
+        c.ws.set_active(origin);
+        let pos = active_pos_of(&c, "doc.txt").unwrap();
+        c.on_row_clicked(origin, pos, std::time::Instant::now());
+        // op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.
+        c.op_to_other(true);
+
+        let mut resuelto = false;
+        let mut termino = false;
+        for _ in 0..4000 {
+            c.ops.pump_ops();
+            if !resuelto {
+                if let Some(crate::ops_ctrl::OpDialog::Conflict { op_id, .. }) =
+                    c.ops.pending_dialog.clone()
+                {
+                    c.ops.resolve_conflict(
+                        op_id,
+                        ConflictAction::RenameTo("doc-copia.txt".into()),
+                        false,
+                    );
+                    resuelto = true;
+                }
+            }
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
+            {
+                termino = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(resuelto, "debe aparecer y resolverse el conflicto");
+        assert!(termino, "la operación debe terminar tras resolver");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.path().join("doc-copia.txt")).unwrap(),
+            "ORIGEN",
+            "el archivo movido quedó con el nombre nuevo y el contenido del origen"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.path().join("doc.txt")).unwrap(),
+            "DESTINO",
+            "el archivo original del destino quedó INTACTO"
+        );
+    }
+
+    // ============== 14. move_hint fuerza mover aunque ctrl/shift lleguen false ================
+
+    /// REGRESIÓN (bug del Shift): durante el bucle modal del OLE, los flags de teclado de la app
+    /// llegan en false porque el modal se traga los eventos. El `move_hint` (Shift REAL al soltar,
+    /// que reporta el OLE) DEBE forzar MOVER igualmente. GESTO: drop con ctrl=false, shift=false,
+    /// move_hint=true. RESULTADO: movido (creado en destino, borrado del origen).
+    #[test]
+    fn move_hint_fuerza_mover_con_modificadores_stale() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("reg.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(src.path());
+        let (_origin, dest) = split_a(&mut c, dst.path());
+
+        let a = area();
+        c.set_area(a);
+        let (cx, cy) = pane_center(&c, a, dest);
+
+        // Modificadores de la app stale (false), pero move_hint del OLE = true → MOVER.
+        let routed = c.drop_at(cx, cy, false, false, vec![src.path().join("reg.txt")], true);
+        assert!(routed, "el drop debe enrutar");
+        assert!(drain_ops(&mut c), "la operación debe terminar");
+
+        assert!(
+            dst.path().join("reg.txt").exists(),
+            "el archivo aterrizó en el destino"
+        );
+        assert!(
+            !src.path().join("reg.txt").exists(),
+            "el move_hint forzó MOVER pese a ctrl/shift en false (regresión del Shift)"
+        );
+    }
+}
