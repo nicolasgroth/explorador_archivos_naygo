@@ -125,9 +125,6 @@ mod windows_impl {
     struct NaygoDropTarget {
         tx: Sender<DropPayload>,
         waker: Waker,
-        // DIAG drag (temporal): para loguear SOLO el primer DragOver del arrastre (no llover).
-        // Se rearma en cada DragEnter. Quitar junto con la instrumentación "DRAG:".
-        dbg_over_logged: std::cell::Cell<bool>,
     }
 
     impl IDropTarget_Impl for NaygoDropTarget_Impl {
@@ -139,11 +136,6 @@ mod windows_impl {
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // DIAG drag (temporal): el cursor entró sobre la ventana de Naygo durante un arrastre.
-            // platform no puede usar log_line → stderr con prefijo "DRAG:". Rearmamos el flag del
-            // DragOver para loguear solo el primero del próximo recorrido. Quitar con la instr.
-            eprintln!("DRAG: IDropTarget DragEnter");
-            self.dbg_over_logged.set(false);
             // SAFETY: el SO entrega un puntero válido a un DROPEFFECT escribible.
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
@@ -161,11 +153,6 @@ mod windows_impl {
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // DIAG drag (temporal): loguear SOLO el primer DragOver (luego llueve). Quitar con la
-            // instrumentación "DRAG:".
-            if !self.dbg_over_logged.replace(true) {
-                eprintln!("DRAG: IDropTarget DragOver (primero)");
-            }
             // SAFETY: igual que en DragEnter; puntero del SO a un DROPEFFECT escribible.
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
@@ -192,10 +179,6 @@ mod windows_impl {
             // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
             // usa para enrutar el drop al panel bajo el cursor.
             let (screen_x, screen_y) = (pt.x, pt.y);
-            // DIAG drag (temporal): el usuario soltó sobre la ventana. A stderr con prefijo
-            // "DRAG:" (las rutas se cuentan más abajo, tras extraerlas del HDROP). Quitar con la
-            // instrumentación.
-            eprintln!("DRAG: IDropTarget Drop, pt=({screen_x},{screen_y})");
             let effect = effect_for(grfkeystate);
             // Reflejar el efecto elegido en la salida (el SO lo usa para la animación final).
             // SAFETY: puntero del SO a un DROPEFFECT escribible.
@@ -232,12 +215,6 @@ mod windows_impl {
                     let hdrop = HDROP(medium.u.hGlobal.0);
                     crate::clipboard::windows_impl::extract_hdrop_paths(hdrop)
                 };
-
-                // DIAG drag (temporal): cuántas rutas se extrajeron del HDROP. Quitar con la instr.
-                eprintln!(
-                    "DRAG: IDropTarget Drop extrajo {} ruta(s), pt=({screen_x},{screen_y})",
-                    paths.len()
-                );
 
                 if !paths.is_empty() {
                     // Enviar el payload; si el receptor ya colgó, lo ignoramos.
@@ -297,13 +274,7 @@ mod windows_impl {
             let _ = OleInitialize(None);
         }
 
-        let target: IDropTarget = NaygoDropTarget {
-            tx,
-            waker,
-            // DIAG drag (temporal): empieza sin loguear el DragOver. Quitar con la instrumentación.
-            dbg_over_logged: std::cell::Cell::new(false),
-        }
-        .into();
+        let target: IDropTarget = NaygoDropTarget { tx, waker }.into();
 
         // SAFETY: hwnd no es nulo y `target` es una interfaz IDropTarget válida; el SO toma
         // su propia referencia. Cualquier error (p. ej. DRAGDROP_E_ALREADYREGISTERED) → None.

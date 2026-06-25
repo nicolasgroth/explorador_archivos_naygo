@@ -745,10 +745,6 @@ export component AppWindow inherits Window {
     callback row-double-clicked(int, int);
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
-    // DIAG drag (temporal): reexpuestos desde FilePanel para cablearlos a log_line en main.rs.
-    // Quitar junto con el resto de la instrumentación "DRAG:".
-    callback dbg-down(int);                // (start-row) press izquierdo en el cuerpo
-    callback dbg-threshold(bool);          // (start-selected) cruzó el umbral de 6px
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     // El panel que está editando su ruta (-1 = ninguno), su texto y sus candidatos. Rust los
@@ -1454,9 +1450,6 @@ export component AppWindow inherits Window {
                         row-clicked(id, pos) => { root.row-clicked(id, pos); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
-                        // DIAG drag (temporal): reenviar los callbacks de depuración del gesto.
-                        dbg-down(row) => { root.dbg-down(row); }
-                        dbg-threshold(sel) => { root.dbg-threshold(sel); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         empty-context(id, cx, cy) => { root.empty-context(id, cx, cy); }
