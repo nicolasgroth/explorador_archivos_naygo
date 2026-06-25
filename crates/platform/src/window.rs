@@ -48,32 +48,60 @@ pub fn screen_to_client(_hwnd: isize, _screen_x: i32, _screen_y: i32) -> Option<
     None
 }
 
-/// Trae la ventana `hwnd` al frente y le da el foco del teclado (`SetForegroundWindow` +
-/// `BringWindowToTop`). Lo necesita el flujo de drag&drop: tras el bucle modal de
-/// `DoDragDrop` (OLE), la ventana de Naygo deja de ser la *foreground window* del SO, así que
-/// el primer clic en un modal de operación solo REACTIVA la ventana y no llega al botón.
-/// Llamando esto justo después de recibir el drop, la ventana ya está al frente cuando aparece
-/// el modal y el primer clic acciona el botón.
+/// Trae la ventana `hwnd` al frente y le da el foco del teclado de verdad. Lo necesita el flujo
+/// de drag&drop: tras el bucle modal de `DoDragDrop` (OLE), la ventana de Naygo deja de ser la
+/// *foreground window* del SO, así que el primer clic en un modal de operación solo REACTIVA la
+/// ventana y no llega al botón. Llamando esto justo después de recibir el drop, la ventana ya
+/// está activa cuando aparece el modal y el primer clic acciona el botón.
 ///
-/// Tolerante: si `hwnd` es nulo no hace nada. `SetForegroundWindow` devuelve un BOOL que el SO
-/// puede poner en FALSE si el proceso no tiene derecho a robar el foco (regla anti-robo de
-/// foco de Windows); se ignora a propósito — nunca paniquea. En la práctica funciona aquí
-/// porque Naygo ERA el foreground antes del arrastre (el usuario arrastró desde su panel), y
-/// `BringWindowToTop` ayuda a re-elevar la ventana aun cuando el cambio de foreground sea
-/// denegado. En no-Windows es un stub no-op.
+/// Windows niega `SetForegroundWindow` a un proceso que no posee el foco (regla anti-robo de
+/// foco). El truco estándar para saltarla: ADJUNTAR temporalmente nuestra cola de entrada a la
+/// del hilo que SÍ tiene el foreground (`AttachThreadInput`); mientras están adjuntas, el SO nos
+/// trata como "el mismo input" y `SetForegroundWindow` sí toma efecto. Luego se desadjunta. Es lo
+/// que hacen los gestores de ventanas para activar de verdad una ventana propia.
+///
+/// Tolerante por diseño (el SO es hostil): si `hwnd` es nulo no hace nada; todos los resultados
+/// de las llamadas Win32 se ignoran a propósito — nunca paniquea. Si el foreground es nuestro
+/// mismo hilo, o no hay foreground, se omite el attach. En no-Windows es un stub no-op.
 #[cfg(windows)]
 pub fn bring_to_front(hwnd: isize) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
 
     if hwnd == 0 {
         return;
     }
     let hwnd = HWND(hwnd as *mut core::ffi::c_void);
-    // Ambas pueden ser ignoradas por el SO; no nos importa el resultado, solo el efecto.
     unsafe {
+        // Hilo de la ventana que actualmente tiene el foreground, y el nuestro (el de la UI).
+        let fg = GetForegroundWindow();
+        let fg_thread = if fg.0.is_null() {
+            0
+        } else {
+            // Sin necesitar el PID (segundo argumento None): solo queremos el id de hilo.
+            GetWindowThreadProcessId(fg, None)
+        };
+        let our_thread = GetCurrentThreadId();
+
+        // Solo adjuntamos si el foreground pertenece a OTRO hilo (adjuntar un hilo a sí mismo es
+        // inválido). `fg_thread == 0` = no hay foreground válido: intentamos activar igual.
+        let attach = fg_thread != 0 && fg_thread != our_thread;
+        if attach {
+            // El resultado (BOOL) se ignora: si el attach falla, el SetForegroundWindow de abajo
+            // simplemente puede ser denegado, pero BringWindowToTop igual re-eleva la ventana.
+            let _ = AttachThreadInput(our_thread, fg_thread, true);
+        }
+
         let _ = SetForegroundWindow(hwnd);
         let _ = BringWindowToTop(hwnd);
+
+        if attach {
+            // Desadjuntar SIEMPRE que hayamos adjuntado, pase lo que pase con lo de arriba.
+            let _ = AttachThreadInput(our_thread, fg_thread, false);
+        }
     }
 }
 

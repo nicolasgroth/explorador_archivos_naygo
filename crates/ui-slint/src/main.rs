@@ -1356,8 +1356,21 @@ fn main() -> Result<(), slint::PlatformError> {
                     // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato
                     // si no cambió. Antes de parar el timer, así el último cambio se guarda.
                     ctrl.borrow_mut().maybe_persist_session();
+                    // ¿Hay algún modal/overlay abierto? Con el render por software y el modo bajo
+                    // consumo, si dejáramos dormir el timer aquí el event loop no procesaría más
+                    // eventos de mouse (hover/move) y los botones del modal no responderían hasta un
+                    // clic "de despertar". Mientras un modal esté en pantalla, el timer SIGUE VIVO.
+                    // Cubre los modales del controlador (`any_modal_open`) + los que viven en la UI:
+                    // el MessageModal (expulsar USB/errores: `MessageVm.kind != 0`) y la paleta de
+                    // comandos (`palette_open`). En reposo NORMAL (sin modal) este flag es false y el
+                    // timer se duerme igual que antes: el bajo consumo no se ve afectado.
+                    let modal_open = ctrl.borrow().any_modal_open()
+                        || ui_weak
+                            .upgrade()
+                            .map(|ui| ui.get_message().kind != 0 || ui.get_palette_open())
+                            .unwrap_or(false);
                     // El watcher corre en su propio hilo y despierta la UI con el waker; el
-                    // timer puede dormir cuando no hay trabajo NI resaltados pendientes.
+                    // timer puede dormir cuando no hay trabajo NI resaltados pendientes NI modales.
                     if files_done
                         && tree_done
                         && !preview_busy
@@ -1366,6 +1379,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         && search_done
                         && !deep_changed
                         && !fresh_pending
+                        && !modal_open
                     {
                         timer2.stop();
                     }
@@ -3220,6 +3234,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let pending_eject = pending_eject.clone();
+        let start_timer = start_timer.clone();
         ui.on_eject_drive(move |path| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -3241,6 +3256,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 cancel_label: tr.get_dlg_cancel(),
                 danger: false,
             });
+            // Modal abierto desde el mouse: rearmar el timer para que el popup responda al
+            // instante (hover + primer clic), sin esperar un clic de despertar.
+            start_timer();
         });
     }
     // Confirmación del modal temático: ejecuta la expulsión pendiente (kind 1).
@@ -3783,19 +3801,25 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_row_context(move |_id, _pos, x, y| {
             ctrl.borrow_mut().open_context_menu(x, y);
             sync_rows();
+            // El menú contextual necesita que el event loop siga vivo para resaltar sus ítems al
+            // pasar el mouse: rearmar el timer al abrirlo (igual criterio que con los modales).
+            start_timer();
         });
     }
     // Clic derecho en la zona vacía del panel → menú contextual de la carpeta (modo carpeta).
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_empty_context(move |id, x, y| {
             ctrl.borrow_mut()
                 .open_folder_context_menu(PaneId(id as u64), x, y);
             sync_rows();
+            start_timer();
         });
     }
     // Modo carpeta: abrir el Explorador de Windows en la carpeta.
@@ -3811,9 +3835,12 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_ctx_new_folder(move || {
             ctrl.borrow_mut().ctx_new_folder();
             sync_rows();
+            // Abrir un modal desde el mouse: rearmar el timer para que responda al instante.
+            start_timer();
         });
     }
     // Modal "nueva(s) carpeta(s)": editar texto / crear / cancelar.
@@ -3959,9 +3986,12 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_new_folder_toolbar(move || {
             ctrl.borrow_mut().new_folder_open_active();
             sync_rows();
+            // Abrir un modal desde el mouse: rearmar el timer para que responda al instante.
+            start_timer();
         });
     }
     // Toolbar: combo de terminales en el panel activo (0=PS,1=CMD,2=WT,3=WSL).
@@ -4049,10 +4079,15 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
         ui.on_ctx_delete(move || {
             ctrl.borrow_mut().op_delete(false);
             ctrl.borrow_mut().close_context_menu();
             sync_rows();
+            // Abrir el modal de confirmar borrado desde el MOUSE: rearmar el timer para que el
+            // popup responda al instante (hover + primer clic), sin esperar un clic de despertar.
+            // El camino de teclado (`on_key`) ya rearma; este es su equivalente para el menú.
+            start_timer();
         });
     }
     {

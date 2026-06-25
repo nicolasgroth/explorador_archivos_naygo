@@ -4522,6 +4522,28 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// ¿Hay ALGÚN overlay/modal de la app abierto que dependa del controlador?
+    ///
+    /// Lo usa el bucle de UI para NO dormir el timer mientras un modal está en pantalla. Con el
+    /// render por software y el modo bajo consumo, el timer se detiene cuando todo está en reposo;
+    /// pero un modal recién abierto necesita que el event loop siga procesando eventos de mouse
+    /// (hover/move) para que sus botones respondan al instante, sin esperar un clic "de despertar".
+    /// Mientras este predicado sea `true`, el timer se mantiene vivo; al cerrarse el modal vuelve a
+    /// dormirse como antes (el reposo normal NO se ve afectado).
+    ///
+    /// Cubre los modales/overlays cuyo estado vive en el controlador. Los que viven en la UI
+    /// (MessageModal `MessageVm.kind != 0` y la paleta de comandos `palette_open`) los suma el
+    /// bucle de UI por separado, porque este método no conoce la `AppWindow`.
+    pub fn any_modal_open(&self) -> bool {
+        self.ops.pending_dialog.is_some() // conflicto / confirmar borrado / pedir nombre / carpeta
+            || self.pending_pick.is_some() // selector de panel destino (overlay 1..9)
+            || self.batch.is_some() // ventana de renombrado por lotes
+            || self.new_folder.is_some() // modal "nueva(s) carpeta(s)"
+            || self.help_open // ayuda (F1)
+            || self.context_menu.is_some() // menú contextual (clic derecho)
+            || self.column_menu.is_some() // menú/editor de columna (clic derecho en header)
+    }
+
     /// Tecla sobre el panel activo (reusa el keymap). Devuelve true si navegó.
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         self.ctrl_down = ctrl;
@@ -6946,5 +6968,52 @@ mod tests {
         c.deep_cancel();
         assert!(!c.is_deep_active(id));
         assert!(c.deep_items().is_empty());
+    }
+
+    /// `any_modal_open` (keep-alive del timer): en reposo es false; con un modal/overlay del
+    /// controlador abierto es true; al cerrarlo vuelve a false. Es el predicado que mantiene vivo
+    /// el bucle de UI mientras hay un popup, para que su hover y primer clic respondan al instante.
+    #[test]
+    fn any_modal_open_refleja_los_overlays_del_controlador() {
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+
+        // Reposo: sin modales → false (el timer puede dormir como antes; bajo consumo intacto).
+        assert!(!c.any_modal_open(), "en reposo no hay modales abiertos");
+
+        // Modal de confirmar borrado (lo reportó el usuario): seleccionar y abrirlo → true.
+        let pos = active_pos_of(&c, "a.txt").unwrap();
+        c.ws.active_files_mut().unwrap().select_single(pos);
+        c.op_delete(false);
+        assert!(
+            c.ops.pending_dialog.is_some(),
+            "op_delete abre el diálogo de confirmación"
+        );
+        assert!(
+            c.any_modal_open(),
+            "con un OpDialog abierto, el timer sigue vivo"
+        );
+
+        // Cerrar el diálogo → vuelve a reposo.
+        c.ops.pending_dialog = None;
+        assert!(!c.any_modal_open(), "al cerrar el modal vuelve a dormir");
+
+        // El menú contextual (clic derecho) también cuenta: necesita hover vivo.
+        c.open_context_menu(0.0, 0.0);
+        assert!(
+            c.any_modal_open(),
+            "el menú contextual mantiene vivo el timer"
+        );
+        c.close_context_menu();
+        assert!(!c.any_modal_open());
+
+        // La ayuda (F1) cuenta como overlay.
+        c.help_open = true;
+        assert!(c.any_modal_open(), "la ayuda (F1) mantiene vivo el timer");
+        c.help_open = false;
+        assert!(!c.any_modal_open());
     }
 }
