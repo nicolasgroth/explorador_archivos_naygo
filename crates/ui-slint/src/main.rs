@@ -1173,7 +1173,13 @@ fn main() -> Result<(), slint::PlatformError> {
                         // no cayó sobre un panel Files), caer al panel activo como antes para no
                         // perder el drop.
                         if !routed {
-                            if let Some(active) = ctrl.borrow().active_id() {
+                            // Extraer active_id() a un `let` propio para SOLTAR el Ref compartido
+                            // ANTES del borrow_mut() de abajo. Si se hiciera el `if let` directo
+                            // sobre `ctrl.borrow().active_id()`, el Ref del scrutinee vive durante
+                            // todo el cuerpo del `if let` y choca con el borrow_mut() → panic
+                            // "already borrowed" (mismo patrón que la ruta feliz ya evita arriba).
+                            let active = ctrl.borrow().active_id();
+                            if let Some(active) = active {
                                 ctrl.borrow_mut().drop_external(
                                     active,
                                     payload.paths,

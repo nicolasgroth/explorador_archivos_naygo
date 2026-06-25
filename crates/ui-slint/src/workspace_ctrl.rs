@@ -3016,7 +3016,7 @@ impl WorkspaceCtrl {
         ctrl: bool,
         shift: bool,
         paths: Vec<std::path::PathBuf>,
-        _move_hint: bool,
+        move_hint: bool,
     ) -> bool {
         use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
@@ -3041,7 +3041,7 @@ impl WorkspaceCtrl {
             content_x,
             content_y,
             paths.len(),
-            _move_hint,
+            move_hint,
             hit_idx_str,
         ));
         let Some((target, _zone)) = hit else {
@@ -3069,10 +3069,15 @@ impl WorkspaceCtrl {
             crate::logging::breadcrumb("drop_at: soltado sobre la propia carpeta, no-op");
             return false;
         }
-        // Acción según modificadores + mismo disco (Ctrl/Shift mandan; el move_hint del OLE es
-        // secundario, coherente con drop_external).
+        // Acción según modificadores + mismo disco. CLAVE: el `move_hint` del OLE viene del
+        // grfKeyState que Windows entrega al SOLTAR (refleja el Shift REAL en ese instante).
+        // Los flags `ctrl`/`shift` de la app NO sirven aquí: durante el bucle modal de
+        // DoDragDrop la app no recibe eventos de teclado, así que llegan desactualizados (false)
+        // aunque el usuario tenga Shift presionado. Por eso, si el OLE reporta Shift
+        // (`move_hint`), MOVEMOS; si no, caemos a decide_drop_action (default por disco + Ctrl).
         let same = same_drive(&paths[0], &dest_dir);
-        let is_move = matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
+        let is_move = move_hint
+            || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
         let label = if is_move { "Mover" } else { "Copiar" };
         crate::logging::breadcrumb(&format!(
             "drop_at: {} {} ítem(s) → {}",
@@ -5715,15 +5720,16 @@ mod tests {
         // Soltar el archivo de `a` sobre el panel destino (`b`). Forzamos COPIA con Ctrl para que
         // el aserto sea determinista sea cual sea el disco: sin modificadores, soltar dentro del
         // mismo disco MUEVE (regla del Explorador), y `a`/`b` viven en el mismo disco temporal.
-        // Lo que prueba este test es el RUTEO (que el archivo aterriza en `b`, bajo el cursor),
-        // no la elección mover/copiar (eso ya lo cubre dnd::decide_drop_action).
+        // `move_hint=false` (sin Shift del OLE), si no el move_hint forzaría Mover y rompería el
+        // aserto de copia. Lo que prueba este test es el RUTEO (que el archivo aterriza en `b`,
+        // bajo el cursor), no la elección mover/copiar (eso ya lo cubre dnd::decide_drop_action).
         let routed = c.drop_at(
             cx,
             cy,
-            true, // ctrl → copiar
-            false,
+            true,  // ctrl → copiar
+            false, // shift
             vec![a.path().join("doc.txt")],
-            true,
+            false, // move_hint del OLE (sin Shift al soltar)
         );
         assert!(routed, "drop_at debe enrutar (no caer al fallback)");
         // Drenar la op y verificar que la copia aterrizó en el panel destino (`b`), no en `a`.
@@ -5740,6 +5746,58 @@ mod tests {
         assert!(
             a.path().join("doc.txt").exists(),
             "el original sigue (copia)"
+        );
+    }
+
+    /// El `move_hint` del OLE (Shift presionado al SOLTAR) fuerza MOVER aunque los flags de
+    /// teclado de la app lleguen en false (lo que pasa durante el bucle modal de DoDragDrop, que
+    /// se traga los eventos de teclado). Regresión del bug "arrastré con Shift y copió en vez de
+    /// mover: creó en destino pero no borró el origen".
+    #[test]
+    fn drop_at_move_hint_del_ole_fuerza_mover() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let panes = c.pane_rects(area);
+        let (_, dest_rect) = panes
+            .iter()
+            .find(|(id, _)| *id == dest)
+            .copied()
+            .expect("el panel destino tiene rect");
+        let cx = dest_rect.x + dest_rect.w / 2.0;
+        let cy = dest_rect.y + dest_rect.h / 2.0;
+        // ctrl=false, shift=false (estado de la app stale durante el modal), PERO move_hint=true
+        // (Shift REAL al soltar, reportado por el OLE). Debe MOVER → el original desaparece.
+        let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], true);
+        assert!(routed, "drop_at debe enrutar");
+        for _ in 0..2000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            b.path().join("doc.txt").exists(),
+            "el archivo aterrizó en el destino"
+        );
+        assert!(
+            !a.path().join("doc.txt").exists(),
+            "el original se MOVIÓ (ya no está en el origen) por el move_hint del OLE"
         );
     }
 
