@@ -7278,22 +7278,15 @@ mod simular_usuario {
     }
 
     /// GESTO: en el cuadro de nuevas carpetas, escribir una RUTA anidada con separadores
-    /// (`a\b\c`) y aplicar. RESULTADO ESPERADO: la cadena anidada existe en disco.
+    /// (`a\b\c`) y aplicar. RESULTADO: la cadena anidada existe en disco.
     ///
-    /// IGNORADO — BUG REAL DETECTADO. `new_folder_apply` parsea la línea con
-    /// `ops::parse_new_folders`, que la acepta como `FolderSpec::Valid("nivel1\\nivel2\\nivel3")`
-    /// (anidada, separada por `\`), y luego se la pasa TAL CUAL a `ops::create(dir, rel, true)`.
-    /// Pero `ops::plan()` valida ese nombre con `ops::names::is_valid_name`, que PROHÍBE el `\`
-    /// (está en FORBIDDEN), así que devuelve `Err(InvalidName)` y `start_op` la descarta en
-    /// silencio: la carpeta anidada NUNCA se crea. Las carpetas SUELTAS (sin `\`) sí se crean,
-    /// por eso el alta multilínea de arriba pasa y este caso no.
-    /// Reparación sugerida (en producción, fuera de esta tarea de tests): que el motor de
-    /// `CreateDir` valide por-componente (como `parse_new_folders`) en vez de con `is_valid_name`
-    /// sobre la ruta completa, o que `new_folder_apply` cree la cadena con `create_dir_all` por
-    /// segmentos. Quitar `#[ignore]` cuando se arregle.
+    /// REGRESIÓN ARREGLADA. Antes `ops::plan()` validaba el nombre completo con
+    /// `ops::names::is_valid_name`, que PROHÍBE el `\` (está en FORBIDDEN), así que la ruta
+    /// relativa anidada (`nivel1\nivel2\nivel3`) caía en `Err(InvalidName)` y `start_op` la
+    /// descartaba en silencio. Ahora el plan de `CreateDir` valida POR COMPONENTE
+    /// (`names::relative_components`, que rechaza `.`/`..`/vacío/absoluta) y arma el destino
+    /// uniendo cada componente sobre la carpeta destino; el motor lo crea con `create_dir_all`.
     #[test]
-    #[ignore = "BUG: crear carpetas anidadas (a\\b\\c) por el cuadro de nuevas carpetas no \
-                funciona: plan()/is_valid_name rechaza el '\\' de la ruta relativa anidada"]
     fn crear_carpetas_anidadas_con_separadores() {
         let work = tempfile::tempdir().unwrap();
         let (mut c, _cfg) = ctrl_en(work.path());

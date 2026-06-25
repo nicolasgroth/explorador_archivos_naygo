@@ -581,6 +581,57 @@ mod tests {
     }
 
     #[test]
+    fn create_dir_anidada_crea_la_jerarquia_en_disco() {
+        // El nombre `a\b\c` (ruta relativa anidada) debe materializar dir/a/b/c en disco.
+        // Cubre el camino completo plan() + run_plan() (exec_create_dir usa create_dir_all).
+        let dir = tempfile::tempdir().unwrap();
+        let req = OpRequest {
+            kind: OpKind::CreateDir {
+                name: "a\\b\\c".into(),
+            },
+            sources: vec![],
+            dest_dir: Some(dir.path().to_path_buf()),
+            conflict: ConflictPolicy::Ask,
+        };
+        let (_msgs, summary) = run(req);
+        assert!(
+            !summary
+                .items
+                .iter()
+                .any(|(_, o)| matches!(o, OpOutcome::Failed(_))),
+            "no debe fallar ningún paso"
+        );
+        let anidada = dir.path().join("a").join("b").join("c");
+        assert!(anidada.is_dir(), "la cadena anidada debe existir en disco");
+    }
+
+    #[test]
+    fn create_dir_anidada_no_escapa_del_destino() {
+        // SEGURIDAD de extremo a extremo: `..` se rechaza en el plan, así que NUNCA se crea
+        // nada fuera de la carpeta destino.
+        let parent = tempfile::tempdir().unwrap();
+        let dest = parent.path().join("dest");
+        std::fs::create_dir(&dest).unwrap();
+        let req = OpRequest {
+            kind: OpKind::CreateDir {
+                name: "..\\fuera".into(),
+            },
+            sources: vec![],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Ask,
+        };
+        // El plan rechaza el nombre: no hay ejecución posible.
+        assert!(matches!(
+            super::super::plan::plan(&req),
+            Err(super::super::plan::PlanError::InvalidName(_))
+        ));
+        assert!(
+            !parent.path().join("fuera").exists(),
+            "no debe crearse nada fuera del destino"
+        );
+    }
+
+    #[test]
     fn copy_archivo_crea_destino() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("a.txt");

@@ -23,6 +23,42 @@ pub fn is_valid_name(name: &str) -> bool {
         .any(|c| FORBIDDEN.contains(&c) || (c as u32) < 0x20)
 }
 
+/// Separa una ruta relativa en sus componentes, aceptando `\` y `/` como divisores.
+/// No interpreta unidades ni rutas absolutas: cada trozo se valida después.
+fn split_relative(rel: &str) -> Vec<&str> {
+    rel.split(['\\', '/']).collect()
+}
+
+/// `true` si `rel` es una ruta RELATIVA segura para crear una jerarquía dentro de un
+/// directorio destino (p. ej. `a\b\c` o `a/b/c`). Reglas:
+/// - Cada componente (separado por `\` o `/`) debe pasar [`is_valid_name`].
+/// - Ningún componente puede ser `.` ni `..` (no se permite escapar del destino).
+/// - Ningún componente puede ser vacío (rechaza `a\\b`, rutas que empiezan o terminan
+///   en separador, y por tanto rutas absolutas tipo `\abs`).
+///
+/// Es la validación por-componente que usa el plan de `CreateDir`/`CreateFile`, en vez de
+/// rechazar el string completo con [`is_valid_name`] (que prohíbe los separadores a propósito).
+pub fn is_valid_relative_path(rel: &str) -> bool {
+    if rel.is_empty() {
+        return false;
+    }
+    let parts = split_relative(rel);
+    // `split` siempre devuelve al menos un elemento; basta con validar cada componente.
+    parts
+        .iter()
+        .all(|part| *part != "." && *part != ".." && is_valid_name(part))
+}
+
+/// Descompone `rel` en sus componentes validados como ruta relativa segura. Devuelve `None`
+/// si la ruta no es válida (ver [`is_valid_relative_path`]). Los componentes se recortan de
+/// espacios igual que [`is_valid_name`] los acepta, pero NO se altera su contenido.
+pub fn relative_components(rel: &str) -> Option<Vec<String>> {
+    if !is_valid_relative_path(rel) {
+        return None;
+    }
+    Some(split_relative(rel).iter().map(|s| s.to_string()).collect())
+}
+
 /// Dada una ruta destino candidata y un predicado `exists`, devuelve la primera ruta
 /// libre añadiendo " (N)" antes de la extensión si hace falta. Pura: el caller provee
 /// `exists` (en tests es un set; en el motor es `Path::exists`).
@@ -77,6 +113,65 @@ mod tests {
             assert!(!is_valid_name(bad), "{bad} debería ser inválido");
         }
         assert!(!is_valid_name(""), "vacío inválido");
+    }
+
+    #[test]
+    fn ruta_relativa_valida_acepta_anidadas() {
+        // Una sola componente, y anidadas con ambos separadores.
+        assert!(is_valid_relative_path("uno"));
+        assert!(is_valid_relative_path("a\\b\\c"));
+        assert!(is_valid_relative_path("a/b/c"));
+        // Mezcla de separadores también vale.
+        assert!(is_valid_relative_path("a\\b/c"));
+    }
+
+    #[test]
+    fn ruta_relativa_rechaza_traversal_y_absoluta() {
+        // `.` y `..` en cualquier posición no se permiten (no escapar del destino).
+        assert!(!is_valid_relative_path("a\\..\\b"), ".. prohibido");
+        assert!(!is_valid_relative_path("..\\b"), ".. al inicio prohibido");
+        assert!(!is_valid_relative_path("a\\."), ". prohibido");
+        // Empezar con separador (ruta absoluta tipo `\abs`) → primer componente vacío.
+        assert!(!is_valid_relative_path("\\abs"), "absoluta prohibida");
+        assert!(!is_valid_relative_path("/abs"), "absoluta prohibida");
+    }
+
+    #[test]
+    fn ruta_relativa_rechaza_componente_vacio_y_chars() {
+        // Doble separador → componente vacío.
+        assert!(!is_valid_relative_path("a\\\\b"), "doble sep prohibido");
+        // Termina en separador → último componente vacío.
+        assert!(!is_valid_relative_path("a\\"), "termina en sep prohibido");
+        // Cadena vacía.
+        assert!(!is_valid_relative_path(""), "vacío prohibido");
+        // Carácter prohibido en un segmento.
+        assert!(
+            !is_valid_relative_path("a\\b:c"),
+            "char prohibido en segmento"
+        );
+        assert!(
+            !is_valid_relative_path("a\\b*c"),
+            "char prohibido en segmento"
+        );
+    }
+
+    #[test]
+    fn relative_components_descompone_y_rechaza() {
+        assert_eq!(
+            relative_components("a\\b\\c"),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        // El `/` también separa.
+        assert_eq!(
+            relative_components("a/b"),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        // Una sola componente.
+        assert_eq!(relative_components("solo"), Some(vec!["solo".to_string()]));
+        // Inválidas devuelven None.
+        assert_eq!(relative_components("a\\..\\b"), None);
+        assert_eq!(relative_components("a\\\\b"), None);
+        assert_eq!(relative_components(""), None);
     }
 
     #[test]

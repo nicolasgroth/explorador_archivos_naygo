@@ -5,7 +5,7 @@
 //! validando precondiciones (nombres, carpeta-dentro-de-sí-misma). Para Copy/Move
 //! recorre el árbol de orígenes leyendo tamaños. Devuelve `Result<OpPlan, PlanError>`.
 
-use super::names::is_valid_name;
+use super::names::{is_valid_name, relative_components};
 use super::{OpKind, OpPlan, OpRequest, OpStep};
 use std::path::{Path, PathBuf};
 
@@ -51,15 +51,27 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
         }
         OpKind::BatchRename { new_names } => plan_batch_rename(req, new_names),
         OpKind::CreateDir { name } | OpKind::CreateFile { name } => {
-            if !is_valid_name(name) {
-                return Err(PlanError::InvalidName(name.clone()));
-            }
             let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
             let is_dir = matches!(req.kind, OpKind::CreateDir { .. });
+            // El nombre puede ser una RUTA RELATIVA anidada (`a\b\c` o `a/b/c`): validamos
+            // CADA componente con `is_valid_name` y rechazamos `.`/`..`/vacío/absoluta, en vez
+            // de pasar el string completo por `is_valid_name` (que prohíbe los separadores).
+            // El destino se arma uniendo componente a componente sobre `dest`, así NUNCA
+            // puede escapar de la carpeta destino (no hay `..` ni rutas absolutas).
+            let to = match relative_components(name) {
+                Some(parts) => {
+                    let mut to = dest.clone();
+                    for part in parts {
+                        to.push(part);
+                    }
+                    to
+                }
+                None => return Err(PlanError::InvalidName(name.clone())),
+            };
             Ok(OpPlan {
                 steps: vec![OpStep {
                     from: None,
-                    to: dest.join(name),
+                    to,
                     bytes: 0,
                     is_dir,
                 }],
@@ -449,6 +461,73 @@ mod tests {
         assert!(matches!(plan(&r), Err(PlanError::InvalidName(_))));
         let r = req(OpKind::BatchRename { new_names: vec![] }, vec![f], None);
         assert!(matches!(plan(&r), Err(PlanError::MissingDest)));
+    }
+
+    #[test]
+    fn create_dir_anidada_arma_la_ruta_completa() {
+        // Un nombre con separadores produce UN paso cuyo destino es la jerarquía completa
+        // colgando de `dest` (el motor lo crea con create_dir_all).
+        let dest = PathBuf::from("C:/work");
+        let r = req(
+            OpKind::CreateDir {
+                name: "a\\b\\c".into(),
+            },
+            vec![],
+            Some(dest.clone()),
+        );
+        let p = plan(&r).unwrap();
+        assert_eq!(p.steps.len(), 1);
+        assert!(p.steps[0].is_dir);
+        assert_eq!(p.steps[0].from, None);
+        assert_eq!(p.steps[0].to, dest.join("a").join("b").join("c"));
+    }
+
+    #[test]
+    fn create_dir_con_barra_normal_tambien() {
+        // El separador `/` se trata igual que `\`.
+        let dest = PathBuf::from("C:/work");
+        let r = req(
+            OpKind::CreateDir { name: "a/b".into() },
+            vec![],
+            Some(dest.clone()),
+        );
+        let p = plan(&r).unwrap();
+        assert_eq!(p.steps[0].to, dest.join("a").join("b"));
+    }
+
+    #[test]
+    fn create_dir_rechaza_traversal_y_absoluta() {
+        // SEGURIDAD: una carpeta nueva siempre se crea DENTRO del destino; `..` y rutas
+        // absolutas se rechazan en el plan (no se puede escapar de la carpeta destino).
+        let dest = PathBuf::from("C:/work");
+        for bad in ["a\\..\\b", "..\\fuera", "\\abs", "a\\\\b", "a\\b:c"] {
+            let r = req(
+                OpKind::CreateDir { name: bad.into() },
+                vec![],
+                Some(dest.clone()),
+            );
+            assert!(
+                matches!(plan(&r), Err(PlanError::InvalidName(_))),
+                "{bad} debería rechazarse en el plan"
+            );
+        }
+    }
+
+    #[test]
+    fn create_file_anidado_arma_la_ruta_completa() {
+        let dest = PathBuf::from("C:/work");
+        let r = req(
+            OpKind::CreateFile {
+                name: "sub\\nota.txt".into(),
+            },
+            vec![],
+            Some(dest.clone()),
+        );
+        let p = plan(&r).unwrap();
+        assert_eq!(p.steps.len(), 1);
+        assert!(!p.steps[0].is_dir);
+        assert_eq!(p.total_files, 1);
+        assert_eq!(p.steps[0].to, dest.join("sub").join("nota.txt"));
     }
 
     #[test]
