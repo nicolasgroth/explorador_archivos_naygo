@@ -4693,6 +4693,8 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         del_count: d.del_count,
         del_permanent: d.del_permanent,
         conflict_name: SharedString::from(d.conflict_name.as_str()),
+        conflict_from: SharedString::from(d.conflict_from.as_str()),
+        conflict_to: SharedString::from(d.conflict_to.as_str()),
         name_title: SharedString::from(d.name_title.as_str()),
         name_value: SharedString::from(d.name_value.as_str()),
         name_valid: d.name_valid,

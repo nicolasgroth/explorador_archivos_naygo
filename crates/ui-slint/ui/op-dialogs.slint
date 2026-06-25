@@ -124,6 +124,33 @@ export component OpDialogs inherits Rectangle {
                     color: white;
                     wrap: word-wrap;
                 }
+                // "De dónde a dónde": carpeta de origen y de destino (rutas atenuadas, elididas si
+                // son largas para no romper el ancho del modal). Solo si se conocen.
+                if root.vm.conflict-from != "" || root.vm.conflict-to != "": VerticalLayout {
+                    spacing: 2px;
+                    if root.vm.conflict-from != "": HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.dlg-conflict-from; color: Theme.text-dim; font-size: 12px; }
+                        Text {
+                            text: root.vm.conflict-from;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    if root.vm.conflict-to != "": HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.dlg-conflict-to; color: Theme.text-dim; font-size: 12px; }
+                        Text {
+                            text: root.vm.conflict-to;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                }
                 apply-all-row := HorizontalLayout {
                     spacing: 6px;
                     Rectangle {
@@ -162,6 +189,33 @@ export component OpDialogs inherits Rectangle {
                     text: Tr.dlg-folder-exists-pre + root.vm.folder-name + Tr.dlg-folder-exists-suf;
                     color: white;
                     wrap: word-wrap;
+                }
+                // "De dónde a dónde": carpeta de origen y de destino (rutas atenuadas, elididas si
+                // son largas). Solo si se conocen.
+                if root.vm.conflict-from != "" || root.vm.conflict-to != "": VerticalLayout {
+                    spacing: 2px;
+                    if root.vm.conflict-from != "": HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.dlg-conflict-from; color: Theme.text-dim; font-size: 12px; }
+                        Text {
+                            text: root.vm.conflict-from;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    if root.vm.conflict-to != "": HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.dlg-conflict-to; color: Theme.text-dim; font-size: 12px; }
+                        Text {
+                            text: root.vm.conflict-to;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
                 }
                 // Casilla "aplicar a todas las carpetas": solo si hay más de una en conflicto.
                 if root.vm.folder-more: HorizontalLayout {

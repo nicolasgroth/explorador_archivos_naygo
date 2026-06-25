@@ -88,6 +88,10 @@ export global Tr {
     in property <string> dlg-rename: "Renombrar";
     in property <string> dlg-overwrite: "Sobrescribir";
     in property <string> dlg-conflict-cancel-all: "Cancelar todo";
+    // Etiquetas del bloque "de dónde a dónde" en el conflicto de archivo/carpeta: la carpeta de
+    // origen y la de destino de la operación, para que el usuario sepa qué se está copiando/moviendo.
+    in property <string> dlg-conflict-from: "Origen:";
+    in property <string> dlg-conflict-to: "Destino:";
     // Título del modal de nombre al renombrar un conflicto (BUG 1). El nombre original va entre
     // `pre` y `suf` (Slint no tiene replace).
     in property <string> dlg-rename-to-pre: "Nuevo nombre para «";

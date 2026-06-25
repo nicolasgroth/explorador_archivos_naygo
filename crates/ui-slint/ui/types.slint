@@ -145,6 +145,11 @@ export struct OpDialogVm {
     del-permanent: bool,
     // Conflicto (por-ítem):
     conflict-name: string,
+    // Carpetas de origen y destino de la operación en conflicto (de dónde a dónde), para mostrar
+    // el contexto bajo el "Ya existe «X»". Vacías si no se conocen. Aplican a kind==2 (archivo) y
+    // kind==6 (carpeta).
+    conflict-from: string,
+    conflict-to: string,
     // Pedir nombre (nuevo/renombrar):
     name-title: string,
     name-value: string,

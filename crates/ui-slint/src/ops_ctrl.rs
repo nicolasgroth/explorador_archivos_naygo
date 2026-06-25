@@ -65,10 +65,14 @@ pub enum OpDialog {
     /// el escaneo (antes de copiar), mientras la op está en fase "esperando decisión de carpeta".
     /// `op_id` resuelve la op por id estable (igual que `Conflict`); `name` es la carpeta actual a
     /// mostrar; `remaining` es cuántas carpetas más quedan por decidir (para el texto/checkbox).
+    /// `source` es la carpeta de ORIGEN (la que se copia/mueve) y `dest_root` el DESTINO exacto que
+    /// ya existe (`dest_dir.join(name)`): se muestran en el modal como "de dónde a dónde".
     FolderConflict {
         op_id: u64,
         name: String,
         remaining: usize,
+        source: PathBuf,
+        dest_root: PathBuf,
     },
     /// Pedir un nombre (nuevo archivo/carpeta, renombrar). `dir` es dónde se crea.
     NameInput {
@@ -731,12 +735,19 @@ impl OpsCtrl {
                 let pf = self.active_ops[idx].awaiting_folders.as_ref().unwrap();
                 if let Some(first) = pf.conflicts.first() {
                     let name = first.name.clone();
+                    // Carpetas de origen y destino para mostrar "de dónde a dónde". `source` es la
+                    // carpeta de origen MISMA (la que se copia/mueve); `dest_root` es el destino
+                    // exacto que ya existe (`dest_dir.join(name)`).
+                    let source = first.source.clone();
+                    let dest_root = first.dest_root.clone();
                     // "restantes" = cuántas carpetas MÁS hay después de esta (para el checkbox).
                     let remaining = pf.conflicts.len().saturating_sub(1);
                     self.pending_dialog = Some(OpDialog::FolderConflict {
                         op_id,
                         name,
                         remaining,
+                        source,
+                        dest_root,
                     });
                 }
             }
@@ -1042,15 +1053,29 @@ impl OpsCtrl {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                // "De dónde a dónde": la carpeta que CONTIENE el archivo entrante (`incoming` es el
+                // origen del paso) y la que CONTIENE el archivo que ya existe (`existing` es el
+                // destino). Se muestran como rutas atenuadas bajo el "Ya existe «X»".
+                conflict_from: folder_of(&prompt.incoming),
+                conflict_to: folder_of(&prompt.existing),
                 ..Default::default()
             },
             Some(OpDialog::FolderConflict {
-                name, remaining, ..
+                name,
+                remaining,
+                source,
+                dest_root,
+                ..
             }) => OpDialogVmData {
                 kind: 6,
                 folder_name: name.clone(),
                 // Solo ofrecer "aplicar a todas" cuando hay MÁS de una carpeta en conflicto.
                 folder_more: *remaining > 0,
+                // "De dónde a dónde": la carpeta que CONTIENE el origen y la que CONTIENE el destino
+                // existente (ambos `parent()`), para que el usuario vea desde y hacia qué carpeta se
+                // mueve/copia la carpeta en conflicto.
+                conflict_from: folder_of(source),
+                conflict_to: folder_of(dest_root),
                 ..Default::default()
             },
             Some(OpDialog::NameInput { purpose, buf, .. }) => OpDialogVmData {
@@ -1408,6 +1433,17 @@ impl OpsCtrl {
     }
 }
 
+/// Ruta de la CARPETA que contiene `p` (su `parent()`), como String para la UI. Se usa en el
+/// modal de conflicto para mostrar de qué carpeta sale y a cuál va el archivo/carpeta. Si `p` no
+/// tiene padre (p. ej. una raíz como `C:\`), se devuelve `p` tal cual; si está vacío, "".
+fn folder_of(p: &Path) -> String {
+    p.parent()
+        .filter(|par| !par.as_os_str().is_empty())
+        .unwrap_or(p)
+        .display()
+        .to_string()
+}
+
 /// Datos planos del modal activo (espejo de `OpDialogVm` de Slint).
 #[derive(Clone, Debug, Default)]
 pub struct OpDialogVmData {
@@ -1415,6 +1451,11 @@ pub struct OpDialogVmData {
     pub del_count: i32,
     pub del_permanent: bool,
     pub conflict_name: String,
+    /// Carpeta de ORIGEN de la operación en conflicto (de dónde sale el archivo/carpeta). Vacía si
+    /// no se conoce. Aplica a kind==2 (archivo) y kind==6 (carpeta).
+    pub conflict_from: String,
+    /// Carpeta de DESTINO de la operación en conflicto (a dónde va). Vacía si no se conoce.
+    pub conflict_to: String,
     pub name_title: String,
     /// Nombre original del archivo en conflicto cuando el modal de nombre se abre para "Renombrar"
     /// un choque (BUG 1). Vacío en los demás casos (nuevo archivo/carpeta/pegar). La UI lo usa para

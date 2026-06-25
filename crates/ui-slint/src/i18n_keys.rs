@@ -94,6 +94,8 @@ where
     tr.set_dlg_rename(c.t("slint.dialog.rename").into());
     tr.set_dlg_overwrite(c.t("slint.dialog.overwrite").into());
     tr.set_dlg_conflict_cancel_all(c.t("slint.dialog.conflict_cancel_all").into());
+    tr.set_dlg_conflict_from(c.t("slint.dialog.conflict_from").into());
+    tr.set_dlg_conflict_to(c.t("slint.dialog.conflict_to").into());
     tr.set_dlg_rename_to_pre(c.t("slint.dialog.rename_to_pre").into());
     tr.set_dlg_rename_to_suf(c.t("slint.dialog.rename_to_suf").into());
     tr.set_dlg_folder_exists_pre(c.t("slint.dialog.folder_exists_pre").into());

@@ -414,6 +414,8 @@
   "slint.dialog.rename": "Rename",
   "slint.dialog.overwrite": "Overwrite",
   "slint.dialog.conflict_cancel_all": "Cancel all",
+  "slint.dialog.conflict_from": "From:",
+  "slint.dialog.conflict_to": "To:",
   "slint.dialog.rename_to_pre": "New name for «",
   "slint.dialog.rename_to_suf": "»:",
   "slint.dialog.folder_exists_pre": "The folder «",
