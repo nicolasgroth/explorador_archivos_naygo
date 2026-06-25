@@ -276,6 +276,18 @@ mod windows_impl {
 
         let target: IDropTarget = NaygoDropTarget { tx, waker }.into();
 
+        // winit (sobre el que corre Slint) ya registró SU PROPIO IDropTarget al crear la
+        // ventana: tiene drag&drop ON por defecto y Slint 1.16 no lo desactiva. Una ventana
+        // Win32 admite UN SOLO drop target, así que sin esto nuestro RegisterDragDrop falla
+        // con DRAGDROP_E_ALREADYREGISTERED y el target de Naygo nunca recibe los drops (el
+        // drop intra-app entre paneles no llegaba al canal). Revocamos el de winit primero.
+        // No se pierde nada: Naygo no consume los eventos de archivo de winit (no hay puente),
+        // y winit no re-registra en runtime (solo lo hace una vez en la creación).
+        // SAFETY: hwnd válido; revocar un target inexistente solo devuelve error (ignorado).
+        unsafe {
+            let _ = RevokeDragDrop(hwnd);
+        }
+
         // SAFETY: hwnd no es nulo y `target` es una interfaz IDropTarget válida; el SO toma
         // su propia referencia. Cualquier error (p. ej. DRAGDROP_E_ALREADYREGISTERED) → None.
         let result = unsafe { RegisterDragDrop(hwnd, &target) };
