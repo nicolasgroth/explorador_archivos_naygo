@@ -108,10 +108,97 @@ pub struct OpProgress {
 }
 
 /// Petición de decisión de conflicto que el motor manda a la UI.
+///
+/// Además de las dos rutas (el archivo que YA existe en el destino y el que llega), trae los
+/// METADATOS de ambos lados (tamaño, fecha de modificación, si es carpeta) para que la UI los
+/// muestre LADO A LADO ("Existente" | "Nuevo") sin volver a tocar el disco. Los metadatos se leen
+/// con `fs::metadata` al armar el prompt (`from_paths`): si una ruta no se puede leer, su tamaño
+/// queda en 0 y su fecha en `None` (la UI muestra "—"). Los campos de metadatos llevan
+/// `#[serde(default)]` para que un journal/serialización vieja (solo con las rutas) siga
+/// deserializando.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConflictPrompt {
     pub existing: PathBuf,
     pub incoming: PathBuf,
+    /// Tamaño del archivo EXISTENTE en bytes (0 si no se pudo leer o es carpeta).
+    #[serde(default)]
+    pub existing_size: u64,
+    /// Fecha de modificación del EXISTENTE en segundos epoch UTC (`None` si no se pudo leer).
+    #[serde(default)]
+    pub existing_modified: Option<u64>,
+    /// `true` si el EXISTENTE es una carpeta.
+    #[serde(default)]
+    pub existing_is_dir: bool,
+    /// Tamaño del archivo NUEVO (entrante) en bytes (0 si no se pudo leer o es carpeta).
+    #[serde(default)]
+    pub incoming_size: u64,
+    /// Fecha de modificación del NUEVO en segundos epoch UTC (`None` si no se pudo leer).
+    #[serde(default)]
+    pub incoming_modified: Option<u64>,
+    /// `true` si el NUEVO es una carpeta.
+    #[serde(default)]
+    pub incoming_is_dir: bool,
+}
+
+impl ConflictPrompt {
+    /// Arma un prompt leyendo los metadatos de ambas rutas con `fs::metadata`. Tolerante a fallos:
+    /// si una ruta no se puede leer (permiso, desaparecida, disco caído), su tamaño queda en 0 y su
+    /// fecha en `None` en vez de fallar; el conflicto se sigue pudiendo resolver con las rutas.
+    pub fn from_paths(existing: PathBuf, incoming: PathBuf) -> ConflictPrompt {
+        let (existing_size, existing_modified, existing_is_dir) = read_meta(&existing);
+        let (incoming_size, incoming_modified, incoming_is_dir) = read_meta(&incoming);
+        ConflictPrompt {
+            existing,
+            incoming,
+            existing_size,
+            existing_modified,
+            existing_is_dir,
+            incoming_size,
+            incoming_modified,
+            incoming_is_dir,
+        }
+    }
+}
+
+/// Lee (tamaño, modificado epoch UTC, es_carpeta) de una ruta. Tolerante a fallos: ante cualquier
+/// error de I/O devuelve `(0, None, false)`.
+fn read_meta(p: &Path) -> (u64, Option<u64>, bool) {
+    match std::fs::metadata(p) {
+        Ok(m) => {
+            let modified = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            // Un directorio reporta `len()` del nodo, no del contenido: lo dejamos en 0 para no
+            // mostrar un tamaño engañoso (la UI distingue carpeta de archivo por `is_dir`).
+            let size = if m.is_dir() { 0 } else { m.len() };
+            (size, modified, m.is_dir())
+        }
+        Err(_) => (0, None, false),
+    }
+}
+
+/// `true` si dos archivos se consideran IDÉNTICOS por una comparación BARATA de metadatos: mismo
+/// tamaño Y misma fecha de modificación (con tolerancia de 2 segundos para los sistemas de archivos
+/// tipo FAT, que guardan la hora con resolución de 2s). NO compara contenido byte a byte ni hash:
+/// es la heurística que usa "saltar idénticos" para no recopiar lo que ya está igual en el destino.
+/// Si alguna fecha no se puede leer, NO se consideran idénticos (mejor preguntar que asumir).
+pub fn are_identical(a: &Path, b: &Path) -> bool {
+    let (size_a, mod_a, dir_a) = read_meta(a);
+    let (size_b, mod_b, dir_b) = read_meta(b);
+    // Carpetas: nunca "idénticas" por este criterio (no tienen tamaño/contenido comparable así).
+    if dir_a || dir_b {
+        return false;
+    }
+    if size_a != size_b {
+        return false;
+    }
+    match (mod_a, mod_b) {
+        (Some(ta), Some(tb)) => ta.abs_diff(tb) <= 2,
+        // Sin fecha de un lado: no asumimos identidad.
+        _ => false,
+    }
 }
 
 /// Decisión que la UI devuelve al motor ante un conflicto.
@@ -139,6 +226,19 @@ pub enum ConflictAction {
     /// sentido con "aplicar a todos" (cada archivo necesita su propio nombre); la UI lo
     /// deshabilita en ese caso.
     RenameTo(String),
+    /// Renombrar el archivo EXISTENTE (el del destino) con un sufijo automático " (N)" libre, y
+    /// dejar entrar el NUEVO con su nombre original. Es la inversa de `Rename`: en vez de
+    /// desambiguar el entrante, desambigua el que ya estaba. Útil cuando se quiere conservar AMBOS
+    /// pero que el nuevo se quede con el nombre "bueno". Si el rename del existente falla
+    /// (permiso/archivo en uso), el motor reporta el paso como fallido y NO pisa el existente.
+    RenameExisting,
+    /// POLÍTICA "saltar idénticos": al elegirla (típicamente con "aplicar a todos"), el motor
+    /// salta automáticamente los conflictos donde el existente y el entrante son IDÉNTICOS por
+    /// metadatos (`are_identical`: mismo tamaño y fecha, tolerancia 2s) y, para los que DIFIEREN,
+    /// vuelve a preguntar a la UI. Como acción por-ítem suelta (sin aplicar a todos) se comporta
+    /// como `Skip` si son idénticos o `Overwrite` si difieren — pero su uso natural es como
+    /// política, así que la UI la ofrece con "aplicar a todos".
+    SkipIdentical,
 }
 
 /// Qué hacer cuando una CARPETA de origen ya existe (como carpeta) en el destino. A
@@ -450,5 +550,152 @@ mod folder_conflict_tests {
         apply_folder_decision(&mut p, &dest_root, FolderDecision::Replace);
         apply_folder_decision(&mut p, &dest_root, FolderDecision::Replace);
         assert_eq!(p.pre_delete, vec![dest_root], "no se duplica el destino");
+    }
+}
+
+#[cfg(test)]
+mod conflict_prompt_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn from_paths_trae_los_metadatos_de_ambos_lados() {
+        // Dos archivos con TAMAÑOS distintos: el prompt debe traer cada tamaño en su lado y una
+        // fecha de modificación presente (Some) para ambos.
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("dst.txt");
+        let incoming = dir.path().join("src.txt");
+        fs::write(&existing, b"viejo").unwrap(); // 5 bytes
+        fs::write(&incoming, b"contenido-nuevo").unwrap(); // 15 bytes
+
+        let p = ConflictPrompt::from_paths(existing.clone(), incoming.clone());
+        assert_eq!(p.existing, existing);
+        assert_eq!(p.incoming, incoming);
+        assert_eq!(p.existing_size, 5, "tamaño del existente");
+        assert_eq!(p.incoming_size, 15, "tamaño del entrante");
+        assert!(
+            !p.existing_is_dir && !p.incoming_is_dir,
+            "ambos son archivos"
+        );
+        assert!(p.existing_modified.is_some(), "fecha del existente leída");
+        assert!(p.incoming_modified.is_some(), "fecha del entrante leída");
+    }
+
+    #[test]
+    fn from_paths_tolerante_a_ruta_inexistente() {
+        // Si una ruta no existe, su tamaño es 0 y su fecha None; no falla.
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existe.txt");
+        fs::write(&existing, b"hola").unwrap();
+        let incoming = dir.path().join("no_existe.txt"); // nunca creado
+
+        let p = ConflictPrompt::from_paths(existing, incoming);
+        assert_eq!(p.existing_size, 4);
+        assert!(p.existing_modified.is_some());
+        assert_eq!(p.incoming_size, 0, "ruta inexistente → tamaño 0");
+        assert!(
+            p.incoming_modified.is_none(),
+            "ruta inexistente → sin fecha"
+        );
+    }
+
+    #[test]
+    fn from_paths_marca_carpeta_y_tamano_cero() {
+        let dir = tempfile::tempdir().unwrap();
+        let carpeta = dir.path().join("una_carpeta");
+        fs::create_dir(&carpeta).unwrap();
+        let archivo = dir.path().join("a.txt");
+        fs::write(&archivo, b"xyz").unwrap();
+
+        let p = ConflictPrompt::from_paths(carpeta, archivo);
+        assert!(p.existing_is_dir, "el existente es carpeta");
+        assert_eq!(p.existing_size, 0, "carpeta → tamaño 0");
+        assert!(!p.incoming_is_dir);
+    }
+
+    #[test]
+    fn are_identical_mismo_tamano_y_fecha_es_true() {
+        // Copiar un archivo con std::fs::copy preserva el contenido; igualamos el mtime a mano para
+        // un escenario determinista de "idénticos".
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, b"mismo-contenido").unwrap();
+        fs::write(&b, b"mismo-contenido").unwrap();
+        // Forzar el MISMO mtime exacto en ambos.
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        filetime_set(&a, t);
+        filetime_set(&b, t);
+        assert!(are_identical(&a, &b), "mismo tamaño y fecha → idénticos");
+    }
+
+    #[test]
+    fn are_identical_tamano_distinto_es_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, b"corto").unwrap();
+        fs::write(&b, b"mucho-mas-largo-que-el-otro").unwrap();
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        filetime_set(&a, t);
+        filetime_set(&b, t);
+        assert!(!are_identical(&a, &b), "tamaños distintos → no idénticos");
+    }
+
+    #[test]
+    fn are_identical_fecha_lejana_es_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, b"igual").unwrap();
+        fs::write(&b, b"igual").unwrap();
+        let ta = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let tb = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_100);
+        filetime_set(&a, ta);
+        filetime_set(&b, tb);
+        assert!(
+            !are_identical(&a, &b),
+            "fechas separadas >2s → no idénticos"
+        );
+    }
+
+    #[test]
+    fn are_identical_tolera_2s_de_diferencia() {
+        // FAT guarda mtime con resolución de 2s: una diferencia de hasta 2s sigue siendo idéntico.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, b"igual").unwrap();
+        fs::write(&b, b"igual").unwrap();
+        let ta = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let tb = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_002);
+        filetime_set(&a, ta);
+        filetime_set(&b, tb);
+        assert!(
+            are_identical(&a, &b),
+            "diferencia de 2s entra en tolerancia"
+        );
+    }
+
+    #[test]
+    fn are_identical_carpeta_es_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let carpeta = dir.path().join("c");
+        fs::create_dir(&carpeta).unwrap();
+        let archivo = dir.path().join("a.txt");
+        fs::write(&archivo, b"").unwrap();
+        assert!(
+            !are_identical(&carpeta, &archivo),
+            "una carpeta nunca es idéntica por este criterio"
+        );
+    }
+
+    /// Ajusta el mtime de un archivo SIN depender del crate `filetime` (que no es dependencia de
+    /// core): reabre el archivo y usa la API de la plataforma vía `std`. En la práctica, en Windows
+    /// y Unix `std` no expone set_mtime; usamos un truco portable: escribir y luego tocar con
+    /// `File::set_modified` (estable desde Rust 1.75).
+    fn filetime_set(path: &Path, t: std::time::SystemTime) {
+        let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        f.set_modified(t).unwrap();
     }
 }

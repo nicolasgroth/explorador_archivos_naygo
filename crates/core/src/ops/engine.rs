@@ -275,6 +275,87 @@ fn exec_step(
     }
 }
 
+/// Resuelve QUÉ acción aplicar a un choque (el destino `existing` ya existe). Encapsula la lógica
+/// de la política y de "aplicar a todos":
+///
+/// - Políticas fijas (`Skip`/`Overwrite`/`Rename`) → su acción directa.
+/// - `Ask` → si hay una acción memorizada (`applied_all`), la reusa SIN preguntar; si no, emite
+///   `OpMsg::Conflict` (con metadatos) y espera la `ConflictDecision` de la UI, memorizando la
+///   acción si pidió "aplicar a todos".
+///
+/// `SkipIdentical` es una POLÍTICA, no una acción terminal: cada vez que aplica (sea memorizada o
+/// elegida por ítem) compara los metadatos de `existing` vs `incoming` con `are_identical`. Si son
+/// idénticos devuelve `Skip` (no recopia lo que ya está igual); si difieren, vuelve a preguntar a
+/// la UI (un choque real que merece decisión). Por eso esta función nunca devuelve `SkipIdentical`:
+/// lo traduce a `Skip` u otra acción concreta.
+#[allow(clippy::too_many_arguments)]
+fn resolve_action(
+    conflict: ConflictPolicy,
+    existing: &Path,
+    incoming: &Path,
+    token: &CancellationToken,
+    tx: &Sender<OpMsg>,
+    conflict_rx: &Receiver<ConflictDecision>,
+    applied_all: &mut Option<ConflictAction>,
+) -> ConflictAction {
+    match conflict {
+        ConflictPolicy::Skip => ConflictAction::Skip,
+        ConflictPolicy::Overwrite => ConflictAction::Overwrite,
+        ConflictPolicy::Rename => ConflictAction::Rename,
+        ConflictPolicy::Ask => {
+            // Acción memorizada con "aplicar a todos". `SkipIdentical` memorizado NO se devuelve
+            // tal cual: se evalúa por ítem (idénticos → Skip; si difieren, cae a preguntar).
+            if let Some(prev) = applied_all.clone() {
+                match prev {
+                    ConflictAction::SkipIdentical => {
+                        if super::are_identical(existing, incoming) {
+                            return ConflictAction::Skip;
+                        }
+                        // Difieren: este choque merece decisión → preguntar (cae abajo).
+                    }
+                    other => return other,
+                }
+            }
+            // Preguntar a la UI: prompt ENRIQUECIDO con metadatos de ambos lados (la UI los muestra
+            // LADO A LADO). El motor ya tiene las rutas a mano.
+            let _ = tx.send(OpMsg::Conflict(ConflictPrompt::from_paths(
+                existing.to_path_buf(),
+                incoming.to_path_buf(),
+            )));
+            // Esperar la decisión sin colgar si se cancela: poll con timeout.
+            let decision = loop {
+                if token.is_cancelled() {
+                    return ConflictAction::Skip;
+                }
+                match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(d) => break d,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        return ConflictAction::Skip;
+                    }
+                }
+            };
+            // "Aplicar a todos" no aplica a `RenameTo` (cada archivo necesita su propio nombre). La
+            // UI ya lo deshabilita ahí; por las dudas, no lo memorizamos.
+            if decision.apply_all && !matches!(decision.action, ConflictAction::RenameTo(_)) {
+                *applied_all = Some(decision.action.clone());
+            }
+            // Si la acción elegida (suelta o recién memorizada) es `SkipIdentical`, evaluarla YA
+            // para este ítem: idénticos → Skip; si difieren, Overwrite (la copia entra). Como suelta
+            // es razonable; como política, los siguientes ítems pasan por la rama memorizada de
+            // arriba (idénticos → Skip; difieren → preguntan).
+            if matches!(decision.action, ConflictAction::SkipIdentical) {
+                return if super::are_identical(existing, incoming) {
+                    ConflictAction::Skip
+                } else {
+                    ConflictAction::Overwrite
+                };
+            }
+            decision.action
+        }
+    }
+}
+
 /// Ejecuta un paso de copia (o mover, si `is_move`). Maneja carpetas (crea el dir),
 /// conflictos según la política, y copia archivos por buffers (cancelable).
 #[allow(clippy::too_many_arguments)]
@@ -314,42 +395,15 @@ fn exec_copy_step(
     // esperando una `ConflictDecision` por `conflict_rx`. Con "aplicar a todos", la acción
     // elegida se memoriza en `applied_all` y los choques siguientes no vuelven a preguntar.
     let to = if step.to.exists() {
-        let effective: ConflictAction = match conflict {
-            ConflictPolicy::Skip => ConflictAction::Skip,
-            ConflictPolicy::Overwrite => ConflictAction::Overwrite,
-            ConflictPolicy::Rename => ConflictAction::Rename,
-            ConflictPolicy::Ask => {
-                // `applied_all` se clona (la acción puede ser `RenameTo(String)`, no `Copy`).
-                if let Some(prev) = applied_all.clone() {
-                    prev
-                } else {
-                    let _ = tx.send(OpMsg::Conflict(ConflictPrompt {
-                        existing: step.to.clone(),
-                        incoming: from.clone(),
-                    }));
-                    // Esperar la decisión sin colgar si se cancela: poll con timeout.
-                    let decision = loop {
-                        if token.is_cancelled() {
-                            return (step.to.clone(), OpOutcome::Skipped, 0, true);
-                        }
-                        match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                            Ok(d) => break d,
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                return (step.to.clone(), OpOutcome::Skipped, 0, true);
-                            }
-                        }
-                    };
-                    // "Aplicar a todos" no aplica a `RenameTo` (cada archivo necesita su propio
-                    // nombre). La UI ya lo deshabilita ahí; por las dudas, no lo memorizamos.
-                    if decision.apply_all && !matches!(decision.action, ConflictAction::RenameTo(_))
-                    {
-                        *applied_all = Some(decision.action.clone());
-                    }
-                    decision.action
-                }
-            }
-        };
+        let effective: ConflictAction = resolve_action(
+            conflict,
+            &step.to,
+            &from,
+            token,
+            tx,
+            conflict_rx,
+            applied_all,
+        );
         match effective {
             ConflictAction::Skip => return (step.to.clone(), OpOutcome::Skipped, 0, true),
             ConflictAction::Rename => super::dedup_name(&step.to, &|p: &Path| p.exists()),
@@ -366,6 +420,27 @@ fn exec_copy_step(
                 };
                 super::dedup_name(&chosen, &|p: &Path| p.exists())
             }
+            // "Renombrar antiguo": apartar el EXISTENTE a un nombre " (N)" libre y dejar entrar el
+            // nuevo con su nombre original (`step.to`). Si el rename del existente FALLA (permiso/
+            // archivo en uso), NO se pisa: se reporta el paso como fallido y se aborta este paso.
+            ConflictAction::RenameExisting => {
+                let apartado = super::dedup_name(&step.to, &|p: &Path| p.exists());
+                if let Err(e) = std::fs::rename(&step.to, &apartado) {
+                    return (
+                        step.to.clone(),
+                        OpOutcome::Failed(format!(
+                            "no se pudo renombrar el archivo existente: {e}"
+                        )),
+                        0,
+                        true,
+                    );
+                }
+                // El existente ya no está en `step.to`: el nuevo entra con su nombre original.
+                step.to.clone()
+            }
+            // `SkipIdentical` ya se resolvió a Skip/Overwrite (o re-preguntó) dentro de
+            // `resolve_action`; nunca debería llegar aquí. Por las dudas, tratamos como Skip.
+            ConflictAction::SkipIdentical => return (step.to.clone(), OpOutcome::Skipped, 0, true),
         }
     } else {
         step.to.clone()
@@ -1345,6 +1420,143 @@ mod tests {
         assert_eq!(summary.count_done(), 2);
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "NA");
         assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "NB");
+    }
+
+    #[test]
+    fn ask_rename_existing_aparta_el_viejo_y_entra_el_nuevo() {
+        // "Renombrar antiguo": el EXISTENTE se aparta a "a (2).txt" y el NUEVO entra como "a.txt".
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"NUEVO").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"VIEJO").unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::RenameExisting,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1);
+        assert_eq!(summary.count_done(), 1);
+        // El nuevo entró con el nombre original; el viejo quedó apartado con sufijo.
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "NUEVO");
+        assert_eq!(fs::read_to_string(dst.join("a (2).txt")).unwrap(), "VIEJO");
+    }
+
+    #[test]
+    fn ask_skip_identical_salta_los_iguales() {
+        // "Saltar idénticos": el existente y el entrante son IGUALES (mismo tamaño y mtime) → se
+        // salta sin recopiar (el existente queda intacto).
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"mismo").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        let existing = dst.join("a.txt");
+        fs::write(&existing, b"mismo").unwrap();
+        // Igualar el mtime para que `are_identical` los considere idénticos.
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&existing)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let (summary, conflicts) = run_ask(
+            req,
+            ConflictDecision {
+                action: ConflictAction::SkipIdentical,
+                apply_all: false,
+            },
+        );
+        assert_eq!(conflicts, 1, "preguntó una vez");
+        assert_eq!(summary.count_skipped(), 1, "idénticos → saltado");
+    }
+
+    #[test]
+    fn skip_identical_apply_all_salta_iguales_y_repregunta_distintos() {
+        // Política "saltar idénticos" con aplicar-a-todos: dos choques, uno IDÉNTICO (se salta sin
+        // re-preguntar) y otro DISTINTO (se vuelve a preguntar). El test responde el segundo prompt
+        // con Overwrite. Esperado: 2 prompts (el inicial que activa la política + el del distinto),
+        // el idéntico saltado, el distinto sobrescrito.
+        let dir = tempfile::tempdir().unwrap();
+        // "ig.txt" idéntico en ambos lados; "di.txt" distinto.
+        let ig_src = dir.path().join("ig.txt");
+        let di_src = dir.path().join("di.txt");
+        fs::write(&ig_src, b"igual").unwrap();
+        fs::write(&di_src, b"origen-nuevo").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("ig.txt"), b"igual").unwrap();
+        fs::write(dst.join("di.txt"), b"destino-viejo").unwrap();
+        // Igualar mtime SOLO del par idéntico.
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for p in [ig_src.clone(), dst.join("ig.txt")] {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        }
+
+        // Orden de los orígenes: el plan los procesa en el orden dado. Ponemos el idéntico PRIMERO
+        // para que active la política, y el distinto después.
+        let req = super::super::transfer(false, vec![ig_src, di_src], dst.clone());
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let prompts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompts2 = prompts.clone();
+        // Primer prompt: SkipIdentical + aplicar a todos (activa la política). Siguientes: Overwrite.
+        let resp = std::thread::spawn(move || {
+            let mut first = true;
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    prompts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let action = if first {
+                        first = false;
+                        ConflictDecision {
+                            action: ConflictAction::SkipIdentical,
+                            apply_all: true,
+                        }
+                    } else {
+                        ConflictDecision {
+                            action: ConflictAction::Overwrite,
+                            apply_all: false,
+                        }
+                    };
+                    let _ = ctx.send(action);
+                }
+            }
+        });
+        let summary = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+        let n = prompts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 2,
+            "el idéntico se saltó solo; el distinto volvió a preguntar (2 prompts)"
+        );
+        // El idéntico quedó intacto (skip), el distinto fue sobrescrito por el origen.
+        assert_eq!(fs::read_to_string(dst.join("ig.txt")).unwrap(), "igual");
+        assert_eq!(
+            fs::read_to_string(dst.join("di.txt")).unwrap(),
+            "origen-nuevo"
+        );
+        assert_eq!(summary.count_skipped(), 1);
+        assert_eq!(summary.count_done(), 1);
     }
 
     #[test]
