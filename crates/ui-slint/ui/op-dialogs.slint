@@ -9,26 +9,72 @@ import { OpDialogVm, ResumeRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
-// Botón de diálogo reutilizable (texto legible + hover).
+// Botón de diálogo reutilizable.
+//
+// Estados (mejora visual de los modales de operación):
+//   - is-default: es el botón con el FOCO (lo que activa ENTER y al que apunta TAB).
+//     Se marca con un ANILLO/BORDE DE ACENTO del tema (2px Theme.accent) + fondo
+//     levemente más claro (Theme.selection-bg). Reemplaza al antiguo rojo del foco.
+//   - is-danger: acción destructiva (Sobrescribir, Eliminar, Reemplazar). Lleva un
+//     TINTE ROJO TENUE (no el rojo saturado de antes): fondo Theme.error.with-alpha,
+//     borde Theme.error.with-alpha, para advertir sin gritar.
+//   - is-danger + is-default: manda el anillo de acento (tiene el foco) pero conserva
+//     algo del tinte rojo de fondo para recordar que es destructivo.
+//   - normal: borde fino Theme.border + fondo Theme.row-bg.
+// El `shortcut` (p. ej. "Enter · S", "R", "O", "Esc") se pinta debajo del label,
+// pequeño y atenuado, entre paréntesis. La tecla además funciona como atajo real
+// (la maneja el FocusScope del modal).
 component DlgBtn inherits Rectangle {
     in property <string> label;
-    in property <bool> primary: false;
-    in property <bool> danger: false;
+    in property <string> shortcut;        // texto del atajo, p.ej. "Enter · S"
+    in property <bool> is-default: false; // tiene el foco; ENTER lo activa; anillo de acento
+    in property <bool> is-danger: false;  // destructivo; tinte rojo tenue
     in property <bool> enabled: true;
     callback clicked();
-    width: txt.preferred-width + 24px;
-    height: 28px;
+    // Los botones se ESTIRAN para repartir el ancho de la fila por igual (todos del mismo
+    // tamaño, ocupando todo el ancho del modal). El `min-width` evita que el texto se recorte
+    // si el modal fuera muy angosto.
+    horizontal-stretch: 1;
+    min-width: content.preferred-width + 16px;
+    height: 34px;
     border-radius: 4px;
+    // Fondo según estado. El tinte rojo del destructivo es tenue (.with-alpha);
+    // el del foco aclara con la selección del tema; el hover sube un poco el contraste.
     background: !root.enabled
         ? Theme.panel-bg
-        : (touch.has-hover
-            ? (root.danger ? Theme.error : Theme.selection-bg)
-            : (root.danger ? Theme.error : (root.primary ? Theme.selection-bg : Theme.row-bg)));
-    txt := Text {
-        text: root.label;
-        color: root.enabled ? white : Theme.text-dim;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        : (root.is-default
+            ? (root.is-danger
+                ? (touch.has-hover ? Theme.error.with-alpha(0.32) : Theme.error.with-alpha(0.22))
+                : Theme.selection-bg)
+            : (root.is-danger
+                ? (touch.has-hover ? Theme.error.with-alpha(0.28) : Theme.error.with-alpha(0.18))
+                : (touch.has-hover ? Theme.selection-bg : Theme.row-bg)));
+    // Borde: anillo de acento grueso si tiene el foco; rojo tenue si es destructivo;
+    // fino y neutro si es normal.
+    border-width: root.is-default ? 2px : 1px;
+    border-color: !root.enabled
+        ? Theme.border
+        : (root.is-default
+            ? Theme.accent
+            : (root.is-danger ? Theme.error.with-alpha(0.5) : Theme.border));
+    content := VerticalLayout {
+        alignment: center;
+        spacing: 1px;
+        Text {
+            text: root.label;
+            color: root.enabled
+                ? (root.is-danger && !root.is-default ? Theme.error : white)
+                : Theme.text-dim;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        // Atajo: solo si se definió. Pequeño, atenuado, entre paréntesis.
+        if root.shortcut != "": Text {
+            text: "(" + root.shortcut + ")";
+            color: Theme.text-dim;
+            font-size: 10px;
+            horizontal-alignment: center;
+        }
     }
     touch := TouchArea {
         enabled: root.enabled;
@@ -63,10 +109,54 @@ export component OpDialogs inherits Rectangle {
     // Retomar: decide por id; action 0=retomar 1=descartar.
     callback resume-decide(string, int);
 
+    // Índice del botón con el FOCO dentro del modal activo. TAB lo avanza, Shift+TAB
+    // lo retrocede (módulo el número de botones del kind). El botón cuyo índice coincide
+    // pinta el anillo de acento (is-default) y es el que ENTER activa.
+    property <int> focus-idx: 0;
+    // Estado "aplicar a todos/todas" hoisteado a la tarjeta para que TANTO los botones
+    // COMO el FocusScope (atajos/Enter) lean el mismo valor aunque la casilla sea
+    // condicional. Uno para el conflicto de archivo (kind 2) y otro para el de carpeta (6).
+    property <bool> conflict-apply-all: false;
+    property <bool> folder-apply-all: false;
+    // Cantidad de botones por kind (para el wrap del TAB). kind 1/4 = 2 botones,
+    // kind 2/6 = 4 botones. El resto no usa TAB (3 lo maneja el TextInput; 5 tiene
+    // botones por fila).
+    function btn-count() -> int {
+        if (root.vm.kind == 1) { return 2; }   // [Cancelar, Eliminar]
+        if (root.vm.kind == 2) { return 4; }   // [Cancelar todo, Saltar, Renombrar, Sobrescribir]
+        if (root.vm.kind == 4) { return 2; }   // [Cancelar, Crear]
+        if (root.vm.kind == 6) { return 4; }   // [Cancelar todo, Saltar, Fusionar, Reemplazar]
+        return 0;
+    }
+    // Dispara la acción del botón en `focus-idx` para el kind activo (lo usa ENTER).
+    function activate-focused() {
+        if (root.vm.kind == 1) {
+            if (root.focus-idx == 0) { root.delete-cancel(); }
+            if (root.focus-idx == 1) { root.delete-confirm(); }
+        }
+        if (root.vm.kind == 2) {
+            if (root.focus-idx == 0) { root.conflict-cancel(); }
+            if (root.focus-idx == 1) { root.conflict-decide(1, root.conflict-apply-all); }
+            if (root.focus-idx == 2) { root.conflict-rename(); }
+            if (root.focus-idx == 3) { root.conflict-decide(0, root.conflict-apply-all); }
+        }
+        if (root.vm.kind == 4) {
+            if (root.focus-idx == 0) { root.paste-cancel(); }
+            if (root.focus-idx == 1) { root.paste-confirm(); }
+        }
+        if (root.vm.kind == 6) {
+            if (root.focus-idx == 0) { root.folder-conflict-cancel(); }
+            if (root.focus-idx == 1) { root.folder-conflict-decide(2, root.folder-apply-all); }
+            if (root.focus-idx == 2) { root.folder-conflict-decide(0, root.folder-apply-all); }
+            if (root.focus-idx == 3) { root.folder-conflict-decide(1, root.folder-apply-all); }
+        }
+    }
+
     // Solo visible si hay un modal activo.
     visible: root.vm.kind > 0;
     // Velo: cubre todo y captura clics fuera de la tarjeta (cancela según el tipo).
-    background: #000000aa;
+    // Un poco más oscuro que antes para que la tarjeta resalte más contra el fondo.
+    background: #000000c0;
     veil := TouchArea {
         clicked => {
             if (root.vm.kind == 1) { root.delete-cancel(); }
@@ -77,14 +167,16 @@ export component OpDialogs inherits Rectangle {
         }
     }
 
-    // Tarjeta centrada.
+    // Tarjeta centrada. Fondo Theme.panel-bg (más oscuro que las filas, contrasta con
+    // el anillo de acento de los botones) y un BORDE SUTIL de acento tenue para que la
+    // tarjeta se separe limpiamente del velo sin gritar.
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 380px;
         height: card.preferred-height + 32px;
-        background: Theme.row-bg;
-        border-color: Theme.selection-bg;
+        background: Theme.panel-bg;
+        border-color: Theme.accent.with-alpha(0.4);
         border-width: 1px;
         border-radius: 8px;
         // Captura los clics dentro de la tarjeta (no propaga al velo).
@@ -109,10 +201,19 @@ export component OpDialogs inherits Rectangle {
                     font-size: 12px;
                 }
                 HorizontalLayout {
-                    alignment: end;
+                    alignment: stretch;
                     spacing: 8px;
-                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.delete-cancel(); } }
-                    DlgBtn { label: Tr.dlg-delete; danger: true; clicked => { root.delete-confirm(); } }
+                    // Orden de TAB: [0]=Cancelar, [1]=Eliminar (default/Enter).
+                    DlgBtn {
+                        label: Tr.dlg-cancel; shortcut: "Esc";
+                        is-default: root.focus-idx == 0;
+                        clicked => { root.delete-cancel(); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-delete; shortcut: "Enter · D"; is-danger: true;
+                        is-default: root.focus-idx == 1;
+                        clicked => { root.delete-confirm(); }
+                    }
                 }
             }
 
@@ -158,31 +259,48 @@ export component OpDialogs inherits Rectangle {
                         border-radius: 3px;
                         border-width: 1px;
                         border-color: Theme.accent;
-                        background: all-touch.has-hover ? Theme.selection-bg : (apply-all-row.checked ? Theme.accent : transparent);
-                        Text { text: apply-all-row.checked ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-                        all-touch := TouchArea { clicked => { apply-all-row.checked = !apply-all-row.checked; } }
+                        background: all-touch.has-hover ? Theme.selection-bg : (root.conflict-apply-all ? Theme.accent : transparent);
+                        Text { text: root.conflict-apply-all ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        all-touch := TouchArea { clicked => { root.conflict-apply-all = !root.conflict-apply-all; } }
                     }
                     Text { text: Tr.dlg-apply-all; color: Theme.text; vertical-alignment: center; }
-                    property <bool> checked: false;
                 }
                 HorizontalLayout {
-                    alignment: end;
+                    alignment: stretch;
                     spacing: 8px;
-                    DlgBtn { label: Tr.dlg-conflict-cancel-all; clicked => { root.conflict-cancel(); } }
-                    DlgBtn { label: Tr.dlg-skip; clicked => { root.conflict-decide(1, apply-all-row.checked); } }
+                    // Orden de TAB: [0]=Cancelar todo, [1]=Saltar (default/Enter, opción segura),
+                    // [2]=Renombrar, [3]=Sobrescribir (destructivo).
+                    DlgBtn {
+                        label: Tr.dlg-conflict-cancel-all; shortcut: "Esc";
+                        is-default: root.focus-idx == 0;
+                        clicked => { root.conflict-cancel(); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-skip; shortcut: "Enter · S";
+                        is-default: root.focus-idx == 1;
+                        clicked => { root.conflict-decide(1, root.conflict-apply-all); }
+                    }
                     // "Renombrar" abre el modal de nombre (no aplica a todos: cada archivo necesita
                     // su propio nombre), por eso ignora la casilla "aplicar a todas".
-                    DlgBtn { label: Tr.dlg-rename; clicked => { root.conflict-rename(); } }
-                    DlgBtn { label: Tr.dlg-overwrite; danger: true; clicked => { root.conflict-decide(0, apply-all-row.checked); } }
+                    DlgBtn {
+                        label: Tr.dlg-rename; shortcut: "R";
+                        is-default: root.focus-idx == 2;
+                        clicked => { root.conflict-rename(); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-overwrite; shortcut: "O"; is-danger: true;
+                        is-default: root.focus-idx == 3;
+                        clicked => { root.conflict-decide(0, root.conflict-apply-all); }
+                    }
                 }
             }
 
             // --- 6: Conflicto de CARPETA (P3) ---
             if root.vm.kind == 6: folder-card := VerticalLayout {
                 spacing: 12px;
-                // Estado de "aplicar a todas" hoisteado a la tarjeta para que los botones lo lean
-                // aunque la casilla (condicional) no se muestre.
-                property <bool> apply-all: false;
+                // El estado "aplicar a todas" vive en root.folder-apply-all (hoisteado) para que
+                // los botones Y el FocusScope (atajos/Enter) lean el mismo valor aunque la casilla
+                // (condicional) no se muestre.
                 Text {
                     // "La carpeta «X» ya existe. ¿Qué hacer?" — el nombre va entre pre y suf
                     // (Slint no tiene replace; el patrón i18n parte el texto alrededor del nombre).
@@ -225,19 +343,37 @@ export component OpDialogs inherits Rectangle {
                         border-radius: 3px;
                         border-width: 1px;
                         border-color: Theme.accent;
-                        background: fall-touch.has-hover ? Theme.selection-bg : (folder-card.apply-all ? Theme.accent : transparent);
-                        Text { text: folder-card.apply-all ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-                        fall-touch := TouchArea { clicked => { folder-card.apply-all = !folder-card.apply-all; } }
+                        background: fall-touch.has-hover ? Theme.selection-bg : (root.folder-apply-all ? Theme.accent : transparent);
+                        Text { text: root.folder-apply-all ? "x" : ""; color: white; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        fall-touch := TouchArea { clicked => { root.folder-apply-all = !root.folder-apply-all; } }
                     }
                     Text { text: Tr.dlg-folder-apply-all; color: Theme.text; vertical-alignment: center; }
                 }
                 HorizontalLayout {
-                    alignment: end;
+                    alignment: stretch;
                     spacing: 8px;
-                    DlgBtn { label: Tr.dlg-conflict-cancel-all; clicked => { root.folder-conflict-cancel(); } }
-                    DlgBtn { label: Tr.dlg-folder-skip; clicked => { root.folder-conflict-decide(2, folder-card.apply-all); } }
-                    DlgBtn { label: Tr.dlg-folder-merge; primary: true; clicked => { root.folder-conflict-decide(0, folder-card.apply-all); } }
-                    DlgBtn { label: Tr.dlg-folder-replace; danger: true; clicked => { root.folder-conflict-decide(1, folder-card.apply-all); } }
+                    // Orden de TAB: [0]=Cancelar todo, [1]=Saltar (default/Enter, opción segura),
+                    // [2]=Fusionar, [3]=Reemplazar (destructivo).
+                    DlgBtn {
+                        label: Tr.dlg-conflict-cancel-all; shortcut: "Esc";
+                        is-default: root.focus-idx == 0;
+                        clicked => { root.folder-conflict-cancel(); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-folder-skip; shortcut: "Enter · S";
+                        is-default: root.focus-idx == 1;
+                        clicked => { root.folder-conflict-decide(2, root.folder-apply-all); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-folder-merge; shortcut: "F";
+                        is-default: root.focus-idx == 2;
+                        clicked => { root.folder-conflict-decide(0, root.folder-apply-all); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-folder-replace; shortcut: "R"; is-danger: true;
+                        is-default: root.focus-idx == 3;
+                        clicked => { root.folder-conflict-decide(1, root.folder-apply-all); }
+                    }
                 }
             }
 
@@ -276,10 +412,15 @@ export component OpDialogs inherits Rectangle {
                     font-size: 12px;
                 }
                 HorizontalLayout {
-                    alignment: end;
+                    alignment: stretch;
                     spacing: 8px;
-                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.name-cancel(); } }
-                    DlgBtn { label: Tr.dlg-accept; primary: true; enabled: root.vm.name-valid; clicked => { root.name-confirm(); } }
+                    // El foco vive en el TextInput (escribir directo), que maneja su propio Enter.
+                    // Aceptar lleva el anillo de acento como botón por defecto visual.
+                    DlgBtn { label: Tr.dlg-cancel; shortcut: "Esc"; clicked => { root.name-cancel(); } }
+                    DlgBtn {
+                        label: Tr.dlg-accept; shortcut: "Enter"; is-default: root.vm.name-valid;
+                        enabled: root.vm.name-valid; clicked => { root.name-confirm(); }
+                    }
                 }
             }
 
@@ -292,10 +433,19 @@ export component OpDialogs inherits Rectangle {
                 }
                 Text { text: root.vm.paste-name; color: Theme.text; }
                 HorizontalLayout {
-                    alignment: end;
+                    alignment: stretch;
                     spacing: 8px;
-                    DlgBtn { label: Tr.dlg-cancel; clicked => { root.paste-cancel(); } }
-                    DlgBtn { label: Tr.dlg-create; primary: true; clicked => { root.paste-confirm(); } }
+                    // Orden de TAB: [0]=Cancelar, [1]=Crear (default/Enter).
+                    DlgBtn {
+                        label: Tr.dlg-cancel; shortcut: "Esc";
+                        is-default: root.focus-idx == 0;
+                        clicked => { root.paste-cancel(); }
+                    }
+                    DlgBtn {
+                        label: Tr.dlg-create; shortcut: "Enter · C";
+                        is-default: root.focus-idx == 1;
+                        clicked => { root.paste-confirm(); }
+                    }
                 }
             }
 
@@ -316,7 +466,9 @@ export component OpDialogs inherits Rectangle {
                         horizontal-stretch: 1;
                         overflow: elide;
                     }
-                    DlgBtn { label: Tr.dlg-resume; primary: true; clicked => { root.resume-decide(r.id, 0); } }
+                    // Retomar (acción recomendada por fila) lleva el anillo de acento; el modal de
+                    // retomar tiene varias filas, así que no usa el índice de foco global.
+                    DlgBtn { label: Tr.dlg-resume; is-default: true; clicked => { root.resume-decide(r.id, 0); } }
                     DlgBtn { label: Tr.dlg-discard; clicked => { root.resume-decide(r.id, 1); } }
                 }
             }
@@ -331,16 +483,40 @@ export component OpDialogs inherits Rectangle {
     property <int> k: root.vm.kind;
     changed k => {
         if (root.k > 0) {
+            // Resetear "aplicar a todos/todas" al abrir cada modal: estos flags están hoisteados a
+            // root (para que el FocusScope/atajos los lean), así que ya NO se re-crean en false al
+            // desmontarse el modal. Sin este reset, la casilla arrastraría el valor de una operación
+            // anterior (un default destructivo silencioso en la siguiente copia con conflicto).
+            root.conflict-apply-all = false;
+            root.folder-apply-all = false;
             // El modal de nombre (3) enfoca su propio TextInput vía forward-focus; los demás
             // (borrado/conflictos/pegar) necesitan que el FocusScope tome el foco para Enter/Esc.
             name-focus-scope.focus();
+            // Inicializa el índice de foco apuntando al botón SEGURO/recomendado por kind:
+            //   1 (eliminar) → Eliminar (idx 1, confirmación; lo que ya hacía Enter)
+            //   2 (conflicto archivo) → Saltar (idx 1, opción segura, decisión previa)
+            //   4 (pegar) → Crear (idx 1)
+            //   6 (conflicto carpeta) → Saltar (idx 1, opción segura)
+            // Todos comparten idx 1, pero se deja explícito por si cambian los órdenes.
+            if (root.vm.kind == 1) { root.focus-idx = 1; }
+            if (root.vm.kind == 2) { root.focus-idx = 1; }
+            if (root.vm.kind == 4) { root.focus-idx = 1; }
+            if (root.vm.kind == 6) { root.focus-idx = 1; }
         }
     }
 
     // Enfocar el TextInput al abrir el modal de nombre (para escribir directo).
     forward-focus: name-focus-scope;
     name-focus-scope := FocusScope {
-        // Vacío: solo para que Enter/Esc lleguen; el TextInput maneja su propio foco.
+        // El FocusScope recibe el foco al abrir el modal (changed k → focus()). Aquí se manejan:
+        //   - Escape: cancela según el kind.
+        //   - Enter: activa el botón en focus-idx (el del anillo de acento). Para "pedir
+        //     nombre" (3) el TextInput maneja su propio `accepted`, así que aquí no se toca.
+        //   - Tab / Shift+Tab: mueve focus-idx entre los botones del modal (con wrap), de modo
+        //     que el anillo de acento se mueve con él. Se ignora en kinds sin botones navegables.
+        //   - Letras de atajo (fijas, comparadas en minúscula sin importar idioma): disparan el
+        //     MISMO callback que el botón correspondiente. kind 2: s/r/o; kind 6: f/r/s;
+        //     kind 1: d=eliminar; kind 4: c=crear. Son las letras que cada botón muestra.
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 if (root.vm.kind == 1) { root.delete-cancel(); }
@@ -348,17 +524,40 @@ export component OpDialogs inherits Rectangle {
                 if (root.vm.kind == 3) { root.name-cancel(); }
                 if (root.vm.kind == 4) { root.paste-cancel(); }
                 if (root.vm.kind == 6) { root.folder-conflict-cancel(); }
+                return accept;
             }
-            // Enter confirma la acción del modal. Para "pedir nombre" (3) el TextInput ya
-            // maneja su propio `accepted`. En los conflictos, Enter = SALTAR (la opción
-            // segura, no destructiva): kind==2 (archivo) → conflict-decide(1) y kind==6
-            // (carpeta) → folder-conflict-decide(2). Los `false` mantienen el comportamiento
-            // por-ítem (no marca "aplicar a todas"). Borrado (1) y pegar (4) confirman.
+            // Tab / Shift+Tab: navegar el foco entre botones (módulo la cantidad del kind).
+            if (event.text == Key.Tab) {
+                if (root.btn-count() > 0) {
+                    if (event.modifiers.shift) {
+                        root.focus-idx = Math.mod(root.focus-idx + root.btn-count() - 1, root.btn-count());
+                    } else {
+                        root.focus-idx = Math.mod(root.focus-idx + 1, root.btn-count());
+                    }
+                }
+                return accept;
+            }
+            // Enter activa el botón enfocado. En "pedir nombre" (3) el TextInput maneja Enter.
             if (event.text == Key.Return) {
-                if (root.vm.kind == 1) { root.delete-confirm(); }
-                if (root.vm.kind == 2) { root.conflict-decide(1, false); } // Enter = saltar este archivo
-                if (root.vm.kind == 4) { root.paste-confirm(); }
-                if (root.vm.kind == 6) { root.folder-conflict-decide(2, false); } // Enter = saltar esta carpeta
+                if (root.vm.kind != 3) { root.activate-focused(); }
+                return accept;
+            }
+            // Letras de atajo (comparación en minúscula, fija, independiente del idioma).
+            if (root.vm.kind == 1) {
+                if (event.text == "d" || event.text == "D") { root.delete-confirm(); return accept; }
+            }
+            if (root.vm.kind == 2) {
+                if (event.text == "s" || event.text == "S") { root.conflict-decide(1, root.conflict-apply-all); return accept; }
+                if (event.text == "r" || event.text == "R") { root.conflict-rename(); return accept; }
+                if (event.text == "o" || event.text == "O") { root.conflict-decide(0, root.conflict-apply-all); return accept; }
+            }
+            if (root.vm.kind == 4) {
+                if (event.text == "c" || event.text == "C") { root.paste-confirm(); return accept; }
+            }
+            if (root.vm.kind == 6) {
+                if (event.text == "f" || event.text == "F") { root.folder-conflict-decide(0, root.folder-apply-all); return accept; }
+                if (event.text == "r" || event.text == "R") { root.folder-conflict-decide(1, root.folder-apply-all); return accept; }
+                if (event.text == "s" || event.text == "S") { root.folder-conflict-decide(2, root.folder-apply-all); return accept; }
             }
             accept
         }

@@ -84,8 +84,6 @@ component ToolBtn inherits Rectangle {
     in property <image> icon;
     // Si true, dibuja un ícono de TERMINAL con Path (no hay PNG de terminal en los sets).
     in property <bool> draw-terminal: false;
-    // Si true, dibuja un "+" con Path (botón de dividir panel), en vez de un glifo de fuente.
-    in property <bool> draw-plus: false;
     // Si true, dibuja un ícono de LAYOUTS (grilla 2x2) con Path: distingue "Layouts" de "Tabs"
     // (antes compartían el mismo PNG y eran indistinguibles).
     in property <bool> draw-layouts: false;
@@ -105,6 +103,30 @@ component ToolBtn inherits Rectangle {
     in property <bool> draw-eye: false;
     // Si true, dibuja una ESTRELLA (menú de favoritos) con Path + un chevron ▾ a su derecha.
     in property <bool> draw-star: false;
+    // Si true, dibuja un ícono de DIVIDIR PANEL con Path: un marco partido en dos por una línea
+    // vertical (dos paneles lado a lado). Reemplaza al viejo "+" (draw-plus), que parecía "nuevo".
+    in property <bool> draw-split: false;
+    // Si true, dibuja un ícono de APILAR PESTAÑA con Path: dos rectángulos escalonados (una
+    // pestaña sobre otra). Reemplaza el PNG genérico ic-tabs.
+    in property <bool> draw-tabs: false;
+    // Si true, dibuja un ícono de INTERCAMBIAR con Path: dos flechas horizontales opuestas (⇄).
+    // Reemplaza el PNG genérico ic-swap.
+    in property <bool> draw-swap: false;
+    // Si true, dibuja un ícono de CLONAR con Path: dos rectángulos idénticos con offset diagonal
+    // (el clásico de "duplicar"). Reemplaza el PNG genérico ic-clone.
+    in property <bool> draw-clone: false;
+    // Si true, dibuja un ícono de PANEL ESPECIAL con Path: un marco con un panel lateral angosto
+    // resaltado y un "+" pequeño (agregar panel auxiliar). Reemplaza el PNG genérico ic-panel.
+    in property <bool> draw-panel: false;
+    // Si true, dibuja un ícono de NUEVA CARPETA con Path: una carpeta con un "+" en la esquina.
+    // Reemplaza el PNG genérico ic-new-folder.
+    in property <bool> draw-new-folder: false;
+    // Si true, dibuja un ícono de SUBIR NIVEL con Path: una flecha hacia arriba. Reemplaza el
+    // PNG genérico ic-up.
+    in property <bool> draw-up: false;
+    // Si true, dibuja un ícono de CONFIGURACIÓN con Path: un engranaje. Reemplaza el PNG
+    // genérico ic-settings.
+    in property <bool> draw-settings: false;
     // Si false, el botón se ve atenuado y no dispara `clicked` (Atrás/Adelante sin historial).
     in property <bool> enabled: true;
     // Color del ícono dibujado por Path. Atenuado cuando el botón está deshabilitado.
@@ -156,25 +178,6 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 12; y: 10.5; }
             }
         }
-        // "+" dibujado (botón de dividir panel).
-        if root.draw-plus: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: white;
-                stroke-width: 1.8px;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                MoveTo { x: 7; y: 2; }
-                LineTo { x: 7; y: 12; }
-                MoveTo { x: 2; y: 7; }
-                LineTo { x: 12; y: 7; }
-            }
-        }
         // Ícono de layouts dibujado: grilla 2x2.
         if root.draw-layouts: Rectangle {
             width: 16px;
@@ -202,7 +205,8 @@ component ToolBtn inherits Rectangle {
                 LineTo { x: 13; y: 7; }
             }
         }
-        // Ícono de refrescar dibujado: flecha circular (arco + punta).
+        // Ícono de refrescar dibujado: el clásico de recarga = DOS arcos opuestos formando un
+        // círculo, cada uno con su punta de flecha (no un solo arco con palito).
         if root.draw-refresh: Rectangle {
             width: 16px;
             height: 16px;
@@ -211,18 +215,25 @@ component ToolBtn inherits Rectangle {
                 height: 14px;
                 x: 1px;
                 y: 1px;
-                stroke: white;
+                stroke: root.icon-tint;
                 stroke-width: 1.4px;
                 fill: transparent;
                 viewbox-width: 14;
                 viewbox-height: 14;
-                // Arco (casi círculo, abierto arriba a la derecha).
-                MoveTo { x: 11.5; y: 4; }
-                ArcTo { radius-x: 5; radius-y: 5; x: 3; y: 5; sweep: false; large-arc: true; }
-                // Punta de flecha en el extremo del arco.
-                MoveTo { x: 11.5; y: 1.5; }
-                LineTo { x: 11.5; y: 4; }
-                LineTo { x: 9; y: 4; }
+                // Arco superior (de izquierda-arriba a derecha-arriba, por encima del centro).
+                MoveTo { x: 2; y: 5.5; }
+                ArcTo { radius-x: 5; radius-y: 5; x: 11.5; y: 4.5; sweep: true; large-arc: false; }
+                // Punta de flecha del arco superior (apunta a la derecha-abajo, hacia el giro).
+                MoveTo { x: 9; y: 4.5; }
+                LineTo { x: 11.5; y: 4.5; }
+                LineTo { x: 11.5; y: 2; }
+                // Arco inferior (de derecha-abajo a izquierda-abajo, por debajo del centro).
+                MoveTo { x: 12; y: 8.5; }
+                ArcTo { radius-x: 5; radius-y: 5; x: 2.5; y: 9.5; sweep: true; large-arc: false; }
+                // Punta de flecha del arco inferior (apunta a la izquierda-arriba, hacia el giro).
+                MoveTo { x: 5; y: 9.5; }
+                LineTo { x: 2.5; y: 9.5; }
+                LineTo { x: 2.5; y: 12; }
             }
         }
         // Lupa dibujada: círculo (la lente) + mango diagonal.
@@ -406,7 +417,268 @@ component ToolBtn inherits Rectangle {
                 Close { }
             }
         }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-plus && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye && !root.draw-star: Text {
+        // Dividir panel dibujado: un marco partido en DOS por una línea vertical central (dos
+        // paneles lado a lado). Comunica "dividir en dos paneles" (antes era un "+" ambiguo).
+        if root.draw-split: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Marco exterior.
+                MoveTo { x: 1; y: 2; }
+                LineTo { x: 13; y: 2; }
+                LineTo { x: 13; y: 12; }
+                LineTo { x: 1; y: 12; }
+                Close { }
+                // Divisoria vertical central (dos paneles).
+                MoveTo { x: 7; y: 2; }
+                LineTo { x: 7; y: 12; }
+            }
+        }
+        // Apilar pestaña dibujado: dos rectángulos escalonados (una pestaña sobre otra). El de
+        // atrás-arriba asoma desplazado; el de adelante-abajo está completo.
+        if root.draw-tabs: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Pestaña de atrás (arriba-derecha, desplazada).
+                MoveTo { x: 5; y: 2; }
+                LineTo { x: 12.5; y: 2; }
+                LineTo { x: 12.5; y: 9; }
+                // Pestaña de adelante (abajo-izquierda, completa, encima de la otra).
+                MoveTo { x: 1.5; y: 5; }
+                LineTo { x: 9; y: 5; }
+                LineTo { x: 9; y: 12.5; }
+                LineTo { x: 1.5; y: 12.5; }
+                Close { }
+            }
+        }
+        // Intercambiar dibujado: dos flechas horizontales opuestas (⇄). La de arriba apunta a la
+        // derecha, la de abajo a la izquierda. Comunica "intercambiar entre dos".
+        if root.draw-swap: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Flecha superior (→).
+                MoveTo { x: 2; y: 5; }
+                LineTo { x: 12; y: 5; }
+                MoveTo { x: 9; y: 2; }
+                LineTo { x: 12; y: 5; }
+                LineTo { x: 9; y: 8; }
+                // Flecha inferior (←).
+                MoveTo { x: 12; y: 9.5; }
+                LineTo { x: 2; y: 9.5; }
+                MoveTo { x: 5; y: 6.5; }
+                LineTo { x: 2; y: 9.5; }
+                LineTo { x: 5; y: 12.5; }
+            }
+        }
+        // Clonar dibujado: dos rectángulos idénticos con offset diagonal (el clásico de
+        // "duplicar/copiar"). Distinto de las pestañas: aquí ambos son iguales y se solapan.
+        if root.draw-clone: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Rectángulo de atrás (arriba-izquierda).
+                MoveTo { x: 2; y: 2; }
+                LineTo { x: 9; y: 2; }
+                LineTo { x: 9; y: 9; }
+                LineTo { x: 2; y: 9; }
+                Close { }
+                // Rectángulo de adelante (abajo-derecha, mismo tamaño, offset diagonal).
+                MoveTo { x: 5; y: 5; }
+                LineTo { x: 12; y: 5; }
+                LineTo { x: 12; y: 12; }
+                LineTo { x: 5; y: 12; }
+                Close { }
+            }
+        }
+        // Panel especial dibujado: un marco con una columna lateral angosta resaltada (el panel
+        // auxiliar) y un "+" pequeño dentro de ella (agregar). Se distingue del dividir-panel:
+        // aquí una sola columna fina a un lado, no una mitad-mitad.
+        if root.draw-panel: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Marco exterior.
+                MoveTo { x: 1; y: 2; }
+                LineTo { x: 13; y: 2; }
+                LineTo { x: 13; y: 12; }
+                LineTo { x: 1; y: 12; }
+                Close { }
+                // Divisoria de la columna lateral angosta (panel auxiliar a la izquierda).
+                MoveTo { x: 5.5; y: 2; }
+                LineTo { x: 5.5; y: 12; }
+                // "+" pequeño dentro de la columna lateral (agregar panel).
+                MoveTo { x: 3.25; y: 5.5; }
+                LineTo { x: 3.25; y: 8.5; }
+                MoveTo { x: 1.75; y: 7; }
+                LineTo { x: 4.75; y: 7; }
+            }
+        }
+        // Nueva carpeta dibujada: una carpeta (lengüeta + cuerpo) con un "+" en la esquina
+        // inferior derecha (crear). Reemplaza el PNG genérico.
+        if root.draw-new-folder: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.3px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Carpeta: lengüeta + cuerpo.
+                MoveTo { x: 1; y: 4; }
+                LineTo { x: 5; y: 4; }
+                LineTo { x: 6.5; y: 6; }
+                LineTo { x: 13; y: 6; }
+                LineTo { x: 13; y: 12; }
+                LineTo { x: 1; y: 12; }
+                Close { }
+                // "+" en la esquina inferior derecha (crear).
+                MoveTo { x: 10.5; y: 8; }
+                LineTo { x: 10.5; y: 11; }
+                MoveTo { x: 9; y: 9.5; }
+                LineTo { x: 12; y: 9.5; }
+            }
+        }
+        // Subir nivel dibujado: una flecha simple hacia arriba (ir a la carpeta padre).
+        if root.draw-up: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.5px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Asta vertical.
+                MoveTo { x: 7; y: 12; }
+                LineTo { x: 7; y: 2.5; }
+                // Punta de flecha.
+                MoveTo { x: 3; y: 6.5; }
+                LineTo { x: 7; y: 2.5; }
+                LineTo { x: 11; y: 6.5; }
+            }
+        }
+        // Configuración dibujada: un engranaje (círculo central + 8 dientes). Reemplaza el PNG.
+        if root.draw-settings: Rectangle {
+            width: 16px;
+            height: 16px;
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.2px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                // Dientes del engranaje (4 pares en cruz + 4 en diagonal, como rayos cortos).
+                MoveTo { x: 7; y: 1; }
+                LineTo { x: 7; y: 3; }
+                MoveTo { x: 7; y: 11; }
+                LineTo { x: 7; y: 13; }
+                MoveTo { x: 1; y: 7; }
+                LineTo { x: 3; y: 7; }
+                MoveTo { x: 11; y: 7; }
+                LineTo { x: 13; y: 7; }
+                MoveTo { x: 2.75; y: 2.75; }
+                LineTo { x: 4.2; y: 4.2; }
+                MoveTo { x: 9.8; y: 9.8; }
+                LineTo { x: 11.25; y: 11.25; }
+                MoveTo { x: 11.25; y: 2.75; }
+                LineTo { x: 9.8; y: 4.2; }
+                MoveTo { x: 4.2; y: 9.8; }
+                LineTo { x: 2.75; y: 11.25; }
+            }
+            // Anillo del engranaje (círculo exterior, dos semiarcos).
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.2px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                MoveTo { x: 11; y: 7; }
+                ArcTo { radius-x: 4; radius-y: 4; x: 3; y: 7; sweep: false; large-arc: false; }
+                ArcTo { radius-x: 4; radius-y: 4; x: 11; y: 7; sweep: false; large-arc: false; }
+                Close { }
+            }
+            // Núcleo (círculo central pequeño).
+            Path {
+                width: 14px;
+                height: 14px;
+                x: 1px;
+                y: 1px;
+                stroke: root.icon-tint;
+                stroke-width: 1.2px;
+                fill: transparent;
+                viewbox-width: 14;
+                viewbox-height: 14;
+                MoveTo { x: 8.5; y: 7; }
+                ArcTo { radius-x: 1.5; radius-y: 1.5; x: 5.5; y: 7; sweep: false; large-arc: false; }
+                ArcTo { radius-x: 1.5; radius-y: 1.5; x: 8.5; y: 7; sweep: false; large-arc: false; }
+                Close { }
+            }
+        }
+        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye && !root.draw-star && !root.draw-split && !root.draw-tabs && !root.draw-swap && !root.draw-clone && !root.draw-panel && !root.draw-new-folder && !root.draw-up && !root.draw-settings: Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -935,10 +1207,11 @@ export component AppWindow inherits Window {
     callback palette-run(int);               // ejecutar el resultado de índice i (Rust)
     callback palette-dismiss();              // cerrar la paleta sin ejecutar (Esc / clic fuera)
     // Menú de Layouts (F4): plantillas de disposición. `layout-rows` lo llena Rust.
-    property <bool> layout-menu-open: false;
+    // in-out para que el atajo de teclado (Ctrl+Shift+L) pueda abrirlo desde Rust.
+    in-out property <bool> layout-menu-open: false;
     // x de centro del botón de Layouts, capturada al abrir para anclar el menú flotante
-    // (mismo patrón que el menú de historial / discos).
-    property <length> layout-menu-x: 0;
+    // (mismo patrón que el menú de historial / discos). in-out: la fija el botón o el atajo.
+    in-out property <length> layout-menu-x: 0;
     // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
     property <bool> term-menu-open: false;
     // ¿WSL / Windows Terminal disponibles? Rust lo setea para mostrar u ocultar esas entradas.
@@ -987,15 +1260,6 @@ export component AppWindow inherits Window {
     property <bool> layout-save-open: false;
     property <string> layout-save-name: "";
 
-    // --- Íconos de acción de la toolbar (6B) ---
-    // Los setea Rust desde el IconCache al arrancar y al cambiar de set de íconos.
-    in property <image> ic-up;
-    in property <image> ic-panel;
-    in property <image> ic-swap;
-    in property <image> ic-clone;
-    in property <image> ic-tabs;
-    in property <image> ic-settings;
-    in property <image> ic-new-folder;
     // (add-pane / layouts / terminal / refresh / eject vuelven a dibujarse con Path —modelo
     //  flat—, así que ya no hay propiedades de imagen para esos botones.)
     // Tira de unidades de disco de la toolbar (6-fix): label = letra, icon = ícono de disco,
@@ -1059,9 +1323,9 @@ export component AppWindow inherits Window {
                 padding: 4px;
                 spacing: 6px;
                 // --- Grupo NAVEGACIÓN ---
-                // Atrás / Adelante / Inicio: navegación tipo navegador. Íconos dibujados con Path
-                // (el render por software no pinta glifos de fuente). Atrás/Adelante se atenúan y
-                // no responden cuando no hay historial en esa dirección.
+                // Atrás / Adelante / Inicio / Subir: navegación tipo navegador. Íconos dibujados
+                // con Path (el render por software no pinta glifos de fuente). Atrás/Adelante se
+                // atenúan y no responden cuando no hay historial en esa dirección.
                 ToolBtn {
                     draw-back: true;
                     icon-only: true;
@@ -1102,106 +1366,21 @@ export component AppWindow inherits Window {
                     clicked => { root.go-home(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                // Subir un nivel (carpeta padre). Flecha hacia arriba dibujada con Path.
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;
-                    icon: root.ic-up;
+                    draw-up: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 64px;
                     clicked => { root.go-up(); }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
                 ToolSep { }
-                // --- Grupo PANELES ---
-                ToolBtn {
-                    // Dividir el panel: nuevo panel de archivos. "+" dibujado (no glifo de fuente).
-                    label: "";
-                    draw-plus: true;
-                    tip: Tr.toolbar-add-tip;
-                    highlight: root.dir-menu-open;
-                    btn-width: 34px;
-                    clicked => { root.dir-menu-open = !root.dir-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolBtn {
-                    label: Tr.toolbar-panel;
-                    tip: Tr.toolbar-panel-tip;
-                    icon: root.ic-panel;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
-                    highlight: root.add-menu-open;
-                    clicked => { root.add-menu-open = !root.add-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolBtn {
-                    label: Tr.toolbar-swap;
-                    tip: Tr.toolbar-swap-tip;
-                    icon: root.ic-swap;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
-                    clicked => { root.swap-panes(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolBtn {
-                    label: Tr.toolbar-clone;
-                    tip: Tr.toolbar-clone-tip;
-                    icon: root.ic-clone;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 72px;
-                    clicked => { root.clone-pane(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolBtn {
-                    label: Tr.toolbar-tabs;
-                    tip: Tr.toolbar-tabs-tip;
-                    icon: root.ic-tabs;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
-                    clicked => { root.stack-pane(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                // Menú de plantillas de disposición (F4). Ícono propio (grilla 2x2) para no
-                // confundirse con "Tabs".
-                layouts-btn := ToolBtn {
-                    label: Tr.toolbar-layouts;
-                    tip: Tr.toolbar-layouts-tip;
-                    draw-layouts: true;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 84px;
-                    highlight: root.layout-menu-open;
-                    clicked => {
-                        // Anclar el menú al botón: capturar su x de centro antes de abrir.
-                        root.layout-menu-x = layouts-btn.absolute-position.x + layouts-btn.width / 2;
-                        root.layout-menu-open = !root.layout-menu-open;
-                    }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolSep { }
-                // --- Grupo ACCIONES ---
-                // Nueva carpeta en el panel activo (abre el modal multilínea). Ícono propio.
-                ToolBtn {
-                    label: Tr.toolbar-new-folder;
-                    tip: Tr.toolbar-new-folder-tip;
-                    icon: root.ic-new-folder;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 110px;
-                    clicked => { root.new-folder-toolbar(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
-                // Ícono de terminal dibujado (no hay PNG de terminal en los sets).
-                ToolBtn {
-                    label: Tr.toolbar-terminal;
-                    tip: Tr.toolbar-terminal-tip;
-                    draw-terminal: true;
-                    icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
-                    highlight: root.term-menu-open;
-                    clicked => { root.term-menu-open = !root.term-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
-                }
-                ToolSep { }
-                // --- Grupo SISTEMA ---
+                // --- Grupo VISTA / BUSCAR ---
+                // Herramientas para ver y encontrar: buscar, visibilidad de archivos, recientes,
+                // favoritos. Todas operan sobre lo que se muestra; van juntas (Buscar ya no está
+                // junto a Config).
                 // Buscar en la carpeta y subcarpetas (Ctrl+F). La lupa abre/cierra el panel.
                 ToolBtn {
                     draw-search: true;
@@ -1255,10 +1434,110 @@ export component AppWindow inherits Window {
                     }
                     hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
                 }
+                ToolSep { }
+                // --- Grupo PANELES ---
+                // Todo lo que manipula la disposición de paneles, junto: dividir, panel auxiliar,
+                // intercambiar, clonar, apilar en pestañas, plantillas de disposición.
+                ToolBtn {
+                    // Dividir el panel en dos: nuevo panel de archivos. Ícono "panel partido"
+                    // dibujado con Path (antes era un "+" ambiguo que parecía "nuevo").
+                    label: "";
+                    draw-split: true;
+                    tip: Tr.toolbar-add-tip;
+                    highlight: root.dir-menu-open;
+                    btn-width: 34px;
+                    clicked => { root.dir-menu-open = !root.dir-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Panel auxiliar (árbol / propiedades / etc.): ícono "panel con columna lateral".
+                ToolBtn {
+                    label: Tr.toolbar-panel;
+                    tip: Tr.toolbar-panel-tip;
+                    draw-panel: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
+                    highlight: root.add-menu-open;
+                    clicked => { root.add-menu-open = !root.add-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Intercambiar paneles: ícono de dos flechas opuestas (⇄) dibujado con Path.
+                ToolBtn {
+                    label: Tr.toolbar-swap;
+                    tip: Tr.toolbar-swap-tip;
+                    draw-swap: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
+                    clicked => { root.swap-panes(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Clonar el panel: ícono de dos rectángulos con offset (duplicar) dibujado con Path.
+                ToolBtn {
+                    label: Tr.toolbar-clone;
+                    tip: Tr.toolbar-clone-tip;
+                    draw-clone: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 72px;
+                    clicked => { root.clone-pane(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Apilar en pestañas: ícono de dos rectángulos escalonados (pestañas) con Path.
+                ToolBtn {
+                    label: Tr.toolbar-tabs;
+                    tip: Tr.toolbar-tabs-tip;
+                    draw-tabs: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
+                    clicked => { root.stack-pane(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Menú de plantillas de disposición (F4). Ícono propio (grilla 2x2) para no
+                // confundirse con "Tabs".
+                layouts-btn := ToolBtn {
+                    label: Tr.toolbar-layouts;
+                    tip: Tr.toolbar-layouts-tip;
+                    draw-layouts: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 84px;
+                    highlight: root.layout-menu-open;
+                    clicked => {
+                        // Anclar el menú al botón: capturar su x de centro antes de abrir.
+                        root.layout-menu-x = layouts-btn.absolute-position.x + layouts-btn.width / 2;
+                        root.layout-menu-open = !root.layout-menu-open;
+                    }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                ToolSep { }
+                // --- Grupo ACCIONES ---
+                // Nueva carpeta en el panel activo (abre el modal multilínea). Ícono "carpeta +"
+                // dibujado con Path.
+                ToolBtn {
+                    label: Tr.toolbar-new-folder;
+                    tip: Tr.toolbar-new-folder-tip;
+                    draw-new-folder: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 110px;
+                    clicked => { root.new-folder-toolbar(); }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
+                // Ícono de terminal dibujado (no hay PNG de terminal en los sets).
+                ToolBtn {
+                    label: Tr.toolbar-terminal;
+                    tip: Tr.toolbar-terminal-tip;
+                    draw-terminal: true;
+                    icon-only: root.settings-vm.icon-only;
+                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
+                    highlight: root.term-menu-open;
+                    clicked => { root.term-menu-open = !root.term-menu-open; }
+                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                }
+                ToolSep { }
+                // --- Grupo SISTEMA ---
+                // Configuración de la app. Ícono de engranaje dibujado con Path.
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.toolbar-config-tip;
-                    icon: root.ic-settings;
+                    draw-settings: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.open-config(); }
