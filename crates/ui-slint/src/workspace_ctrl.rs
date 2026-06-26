@@ -7353,6 +7353,110 @@ mod simular_usuario {
         );
     }
 
+    // =============== 1c. Ciclo operación → refresh NO deja la vista inconsistente ===============
+
+    /// REGRESIÓN integral del bug de F5 en su escenario REAL: el usuario opera (crea/copia/borra)
+    /// y luego refresca. Crear varios archivos y refrescar varias veces NO debe duplicar ni perder
+    /// filas: la vista siempre refleja EXACTAMENTE lo que hay en disco.
+    #[test]
+    fn crear_y_refrescar_repetido_mantiene_la_vista_consistente() {
+        let work = tempfile::tempdir().unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+        assert_eq!(c.ws.active_files().unwrap().entries.len(), 0);
+
+        // Crear 4 archivos por fuera y refrescar: la vista debe tener exactamente 4.
+        for i in 0..4 {
+            std::fs::write(work.path().join(format!("f{i}.txt")), b"x").unwrap();
+        }
+        assert!(c.refresh_active());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().entries.len(), 4);
+
+        // Refrescar 5 veces más sin cambios: sigue en 4 (no acumula).
+        for _ in 0..5 {
+            assert!(c.refresh_active());
+            assert!(drain(&mut c));
+        }
+        assert_eq!(
+            c.ws.active_files().unwrap().entries.len(),
+            4,
+            "refrescos repetidos no deben duplicar ni perder filas"
+        );
+
+        // Agregar uno más y refrescar: pasa a 5.
+        std::fs::write(work.path().join("f4.txt"), b"x").unwrap();
+        assert!(c.refresh_active());
+        assert!(drain(&mut c));
+        assert_eq!(c.ws.active_files().unwrap().entries.len(), 5);
+    }
+
+    /// REGRESIÓN: copiar un archivo al OTRO panel y luego refrescar el panel DESTINO no debe
+    /// duplicar la fila recién llegada. (El destino se re-lista tras la operación; este test cierra
+    /// el ciclo operación-en-un-panel → refresh-del-otro.)
+    #[test]
+    fn copiar_al_otro_panel_y_refrescar_destino_no_duplica() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        c.set_area(area());
+        c.ws.set_active(origin);
+
+        // Copiar al otro panel.
+        c.ws.active_files_mut().unwrap().select_all();
+        c.op_to_other(false);
+        assert!(drain_ops(&mut c));
+
+        // Refrescar el destino dos veces: la fila copiada aparece UNA sola vez.
+        c.ws.set_active(dest);
+        for _ in 0..2 {
+            assert!(c.refresh_active());
+            assert!(drain(&mut c));
+        }
+        let dest_entries = c.ws.active_files().unwrap().entries.len();
+        assert_eq!(
+            dest_entries, 1,
+            "el destino tiene 1 archivo, no duplicado tras refrescar"
+        );
+    }
+
+    /// REGRESIÓN: eliminar un archivo (permanente, en el tempdir) y refrescar debe BAJAR el conteo,
+    /// no dejar la fila fantasma. Cierra el ciclo eliminar → refresh.
+    #[test]
+    fn eliminar_y_refrescar_baja_el_conteo() {
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("uno.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("dos.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("tres.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+        assert_eq!(c.ws.active_files().unwrap().entries.len(), 3);
+
+        // Seleccionar "uno.txt" y eliminarlo permanente (queda en el tempdir, no en la papelera).
+        let pos = active_pos_of(&c, "uno.txt").expect("uno.txt está en la vista");
+        c.ws.active_files_mut().unwrap().select_single(pos);
+        c.op_delete(true);
+        c.ops.delete_confirm();
+        assert!(drain_ops(&mut c));
+        c.refresh_active();
+        assert!(drain(&mut c));
+
+        assert_eq!(
+            c.ws.active_files().unwrap().entries.len(),
+            2,
+            "tras eliminar y refrescar, quedan 2 archivos"
+        );
+        assert!(
+            active_pos_of(&c, "uno.txt").is_none(),
+            "el archivo eliminado ya no está en la vista"
+        );
+    }
+
     // ============================== 2. Crear archivo con Ctrl+N ===============================
 
     /// GESTO: Ctrl+N (atajo "nuevo archivo"), nombre, confirmar. RESULTADO: el archivo existe.
