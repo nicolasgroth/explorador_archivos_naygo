@@ -463,6 +463,12 @@ pub fn recent_rows(recents: &RecentDirs, folder_icon: &slint::Image) -> Vec<NavR
 
 /// Fila del historial (espejo de `HistRow` de Slint): etiqueta + cuándo + cuántas
 /// acciones + si AÚN es deshacible (validado contra el disco) + motivo si no lo es.
+///
+/// `undone` distingue el caso "ya lo deshiciste" (la acción se aplicó) del caso
+/// "no es deshacible por su tipo / ya no aplica" (p. ej. un Delete, o el destino
+/// cambió). Ambos dejan `undoable = false`, pero la UI los pinta distinto: el primero
+/// como "Deshecho ✓" (en color de acento, confirmación de que se aplicó), el segundo
+/// con el botón inerte y el motivo de tooltip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistRow {
     pub id: u64,
@@ -470,18 +476,24 @@ pub struct HistRow {
     pub when: String,
     pub count: i32,
     pub undoable: bool,
+    /// `true` si esta entrada YA se deshizo (acción aplicada). Mutuamente excluyente
+    /// con `undoable` (una entrada deshecha no se vuelve a ofrecer).
+    pub undone: bool,
     pub reason: String,
 }
 
 /// Convierte el historial de deshacer a filas, validando cada entrada contra el disco
 /// (igual que el panel egui: deshabilita "Deshacer" y muestra el motivo si ya no aplica).
-/// Las entradas ya deshechas no se ofrecen (undoable = false con motivo).
+/// Las entradas ya deshechas no se ofrecen (undoable = false, `undone = true`).
 pub fn history_rows(entries: &[UndoEntry]) -> Vec<HistRow> {
     entries
         .iter()
         .map(|e| {
+            // Tres estados: deshecha (undone), deshacible (undoable), o trabada/no-deshacible
+            // (ninguna de las dos, con motivo). `undone` tiene prioridad: si ya se aplicó, no
+            // importa que el inverso "siga válido", no se vuelve a ofrecer.
             let (undoable, reason) = if e.undone {
-                (false, "Ya deshecho".to_string())
+                (false, String::new())
             } else {
                 match undo::validate(&e.actions) {
                     Ok(()) => (true, String::new()),
@@ -494,6 +506,7 @@ pub fn history_rows(entries: &[UndoEntry]) -> Vec<HistRow> {
                 when: format!("{}", e.when_epoch_secs),
                 count: e.actions.len() as i32,
                 undoable,
+                undone: e.undone,
                 reason,
             }
         })
@@ -844,6 +857,60 @@ mod tests {
     #[test]
     fn historial_vacio_da_filas_vacias() {
         assert!(history_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn history_rows_distingue_deshacible_de_ya_deshecho() {
+        // Tres entradas: una deshacible (inverso válido contra disco real), una ya deshecha, y una
+        // trabada (el inverso ya no aplica: la ruta no existe). `history_rows` las clasifica:
+        //   deshacible → undoable=true, undone=false
+        //   ya deshecho → undoable=false, undone=true (la UI pinta "Deshecho ✓")
+        //   trabada     → undoable=false, undone=false, con motivo
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, b"x").unwrap();
+
+        let deshacible = UndoEntry {
+            id: 1,
+            label: "Mover".into(),
+            when_epoch_secs: 0,
+            // Mandar `real.txt` a la papelera es un inverso válido (el archivo existe).
+            actions: vec![undo::UndoAction::TrashCreated { path: real.clone() }],
+            undone: false,
+        };
+        let ya_deshecho = UndoEntry {
+            id: 2,
+            label: "Copiar".into(),
+            when_epoch_secs: 0,
+            actions: vec![undo::UndoAction::TrashCreated { path: real }],
+            undone: true,
+        };
+        let trabada = UndoEntry {
+            id: 3,
+            label: "Mover".into(),
+            when_epoch_secs: 0,
+            // El inverso apunta a una ruta inexistente → validate falla → no deshacible (no deshecho).
+            actions: vec![undo::UndoAction::TrashCreated {
+                path: dir.path().join("no_existe.txt"),
+            }],
+            undone: false,
+        };
+
+        let rows = history_rows(&[deshacible, ya_deshecho, trabada]);
+        assert_eq!(rows.len(), 3);
+        // Deshacible.
+        assert!(rows[0].undoable && !rows[0].undone, "id1 es deshacible");
+        // Ya deshecho: NO deshacible, pero marcado undone (la UI lo distingue de la trabada).
+        assert!(
+            !rows[1].undoable && rows[1].undone,
+            "id2 ya se deshizo (undone=true)"
+        );
+        // Trabada: ni deshacible ni deshecha, con motivo.
+        assert!(
+            !rows[2].undoable && !rows[2].undone,
+            "id3 no es deshacible por estado, NO por haberse deshecho"
+        );
+        assert!(!rows[2].reason.is_empty(), "la trabada explica el motivo");
     }
 
     #[test]

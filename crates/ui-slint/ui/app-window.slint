@@ -1,7 +1,7 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
 import { LineEdit, ListView } from "std-widgets.slint";
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, OpFileVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { ColumnMenu } from "column-menu.slint";
@@ -13,6 +13,7 @@ import { PreviewPanel } from "preview-panel.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { MessageModal } from "message-modal.slint";
 import { OpsPanel } from "ops-panel.slint";
+import { OpFileListModal } from "op-file-list-modal.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
@@ -1146,6 +1147,13 @@ export component AppWindow inherits Window {
     callback op-pause(int);
     callback op-resume(int);
     callback op-skip(int);
+    // Popup "Archivos de la operación": el enlace "Ver N archivos" de una fila del historial pide
+    // a Rust la lista completa (op-show-files con el id de la op); Rust llena `op-file-list` +
+    // `op-file-list-label` y abre el modal poniendo `op-file-list-open`.
+    callback op-show-files(int);
+    in property <[OpFileVm]> op-file-list;
+    in property <string> op-file-list-label;
+    in-out property <bool> op-file-list-open;
     in property <[ResumeRowVm]> resume-rows;
     callback resume-decide(string, int);
     callback delete-confirm();
@@ -1824,6 +1832,7 @@ export component AppWindow inherits Window {
                         resume(i) => { root.op-resume(i); }
                         skip(i) => { root.op-skip(i); }
                         cancel(i) => { root.op-cancel(i); }
+                        show-files(i) => { root.op-show-files(i); }
                     }
                 }
             }
@@ -2565,5 +2574,13 @@ export component AppWindow inherits Window {
         vm: root.message;
         message-confirm() => { root.message-confirm(); }
         message-cancel() => { root.message-cancel(); }
+    }
+
+    // Popup con la lista completa de archivos de una op (lo abre "Ver N archivos" del historial).
+    OpFileListModal {
+        open: root.op-file-list-open;
+        op-label: root.op-file-list-label;
+        rows: root.op-file-list;
+        close() => { root.op-file-list-open = false; }
     }
 }

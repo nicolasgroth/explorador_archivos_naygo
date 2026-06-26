@@ -94,6 +94,12 @@ where
     tr.set_ops_remaining(c.t("ops.remaining").into());
     tr.set_ops_waiting(c.t("ops.waiting").into());
     tr.set_ops_calculating(c.t("ops.calculating").into());
+    tr.set_ops_view_files(c.t("ops.view_files").into());
+    tr.set_ops_files_word(c.t("ops.files_word").into());
+    tr.set_ops_file_list_title(c.t("ops.file_list_title").into());
+    tr.set_ops_file_skipped(c.t("ops.file_skipped").into());
+    tr.set_ops_file_failed(c.t("ops.file_failed").into());
+    tr.set_ops_close(c.t("ops.close").into());
     // Encabezados de columnas.
     tr.set_col_name(c.t("slint.col.name").into());
     tr.set_col_ext(c.t("slint.col.ext").into());
@@ -232,6 +238,7 @@ where
     tr.set_history_title(c.t("pane.history.title").into());
     tr.set_history_empty(c.t("slint.history.empty").into());
     tr.set_history_undo(c.t("slint.history.undo").into());
+    tr.set_history_undone(c.t("slint.history.undone").into());
     tr.set_fav_title(c.t("pane.favorites.title").into());
     tr.set_fav_empty(c.t("slint.fav.empty").into());
     tr.set_fav_recents(c.t("slint.fav.recents").into());

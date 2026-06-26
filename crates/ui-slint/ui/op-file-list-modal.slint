@@ -1,0 +1,132 @@
+// Naygo — modal con la lista completa de archivos de una operación terminada.
+// Lo abre el enlace "Ver N archivos" de una fila del historial del panel Operaciones
+// cuando la op procesó muchos archivos (3+). Mismo look que los demás modales:
+// velo + tarjeta centrada con scroll. Cada fila pinta el nombre y, si no fue "hecho",
+// su estado (saltado/fallido) con color.
+// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+import { ListView } from "std-widgets.slint";
+import { OpFileVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component DlgBtn inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    width: txt.preferred-width + 24px;
+    height: 28px;
+    border-radius: 4px;
+    background: touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+    txt := Text {
+        text: root.label;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component OpFileListModal inherits Rectangle {
+    in property <bool> open;
+    in property <string> op-label;      // etiqueta de la op (subtítulo), p. ej. "Mover → D:\x"
+    in property <[OpFileVm]> rows;
+    callback close();
+
+    visible: root.open;
+    background: #000000aa;
+
+    // Velo: clic fuera de la tarjeta = cerrar.
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(520px, parent.width - 48px);
+        height: min(440px, parent.height - 48px);
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 8px;
+        // Captura los clics dentro de la tarjeta (no propaga al velo).
+        TouchArea {}
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            // Título + subtítulo (la etiqueta de la op).
+            HorizontalLayout {
+                spacing: 10px;
+                Rectangle {
+                    width: 3px;
+                    border-radius: 1.5px;
+                    background: Theme.accent;
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: Tr.ops-file-list-title;
+                        color: white;
+                        font-size: 15px;
+                        font-weight: 600;
+                    }
+                    if root.op-label != "": Text {
+                        text: root.op-label;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // Lista con scroll de los nombres de archivo (+ estado si no fue "hecho").
+            ListView {
+                vertical-stretch: 1;
+                for f in root.rows: Rectangle {
+                    height: 24px;
+                    HorizontalLayout {
+                        padding-left: 4px;
+                        padding-right: 4px;
+                        spacing: 8px;
+                        Text {
+                            text: f.name;
+                            color: f.status == 2 ? Theme.error : Theme.text;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        // Etiqueta de estado a la derecha solo cuando NO fue "hecho".
+                        if f.status != 0: Text {
+                            text: f.status == 1 ? Tr.ops-file-skipped : Tr.ops-file-failed;
+                            color: f.status == 1 ? Theme.text-dim : Theme.error;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                DlgBtn {
+                    label: Tr.ops-close;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+    }
+
+    // Esc cierra.
+    forward-focus: fl-focus;
+    fl-focus := FocusScope {
+        enabled: root.open;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { root.close(); }
+            accept
+        }
+    }
+}

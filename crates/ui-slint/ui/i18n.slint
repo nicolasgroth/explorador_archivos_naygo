@@ -72,6 +72,13 @@ export global Tr {
     in property <string> ops-remaining: "Restante";
     in property <string> ops-waiting: "en espera";
     in property <string> ops-calculating: "Calculando…";
+    // Detalle de archivos de una op terminada (nombres inline + popup con la lista).
+    in property <string> ops-view-files: "Ver";          // enlace "Ver N archivos"
+    in property <string> ops-files-word: "archivos";       // sustantivo del enlace
+    in property <string> ops-file-list-title: "Archivos de la operación";
+    in property <string> ops-file-skipped: "saltado";
+    in property <string> ops-file-failed: "fallido";
+    in property <string> ops-close: "Cerrar";
 
     // Encabezados de columnas (file-panel).
     in property <string> col-name: "Nombre";
@@ -246,6 +253,7 @@ export global Tr {
     in property <string> history-title: "Historial de acciones";
     in property <string> history-empty: "Sin operaciones todavía";
     in property <string> history-undo: "Deshacer";
+    in property <string> history-undone: "Deshecho ✓";
     in property <string> fav-title: "Favoritos";
     in property <string> fav-empty: "Sin favoritos (Ctrl+D)";
     in property <string> fav-recents: "Recientes";

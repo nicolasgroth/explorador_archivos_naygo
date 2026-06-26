@@ -398,29 +398,64 @@ component QueuedRow inherits Rectangle {
     }
 }
 
-// Fila de HISTORIAL: muestra el `status` ya formateado.
+// Fila de HISTORIAL: el `status` ya formateado + el detalle de QUÉ archivos se procesaron.
+// El detalle va en una segunda línea: si fueron 1-2 archivos, sus nombres inline; si fueron más,
+// un enlace "Ver N archivos" que abre el popup con la lista completa (callback `show-files`).
 component HistoryRow inherits Rectangle {
     in property <OpRowVm> op;
-    height: 28px;
-    HorizontalLayout {
+    callback show-files(int);
+    // Alto adaptable: 28px si no hay detalle, 44px si hay segunda línea (nombres o enlace).
+    height: (root.op.files-summary != "" || root.op.has-file-list) ? 44px : 28px;
+    VerticalLayout {
         padding-left: 9px;
         padding-right: 9px;
-        spacing: 8px;
-        Text {
-            text: root.op.label;
-            color: Theme.text-dim;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        spacing: 1px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.op.label;
+                color: Theme.text-dim;
+                font-size: 11px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.op.status;
+                color: Theme.text-dim;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+        // Segunda línea: nombres inline (1-2) o el enlace "Ver N archivos" (3+).
+        if root.op.files-summary != "": Text {
+            text: root.op.files-summary;
+            color: Theme.text;
             font-size: 11px;
-            font-weight: 600;
-            vertical-alignment: center;
             overflow: elide;
         }
-        Text {
-            text: root.op.status;
-            color: Theme.text-dim;
-            font-size: 11px;
-            vertical-alignment: center;
+        if root.op.has-file-list: Rectangle {
             horizontal-stretch: 1;
-            overflow: elide;
+            height: 16px;
+            HorizontalLayout {
+                alignment: start;
+                link := Text {
+                    // "Ver N archivos": compone Tr + el conteo (no se traduce el número).
+                    text: Tr.ops-view-files + " " + root.op.files-done-count + " " + Tr.ops-files-word;
+                    color: link-touch.has-hover ? Theme.accent : Theme.text-dim;
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+            link-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.show-files(root.op.index); }
+            }
         }
     }
 }
@@ -450,6 +485,8 @@ export component OpsPanel inherits Rectangle {
     callback resume(int);
     callback skip(int);
     callback cancel(int);
+    // El enlace "Ver N archivos" de una fila de historial pide abrir el popup con la lista.
+    callback show-files(int);
 
     background: Theme.panel-bg;
 
@@ -515,6 +552,7 @@ export component OpsPanel inherits Rectangle {
                 if root.history-count > 0: SectionHeader { text: Tr.ops-history; }
                 for r in root.history-rows: HistoryRow {
                     op: r;
+                    show-files(i) => { root.show-files(i); }
                 }
 
                 // Espaciador para empujar el contenido hacia arriba.

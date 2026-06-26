@@ -3803,6 +3803,33 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        // "Ver N archivos" de una fila de historial: arma la lista completa de archivos de esa op
+        // (pedida por demanda a `op_file_list`) y abre el modal con ella.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_op_show_files(move |id| {
+            let (rows, label) = {
+                let c = ctrl.borrow();
+                let id = id as u64;
+                let rows = c.ops.op_file_list(id);
+                let label = c
+                    .ops
+                    .active_ops
+                    .iter()
+                    .find(|o| o.id == id)
+                    .map(|o| o.label.clone())
+                    .unwrap_or_default();
+                (rows, label)
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                let vms: Vec<OpFileVm> = rows.into_iter().map(to_op_file_vm).collect();
+                ui.set_op_file_list(ModelRc::from(Rc::new(VecModel::from(vms))));
+                ui.set_op_file_list_label(SharedString::from(label.as_str()));
+                ui.set_op_file_list_open(true);
+            }
+        });
+    }
+    {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
@@ -4749,6 +4776,17 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         eta: SharedString::from(r.eta.as_str()),
         elapsed: SharedString::from(r.elapsed.as_str()),
         kind: r.kind,
+        files_summary: SharedString::from(r.files_summary.as_str()),
+        has_file_list: r.has_file_list,
+        files_done_count: r.files_done_count,
+    }
+}
+
+fn to_op_file_vm(e: ops_ctrl::OpFileEntry) -> OpFileVm {
+    OpFileVm {
+        name: SharedString::from(e.name.as_str()),
+        status: e.status,
+        detail: SharedString::from(e.detail.as_str()),
     }
 }
 
@@ -4838,6 +4876,7 @@ fn to_hist_row(r: bridge::HistRow) -> HistRow {
         when: SharedString::from(r.when.as_str()),
         count: r.count,
         undoable: r.undoable,
+        undone: r.undone,
         reason: SharedString::from(r.reason.as_str()),
     }
 }

@@ -53,13 +53,24 @@ export component HistoryPanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+                    // Tres estados visibles en el mismo espacio:
+                    //  - deshacible → botón activo "Deshacer" (acento al pasar el mouse).
+                    //  - ya deshecho → etiqueta "Deshecho ✓" en color de acento (confirma que se
+                    //    aplicó; NO es un botón). Distingue de "no deshacible".
+                    //  - no deshacible (Delete, o el inverso ya no aplica) → botón inerte y atenuado
+                    //    con el motivo de tooltip.
                     Rectangle {
-                        width: 74px;
-                        background: e.undoable ? (undo-touch.has-hover ? Theme.selection-bg : Theme.row-bg) : Theme.panel-bg;
+                        width: 86px;
+                        background: e.undone
+                            ? transparent
+                            : (e.undoable ? (undo-touch.has-hover ? Theme.selection-bg : Theme.row-bg) : Theme.panel-bg);
                         border-radius: 4px;
+                        border-width: e.undone ? 1px : 0px;
+                        border-color: Theme.accent;
                         Text {
-                            text: Tr.history-undo;
-                            color: e.undoable ? white : Theme.text-dim;
+                            text: e.undone ? Tr.history-undone : Tr.history-undo;
+                            color: e.undone ? Theme.accent : (e.undoable ? white : Theme.text-dim);
+                            font-weight: e.undone ? 700 : 400;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }

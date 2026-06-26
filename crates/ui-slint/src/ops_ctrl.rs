@@ -1184,6 +1184,13 @@ impl OpsCtrl {
                     0
                 };
 
+                // Detalle de archivos (solo historial): nombres inline si son 1-2, o "Ver archivos"
+                // si son más. Se calcula de los ítems Done del summary.
+                let (files_summary, has_file_list, files_done_count) = match &o.summary {
+                    Some(s) => file_summary_of(s),
+                    None => (String::new(), false, 0),
+                };
+
                 let status = if planning {
                     // "Calculando… N archivos, M tamaño". El texto base "Calculando…" lo pinta el
                     // panel con Tr; aquí van los contadores del escaneo (ya formateados).
@@ -1242,6 +1249,43 @@ impl OpsCtrl {
                     eta,
                     elapsed: format_duration(elapsed_secs as u64),
                     kind,
+                    files_summary,
+                    has_file_list,
+                    files_done_count,
+                }
+            })
+            .collect()
+    }
+
+    /// Lista completa de archivos procesados por la op terminada `op_id` (la que pidió "Ver
+    /// archivos"). Cada entrada es "nombre" o "nombre · estado" (Saltado/Fallido) para que el
+    /// popup distinga lo que se concretó de lo que no. Vacío si la op no existe o no terminó.
+    /// Se calcula al vuelo desde `summary.items` (no se cachea: el popup se abre por demanda).
+    pub fn op_file_list(&self, op_id: u64) -> Vec<OpFileEntry> {
+        let Some(op) = self.active_ops.iter().find(|o| o.id == op_id) else {
+            return Vec::new();
+        };
+        let Some(summary) = &op.summary else {
+            return Vec::new();
+        };
+        summary
+            .items
+            .iter()
+            .map(|(path, outcome)| {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                // 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
+                let (status, detail) = match outcome {
+                    naygo_core::ops::OpOutcome::Done => (0, String::new()),
+                    naygo_core::ops::OpOutcome::Skipped => (1, String::new()),
+                    naygo_core::ops::OpOutcome::Failed(why) => (2, why.clone()),
+                };
+                OpFileEntry {
+                    name,
+                    status,
+                    detail,
                 }
             })
             .collect()
@@ -1433,6 +1477,42 @@ impl OpsCtrl {
     }
 }
 
+/// Una fila del popup "Archivos de la operación": nombre + estado (0=hecho 1=saltado 2=fallido)
+/// + detalle del error si falló. Espejo de `OpFileVm` de Slint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpFileEntry {
+    pub name: String,
+    /// 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
+    pub status: i32,
+    /// Motivo del fallo (solo cuando status==2); vacío en los demás casos.
+    pub detail: String,
+}
+
+/// Resumen del detalle de archivos de una op terminada, para la fila de historial.
+/// Devuelve `(inline, has_list, done_count)`:
+///   - `inline`: nombres unidos por ", " cuando hay 1-2 archivos Done (caja chica que cabe en la
+///     fila). Vacío cuando hay 3+ (se ofrece "Ver archivos") o cuando no hay nada Done.
+///   - `has_list`: `true` con 3+ Done → la UI muestra el enlace "Ver archivos" que abre el popup.
+///   - `done_count`: cuántos archivos Done (para el texto "Ver N archivos").
+fn file_summary_of(summary: &OpSummary) -> (String, bool, i32) {
+    let done: Vec<String> = summary
+        .items
+        .iter()
+        .filter(|(_, o)| matches!(o, naygo_core::ops::OpOutcome::Done))
+        .map(|(p, _)| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string())
+        })
+        .collect();
+    let count = done.len() as i32;
+    match done.len() {
+        0 => (String::new(), false, 0),
+        1..=2 => (done.join(", "), false, count),
+        _ => (String::new(), true, count),
+    }
+}
+
 /// Ruta de la CARPETA que contiene `p` (su `parent()`), como String para la UI. Se usa en el
 /// modal de conflicto para mostrar de qué carpeta sale y a cuál va el archivo/carpeta. Si `p` no
 /// tiene padre (p. ej. una raíz como `C:\`), se devuelve `p` tal cual; si está vacío, "".
@@ -1492,6 +1572,14 @@ pub struct OpRowData {
     pub elapsed: String,
     /// 0=en curso 1=en cola 2=historial.
     pub kind: i32,
+    /// Nombres inline de los archivos procesados cuando son POCOS (1-2 Done): "a.txt, b.txt".
+    /// Vacío si la op procesó 3+ (entonces se ofrece "Ver archivos") o nada Done (o no es historial).
+    pub files_summary: String,
+    /// `true` si hay que ofrecer el enlace "Ver archivos" (op terminada con 3+ archivos Done).
+    /// Cuando es `true`, la lista completa se pide con `op_file_list(index)`.
+    pub has_file_list: bool,
+    /// Cuántos archivos se concretaron (Done). Lo usa la UI para el texto "Ver N archivos".
+    pub files_done_count: i32,
 }
 
 /// Segundos desde la época Unix (para el timestamp del UndoEntry).
@@ -2269,5 +2357,145 @@ mod tests {
             "el id del placeholder se conserva al respawnear desde la cola"
         );
         assert!(d2.join("b.txt").exists(), "la 2ª op se completó");
+    }
+
+    // --- PUNTO 2: detalle de QUÉ archivos se movieron/copiaron ---
+
+    /// Copia `n` archivos a `dst` y drena hasta terminar. Devuelve el OpsCtrl ya con el summary y
+    /// el id de la op. Cada archivo es `f{i}.txt`.
+    fn copia_n_archivos(n: usize) -> (tempfile::TempDir, OpsCtrl, u64) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        for i in 0..n {
+            let f = tmp.path().join(format!("f{i}.txt"));
+            std::fs::write(&f, b"x").unwrap();
+            sources.push(f);
+        }
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, sources, dst),
+            "Copiar".into(),
+            true,
+        );
+        drain(&mut c);
+        let id = c.active_ops[0].id;
+        (tmp, c, id)
+    }
+
+    #[test]
+    fn op_de_2_archivos_pone_nombres_inline_sin_lista() {
+        // Una op que copió 2 archivos → la fila de historial lleva los 2 nombres inline y NO ofrece
+        // "Ver archivos" (caben en la fila).
+        let (_tmp, c, _id) = copia_n_archivos(2);
+        let row = c
+            .op_rows()
+            .into_iter()
+            .find(|r| r.kind == 2)
+            .expect("hay una fila de historial");
+        assert!(!row.has_file_list, "2 archivos NO ofrecen 'Ver archivos'");
+        assert_eq!(row.files_done_count, 2);
+        // Ambos nombres aparecen inline (el orden lo fija el plan, así que solo chequeamos presencia).
+        assert!(
+            row.files_summary.contains("f0.txt") && row.files_summary.contains("f1.txt"),
+            "los 2 nombres van inline, vino: {}",
+            row.files_summary
+        );
+    }
+
+    #[test]
+    fn op_de_muchos_archivos_ofrece_ver_archivos_y_lista_completa() {
+        // Una op que copió 5 archivos → la fila NO pone nombres inline pero SÍ ofrece "Ver
+        // archivos", y `op_file_list` devuelve los 5 con estado Done.
+        let (_tmp, c, id) = copia_n_archivos(5);
+        let row = c
+            .op_rows()
+            .into_iter()
+            .find(|r| r.kind == 2)
+            .expect("hay una fila de historial");
+        assert!(row.has_file_list, "5 archivos ofrecen 'Ver archivos'");
+        assert_eq!(row.files_done_count, 5);
+        assert!(
+            row.files_summary.is_empty(),
+            "con muchos no se ponen nombres inline"
+        );
+        let list = c.op_file_list(id);
+        assert_eq!(list.len(), 5, "la lista trae los 5 archivos");
+        assert!(
+            list.iter().all(|e| e.status == 0),
+            "todos quedaron Done (status 0)"
+        );
+        let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+        for i in 0..5 {
+            assert!(
+                names.contains(&format!("f{i}.txt").as_str()),
+                "falta f{i}.txt en la lista"
+            );
+        }
+    }
+
+    #[test]
+    fn file_summary_of_clasifica_por_cantidad() {
+        use naygo_core::ops::OpOutcome;
+        let mk = |items: Vec<(&str, OpOutcome)>| OpSummary {
+            items: items
+                .into_iter()
+                .map(|(s, o)| (PathBuf::from(s), o))
+                .collect(),
+            bytes_done: 0,
+            elapsed_secs: 0.0,
+        };
+        // 0 Done → sin detalle.
+        let (s, has, n) = file_summary_of(&mk(vec![("D:/a.txt", OpOutcome::Skipped)]));
+        assert!(s.is_empty() && !has && n == 0);
+        // 1 Done → nombre inline.
+        let (s, has, n) = file_summary_of(&mk(vec![("D:/a.txt", OpOutcome::Done)]));
+        assert_eq!((s.as_str(), has, n), ("a.txt", false, 1));
+        // 2 Done → ambos inline.
+        let (s, has, n) = file_summary_of(&mk(vec![
+            ("D:/a.txt", OpOutcome::Done),
+            ("D:/b.txt", OpOutcome::Done),
+        ]));
+        assert_eq!((s.as_str(), has, n), ("a.txt, b.txt", false, 2));
+        // 3 Done → sin inline, ofrece lista.
+        let (s, has, n) = file_summary_of(&mk(vec![
+            ("D:/a.txt", OpOutcome::Done),
+            ("D:/b.txt", OpOutcome::Done),
+            ("D:/c.txt", OpOutcome::Done),
+        ]));
+        assert!(s.is_empty() && has && n == 3);
+    }
+
+    #[test]
+    fn op_file_list_marca_saltados_y_fallidos() {
+        use naygo_core::ops::{OpOutcome, OpSummary};
+        // Inyectamos una op terminada a mano con un mix de outcomes y verificamos el mapeo de estado.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        c.start_op(
+            naygo_core::ops::create(std::env::temp_dir(), "z".into(), true),
+            "x".into(),
+            false,
+        );
+        // Reemplazamos el summary de la (única) op por uno controlado.
+        let id = c.active_ops[0].id;
+        c.active_ops[0].summary = Some(OpSummary {
+            items: vec![
+                (PathBuf::from("D:/dst/ok.txt"), OpOutcome::Done),
+                (PathBuf::from("D:/dst/salt.txt"), OpOutcome::Skipped),
+                (
+                    PathBuf::from("D:/dst/mal.txt"),
+                    OpOutcome::Failed("permiso".into()),
+                ),
+            ],
+            bytes_done: 0,
+            elapsed_secs: 0.0,
+        });
+        let list = c.op_file_list(id);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].status, 0); // Done
+        assert_eq!(list[1].status, 1); // Skipped
+        assert_eq!(list[2].status, 2); // Failed
+        assert_eq!(list[2].detail, "permiso");
     }
 }

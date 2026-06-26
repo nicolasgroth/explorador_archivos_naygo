@@ -270,6 +270,17 @@ export struct OpRowVm {
     eta: string,           // tiempo restante estimado, p. ej. "11:08" o ""
     elapsed: string,       // transcurrido, p. ej. "01:48"
     kind: int,             // 0=en curso 1=en cola 2=historial
+    // Detalle de QUÉ archivos se procesaron (solo en filas de historial):
+    files-summary: string, // nombres inline si son 1-2 ("a.txt, b.txt"); vacío si son más o ninguno
+    has-file-list: bool,   // true si hay 3+ archivos → la fila ofrece "Ver archivos" (abre popup)
+    files-done-count: int, // cuántos archivos se concretaron (para el texto "Ver N archivos")
+}
+
+// Una fila del popup "Archivos de la operación": nombre + estado.
+export struct OpFileVm {
+    name: string,
+    status: int,    // 0=hecho 1=saltado 2=fallido (color)
+    detail: string, // motivo del fallo (solo status==2)
 }
 
 // Fila del historial de deshacer.
@@ -279,6 +290,9 @@ export struct HistRow {
     when: string,
     count: int,
     undoable: bool,
+    // `true` si la entrada YA se deshizo (acción aplicada). La UI lo pinta como
+    // "Deshecho ✓" en color de acento, para distinguirlo del caso "no deshacible".
+    undone: bool,
     reason: string,
 }
 
