@@ -108,7 +108,10 @@ export component MessageModal inherits Rectangle {
     msg-focus := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Escape) {
-                if (root.vm.kind == 1) { root.message-cancel(); }
+                // kind 1 (confirmación), 3 (confirmar drop) y 4 (cancelar todo) → Esc CANCELA (la
+                // opción segura: en el drop, cancelar = no copia nada). kind 2 (aviso de 1 botón) →
+                // Esc lo acepta/cierra. Coherente con el velo, que para 1/3/4 también cancela.
+                if (root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4) { root.message-cancel(); }
                 if (root.vm.kind == 2) { root.message-confirm(); }
             }
             accept

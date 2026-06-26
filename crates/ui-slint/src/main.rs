@@ -1270,7 +1270,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         // CONFIRMAR AL SOLTAR (PUNTO 1b): si `drop_at` dejó un drop pendiente (intra-app
                         // entre paneles), NO se ejecutó todavía. Abrimos el modal de confirmación
-                        // "¿Copiar/Mover N a «destino»?". Al confirmar, `on_message_confirm` (kind 2)
+                        // "¿Copiar/Mover N a «destino»?". Al confirmar, `on_message_confirm` (kind 3)
                         // llama a `confirm_pending_drop`; al cancelar, `cancel_pending_drop` lo descarta.
                         let pending = {
                             let c = ctrl.borrow();
