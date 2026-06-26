@@ -164,6 +164,7 @@ where
     tr.set_drop_confirm_title(c.t("slint.drop.confirm_title").into());
     tr.set_drop_confirm_copy(c.t("slint.drop.confirm_copy").into());
     tr.set_drop_confirm_move(c.t("slint.drop.confirm_move").into());
+    tr.set_drop_confirm_more(c.t("slint.drop.confirm_more").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
     tr.set_ctx_open_with(c.t("slint.ctx.open_with").into());
@@ -393,6 +394,7 @@ where
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
     tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());
     tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
+    tr.set_cfg_confirm_drop(c.t("slint.cfg.confirm_drop").into());
     tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());
     tr.set_cfg_paste_confirm(c.t("slint.cfg.paste_confirm").into());
     tr.set_cfg_paste_name(c.t("slint.cfg.paste_name").into());

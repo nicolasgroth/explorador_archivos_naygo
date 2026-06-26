@@ -138,6 +138,7 @@ export component ConfigWindow inherits Window {
     // Settings (toggles/combos/text):
     callback set-ops-mode(int);
     callback set-confirm-trash(bool);
+    callback set-confirm-drop-between-panes(bool);
     callback set-show-op-summary(bool);
     callback set-show-parent(bool);
     callback set-icon-only(bool);
@@ -368,6 +369,10 @@ export component ConfigWindow inherits Window {
                                 Field {
                                     label: Tr.cfg-confirm-trash;
                                     Switch { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-drop;
+                                    Switch { checked: root.vm.confirm-drop-between-panes; toggled => { root.set-confirm-drop-between-panes(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-show-op-summary;

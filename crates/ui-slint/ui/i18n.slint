@@ -153,8 +153,9 @@ export global Tr {
     // Confirmar al soltar archivos en otro panel (PUNTO 1b). El cuerpo lleva {count} y {dest} que
     // Rust reemplaza (Slint no tiene replace, lo arma el controlador).
     in property <string> drop-confirm-title: "Confirmar";
-    in property <string> drop-confirm-copy: "¿Copiar {count} elemento(s) a «{dest}»?";
-    in property <string> drop-confirm-move: "¿Mover {count} elemento(s) a «{dest}»?";
+    in property <string> drop-confirm-copy: "¿Copiar {items} a «{dest}»?";
+    in property <string> drop-confirm-move: "¿Mover {items} a «{dest}»?";
+    in property <string> drop-confirm-more: " y {n} más";
 
     // Menú contextual (context-menu).
     in property <string> ctx-open: "Abrir";
@@ -401,6 +402,7 @@ export global Tr {
     in property <string> cfg-ops-queue: "En cola";
     in property <string> cfg-ops-parallel: "En paralelo";
     in property <string> cfg-confirm-trash: "Confirmar envío a papelera";
+    in property <string> cfg-confirm-drop: "Preguntar al arrastrar entre paneles";
     in property <string> cfg-show-op-summary: "Mostrar resumen al terminar";
     in property <string> cfg-paste-confirm: "Confirmar nombre al pegar";
     in property <string> cfg-paste-name: "Nombre para texto pegado";

@@ -435,6 +435,12 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Preguntar al arrastrar archivos/carpetas entre paneles antes de copiar/mover.
+    pub fn set_confirm_drop_between_panes(&mut self, v: bool) {
+        self.settings.confirm_drop_between_panes = v;
+        self.save();
+    }
+
     /// Mostrar el resumen al terminar una operación.
     pub fn set_show_op_summary(&mut self, v: bool) {
         self.settings.show_op_summary = v;

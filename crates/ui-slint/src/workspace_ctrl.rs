@@ -251,6 +251,45 @@ pub struct PendingDrop {
     pub count: usize,
 }
 
+/// Cuántos nombres se listan explícitamente antes de truncar con "y N más" (umbral "pocos").
+const DROP_NAMES_MAX_LISTED: usize = 4;
+
+impl PendingDrop {
+    /// Resumen legible de los nombres para el modal de confirmación. Pide nombrar lo que se va a
+    /// copiar/mover (pedido de Nicolás), sobre todo cuando es más de uno:
+    ///   - 1 elemento: «a.txt»
+    ///   - pocos (2..=4): «a.txt», «b.txt», «c.txt»
+    ///   - muchos (5+): «a.txt», «b.txt», «c.txt», «d.txt» + sufijo "y N más"
+    ///
+    /// El sufijo de "y N más" llega ya formateado (i18n, con el número resuelto) para no hardcodear
+    /// texto aquí; `more_suffix(n)` recibe cuántos quedan sin nombrar y devuelve el texto a anexar
+    /// (p.ej. " y 8 más"). Cada nombre va entre comillas angulares, como el resto de la UI.
+    pub fn names_summary(&self, more_suffix: impl Fn(usize) -> String) -> String {
+        let names: Vec<String> = self
+            .paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    // Sin nombre de archivo (raro: raíz de disco) → la ruta completa, no vacío.
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+            .collect();
+        let listed = names.len().min(DROP_NAMES_MAX_LISTED);
+        let mut out = names
+            .iter()
+            .take(listed)
+            .map(|n| format!("«{}»", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remaining = names.len().saturating_sub(listed);
+        if remaining > 0 {
+            out.push_str(&more_suffix(remaining));
+        }
+        out
+    }
+}
+
 /// Mapea el entero de la UI a una terminal: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL.
 fn term_from_int(term_int: i32) -> naygo_platform::open::Terminal {
     use naygo_platform::open::Terminal;
@@ -3211,6 +3250,21 @@ impl WorkspaceCtrl {
             is_move,
             count,
         });
+        // Confirmación opcional (decisión de Nicolás): si el ajuste está APAGADO, no abrimos el
+        // modal "¿Copiar/Mover…?"; ejecutamos directo reusando `confirm_pending_drop` (que arranca
+        // la op y CONSUME `pending_drop`). El modal de CONFLICTO (archivo que ya existe) es
+        // independiente y SIEMPRE aparece: lo dispara `pump_ops`, no esta confirmación.
+        //
+        // Devolvemos `true` en AMBOS casos (el drop fue ENRUTADO y manejado por este panel, así la
+        // UI no cae al fallback `drop_external`). Quién decide abrir el modal es el llamador, que
+        // lee `pending_drop` DESPUÉS: con la confirmación ON queda `Some` → abre el modal; con la
+        // confirmación OFF ya lo consumió `confirm_pending_drop` y queda `None` → no abre nada.
+        if !self.config.settings.confirm_drop_between_panes {
+            crate::logging::breadcrumb(
+                "drop_at: confirmación de drop desactivada → ejecutar directo",
+            );
+            self.confirm_pending_drop();
+        }
         true
     }
 
@@ -7344,6 +7398,134 @@ mod simular_usuario {
             .position(|&real| f.entries[real].name == name)
     }
 
+    /// UX4: el resumen de nombres para el modal de confirmación de drop. Umbral: hasta 4 nombres
+    /// listados; a partir de 5, los primeros 4 + sufijo "y N más" (aquí simulado como " +N").
+    #[test]
+    fn pending_drop_names_summary_uno_pocos_muchos() {
+        let mk = |paths: Vec<&str>| PendingDrop {
+            paths: paths.into_iter().map(std::path::PathBuf::from).collect(),
+            dest_dir: std::path::PathBuf::from("C:\\dest"),
+            is_move: false,
+            count: 0,
+        };
+        // El sufijo de "y N más" lo simulamos con " +N" para no depender de i18n en el test.
+        let more = |n: usize| format!(" +{}", n);
+
+        // 1 elemento: solo su nombre entre comillas angulares.
+        assert_eq!(mk(vec!["C:\\a\\foo.txt"]).names_summary(more), "«foo.txt»");
+
+        // Pocos (3): todos listados, sin sufijo.
+        assert_eq!(
+            mk(vec!["C:\\a\\a.txt", "C:\\a\\b.txt", "C:\\a\\c.txt"]).names_summary(more),
+            "«a.txt», «b.txt», «c.txt»"
+        );
+
+        // Justo en el umbral (4): los 4, sin sufijo.
+        assert_eq!(
+            mk(vec!["x\\1", "x\\2", "x\\3", "x\\4"]).names_summary(more),
+            "«1», «2», «3», «4»"
+        );
+
+        // Muchos (6): primeros 4 + " +2" (quedan 2 sin nombrar).
+        assert_eq!(
+            mk(vec!["x\\1", "x\\2", "x\\3", "x\\4", "x\\5", "x\\6"]).names_summary(more),
+            "«1», «2», «3», «4» +2"
+        );
+    }
+
+    /// UX3: con `confirm_drop_between_panes = false`, soltar entre paneles NO deja un drop pendiente
+    /// esperando confirmación: ejecuta la op directo (no abre el modal kind 3). Pero si el archivo
+    /// YA EXISTE en el destino, el modal de CONFLICTO sigue apareciendo (son cosas distintas).
+    #[test]
+    fn drop_con_confirmacion_off_ejecuta_directo_y_sin_conflicto_copia() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let (mut c, _cfg) = ctrl_en(a.path());
+        // Apagar la confirmación de drop.
+        c.config.settings.confirm_drop_between_panes = false;
+        let (origin, dest) = split_a(&mut c, b.path());
+        let area = area();
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let (cx, cy) = pane_center(&c, area, dest);
+
+        // Soltar (Ctrl = copia, determinista). Con la confirmación OFF NO debe quedar pendiente.
+        let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false);
+        assert!(
+            routed,
+            "drop_at enruta igual (devuelve true en ambos modos)"
+        );
+        assert!(
+            c.pending_drop.is_none(),
+            "confirmación OFF: no queda un drop esperando el modal kind 3"
+        );
+        assert!(
+            !c.ops.active_ops.is_empty(),
+            "confirmación OFF: la op arrancó directo"
+        );
+        // Sin conflicto (nombre libre en el destino): la op termina y el archivo aterriza.
+        for _ in 0..4000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            b.path().join("doc.txt").exists(),
+            "confirmación OFF, sin conflicto: la copia se ejecutó directo"
+        );
+    }
+
+    /// UX3 (parte crítica): aunque la confirmación de drop esté APAGADA, el modal de CONFLICTO
+    /// (archivo que ya existe en el destino) DEBE seguir apareciendo. El motor se detiene en el
+    /// conflicto y no sobrescribe sin preguntar — confirmación de drop y conflicto son ortogonales.
+    #[test]
+    fn drop_con_confirmacion_off_pero_archivo_existente_pide_conflicto() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"ORIGEN-nuevo").unwrap();
+        std::fs::write(b.path().join("doc.txt"), b"DESTINO-viejo").unwrap();
+        let (mut c, _cfg) = ctrl_en(a.path());
+        c.config.settings.confirm_drop_between_panes = false;
+        let (origin, dest) = split_a(&mut c, b.path());
+        let area = area();
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let (cx, cy) = pane_center(&c, area, dest);
+
+        // Soltar con la confirmación OFF → arranca directo, sin modal kind 3.
+        assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false));
+        assert!(c.pending_drop.is_none(), "no hay confirmación de drop");
+
+        // El motor debe DETENERSE en el conflicto, no sobrescribir.
+        let mut pidio_conflicto = false;
+        for _ in 0..4000 {
+            c.ops.pump_ops();
+            if matches!(
+                c.ops.pending_dialog,
+                Some(crate::ops_ctrl::OpDialog::Conflict { .. })
+            ) {
+                pidio_conflicto = true;
+                break;
+            }
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            pidio_conflicto,
+            "confirmación de drop OFF NO debe saltarse el conflicto: el archivo existe → preguntar"
+        );
+        assert_eq!(
+            std::fs::read_to_string(b.path().join("doc.txt")).unwrap(),
+            "DESTINO-viejo",
+            "el destino no se toca hasta que el usuario resuelva el conflicto"
+        );
+    }
+
     /// REGRESIÓN (reportado por Nicolás): arrastrar un archivo a otro panel donde YA EXISTE, y
     /// confirmar el drop, debe DETENERSE en el conflicto (preguntar) — no sobrescribir en silencio.
     /// Reproduce el flujo completo drop_at → confirm_pending_drop → motor con first_collision.
@@ -7383,7 +7565,8 @@ mod simular_usuario {
                 pidio_conflicto = true;
                 break;
             }
-            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
+            {
                 break; // terminó sin preguntar
             }
             std::thread::sleep(std::time::Duration::from_millis(1));

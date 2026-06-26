@@ -267,6 +267,12 @@ pub struct Settings {
     /// Ocultar los que empiezan con punto (dotfiles estilo Linux). Default false.
     #[serde(default)]
     pub hide_dotfiles: bool,
+    /// Preguntar (modal de confirmación) al arrastrar archivos/carpetas entre paneles antes de
+    /// copiar o mover. Default `true`: red de seguridad contra arrastres accidentales. En `false`
+    /// el drop se ejecuta directo. OJO: el modal de CONFLICTO (archivo que ya existe en el destino)
+    /// es independiente y SIEMPRE aparece, esté esto en `true` o `false`.
+    #[serde(default = "default_confirm_drop_between_panes")]
+    pub confirm_drop_between_panes: bool,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -418,6 +424,11 @@ fn default_show_system() -> bool {
     true
 }
 
+/// Default de `confirm_drop_between_panes`: true (preguntar antes de copiar/mover entre paneles).
+fn default_confirm_drop_between_panes() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -464,6 +475,7 @@ impl Default for Settings {
             show_hidden: true,
             show_system: true,
             hide_dotfiles: false,
+            confirm_drop_between_panes: true,
         }
     }
 }
@@ -736,6 +748,7 @@ mod tests {
             show_hidden: false,
             show_system: false,
             hide_dotfiles: true,
+            confirm_drop_between_panes: false,
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -1058,6 +1071,17 @@ mod tests {
         assert!(s.show_hidden);
         assert!(s.show_system);
         assert!(!s.hide_dotfiles);
+        // Un settings.json viejo sin el campo conserva la red de seguridad (preguntar = true).
+        assert!(s.confirm_drop_between_panes);
+    }
+
+    #[test]
+    fn settings_confirm_drop_default_es_true() {
+        let s = Settings::default();
+        assert!(
+            s.confirm_drop_between_panes,
+            "por defecto se pregunta antes de copiar/mover entre paneles"
+        );
     }
 
     #[test]

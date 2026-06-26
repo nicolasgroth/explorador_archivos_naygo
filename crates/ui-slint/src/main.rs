@@ -1276,6 +1276,10 @@ fn main() -> Result<(), slint::PlatformError> {
                             let c = ctrl.borrow();
                             c.pending_drop.clone()
                         };
+                        // Con la confirmación de drop DESACTIVADA, `drop_at` arrancó la op directo
+                        // y consumió el pendiente: `routed` es true pero `pending` quedó None.
+                        // (Distinto de "cayó fuera de todo panel": ahí `routed` es false.)
+                        let direct_drop_ran = routed && pending.is_none();
                         if let (Some(pd), Some(ui)) = (pending, ui_weak.upgrade()) {
                             let tr = ui.global::<Tr>();
                             let dest_name = pd
@@ -1283,15 +1287,21 @@ fn main() -> Result<(), slint::PlatformError> {
                                 .file_name()
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| pd.dest_dir.display().to_string());
-                            // Cuerpo: "¿Copiar/Mover N elemento(s) a «destino»?" — la plantilla i18n
-                            // lleva {count} y {dest}; el verbo lo elige según copiar/mover.
+                            // Nombres de lo que se va a copiar/mover (pedido de Nicolás): 1 →
+                            // «a.txt»; pocos → «a.txt», «b.txt», …; muchos → primeros + " y N más"
+                            // (el sufijo lo da la clave i18n `drop-confirm-more`, con {n} resuelto).
+                            let more_tmpl = tr.get_drop_confirm_more().to_string();
+                            let items =
+                                pd.names_summary(|n| more_tmpl.replace("{n}", &n.to_string()));
+                            // Cuerpo: "¿Copiar/Mover <nombres> a «destino»?" — la plantilla i18n
+                            // lleva {items} y {dest}; el verbo lo elige según copiar/mover.
                             let template = if pd.is_move {
                                 tr.get_drop_confirm_move()
                             } else {
                                 tr.get_drop_confirm_copy()
                             };
                             let body = template
-                                .replace("{count}", &pd.count.to_string())
+                                .replace("{items}", &items)
                                 .replace("{dest}", &dest_name);
                             let confirm_label = if pd.is_move {
                                 tr.get_dlg_move()
@@ -1307,6 +1317,30 @@ fn main() -> Result<(), slint::PlatformError> {
                                 cancel_label: tr.get_dlg_cancel(),
                                 danger: false,
                             });
+                            // BUG A (doble clic): tras el bucle modal de `DoDragDrop` (OLE) la
+                            // ventana de Naygo deja de ser la foreground del SO; aunque ya hicimos
+                            // un `bring_to_front` al inicio del drenado, el modal kind 3 se arma
+                            // RECIÉN aquí. Volvemos a traer la ventana al frente AHORA, con el modal
+                            // ya en pantalla, para que el PRIMER clic del usuario vaya al botón en
+                            // vez de gastarse en reactivar la ventana. (No rearmamos el timer: este
+                            // bloque corre dentro de un tick que sigue vivo porque el modal kind 3
+                            // mantiene `get_message().kind != 0`.)
+                            if let Some(hwnd) = naygo_hwnd(&ui) {
+                                naygo_platform::window::bring_to_front(hwnd);
+                            }
+                        } else if direct_drop_ran {
+                            // Confirmación de drop DESACTIVADA: `drop_at` ya arrancó la op directo
+                            // (sin modal kind 3). Refrescar la disposición (pudo aparecer el panel
+                            // Operaciones); el timer sigue vivo en este mismo tick y `pump_ops`
+                            // drenará el progreso y abrirá el modal de CONFLICTO si el archivo ya
+                            // existía en el destino. Traemos la ventana al frente para que ESE modal
+                            // (que llega un par de ticks después) reciba bien el primer clic.
+                            sync_layout();
+                            if let Some(ui) = ui_weak.upgrade() {
+                                if let Some(hwnd) = naygo_hwnd(&ui) {
+                                    naygo_platform::window::bring_to_front(hwnd);
+                                }
+                            }
                         }
                     }
                     // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y
@@ -2452,6 +2486,11 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     cfg_setter!(on_set_confirm_trash, bool, set_confirm_trash);
+    cfg_setter!(
+        on_set_confirm_drop_between_panes,
+        bool,
+        set_confirm_drop_between_panes
+    );
     cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
     cfg_setter!(on_set_show_parent, bool, set_show_parent);
     cfg_setter!(on_set_icon_only, bool, set_icon_only);
@@ -3369,6 +3408,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     // rearmar el timer para que `pump_ops` drene el progreso de la op nueva.
                     sync_layout();
                     start_timer();
+                    // BUG B (el modal de CONFLICTO no aparecía / aparecía "muerto"): la op puede
+                    // chocar con un archivo que ya existe y `pump_ops` abrirá el modal de conflicto
+                    // un par de ticks después. Como venimos de la cadena drop→DoDragDrop, la ventana
+                    // arrastra el déficit de foreground del bucle modal OLE; la traemos al frente
+                    // AHORA para que ese segundo modal reciba bien el primer clic (no uno de
+                    // reactivación). `any_modal_open()` ya mantiene el timer vivo para el conflicto.
+                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                        naygo_platform::window::bring_to_front(hwnd);
+                    }
                 }
                 return;
             }
@@ -4636,6 +4684,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             0
         },
         confirm_trash: s.confirm_trash,
+        confirm_drop_between_panes: s.confirm_drop_between_panes,
         show_op_summary: s.show_op_summary,
         size_no_subdirs: s.size_no_subdirs,
         autostart: s.autostart,
