@@ -178,6 +178,20 @@ pub enum Action {
     GoFavorite9,
     /// Abrir la paleta de comandos (Ctrl+P).
     CommandPalette,
+    /// Abrir una terminal (PowerShell por defecto) en la carpeta del panel activo (Ctrl+T).
+    OpenTerminal,
+    /// Dividir: agregar un nuevo panel de archivos (Ctrl+Shift+T).
+    SplitPanel,
+    /// Refrescar la tira de unidades de disco — útil para unidades de red (Ctrl+Shift+R).
+    RefreshDrives,
+    /// Mostrar/ocultar los archivos ocultos en todos los paneles (Ctrl+H).
+    ToggleHidden,
+    /// Abrir el menú de favoritos de la toolbar (Ctrl+D).
+    FavoritesMenu,
+    /// Abrir la ventana de configuración (Ctrl+Shift+O).
+    OpenConfig,
+    /// Abrir el menú de plantillas de disposición de paneles (Ctrl+Shift+L).
+    LayoutsMenu,
 }
 
 impl Action {
@@ -238,6 +252,13 @@ impl Action {
             GoFavorite8,
             GoFavorite9,
             CommandPalette,
+            OpenTerminal,
+            SplitPanel,
+            RefreshDrives,
+            ToggleHidden,
+            FavoritesMenu,
+            OpenConfig,
+            LayoutsMenu,
         ]
     }
 
@@ -298,6 +319,13 @@ impl Action {
             GoFavorite8 => "action.go_favorite_8",
             GoFavorite9 => "action.go_favorite_9",
             CommandPalette => "action.command_palette",
+            OpenTerminal => "action.open_terminal",
+            SplitPanel => "action.split_panel",
+            RefreshDrives => "action.refresh_drives",
+            ToggleHidden => "action.toggle_hidden",
+            FavoritesMenu => "action.favorites_menu",
+            OpenConfig => "action.open_config",
+            LayoutsMenu => "action.layouts_menu",
         }
     }
 
@@ -394,6 +422,15 @@ impl KeyMap {
             (GoFavorite9, vec![Chord::ctrl(Char('9'))]),
             // Paleta de comandos: Ctrl+P abre el buscador de acciones.
             (CommandPalette, vec![Chord::ctrl(Char('p'))]),
+            // Botones de la toolbar sin atajo histórico: atajos sensatos y configurables. Todos
+            // verificados libres contra los defaults de arriba (ver test `toolbar_acciones_*`).
+            (OpenTerminal, vec![Chord::ctrl(Char('t'))]),
+            (SplitPanel, vec![Chord::ctrl_shift(Char('t'))]),
+            (RefreshDrives, vec![Chord::ctrl_shift(Char('r'))]),
+            (ToggleHidden, vec![Chord::ctrl(Char('h'))]),
+            (FavoritesMenu, vec![Chord::ctrl(Char('d'))]),
+            (OpenConfig, vec![Chord::ctrl_shift(Char('o'))]),
+            (LayoutsMenu, vec![Chord::ctrl_shift(Char('l'))]),
         ];
         KeyMap { bindings: b }
     }
@@ -513,13 +550,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_53_acciones_con_clave_i18n_unica() {
+    fn all_tiene_60_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 53);
+        assert_eq!(all.len(), 60);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 53, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 60, "cada acción tiene una clave i18n única");
+    }
+
+    #[test]
+    fn toolbar_acciones_nuevas_tienen_su_chord_y_action_for_lo_resuelve() {
+        let km = KeyMap::defaults();
+        // Cada botón de toolbar antes sin atajo ahora tiene su chord por defecto, y `action_for`
+        // (lo que consume la UI al teclear) lo resuelve a la acción correcta.
+        for (chord, action) in [
+            (Chord::ctrl(KeyCode::Char('t')), Action::OpenTerminal),
+            (Chord::ctrl_shift(KeyCode::Char('t')), Action::SplitPanel),
+            (Chord::ctrl_shift(KeyCode::Char('r')), Action::RefreshDrives),
+            (Chord::ctrl(KeyCode::Char('h')), Action::ToggleHidden),
+            (Chord::ctrl(KeyCode::Char('d')), Action::FavoritesMenu),
+            (Chord::ctrl_shift(KeyCode::Char('o')), Action::OpenConfig),
+            (Chord::ctrl_shift(KeyCode::Char('l')), Action::LayoutsMenu),
+        ] {
+            assert_eq!(
+                km.chords_for(action).len(),
+                1,
+                "{action:?} sin chord default"
+            );
+            assert_eq!(
+                km.action_for(&chord),
+                Some(action),
+                "{action:?} no se resuelve"
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_sin_chords_duplicados() {
+        // Ningún chord puede pertenecer a dos acciones a la vez: si un default nuevo chocara con
+        // uno existente, este conteo lo delataría. Recolecta TODOS los chords de TODAS las acciones
+        // y verifica que no haya repetidos.
+        let km = KeyMap::defaults();
+        let mut all: Vec<String> = Vec::new();
+        for &a in Action::all() {
+            for c in km.chords_for(a) {
+                // El Debug del chord es total y estable: sirve de clave para detectar repetidos.
+                all.push(format!("{c:?}"));
+            }
+        }
+        let total = all.len();
+        all.sort();
+        all.dedup();
+        assert_eq!(
+            total,
+            all.len(),
+            "hay al menos un chord duplicado en defaults()"
+        );
     }
 
     #[test]

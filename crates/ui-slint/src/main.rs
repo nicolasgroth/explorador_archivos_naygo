@@ -1802,6 +1802,50 @@ fn main() -> Result<(), slint::PlatformError> {
                     ui.set_rename_text(name.into());
                 }
             }
+            // Atajo "abrir configuración" (Ctrl+Shift+O): reusa el handler del engranaje de la toolbar.
+            if ctrl.borrow_mut().take_open_config_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_open_config();
+                }
+            }
+            // Atajos que abren menús/acciones de la toolbar cuyos props viven en la AppWindow
+            // (Favoritos / Disposiciones / Refrescar unidades). El controlador no puede tocarlos, así
+            // que dejó una petición; acá la aplicamos. Los menús se anclan a un x razonable (la zona
+            // de la toolbar donde vive cada botón); no necesitan la posición exacta para funcionar.
+            if let Some(req) = ctrl.borrow_mut().take_toolbar_menu_request() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    use workspace_ctrl::ToolbarMenuRequest as Tmr;
+                    // No tener dos menús flotantes abiertos a la vez.
+                    ui.set_history_menu_open(false);
+                    ui.set_back_history_menu_open(false);
+                    ui.set_fwd_history_menu_open(false);
+                    ui.set_drive_menu_path("".into());
+                    ui.set_view_menu_open(false);
+                    // x de anclaje del menú flotante abierto por teclado. No hay botón al que
+                    // anclarse (vino de un atajo), así que se usa el ancho lógico de la ventana para
+                    // ubicarlo en la zona donde vive cada botón en la toolbar (favoritos a la
+                    // derecha, disposiciones más al centro). Es solo cosmético: el menú funciona igual.
+                    let win = ui.window();
+                    let logical = win.size().to_logical(win.scale_factor());
+                    let w = logical.width;
+                    match req {
+                        Tmr::RefreshDrives => ui.invoke_refresh_drives(),
+                        Tmr::Favorites => {
+                            ui.set_layout_menu_open(false);
+                            ui.set_fav_menu_x(w * 0.75);
+                            ui.set_fav_menu_open(true);
+                        }
+                        Tmr::Layouts => {
+                            ui.set_fav_menu_open(false);
+                            ui.set_layout_menu_x(w * 0.45);
+                            ui.set_layout_menu_open(true);
+                        }
+                    }
+                    // El menú flotante puede robar el foco: limpiar modificadores para no dejar Ctrl
+                    // pegado tras el atajo.
+                    ctrl.borrow_mut().clear_modifiers();
+                }
+            }
             start_timer();
             sync_layout();
         });
@@ -2090,31 +2134,12 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     refresh_config_vm();
-    // Vuelca los íconos de acción de la toolbar desde el IconCache a la AppWindow. Se llama al
-    // arrancar y al cambiar el set de íconos. Decodifica una vez (cacheado): clonar es barato.
-    let refresh_toolbar_icons: Rc<dyn Fn()> = {
-        let ctrl = ctrl.clone();
-        let ui_weak = ui.as_weak();
-        Rc::new(move || {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
-            use naygo_core::icon_kind::{ActionIcon, IconKey};
-            let mut c = ctrl.borrow_mut();
-            let ic = |c: &mut workspace_ctrl::WorkspaceCtrl, a: ActionIcon| {
-                c.icons.get(IconKey::Action(a))
-            };
-            ui.set_ic_up(ic(&mut c, ActionIcon::Up));
-            ui.set_ic_panel(ic(&mut c, ActionIcon::Panel));
-            ui.set_ic_swap(ic(&mut c, ActionIcon::SwapPanes));
-            ui.set_ic_clone(ic(&mut c, ActionIcon::ClonePath));
-            ui.set_ic_tabs(ic(&mut c, ActionIcon::Tabs));
-            ui.set_ic_settings(ic(&mut c, ActionIcon::Settings));
-            ui.set_ic_new_folder(ic(&mut c, ActionIcon::NewFolder));
-            // (add-pane / layouts / terminal / refresh / eject: la toolbar volvió a íconos
-            //  dibujados con Path —modelo flat—, así que ya no se vuelcan PNG para esos botones.)
-        })
-    };
+    // Volcado de íconos de acción de la toolbar: ya no hace falta. TODOS los botones de la
+    // toolbar (subir, dividir, panel, swap, clonar, tabs, layouts, nueva-carpeta, terminal,
+    // refrescar, config, etc.) se dibujan con Path dentro del .slint (modelo flat consistente),
+    // así que no se vuelca ningún PNG del IconCache. Se conserva un closure vacío para no romper
+    // a los llamadores que lo invocan al cambiar el set de íconos.
+    let refresh_toolbar_icons: Rc<dyn Fn()> = Rc::new(move || {});
     refresh_toolbar_icons();
     // Vuelca la tira de unidades de disco a la toolbar. Se llama al arrancar, al cambiar el set
     // de íconos (los íconos de disco cambian) y al cambiar los dispositivos (USB conectado/sacado).

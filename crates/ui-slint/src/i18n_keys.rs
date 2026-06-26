@@ -16,16 +16,30 @@ where
     W: ComponentHandle,
     Tr<'a>: Global<'a, W>,
 {
+    use naygo_core::keymap::Action;
     let tr = ui.global::<Tr>();
+    // Tooltip de un botón de la toolbar CON atajo: concatena el texto base i18n con el atajo REAL
+    // configurado en el keymap (formato legible, p. ej. "Atrás (Alt+←)"). Si el usuario cambió el
+    // atajo en Config → Atajos, el tooltip lo refleja en caliente; si la acción quedó sin atajo,
+    // muestra solo el texto base. Centralizar acá evita hardcodear el atajo en cada idioma.
+    let tip = |key: &str, action: Action| -> slint::SharedString {
+        let base = c.t(key);
+        let chord = c.chord_text_for(action);
+        if chord.is_empty() {
+            base.into()
+        } else {
+            format!("{base} ({chord})").into()
+        }
+    };
     // Barra de herramientas.
     tr.set_toolbar_up(c.t("slint.toolbar.up").into());
-    tr.set_toolbar_up_tip(c.t("toolbar.up").into());
-    tr.set_nav_back_tip(c.t("slint.toolbar.back_tip").into());
-    tr.set_nav_forward_tip(c.t("slint.toolbar.forward_tip").into());
-    tr.set_nav_home_tip(c.t("slint.toolbar.home_tip").into());
+    tr.set_toolbar_up_tip(tip("toolbar.up", Action::GoUp));
+    tr.set_nav_back_tip(tip("slint.toolbar.back_tip", Action::GoBack));
+    tr.set_nav_forward_tip(tip("slint.toolbar.forward_tip", Action::GoForward));
+    tr.set_nav_home_tip(tip("slint.toolbar.home_tip", Action::GoHome));
     tr.set_nav_back_history_tip(c.t("slint.toolbar.back_history").into());
     tr.set_nav_forward_history_tip(c.t("slint.toolbar.forward_history").into());
-    tr.set_toolbar_add_tip(c.t("slint.toolbar.add").into());
+    tr.set_toolbar_add_tip(tip("slint.toolbar.add", Action::SplitPanel));
     tr.set_toolbar_panel(c.t("slint.toolbar.panel").into());
     tr.set_toolbar_panel_tip(c.t("toolbar.add_other").into());
     tr.set_toolbar_swap(c.t("slint.toolbar.swap").into());
@@ -39,19 +53,19 @@ where
     tr.set_pathbar_copied(c.t("slint.pathbar.copied").into());
     tr.set_drive_eject_tip(c.t("slint.drive.eject_tip").into());
     tr.set_drive_eject(c.t("slint.drive.eject").into());
-    tr.set_toolbar_refresh_drives(c.t("slint.toolbar.refresh_drives").into());
+    tr.set_toolbar_refresh_drives(tip("slint.toolbar.refresh_drives", Action::RefreshDrives));
     tr.set_drive_eject_ok(c.t("slint.drive.eject_ok").into());
     tr.set_drive_eject_in_use(c.t("slint.drive.eject_in_use").into());
     tr.set_drive_eject_failed(c.t("slint.drive.eject_failed").into());
     tr.set_drive_eject_confirm_title(c.t("slint.drive.eject_confirm_title").into());
     tr.set_drive_eject_confirm(c.t("slint.drive.eject_confirm").into());
-    tr.set_toolbar_config_tip(c.t("slint.toolbar.config_tip").into());
+    tr.set_toolbar_config_tip(tip("slint.toolbar.config_tip", Action::OpenConfig));
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
-    tr.set_toolbar_layouts_tip(c.t("slint.toolbar.layouts_tip").into());
+    tr.set_toolbar_layouts_tip(tip("slint.toolbar.layouts_tip", Action::LayoutsMenu));
     tr.set_toolbar_new_folder(c.t("slint.toolbar.new_folder").into());
-    tr.set_toolbar_new_folder_tip(c.t("slint.toolbar.new_folder_tip").into());
+    tr.set_toolbar_new_folder_tip(tip("slint.toolbar.new_folder_tip", Action::NewDir));
     tr.set_toolbar_terminal(c.t("slint.toolbar.terminal").into());
-    tr.set_toolbar_terminal_tip(c.t("slint.toolbar.terminal_tip").into());
+    tr.set_toolbar_terminal_tip(tip("slint.toolbar.terminal_tip", Action::OpenTerminal));
     tr.set_toolbar_terminal_wsl(c.t("slint.toolbar.terminal_wsl").into());
     tr.set_layout_save_current(c.t("slint.layout.save_current").into());
     tr.set_layout_save_title(c.t("slint.layout.save_title").into());
@@ -132,12 +146,12 @@ where
     tr.set_missing_ancestor(c.t("slint.missing.ancestor").into());
     tr.set_missing_choose(c.t("slint.missing.choose").into());
     tr.set_missing_close(c.t("slint.missing.close").into());
-    tr.set_view_hidden_tip(c.t("slint.view.hidden_tip").into());
+    tr.set_view_hidden_tip(tip("slint.view.hidden_tip", Action::ToggleHidden));
     tr.set_view_show_hidden(c.t("slint.view.show_hidden").into());
     tr.set_view_show_system(c.t("slint.view.show_system").into());
     tr.set_view_hide_dotfiles(c.t("slint.view.hide_dotfiles").into());
     tr.set_search_title(c.t("slint.search.title").into());
-    tr.set_search_tip(c.t("slint.search.tip").into());
+    tr.set_search_tip(tip("slint.search.tip", Action::Find));
     tr.set_search_placeholder(c.t("slint.search.placeholder").into());
     tr.set_search_go(c.t("slint.search.go").into());
     tr.set_search_stop(c.t("slint.search.stop").into());
@@ -222,7 +236,7 @@ where
     tr.set_fav_empty(c.t("slint.fav.empty").into());
     tr.set_fav_recents(c.t("slint.fav.recents").into());
     // Favoritos editables (panel árbol + menú ▾ del toolbar).
-    tr.set_fav_menu_tip(c.t("fav.menu_tip").into());
+    tr.set_fav_menu_tip(tip("fav.menu_tip", Action::FavoritesMenu));
     tr.set_fav_new_group(c.t("fav.new_group").into());
     tr.set_fav_rename(c.t("fav.rename").into());
     tr.set_fav_delete(c.t("fav.delete").into());
