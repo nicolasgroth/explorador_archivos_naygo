@@ -181,6 +181,11 @@ pub struct WorkspaceCtrl {
     /// La paleta eligió "abrir configuración". La UI lo lee con `take_open_config_request` y
     /// muestra la ventana de config (igual que el botón/menú de la toolbar). (Task 6/7)
     pub open_config_requested: bool,
+    /// Un atajo de teclado pidió ABRIR un menú flotante de la toolbar (Favoritos / Disposiciones).
+    /// `run_action` no puede tocar props de la UI (viven en la AppWindow), así que deja la petición
+    /// aquí y la UI la consume con `take_toolbar_menu_request` para abrir el menú correspondiente.
+    /// `Refresh-drives` también va por acá (refresca la tira). Ver `ToolbarMenuRequest`.
+    pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
@@ -190,6 +195,20 @@ pub struct WorkspaceCtrl {
     /// Se vacía al navegar (vía `start_listing`) para que el espacio libre se refresque al
     /// entrar a otra carpeta/unidad. Ver `footer_text_for`.
     footer_disk_cache: std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+}
+
+/// Petición de un atajo de teclado que necesita que la UI abra un menú/acción de la toolbar cuyos
+/// props viven en la AppWindow (no en el controlador). La UI la consume con
+/// `take_toolbar_menu_request` tras procesar la tecla. Ver `Action::FavoritesMenu`/`LayoutsMenu`/
+/// `RefreshDrives` en `run_action`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolbarMenuRequest {
+    /// Abrir el menú flotante de favoritos (estrella ▾).
+    Favorites,
+    /// Abrir el menú flotante de disposiciones (grilla 2x2).
+    Layouts,
+    /// Refrescar la tira de unidades de disco (útil para unidades de red).
+    RefreshDrives,
 }
 
 /// Estado del menú contextual abierto.
@@ -393,6 +412,7 @@ impl WorkspaceCtrl {
             open_palette_requested: false,
             palette_theme_requested: None,
             open_config_requested: false,
+            toolbar_menu_requested: None,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
         };
@@ -902,17 +922,42 @@ impl WorkspaceCtrl {
         let group_new_at_end = self.config.settings.new_items_at_end;
         let ids: Vec<PaneId> = self.listings.keys().copied().collect();
         for id in ids {
-            let (batch, done) = match self.listings.get(&id) {
-                Some(l) => l.poll(),
+            // El flag `fresh` se reclama solo cuando este poll trae avance real: o llegaron
+            // entries, o el listado TERMINÓ (carpeta vacía → done sin lotes). Un tick que poll-ea
+            // vacío y sin terminar NO lo consume, así el reemplazo de filas se aplica recién con
+            // el primer avance real. `take_fresh()` solo devuelve `true` una vez por listado.
+            let (batch, done, fresh) = match self.listings.get_mut(&id) {
+                Some(l) => {
+                    let (b, d) = l.poll();
+                    let fresh = if b.is_empty() && !d {
+                        false
+                    } else {
+                        l.take_fresh()
+                    };
+                    (b, d, fresh)
+                }
                 None => continue,
             };
+            let batch_was_empty = batch.is_empty();
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.set_visibility(vis);
                 f.group_new_at_end = group_new_at_end;
-                if !batch.is_empty() {
+                if !batch_was_empty {
+                    // Primer lote de un listado nuevo: REEMPLAZAR (no acumular) las entries que
+                    // el panel tuviera de antes. Esto evita que F5 duplique las filas al
+                    // re-listar el mismo directorio sobre un panel ya poblado.
+                    if fresh {
+                        f.entries.clear();
+                    }
                     f.entries.extend(batch);
                 }
                 if done {
+                    // Carpeta que quedó VACÍA tras refrescar: el listado nuevo no emitió ningún
+                    // lote, así que `fresh` nunca se reclamó y las entries viejas seguirían ahí.
+                    // Al terminar, si aún estaba fresco, vaciar para reflejar la carpeta vacía.
+                    if fresh && batch_was_empty {
+                        f.entries.clear();
+                    }
                     let spec = f.sort;
                     naygo_core::sort::sort_entries(&mut f.entries, &spec);
                     if f.focused.is_none() && !f.entries.is_empty() {
@@ -1796,6 +1841,13 @@ impl WorkspaceCtrl {
     /// Consume la petición de "abrir configuración" desde la paleta, si la hay. (Task 6/7)
     pub fn take_open_config_request(&mut self) -> bool {
         std::mem::take(&mut self.open_config_requested)
+    }
+
+    /// Consume la petición de abrir un menú/acción de la toolbar disparada por un atajo de teclado
+    /// (Favoritos / Disposiciones / Refrescar unidades), si la hay. La UI la aplica sobre los props
+    /// de la AppWindow. Ver `ToolbarMenuRequest`.
+    pub fn take_toolbar_menu_request(&mut self) -> Option<ToolbarMenuRequest> {
+        self.toolbar_menu_requested.take()
     }
 
     /// Navega el panel `id` a `dir` (clic en un breadcrumb / commit del editor). Reusa la
@@ -4705,6 +4757,39 @@ impl WorkspaceCtrl {
                 self.open_palette_requested = true;
                 return true;
             }
+            // --- Atajos de botones de la toolbar (configurables) ---
+            // Terminal (Ctrl+T): abre PowerShell directo en la carpeta del panel activo (acción
+            // directa, no el combo de terminales). term_int 0 = PowerShell, ver `term_from_int`.
+            Action::OpenTerminal => self.ctx_open_terminal(0),
+            // Dividir (Ctrl+Shift+T): agrega un panel de archivos (la opción más común del menú "+").
+            Action::SplitPanel => self.add_pane_split(),
+            // Mostrar/ocultar ocultos (Ctrl+H): togglea el flag, re-arma los árboles filtrados y deja
+            // que el `sync_rows` posterior refiltre los paneles. Mismo efecto que la casilla del ojo.
+            Action::ToggleHidden => {
+                let v = self.config.settings.show_hidden;
+                self.config.set_show_hidden(!v);
+                self.refresh_trees_visibility();
+            }
+            // Refrescar unidades / abrir menú de favoritos / abrir menú de disposiciones: tocan props
+            // de la AppWindow, así que dejan una petición que la UI consume tras procesar la tecla.
+            Action::RefreshDrives => {
+                self.toolbar_menu_requested = Some(ToolbarMenuRequest::RefreshDrives);
+                return true;
+            }
+            Action::FavoritesMenu => {
+                self.toolbar_menu_requested = Some(ToolbarMenuRequest::Favorites);
+                return true;
+            }
+            Action::LayoutsMenu => {
+                self.toolbar_menu_requested = Some(ToolbarMenuRequest::Layouts);
+                return true;
+            }
+            // Abrir configuración (Ctrl+Shift+O): reusa la misma petición que la paleta; la UI la
+            // consume con `take_open_config_request` e invoca el handler del engranaje.
+            Action::OpenConfig => {
+                self.open_config_requested = true;
+                return true;
+            }
             _ => {}
         }
         false
@@ -7211,6 +7296,60 @@ mod simular_usuario {
         assert!(
             active_pos_of(&c, "Documentos").is_some(),
             "la carpeta nueva aparece en la vista tras refrescar"
+        );
+    }
+
+    // ===================== 1b. Refrescar (F5) NO duplica las filas =============================
+
+    /// REGRESIÓN (bug reportado por Nicolás): al pulsar F5 sobre un panel ya poblado, las filas
+    /// se DUPLICABAN porque `pump_listings` hacía `entries.extend(batch)` sin vaciar primero las
+    /// entries previas. RESULTADO esperado: tras refrescar, el panel tiene EXACTAMENTE los mismos
+    /// archivos que el disco, sin copias. Cubre el flag `Listing::fresh` + el `clear()` del primer
+    /// lote en `pump_listings`.
+    #[test]
+    fn refrescar_f5_no_duplica_las_filas() {
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(work.path().join("b.txt"), b"b").unwrap();
+        std::fs::create_dir(work.path().join("sub")).unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+
+        let n0 = c.ws.active_files().unwrap().entries.len();
+        assert_eq!(n0, 3, "el listado inicial trae los 3 ítems");
+
+        // Refrescar varias veces (F5): cada refresco debe REEMPLAZAR, no acumular.
+        for _ in 0..3 {
+            assert!(c.refresh_active(), "F5 inicia el re-listado");
+            assert!(drain(&mut c), "el re-listado termina");
+            assert_eq!(
+                c.ws.active_files().unwrap().entries.len(),
+                3,
+                "refrescar NO debe duplicar: siguen siendo 3 ítems"
+            );
+        }
+    }
+
+    /// REGRESIÓN: refrescar una carpeta que QUEDÓ VACÍA (todos sus ítems se borraron desde fuera)
+    /// debe dejar el panel vacío, no con las filas viejas. Cubre el `clear()` de la rama `done`
+    /// cuando el listado nuevo no emitió ningún lote.
+    #[test]
+    fn refrescar_carpeta_que_quedo_vacia_limpia_las_filas() {
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(work.path().join("b.txt"), b"b").unwrap();
+        let (mut c, _cfg) = ctrl_en(work.path());
+        assert_eq!(c.ws.active_files().unwrap().entries.len(), 2);
+
+        // Se borran los archivos por fuera y se refresca.
+        std::fs::remove_file(work.path().join("a.txt")).unwrap();
+        std::fs::remove_file(work.path().join("b.txt")).unwrap();
+        assert!(c.refresh_active());
+        assert!(drain(&mut c));
+
+        assert_eq!(
+            c.ws.active_files().unwrap().entries.len(),
+            0,
+            "tras refrescar, la carpeta vacía no debe conservar las filas viejas"
         );
     }
 
