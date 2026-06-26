@@ -107,10 +107,11 @@ component ConflictCol inherits Rectangle {
             color: root.highlight ? Theme.accent : Theme.text-dim;
             font-size: 11px;
         }
-        // Nombre del archivo: lo más visible.
+        // Nombre del archivo: lo más visible. Usa Theme.text (no `white` literal) para que sea
+        // legible también en temas claros.
         Text {
             text: root.name;
-            color: white;
+            color: Theme.text;
             overflow: elide;
             wrap: no-wrap;
         }

@@ -311,47 +311,60 @@ fn resolve_action(
                         if super::are_identical(existing, incoming) {
                             return ConflictAction::Skip;
                         }
-                        // Difieren: este choque merece decisión → preguntar (cae abajo).
+                        // Difieren: este choque merece decisión → preguntar (cae al loop de abajo).
                     }
                     other => return other,
                 }
             }
-            // Preguntar a la UI: prompt ENRIQUECIDO con metadatos de ambos lados (la UI los muestra
-            // LADO A LADO). El motor ya tiene las rutas a mano.
-            let _ = tx.send(OpMsg::Conflict(ConflictPrompt::from_paths(
-                existing.to_path_buf(),
-                incoming.to_path_buf(),
-            )));
-            // Esperar la decisión sin colgar si se cancela: poll con timeout.
-            let decision = loop {
-                if token.is_cancelled() {
-                    return ConflictAction::Skip;
-                }
-                match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                    Ok(d) => break d,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // Bucle de pregunta: normalmente se pregunta UNA vez. Pero "Saltar idénticos" sobre un
+            // par que DIFIERE no es una decisión terminal (la palabra es "saltar", nunca debe
+            // sobrescribir en silencio): si difieren, se vuelve a mostrar el modal para que el
+            // usuario decida de verdad qué hacer con ESE archivo. Idénticos → Skip y listo.
+            loop {
+                // Preguntar a la UI: prompt ENRIQUECIDO con metadatos de ambos lados (la UI los
+                // muestra LADO A LADO). El motor ya tiene las rutas a mano.
+                let _ = tx.send(OpMsg::Conflict(ConflictPrompt::from_paths(
+                    existing.to_path_buf(),
+                    incoming.to_path_buf(),
+                )));
+                // Esperar la decisión sin colgar si se cancela: poll con timeout.
+                let decision = loop {
+                    if token.is_cancelled() {
                         return ConflictAction::Skip;
                     }
-                }
-            };
-            // "Aplicar a todos" no aplica a `RenameTo` (cada archivo necesita su propio nombre). La
-            // UI ya lo deshabilita ahí; por las dudas, no lo memorizamos.
-            if decision.apply_all && !matches!(decision.action, ConflictAction::RenameTo(_)) {
-                *applied_all = Some(decision.action.clone());
-            }
-            // Si la acción elegida (suelta o recién memorizada) es `SkipIdentical`, evaluarla YA
-            // para este ítem: idénticos → Skip; si difieren, Overwrite (la copia entra). Como suelta
-            // es razonable; como política, los siguientes ítems pasan por la rama memorizada de
-            // arriba (idénticos → Skip; difieren → preguntan).
-            if matches!(decision.action, ConflictAction::SkipIdentical) {
-                return if super::are_identical(existing, incoming) {
-                    ConflictAction::Skip
-                } else {
-                    ConflictAction::Overwrite
+                    match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                        Ok(d) => break d,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            return ConflictAction::Skip;
+                        }
+                    }
                 };
+                // "Saltar idénticos" elegido suelto o como política: evaluarlo YA para este ítem.
+                // Idénticos → Skip. Si DIFIEREN: memorizar la política si pidió "aplicar a todos"
+                // (para que los siguientes idénticos se salten solos) y volver a preguntar por ESTE
+                // archivo (nunca sobrescribir sin que el usuario lo confirme explícitamente).
+                if matches!(decision.action, ConflictAction::SkipIdentical) {
+                    if super::are_identical(existing, incoming) {
+                        if decision.apply_all {
+                            *applied_all = Some(ConflictAction::SkipIdentical);
+                        }
+                        return ConflictAction::Skip;
+                    }
+                    if decision.apply_all {
+                        *applied_all = Some(ConflictAction::SkipIdentical);
+                    }
+                    // Difieren: re-preguntar (el loop vuelve a enviar el prompt).
+                    continue;
+                }
+                // Cualquier otra acción es terminal. "Aplicar a todos" no aplica a `RenameTo` (cada
+                // archivo necesita su propio nombre); la UI ya lo deshabilita, pero por las dudas
+                // no lo memorizamos.
+                if decision.apply_all && !matches!(decision.action, ConflictAction::RenameTo(_)) {
+                    *applied_all = Some(decision.action.clone());
+                }
+                return decision.action;
             }
-            decision.action
         }
     }
 }
@@ -1481,6 +1494,64 @@ mod tests {
         );
         assert_eq!(conflicts, 1, "preguntó una vez");
         assert_eq!(summary.count_skipped(), 1, "idénticos → saltado");
+    }
+
+    #[test]
+    fn skip_identical_suelto_sobre_distintos_repregunta_no_sobrescribe() {
+        // "Saltar idénticos" elegido SUELTO (sin aplicar-a-todos) sobre un par que DIFIERE NO debe
+        // sobrescribir en silencio (la palabra es "saltar"): debe volver a preguntar para que el
+        // usuario decida de verdad. El test responde el primer prompt con SkipIdentical y el segundo
+        // con Skip → el destino queda INTACTO (no pisado). Esperado: 2 prompts, destino sin cambiar.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"origen-distinto").unwrap();
+        let dst = dir.path().join("dst");
+        fs::create_dir(&dst).unwrap();
+        let existing = dst.join("a.txt");
+        fs::write(&existing, b"destino-original").unwrap();
+        // mtime distinto a propósito (no igualamos) → are_identical = false.
+
+        let req = super::super::transfer(false, vec![src], dst.clone());
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let prompts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompts2 = prompts.clone();
+        // 1er prompt: SkipIdentical (suelto). Como difieren, el motor RE-pregunta. 2º prompt: Skip.
+        let resp = std::thread::spawn(move || {
+            let mut first = true;
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    prompts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let action = if first {
+                        first = false;
+                        ConflictAction::SkipIdentical
+                    } else {
+                        ConflictAction::Skip
+                    };
+                    let _ = ctx.send(ConflictDecision {
+                        action,
+                        apply_all: false,
+                    });
+                }
+            }
+        });
+        let summary = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+
+        assert_eq!(
+            prompts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "difieren → SkipIdentical suelto vuelve a preguntar (2 prompts)"
+        );
+        assert_eq!(
+            fs::read_to_string(&existing).unwrap(),
+            "destino-original",
+            "el destino NO se sobrescribió: 'saltar idénticos' jamás pisa sin confirmar"
+        );
+        assert_eq!(summary.count_skipped(), 1);
     }
 
     #[test]
