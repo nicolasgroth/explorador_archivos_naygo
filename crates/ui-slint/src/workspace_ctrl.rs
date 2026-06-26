@@ -7344,6 +7344,63 @@ mod simular_usuario {
             .position(|&real| f.entries[real].name == name)
     }
 
+    /// REGRESIÓN (reportado por Nicolás): arrastrar un archivo a otro panel donde YA EXISTE, y
+    /// confirmar el drop, debe DETENERSE en el conflicto (preguntar) — no sobrescribir en silencio.
+    /// Reproduce el flujo completo drop_at → confirm_pending_drop → motor con first_collision.
+    /// Distingue si el bug está en el MOTOR (este test falla) o solo en la UI/timing (pasa).
+    #[test]
+    fn drop_sobre_archivo_existente_confirmado_pide_conflicto_no_sobrescribe() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        // El MISMO nombre existe en ambos lados, con contenido DISTINTO.
+        std::fs::write(a.path().join("doc.txt"), b"ORIGEN-nuevo").unwrap();
+        std::fs::write(b.path().join("doc.txt"), b"DESTINO-viejo").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = area();
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let (cx, cy) = pane_center(&c, area, dest);
+
+        // Soltar el archivo sobre el destino (Ctrl=copia, determinista) y CONFIRMAR.
+        assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false));
+        assert!(c.confirm_pending_drop(), "el drop confirmado arranca la op");
+
+        // Drenar las ops hasta que el motor PIDA el conflicto (pending_dialog = Conflict). Si en
+        // vez de eso la op termina (summary) SIN preguntar, es el bug: sobrescribió en silencio.
+        let mut pidio_conflicto = false;
+        for _ in 0..4000 {
+            c.ops.pump_ops();
+            if matches!(
+                c.ops.pending_dialog,
+                Some(crate::ops_ctrl::OpDialog::Conflict { .. })
+            ) {
+                pidio_conflicto = true;
+                break;
+            }
+            if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
+                break; // terminó sin preguntar
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(
+            pidio_conflicto,
+            "copiar sobre un archivo que YA existe debe DETENERSE en el conflicto, no sobrescribir"
+        );
+        // El destino NO debe haberse pisado mientras se espera la decisión.
+        assert_eq!(
+            std::fs::read_to_string(b.path().join("doc.txt")).unwrap(),
+            "DESTINO-viejo",
+            "el destino no se toca hasta que el usuario decida"
+        );
+    }
+
     /// El char unicode de una tecla especial de Slint, como String (lo que llega a `on_key`).
     /// Copiado de keys.rs:92.
     fn key_char(k: slint::platform::Key) -> String {
