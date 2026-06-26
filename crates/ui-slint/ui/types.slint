@@ -290,11 +290,26 @@ export struct OpRowVm {
     files-done-count: int, // cuántos archivos se concretaron (para el texto "Ver N archivos")
 }
 
-// Una fila del popup "Archivos de la operación": nombre + estado.
+// Una fila del popup "Archivos de la operación": ruta relativa + tamaño + estado (PUNTO 3).
 export struct OpFileVm {
-    name: string,
-    status: int,    // 0=hecho 1=saltado 2=fallido (color)
-    detail: string, // motivo del fallo (solo status==2)
+    name: string,     // solo el nombre (respaldo)
+    rel-path: string, // ruta relativa al destino ("sub/config.txt") — lo que se muestra
+    size: string,     // tamaño ya formateado ("2,0 KB"); vacío si carpeta/desconocido
+    status: int,      // 0=hecho 1=saltado 2=fallido (color)
+    detail: string,   // motivo del fallo (solo status==2)
+}
+
+// Encabezado del popup "Archivos de la operación" (PUNTO 3): tipo + carpetas origen/destino +
+// estadísticas. Lo arma Rust desde el request + summary de la op.
+export struct OpFileContextVm {
+    kind: int,         // 0=Copiar 1=Mover 2=otra (la UI compone la etiqueta con i18n)
+    origin: string,    // carpeta de origen
+    dest: string,      // carpeta de destino
+    total-files: int,
+    done: int,
+    skipped: int,
+    failed: int,
+    total-size: string, // tamaño total transferido ya formateado
 }
 
 // Fila del historial de deshacer.

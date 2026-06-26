@@ -693,8 +693,12 @@ impl OpsCtrl {
                 self.active_ops[i].awaiting_conflict = Some(prompt);
             }
             if let Some(summary) = finished {
-                // Registrar el deshacer si corresponde.
-                if let Some(req) = self.active_ops[i].request.take() {
+                // Registrar el deshacer si corresponde. NO se hace `.take()` del request: se CONSERVA
+                // en la op terminada para que el popup "Archivos de la operación" pueda mostrar el
+                // contexto (tipo, origen, destino) y calcular las rutas relativas al destino (PUNTO
+                // 3). Las ops terminadas están topeadas a 20 (HISTORY_CAP), así que el costo de
+                // retener el request es despreciable.
+                if let Some(req) = self.active_ops[i].request.clone() {
                     if let Some(actions) = undo::build_undo(&req, &summary) {
                         if !actions.is_empty() {
                             let id = self.next_undo_id;
@@ -971,6 +975,29 @@ impl OpsCtrl {
         if let Some(op) = self.active_ops.iter().find(|o| o.id as i32 == op_id) {
             op.token.cancel();
         }
+    }
+
+    /// Cancela TODAS las operaciones activas de un golpe (botón "Cancelar todo" del panel, tras
+    /// confirmar). Itera `active_ops` y cancela el token de cada op que NO terminó (las del
+    /// historial ya no tienen nada que cancelar). Cubre los tres estados activos: copiando (el motor
+    /// ve el token), "Calculando…" (el worker de plan ve el token) y en cola (su token queda
+    /// cancelado; al promoverla, el motor abortará limpio). Una op detenida en un conflicto también
+    /// se cancela (el worker sale del `recv_timeout` y aborta). Devuelve cuántas ops se cancelaron.
+    pub fn cancel_all_ops(&mut self) -> usize {
+        let mut n = 0;
+        for op in self.active_ops.iter() {
+            // "Activa" = aún no es historial: tiene canal del motor o de plan vivo, está esperando
+            // una decisión de carpeta, o está en cola esperando turno.
+            let active = op.rx.is_some()
+                || op.plan_rx.is_some()
+                || op.awaiting_folders.is_some()
+                || !op.started;
+            if active {
+                op.token.cancel();
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Pausa la op identificada por `op_id` (el motor se detiene en el siguiente
@@ -1285,12 +1312,17 @@ impl OpsCtrl {
     /// popup distinga lo que se concretó de lo que no. Vacío si la op no existe o no terminó.
     /// Se calcula al vuelo desde `summary.items` (no se cachea: el popup se abre por demanda).
     pub fn op_file_list(&self, op_id: u64) -> Vec<OpFileEntry> {
+        use naygo_core::format::{format_size, SizeFormat};
         let Some(op) = self.active_ops.iter().find(|o| o.id == op_id) else {
             return Vec::new();
         };
         let Some(summary) = &op.summary else {
             return Vec::new();
         };
+        // Raíz para calcular las rutas RELATIVAS (PUNTO 3): la carpeta DESTINO de la op. Las rutas de
+        // `summary.items` son las de DESTINO (`step.to`), así que se recortan contra el destino. Si
+        // no hay request/destino (Delete, Create…), `rel_path` cae al nombre del archivo.
+        let dest_root: Option<&Path> = op.request.as_ref().and_then(|r| r.dest_dir.as_deref());
         summary
             .items
             .iter()
@@ -1299,6 +1331,15 @@ impl OpsCtrl {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
+                // Ruta relativa al destino: ".git/config" en vez de solo "config". Si no comparte
+                // prefijo (otra unidad, ruta rara) o no hay destino, cae al nombre.
+                let rel_path = rel_to_root(path, dest_root).unwrap_or_else(|| name.clone());
+                // Tamaño: solo para archivos que existen en disco (los Done). Para saltados/fallidos
+                // el destino puede no existir; se deja vacío. Carpeta → vacío.
+                let size = match std::fs::metadata(path) {
+                    Ok(m) if m.is_file() => format_size(m.len(), SizeFormat::Auto),
+                    _ => String::new(),
+                };
                 // 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
                 let (status, detail) = match outcome {
                     naygo_core::ops::OpOutcome::Done => (0, String::new()),
@@ -1307,11 +1348,57 @@ impl OpsCtrl {
                 };
                 OpFileEntry {
                     name,
+                    rel_path,
+                    size,
                     status,
                     detail,
                 }
             })
             .collect()
+    }
+
+    /// Contexto de la op terminada `op_id` para el ENCABEZADO del popup (PUNTO 3): tipo + carpetas
+    /// de origen/destino + estadísticas (totales + hechos/saltados/fallidos + tamaño total). Se
+    /// deriva de `request` (sources/dest/kind) y `summary` (items + bytes). Vacío si la op no existe
+    /// o no terminó.
+    pub fn op_file_context(&self, op_id: u64) -> OpFileContext {
+        use naygo_core::format::{format_size, SizeFormat};
+        let Some(op) = self.active_ops.iter().find(|o| o.id == op_id) else {
+            return OpFileContext::default();
+        };
+        let Some(summary) = &op.summary else {
+            return OpFileContext::default();
+        };
+        // Tipo: 0=Copiar 1=Mover 2=otra. Se toma del request (si lo hay).
+        let kind = match op.request.as_ref().map(|r| &r.kind) {
+            Some(OpKind::Copy) => 0,
+            Some(OpKind::Move) => 1,
+            _ => 2,
+        };
+        // Origen = carpeta que CONTIENE la primera fuente (de dónde salen los archivos).
+        let origin = op
+            .request
+            .as_ref()
+            .and_then(|r| r.sources.first())
+            .and_then(|s| s.parent())
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let dest = op
+            .request
+            .as_ref()
+            .and_then(|r| r.dest_dir.as_deref())
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        OpFileContext {
+            kind,
+            origin,
+            dest,
+            total_files: summary.items.len() as i32,
+            done: summary.count_done() as i32,
+            skipped: summary.count_skipped() as i32,
+            failed: summary.count_failed() as i32,
+            total_size: format_size(summary.bytes_done, SizeFormat::Auto),
+        }
     }
 
     // --- Aplicar decisiones de los modales ---
@@ -1500,15 +1587,40 @@ impl OpsCtrl {
     }
 }
 
-/// Una fila del popup "Archivos de la operación": nombre + estado (0=hecho 1=saltado 2=fallido)
-/// + detalle del error si falló. Espejo de `OpFileVm` de Slint.
+/// Una fila del popup "Archivos de la operación": nombre + ruta RELATIVA + tamaño + estado
+/// (0=hecho 1=saltado 2=fallido) + detalle del error si falló. Espejo de `OpFileVm` de Slint.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpFileEntry {
+    /// Solo el nombre del archivo (se conserva por compatibilidad/respaldo).
     pub name: String,
+    /// Ruta RELATIVA a la carpeta destino de la op (PUNTO 3). P. ej. ".git/config" en vez de solo
+    /// "config". Si no comparte prefijo con el destino, cae al nombre.
+    pub rel_path: String,
+    /// Tamaño del archivo ya formateado ("1,2 MB"); vacío si no se pudo leer o es carpeta.
+    pub size: String,
     /// 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
     pub status: i32,
     /// Motivo del fallo (solo cuando status==2); vacío en los demás casos.
     pub detail: String,
+}
+
+/// Contexto de una operación terminada para el encabezado del popup (PUNTO 3): tipo (Copiar/Mover/
+/// otra), carpetas de origen y destino, y estadísticas (totales + hechos/saltados/fallidos + tamaño
+/// total). Todo ya como String listo para la UI. Lo arma `op_file_context`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OpFileContext {
+    /// 0=Copiar 1=Mover 2=otra (la UI compone la etiqueta con i18n).
+    pub kind: i32,
+    /// Carpeta de ORIGEN (la primera fuente del request), vacía si no se conoce.
+    pub origin: String,
+    /// Carpeta de DESTINO de la op, vacía si no se conoce.
+    pub dest: String,
+    pub total_files: i32,
+    pub done: i32,
+    pub skipped: i32,
+    pub failed: i32,
+    /// Tamaño total transferido ya formateado ("12,4 GB").
+    pub total_size: String,
 }
 
 /// Resumen del detalle de archivos de una op terminada, para la fila de historial.
@@ -1533,6 +1645,20 @@ fn file_summary_of(summary: &OpSummary) -> (String, bool, i32) {
         0 => (String::new(), false, 0),
         1..=2 => (done.join(", "), false, count),
         _ => (String::new(), true, count),
+    }
+}
+
+/// Ruta de `p` RELATIVA a `root` (PUNTO 3), con separadores `/` para la UI. Si `root` es `None` o
+/// `p` no cuelga de `root` (otra unidad, ruta sin prefijo común), devuelve `None` (el llamador cae
+/// al nombre). P. ej. `rel_to_root("D:/dst/.git/config", Some("D:/dst"))` → `".git/config"`.
+fn rel_to_root(p: &Path, root: Option<&Path>) -> Option<String> {
+    let root = root?;
+    let rel = p.strip_prefix(root).ok()?;
+    let s = rel.to_string_lossy().replace('\\', "/");
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -1792,6 +1918,68 @@ mod tests {
             .active_ops
             .iter()
             .all(|o| o.rx.is_none() && !o.is_planning()));
+    }
+
+    #[test]
+    fn cancel_all_ops_cancela_todas_las_activas() {
+        // Dos copias grandes en paralelo → cancel_all_ops cancela AMBAS de un golpe; ninguna deja
+        // su carpeta destino completa (se aborta a mitad). PUNTO 2.
+        let tmp = tempfile::tempdir().unwrap();
+        // Dos orígenes con varios archivos para que la copia no termine instantánea.
+        let mk_src = |name: &str| {
+            let dir = tmp.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            for i in 0..50 {
+                std::fs::write(dir.join(format!("f{i}.bin")), vec![0u8; 4096]).unwrap();
+            }
+            dir
+        };
+        let src1 = mk_src("a");
+        let src2 = mk_src("b");
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        // Paralelo (default): ambas corren a la vez.
+        assert_eq!(c.ops_mode, OpsMode::Parallel);
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src1], dst.clone()),
+            "Copiar A".into(),
+            true,
+        );
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src2], dst.clone()),
+            "Copiar B".into(),
+            true,
+        );
+        assert_eq!(c.active_ops.len(), 2, "dos ops activas");
+        // Dejar que arranquen (salgan de Planning y empiecen a copiar/escanear).
+        for _ in 0..50 {
+            c.pump_ops();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Cancelar TODO: debe reportar 2 (ambas activas).
+        let cancelled = c.cancel_all_ops();
+        assert_eq!(cancelled, 2, "se cancelaron las dos ops");
+        // Drenar hasta reposo: ambos workers ven el token cancelado y cierran.
+        for _ in 0..4000 {
+            if c.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Ambas terminaron (sin canal vivo) y ya no hay ops activas.
+        assert!(
+            c.active_ops
+                .iter()
+                .all(|o| o.rx.is_none() && o.plan_rx.is_none()),
+            "ninguna op quedó con canal vivo tras cancelar todo"
+        );
+    }
+
+    #[test]
+    fn cancel_all_ops_sin_ops_no_cancela_nada() {
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        assert_eq!(c.cancel_all_ops(), 0, "sin ops, cancela 0");
     }
 
     #[test]
@@ -2638,5 +2826,50 @@ mod tests {
         assert_eq!(list[1].status, 1); // Skipped
         assert_eq!(list[2].status, 2); // Failed
         assert_eq!(list[2].detail, "permiso");
+    }
+
+    #[test]
+    fn op_file_list_da_rutas_relativas_y_contexto() {
+        // PUNTO 3: copiar una carpeta con un archivo ANIDADO → la lista del popup muestra la ruta
+        // RELATIVA al destino (no solo el nombre) + el tamaño, y `op_file_context` trae el tipo
+        // (Copiar), las carpetas origen/destino y las estadísticas.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("proyecto");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub").join("config.txt"), vec![0u8; 2048]).unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::transfer(false, vec![src.clone()], dst.clone()),
+            "Copiar".into(),
+            true,
+        );
+        drain(&mut c);
+        let id = c.active_ops[0].id;
+        // La copia aterrizó: el archivo anidado existe en el destino.
+        assert!(dst.join("proyecto/sub/config.txt").exists());
+        let list = c.op_file_list(id);
+        // La fila del archivo trae la ruta RELATIVA al destino (con separador /), no solo el nombre.
+        let cfg = list
+            .iter()
+            .find(|e| e.name == "config.txt")
+            .expect("config.txt está en la lista");
+        assert_eq!(
+            cfg.rel_path, "proyecto/sub/config.txt",
+            "la ruta es relativa al destino, no solo el nombre"
+        );
+        assert!(!cfg.size.is_empty(), "trae el tamaño formateado");
+        assert_eq!(cfg.status, 0, "se concretó (Done)");
+
+        // Contexto del encabezado: tipo Copiar (0), origen = carpeta que contiene `src`, destino =
+        // `dst`, y al menos un archivo hecho.
+        let ctx = c.op_file_context(id);
+        assert_eq!(ctx.kind, 0, "Copiar");
+        assert_eq!(ctx.dest, dst.display().to_string());
+        assert_eq!(ctx.origin, tmp.path().display().to_string());
+        assert!(ctx.done >= 1, "al menos un archivo hecho");
+        assert_eq!(ctx.failed, 0);
+        assert!(!ctx.total_size.is_empty(), "tamaño total formateado");
     }
 }

@@ -1,7 +1,7 @@
 // Naygo — ventana principal (Slint, Fase 2c: multi-panel + paneles especiales + acciones).
 // Copyright (c) 2026 N. Groth / ISGroth. MIT.
 import { LineEdit, ListView } from "std-widgets.slint";
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, OpFileVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, OpFileVm, OpFileContextVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { ColumnMenu } from "column-menu.slint";
@@ -1147,12 +1147,22 @@ export component AppWindow inherits Window {
     callback op-pause(int);
     callback op-resume(int);
     callback op-skip(int);
+    // Cancelar TODAS las operaciones en curso de un golpe (botón "Cancelar todo" del panel
+    // Operaciones). Rust abre primero un modal de confirmación; este callback solo PIDE cancelar.
+    callback op-cancel-all();
+    // Un arrastre OLE (DoDragDrop) está corriendo su bucle modal: los paneles Files desmontan su
+    // TouchArea exterior mientras es true para evitar la captura de puntero huérfana (ver
+    // file-panel.slint `drag-in-progress`). Rust lo pone en true al lanzar el arrastre y en false al
+    // terminar (drop procesado o cancelado).
+    in property <bool> drag-in-progress: false;
     // Popup "Archivos de la operación": el enlace "Ver N archivos" de una fila del historial pide
     // a Rust la lista completa (op-show-files con el id de la op); Rust llena `op-file-list` +
     // `op-file-list-label` y abre el modal poniendo `op-file-list-open`.
     callback op-show-files(int);
     in property <[OpFileVm]> op-file-list;
     in property <string> op-file-list-label;
+    // Encabezado enriquecido del popup (PUNTO 3): tipo + origen + destino + estadísticas.
+    in property <OpFileContextVm> op-file-context;
     in-out property <bool> op-file-list-open;
     in property <[ResumeRowVm]> resume-rows;
     callback resume-decide(string, int);
@@ -1710,6 +1720,10 @@ export component AppWindow inherits Window {
                         // robarle hover/clic al velo del modal (si no, el popup tiene el hover muerto
                         // hasta el primer clic y arrastrar resalta filas que no debería). > 0 = visible.
                         modal-open: root.op-dialog.kind > 0 || root.message.kind > 0;
+                        // Mientras un arrastre OLE está en curso (DoDragDrop modal), el panel desmonta
+                        // su TouchArea exterior para no quedar con la captura de puntero huérfana del
+                        // bucle modal de Windows (fix de la "captura fantasma"). Rust lo togglea.
+                        drag-in-progress: root.drag-in-progress;
                         rows: p.rows;
                         columns: p.columns;
                         col-menu: p.col-menu;
@@ -1832,6 +1846,7 @@ export component AppWindow inherits Window {
                         resume(i) => { root.op-resume(i); }
                         skip(i) => { root.op-skip(i); }
                         cancel(i) => { root.op-cancel(i); }
+                        cancel-all() => { root.op-cancel-all(); }
                         show-files(i) => { root.op-show-files(i); }
                     }
                 }
@@ -2581,6 +2596,7 @@ export component AppWindow inherits Window {
         open: root.op-file-list-open;
         op-label: root.op-file-list-label;
         rows: root.op-file-list;
+        context: root.op-file-context;
         close() => { root.op-file-list-open = false; }
     }
 }

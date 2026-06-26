@@ -485,6 +485,9 @@ export component OpsPanel inherits Rectangle {
     callback resume(int);
     callback skip(int);
     callback cancel(int);
+    // Cancelar TODAS las operaciones en curso de un golpe (botón del header). La UI abre primero un
+    // modal de confirmación; este callback solo PIDE cancelar. PUNTO 2.
+    callback cancel-all();
     // El enlace "Ver N archivos" de una fila de historial pide abrir el popup con la lista.
     callback show-files(int);
 
@@ -494,7 +497,7 @@ export component OpsPanel inherits Rectangle {
         padding: 8px;
         spacing: 6px;
 
-        // Encabezado del panel + resumen.
+        // Encabezado del panel + botón "Cancelar todo" + resumen.
         HorizontalLayout {
             spacing: 8px;
             Text {
@@ -505,6 +508,14 @@ export component OpsPanel inherits Rectangle {
                 vertical-alignment: center;
             }
             Rectangle { horizontal-stretch: 1; }
+            // "Cancelar todo": visible solo cuando hay ALGO activo (calculando / en curso / en cola).
+            // La confirmación la abre Rust (modal MessageModal de 2 botones) antes de cancelar.
+            if (root.planning-count + root.running-count + root.queued-count) > 0: OpButton {
+                label: Tr.ops-cancel-all;
+                danger: true;
+                show-cancel: true;
+                pressed => { root.cancel-all(); }
+            }
             Text {
                 // Resumen: "[K calculando · ]N en curso · M en cola". El tramo "calculando" solo
                 // aparece si hay alguna op escaneando su plan.

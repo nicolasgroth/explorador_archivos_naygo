@@ -116,6 +116,12 @@ pub struct WorkspaceCtrl {
     /// sobre ningún panel Files. Estado de UI transitorio: no se persiste. La UI lo refleja en
     /// `PaneVm.drag-over` (true solo para el panel cuyo id coincide).
     pub drag_over_pane: Option<PaneId>,
+    /// Drop intra-app (entre paneles) en ESPERA de confirmación del usuario (decisión de Nicolás:
+    /// "confirmar al soltar"). `drop_at` ya validó (destino Files, no es la propia carpeta) y guardó
+    /// aquí la operación; la UI muestra un modal "¿Copiar/Mover N a «destino»?" y, al confirmar,
+    /// llama a `confirm_pending_drop` que arranca la op de verdad. Al cancelar, `cancel_pending_drop`
+    /// lo descarta. `None` = no hay drop pendiente. Estado transitorio: no se persiste.
+    pub pending_drop: Option<PendingDrop>,
     /// Último clic (panel, posición de vista, instante) para detectar el doble-clic en Rust
     /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
     /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
@@ -228,6 +234,21 @@ pub struct ContextMenuState {
 pub struct NewFolderState {
     pub dir: PathBuf,
     pub text: String,
+}
+
+/// Un drop intra-app (entre paneles) ya validado y a la espera de que el usuario CONFIRME la
+/// copia/mueve en un modal. Guarda todo lo necesario para arrancar la op al confirmar, sin volver
+/// a hit-testear (el destino ya se resolvió). Ver `WorkspaceCtrl::pending_drop`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingDrop {
+    /// Archivos a copiar/mover (las rutas de origen del OLE).
+    pub paths: Vec<PathBuf>,
+    /// Carpeta destino resuelta (el panel bajo el cursor al soltar).
+    pub dest_dir: PathBuf,
+    /// `true` = mover, `false` = copiar (ya decidido por modificadores + mismo disco).
+    pub is_move: bool,
+    /// Cuántos elementos (para el texto del modal; == `paths.len()`).
+    pub count: usize,
 }
 
 /// Mapea el entero de la UI a una terminal: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL.
@@ -389,6 +410,7 @@ impl WorkspaceCtrl {
                 h: 0.0,
             },
             drag_over_pane: None,
+            pending_drop: None,
             last_click: None,
             last_open: None,
             typeahead: String::new(),
@@ -3172,16 +3194,51 @@ impl WorkspaceCtrl {
         let is_move =
             move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
         let label = if is_move { "Mover" } else { "Copiar" };
+        // CONFIRMAR AL SOLTAR (decisión de Nicolás): NO ejecutamos la op aquí. Guardamos el drop ya
+        // validado en `pending_drop` y devolvemos true; la UI abre un modal "¿Copiar/Mover N a
+        // «destino»?" y, al confirmar, llama a `confirm_pending_drop` que arranca la op de verdad.
+        // Así un arrastre accidental entre paneles no copia/mueve archivos sin que el usuario lo vea.
+        let count = paths.len();
         crate::logging::breadcrumb(&format!(
-            "drop_at: {} {} ítem(s) → {}",
+            "drop_at: {} {} ítem(s) → {} (pendiente de confirmar)",
             label,
-            paths.len(),
+            count,
             dest_dir.display(),
         ));
-        let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
+        self.pending_drop = Some(PendingDrop {
+            paths,
+            dest_dir,
+            is_move,
+            count,
+        });
+        true
+    }
+
+    /// El usuario CONFIRMÓ el drop pendiente (botón Copiar/Mover del modal): arranca la op real.
+    /// Devuelve true si había un drop pendiente y se lanzó. No-op (false) si no había ninguno.
+    pub fn confirm_pending_drop(&mut self) -> bool {
+        let Some(pd) = self.pending_drop.take() else {
+            return false;
+        };
+        let label = if pd.is_move { "Mover" } else { "Copiar" };
+        crate::logging::breadcrumb(&format!(
+            "confirm_pending_drop: {} {} ítem(s) → {}",
+            label,
+            pd.count,
+            pd.dest_dir.display(),
+        ));
+        let req = naygo_core::ops::transfer(pd.is_move, pd.paths, pd.dest_dir);
         self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
         true
+    }
+
+    /// El usuario CANCELÓ el drop pendiente (botón Cancelar / Esc / clic fuera): lo descarta sin
+    /// copiar ni mover nada.
+    pub fn cancel_pending_drop(&mut self) {
+        if self.pending_drop.take().is_some() {
+            crate::logging::breadcrumb("cancel_pending_drop: drop descartado por el usuario");
+        }
     }
 
     /// Eliminar la selección: abre el modal de confirmación.
@@ -5880,6 +5937,18 @@ mod tests {
             false, // move_hint del OLE (sin Shift al soltar)
         );
         assert!(routed, "drop_at debe enrutar (no caer al fallback)");
+        // CONFIRMAR AL SOLTAR: `drop_at` ya no ejecuta; deja el drop pendiente. La op real arranca
+        // al confirmar (lo que hace el botón Copiar/Mover del modal). Sanity: nada se copió todavía.
+        assert!(
+            c.pending_drop.is_some(),
+            "el drop queda pendiente de confirmar"
+        );
+        assert!(
+            !b.path().join("doc.txt").exists(),
+            "antes de confirmar no se copió nada"
+        );
+        assert!(c.confirm_pending_drop(), "confirmar arranca la op");
+        assert!(c.pending_drop.is_none(), "el pendiente se consumió");
         // Drenar la op y verificar que la copia aterrizó en el panel destino (`b`), no en `a`.
         for _ in 0..2000 {
             if c.ops.pump_ops() {
@@ -5982,6 +6051,13 @@ mod tests {
         // (Shift REAL al soltar, reportado por el OLE). Debe MOVER → el original desaparece.
         let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], true);
         assert!(routed, "drop_at debe enrutar");
+        // El drop queda pendiente: debe ser MOVER (el move_hint del OLE manda).
+        assert_eq!(
+            c.pending_drop.as_ref().map(|p| p.is_move),
+            Some(true),
+            "el drop pendiente es Mover por el move_hint"
+        );
+        assert!(c.confirm_pending_drop(), "confirmar arranca la op");
         for _ in 0..2000 {
             if c.ops.pump_ops() {
                 break;
@@ -6034,6 +6110,7 @@ mod tests {
         // ctrl=false, shift=false, move_hint=false → la decisión depende del disco. Mismo disco → Mover.
         let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], false);
         assert!(routed, "drop_at debe enrutar");
+        assert!(c.confirm_pending_drop(), "confirmar arranca la op");
         for _ in 0..2000 {
             if c.ops.pump_ops() {
                 break;
@@ -6045,6 +6122,63 @@ mod tests {
             !a.path().join("doc.txt").exists(),
             "mismo disco sin modificadores: se MOVIÓ (el original ya no está)"
         );
+    }
+
+    /// CONFIRMAR AL SOLTAR (PUNTO 1b): un drop entre paneles NO ejecuta la operación hasta que el
+    /// usuario confirme. `drop_at` solo deja el drop pendiente; CANCELAR lo descarta sin tocar el
+    /// disco. Regresión del bug "arrastré sin querer una carpeta a otro panel y empezó a copiarla".
+    #[test]
+    fn drop_at_no_ejecuta_hasta_confirmar_y_cancelar_descarta() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("doc.txt"), b"x").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let panes = c.pane_rects(area);
+        let (_, dest_rect) = panes
+            .iter()
+            .find(|(id, _)| *id == dest)
+            .copied()
+            .expect("el panel destino tiene rect");
+        let cx = dest_rect.x + dest_rect.w / 2.0;
+        let cy = dest_rect.y + dest_rect.h / 2.0;
+        // Soltar (Ctrl=copia para que el dato sea determinista).
+        let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false);
+        assert!(routed, "drop_at debe enrutar");
+        // NADA se ejecutó todavía: el drop está pendiente y no hay op alguna.
+        let pd = c.pending_drop.as_ref().expect("drop pendiente");
+        assert_eq!(pd.count, 1);
+        assert!(!pd.is_move, "Ctrl → copiar");
+        assert_eq!(pd.dest_dir, b.path());
+        assert!(
+            c.ops.active_ops.is_empty(),
+            "antes de confirmar no arrancó ninguna op"
+        );
+        // CANCELAR descarta sin copiar.
+        c.cancel_pending_drop();
+        assert!(c.pending_drop.is_none(), "el pendiente se descartó");
+        for _ in 0..200 {
+            c.ops.pump_ops();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            !b.path().join("doc.txt").exists(),
+            "cancelar no copió nada al destino"
+        );
+        assert!(a.path().join("doc.txt").exists(), "el origen quedó intacto");
     }
 
     /// El batch-rename: abrir con la selección, editar el spec (plantilla + contador) y aplicar.
@@ -7644,6 +7778,9 @@ mod simular_usuario {
             true,
         );
         assert!(routed, "el drop debe enrutar al panel destino");
+        // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles ahora pide confirmación antes de
+        // ejecutar; lo confirmamos (equivale a pulsar Mover en el modal).
+        assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
         assert!(
             drain_ops(&mut c),
             "el movimiento por arrastre debe terminar"
@@ -7685,6 +7822,8 @@ mod simular_usuario {
             false,
         );
         assert!(routed, "el drop debe enrutar");
+        // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
+        assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
         assert!(drain_ops(&mut c), "la operación debe terminar");
 
         assert!(
@@ -7976,6 +8115,9 @@ mod simular_usuario {
         // Modificadores de la app stale (false), pero move_hint del OLE = true → MOVER.
         let routed = c.drop_at(cx, cy, false, false, vec![src.path().join("reg.txt")], true);
         assert!(routed, "el drop debe enrutar");
+        // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
+        // El move_hint queda guardado en el pendiente, así que confirmar MUEVE igual.
+        assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
         assert!(drain_ops(&mut c), "la operación debe terminar");
 
         assert!(

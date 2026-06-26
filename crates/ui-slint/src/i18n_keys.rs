@@ -100,6 +100,22 @@ where
     tr.set_ops_file_skipped(c.t("ops.file_skipped").into());
     tr.set_ops_file_failed(c.t("ops.file_failed").into());
     tr.set_ops_close(c.t("ops.close").into());
+    // Cancelar todas las operaciones (PUNTO 2).
+    tr.set_ops_cancel_all(c.t("ops.cancel_all").into());
+    tr.set_ops_cancel_all_title(c.t("ops.cancel_all_title").into());
+    tr.set_ops_cancel_all_q(c.t("ops.cancel_all_q").into());
+    tr.set_ops_cancel_all_yes(c.t("ops.cancel_all_yes").into());
+    tr.set_ops_cancel_all_no(c.t("ops.cancel_all_no").into());
+    // Encabezado enriquecido del popup de archivos (PUNTO 3).
+    tr.set_ops_file_origin(c.t("ops.file_origin").into());
+    tr.set_ops_file_dest(c.t("ops.file_dest").into());
+    tr.set_ops_file_total(c.t("ops.file_total").into());
+    tr.set_ops_file_stats_done(c.t("ops.file_stats_done").into());
+    tr.set_ops_file_stats_skipped(c.t("ops.file_stats_skipped").into());
+    tr.set_ops_file_stats_failed(c.t("ops.file_stats_failed").into());
+    tr.set_ops_file_kind_copy(c.t("ops.file_kind_copy").into());
+    tr.set_ops_file_kind_move(c.t("ops.file_kind_move").into());
+    tr.set_ops_file_kind_other(c.t("ops.file_kind_other").into());
     // Encabezados de columnas.
     tr.set_col_name(c.t("slint.col.name").into());
     tr.set_col_ext(c.t("slint.col.ext").into());
@@ -142,6 +158,12 @@ where
     tr.set_dlg_resume_q(c.t("slint.dialog.resume_q").into());
     tr.set_dlg_resume(c.t("slint.dialog.resume").into());
     tr.set_dlg_discard(c.t("slint.dialog.discard").into());
+    // Confirmar drop entre paneles (PUNTO 1b).
+    tr.set_dlg_copy(c.t("slint.dialog.copy").into());
+    tr.set_dlg_move(c.t("slint.dialog.move").into());
+    tr.set_drop_confirm_title(c.t("slint.drop.confirm_title").into());
+    tr.set_drop_confirm_copy(c.t("slint.drop.confirm_copy").into());
+    tr.set_drop_confirm_move(c.t("slint.drop.confirm_move").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
     tr.set_ctx_open_with(c.t("slint.ctx.open_with").into());

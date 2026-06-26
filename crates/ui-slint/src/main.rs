@@ -1268,6 +1268,46 @@ fn main() -> Result<(), slint::PlatformError> {
                         if ctrl.borrow_mut().set_drag_over(None) {
                             sync_rows();
                         }
+                        // CONFIRMAR AL SOLTAR (PUNTO 1b): si `drop_at` dejó un drop pendiente (intra-app
+                        // entre paneles), NO se ejecutó todavía. Abrimos el modal de confirmación
+                        // "¿Copiar/Mover N a «destino»?". Al confirmar, `on_message_confirm` (kind 2)
+                        // llama a `confirm_pending_drop`; al cancelar, `cancel_pending_drop` lo descarta.
+                        let pending = {
+                            let c = ctrl.borrow();
+                            c.pending_drop.clone()
+                        };
+                        if let (Some(pd), Some(ui)) = (pending, ui_weak.upgrade()) {
+                            let tr = ui.global::<Tr>();
+                            let dest_name = pd
+                                .dest_dir
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| pd.dest_dir.display().to_string());
+                            // Cuerpo: "¿Copiar/Mover N elemento(s) a «destino»?" — la plantilla i18n
+                            // lleva {count} y {dest}; el verbo lo elige según copiar/mover.
+                            let template = if pd.is_move {
+                                tr.get_drop_confirm_move()
+                            } else {
+                                tr.get_drop_confirm_copy()
+                            };
+                            let body = template
+                                .replace("{count}", &pd.count.to_string())
+                                .replace("{dest}", &dest_name);
+                            let confirm_label = if pd.is_move {
+                                tr.get_dlg_move()
+                            } else {
+                                tr.get_dlg_copy()
+                            };
+                            ui.set_message(MessageVm {
+                                kind: 3, // 3 = confirmar drop entre paneles (2 botones, velo=cancela)
+                                level: 0,
+                                title: tr.get_drop_confirm_title(),
+                                body: body.into(),
+                                confirm_label,
+                                cancel_label: tr.get_dlg_cancel(),
+                                danger: false,
+                            });
+                        }
                     }
                     // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y
                     // elevar la ventana; Salir = terminar el bucle de verdad.
@@ -1487,6 +1527,7 @@ fn main() -> Result<(), slint::PlatformError> {
         // nadie. El cinturón de seguridad complementario está en el tick del timer, que ahora
         // usa `try_borrow_mut` y se salta el tick si el controlador está prestado.
         let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
         ui.on_row_drag_out(move |_id| {
             // Borrow corto: clonar las rutas seleccionadas y soltar el préstamo de inmediato.
             let paths = ctrl.borrow().selected_paths();
@@ -1499,8 +1540,26 @@ fn main() -> Result<(), slint::PlatformError> {
             ));
             // Diferir el arrastre fuera de este frame. `paths` se mueve al closure; ya no hay
             // ningún borrow de `ctrl` en juego cuando `DoDragDrop` arranca su bucle modal.
+            let ui_weak = ui_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
+                // SEGURIDAD DE DATOS (captura fantasma): marcar `drag-in-progress` ANTES de entrar
+                // al bucle modal de `DoDragDrop`. Mientras es true, cada panel Files DESMONTA su
+                // TouchArea exterior, así el panel ORIGEN no queda con la captura de puntero
+                // huérfana que el bucle modal de Windows nunca le devuelve (el `pointer-up` no llega
+                // al TouchArea). Sin esto, tras el arrastre el cursor sobre OTRO panel seguiría
+                // resaltando/seleccionando la fila del origen a su misma altura.
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_drag_in_progress(true);
+                }
+                // `start_drag` es BLOQUEANTE: corre el bucle modal de DoDragDrop hasta que el
+                // usuario suelta. Al volver, el gesto terminó (drop dentro/fuera o cancelado).
                 let _outcome = naygo_platform::dnd::start_drag(&paths);
+                // Re-montar los TouchArea: el gesto del body-touch del origen renace LIMPIO (sin
+                // `pressed-here` ni grab). Un drop intra-app entre paneles llega aparte por
+                // `drop_rx` en el tick del timer; este flag solo controla el montaje del TouchArea.
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_drag_in_progress(false);
+                }
             });
         });
     }
@@ -3286,12 +3345,15 @@ fn main() -> Result<(), slint::PlatformError> {
             start_timer();
         });
     }
-    // Confirmación del modal temático: ejecuta la expulsión pendiente (kind 1).
+    // Confirmación del modal temático: ejecuta la expulsión pendiente (kind 1) o el drop entre
+    // paneles pendiente (kind 3). Es el dispatcher único de confirmaciones del MessageModal.
     {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
         let refresh_drives = refresh_drives.clone();
         let pending_eject = pending_eject.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
         ui.on_message_confirm(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -3299,6 +3361,24 @@ fn main() -> Result<(), slint::PlatformError> {
             let kind = ui.get_message().kind;
             // Cerrar el modal.
             ui.set_message(MessageVm::default());
+            // kind 3 = confirmar drop entre paneles → arrancar la op real.
+            if kind == 3 {
+                let started = ctrl.borrow_mut().confirm_pending_drop();
+                if started {
+                    // Refrescar la disposición (puede haber aparecido el panel Operaciones) y
+                    // rearmar el timer para que `pump_ops` drene el progreso de la op nueva.
+                    sync_layout();
+                    start_timer();
+                }
+                return;
+            }
+            // kind 4 = confirmar "cancelar todas las operaciones" → cancelar todas.
+            if kind == 4 {
+                ctrl.borrow_mut().ops.cancel_all_ops();
+                // Rearmar el timer: `pump_ops` debe drenar el cierre de cada op cancelada.
+                start_timer();
+                return;
+            }
             // kind 1 = confirmación de expulsar.
             if kind == 1 {
                 if let Some(path) = pending_eject.borrow_mut().take() {
@@ -3319,9 +3399,11 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
-    // Cancelación del modal temático: cierra y descarta el path pendiente.
+    // Cancelación del modal temático: cierra y descarta lo pendiente (path de expulsar y/o drop
+    // entre paneles). Descartar el drop pendiente es lo seguro: no se copia ni mueve nada.
     {
         let ui_weak = ui.as_weak();
+        let ctrl = ctrl.clone();
         let pending_eject = pending_eject.clone();
         ui.on_message_cancel(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -3329,6 +3411,8 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             ui.set_message(MessageVm::default());
             pending_eject.borrow_mut().take();
+            // Si había un drop entre paneles esperando confirmación, descartarlo (no-op si no había).
+            ctrl.borrow_mut().cancel_pending_drop();
         });
     }
     // Refrescar unidades a mano (botón ⟳): re-escanea y reconstruye la tira. Útil para unidades
@@ -3783,6 +3867,29 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // "Cancelar todo" (PUNTO 2): abre un modal de confirmación (MessageModal kind 4, de 2 botones).
+    // La cancelación real ocurre en `on_message_confirm` (kind 4); aquí solo pedimos confirmación.
+    {
+        let ui_weak = ui.as_weak();
+        let start_timer = start_timer.clone();
+        ui.on_op_cancel_all(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let tr = ui.global::<Tr>();
+            ui.set_message(MessageVm {
+                kind: 4,  // 4 = confirmar "cancelar todas las operaciones"
+                level: 1, // warning
+                title: tr.get_ops_cancel_all_title(),
+                body: tr.get_ops_cancel_all_q(),
+                confirm_label: tr.get_ops_cancel_all_yes(),
+                cancel_label: tr.get_ops_cancel_all_no(),
+                danger: true,
+            });
+            // Modal abierto desde un clic: rearmar el timer para que el popup responda al instante.
+            start_timer();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
@@ -3814,10 +3921,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         ui.on_op_show_files(move |id| {
-            let (rows, label) = {
+            let (rows, label, context) = {
                 let c = ctrl.borrow();
                 let id = id as u64;
                 let rows = c.ops.op_file_list(id);
+                // Contexto del encabezado (tipo/origen/destino/estadísticas) — PUNTO 3.
+                let context = c.ops.op_file_context(id);
                 let label = c
                     .ops
                     .active_ops
@@ -3825,12 +3934,13 @@ fn main() -> Result<(), slint::PlatformError> {
                     .find(|o| o.id == id)
                     .map(|o| o.label.clone())
                     .unwrap_or_default();
-                (rows, label)
+                (rows, label, context)
             };
             if let Some(ui) = ui_weak.upgrade() {
                 let vms: Vec<OpFileVm> = rows.into_iter().map(to_op_file_vm).collect();
                 ui.set_op_file_list(ModelRc::from(Rc::new(VecModel::from(vms))));
                 ui.set_op_file_list_label(SharedString::from(label.as_str()));
+                ui.set_op_file_context(to_op_file_context_vm(context));
                 ui.set_op_file_list_open(true);
             }
         });
@@ -4801,8 +4911,23 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
 fn to_op_file_vm(e: ops_ctrl::OpFileEntry) -> OpFileVm {
     OpFileVm {
         name: SharedString::from(e.name.as_str()),
+        rel_path: SharedString::from(e.rel_path.as_str()),
+        size: SharedString::from(e.size.as_str()),
         status: e.status,
         detail: SharedString::from(e.detail.as_str()),
+    }
+}
+
+fn to_op_file_context_vm(c: ops_ctrl::OpFileContext) -> OpFileContextVm {
+    OpFileContextVm {
+        kind: c.kind,
+        origin: SharedString::from(c.origin.as_str()),
+        dest: SharedString::from(c.dest.as_str()),
+        total_files: c.total_files,
+        done: c.done,
+        skipped: c.skipped,
+        failed: c.failed,
+        total_size: SharedString::from(c.total_size.as_str()),
     }
 }
 

@@ -36,10 +36,13 @@ export component MessageModal inherits Rectangle {
     visible: root.vm.kind > 0;
     background: #000000aa;
 
-    // Velo: clic fuera de la tarjeta = cancelar (kind 1) / cerrar (kind 2).
+    // Velo: clic fuera de la tarjeta. En confirmaciones de 2 botones (kind 1 = aviso/expulsar,
+    // kind 3 = confirmar drop entre paneles, kind 4 = cancelar todas las operaciones) cancela
+    // (opción segura: NO ejecuta la acción). En el aviso de 1 botón (kind 2) cierra (que equivale a
+    // confirmar el único botón).
     veil := TouchArea {
         clicked => {
-            if (root.vm.kind == 1) { root.message-cancel(); }
+            if (root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4) { root.message-cancel(); }
             if (root.vm.kind == 2) { root.message-confirm(); }
         }
     }
@@ -85,13 +88,14 @@ export component MessageModal inherits Rectangle {
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px;
-                if root.vm.kind == 1: DlgBtn {
+                // Botón Cancelar: solo en confirmaciones de 2 botones (kind 1, 3 y 4).
+                if root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4: DlgBtn {
                     label: root.vm.cancel-label;
                     clicked => { root.message-cancel(); }
                 }
                 DlgBtn {
                     label: root.vm.confirm-label;
-                    primary: root.vm.kind == 1;
+                    primary: root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4;
                     danger: root.vm.danger;
                     clicked => { root.message-confirm(); }
                 }

@@ -79,6 +79,23 @@ export global Tr {
     in property <string> ops-file-skipped: "saltado";
     in property <string> ops-file-failed: "fallido";
     in property <string> ops-close: "Cerrar";
+    // Cancelar TODAS las operaciones en curso (botón del header + confirmación). PUNTO 2.
+    in property <string> ops-cancel-all: "Cancelar todo";
+    in property <string> ops-cancel-all-title: "Cancelar operaciones";
+    in property <string> ops-cancel-all-q: "¿Cancelar todas las operaciones en curso?";
+    in property <string> ops-cancel-all-yes: "Sí, cancelar todo";
+    in property <string> ops-cancel-all-no: "No";
+    // Encabezado enriquecido del popup "Archivos de la operación" (PUNTO 3): tipo + origen +
+    // destino + estadísticas. Las etiquetas; los valores los compone Rust.
+    in property <string> ops-file-origin: "Origen:";
+    in property <string> ops-file-dest: "Destino:";
+    in property <string> ops-file-total: "Total:";
+    in property <string> ops-file-stats-done: "hechos";
+    in property <string> ops-file-stats-skipped: "saltados";
+    in property <string> ops-file-stats-failed: "fallidos";
+    in property <string> ops-file-kind-copy: "Copiar";
+    in property <string> ops-file-kind-move: "Mover";
+    in property <string> ops-file-kind-other: "Operación";
 
     // Encabezados de columnas (file-panel).
     in property <string> col-name: "Nombre";
@@ -130,6 +147,14 @@ export global Tr {
     in property <string> dlg-resume-q: "Hay operaciones que no terminaron. ¿Retomarlas?";
     in property <string> dlg-resume: "Retomar";
     in property <string> dlg-discard: "Descartar";
+    // Botones de verbo para el modal de confirmar drop entre paneles (PUNTO 1b).
+    in property <string> dlg-copy: "Copiar";
+    in property <string> dlg-move: "Mover";
+    // Confirmar al soltar archivos en otro panel (PUNTO 1b). El cuerpo lleva {count} y {dest} que
+    // Rust reemplaza (Slint no tiene replace, lo arma el controlador).
+    in property <string> drop-confirm-title: "Confirmar";
+    in property <string> drop-confirm-copy: "¿Copiar {count} elemento(s) a «{dest}»?";
+    in property <string> drop-confirm-move: "¿Mover {count} elemento(s) a «{dest}»?";
 
     // Menú contextual (context-menu).
     in property <string> ctx-open: "Abrir";

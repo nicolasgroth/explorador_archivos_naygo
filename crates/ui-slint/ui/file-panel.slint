@@ -200,6 +200,16 @@ export component FilePanel inherits FocusScope {
     // velo del modal: sin esto el popup queda con el hover muerto hasta el primer clic, y arrastrar
     // resalta filas que no debería. Al cerrar el modal vuelve a false → el TouchArea se re-monta.
     in property <bool> modal-open: false;
+    // Hay un arrastre OLE EN CURSO (DoDragDrop corriendo su bucle modal de Windows). Rust lo pone
+    // en true al lanzar el arrastre y en false cuando termina (drop procesado o cancelado). Mientras
+    // es true DESMONTAMOS el `body-touch` exterior — igual que con `modal-open` — por una razón de
+    // SEGURIDAD DE DATOS: el bucle modal de DoDragDrop CAPTURA el mouse y NUNCA devuelve el
+    // `pointer-up` al TouchArea del panel origen, que quedaría con `pressed-here`/grab de puntero sin
+    // liberar. Tras el drag, el cursor sobre OTRO panel seguiría llegando al body-touch del ORIGEN,
+    // resaltando/seleccionando la fila a su misma altura (captura fantasma). Al desmontar y re-montar
+    // el TouchArea nace con el estado del gesto LIMPIO y sin grab huérfano. Es la misma técnica que
+    // ya usa `modal-open`, reaprovechada.
+    in property <bool> drag-in-progress: false;
     in property <[RowData]> rows;
     in property <[ColumnVm]> columns;        // columnas visibles (orden/ancho/alineación) (6C)
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
@@ -330,6 +340,13 @@ export component FilePanel inherits FocusScope {
     // empezar a editar (y también al salir, por simetría: el puntero pudo moverse con el editor
     // tapando el cuerpo).
     changed rename-pos => { root.hover-row = -1; }
+
+    // Mismo motivo que arriba para el arrastre OLE: mientras dura el drag el `body-touch` está
+    // desmontado y `hover-row` se quedaría congelado en la fila que estaba bajo el cursor al empezar
+    // → un resaltado fantasma pegado. Lo limpiamos al entrar Y al salir del arrastre (al salir, el
+    // cursor pudo terminar sobre otro panel: este no debe mostrar hover hasta que el TouchArea
+    // re-montado reciba un `moved` real).
+    changed drag-in-progress => { root.hover-row = -1; }
 
     // Cuando este panel pasa a ser el activo, tomar el foco de teclado para que las teclas
     // lleguen sin necesidad de un clic previo (p. ej. tras Tab o al arrancar).
@@ -682,7 +699,7 @@ export component FilePanel inherits FocusScope {
                 // oculta durante el rename inline para no tapar el editor de la celda Name (durante
                 // el rename no se necesita clic-en-vacío). También se DESMONTA si hay un modal abierto
                 // (`modal-open`): así no roba hover/clic al velo del modal; vuelve al cerrarse este.
-                if root.rename-pos == -1 && !root.modal-open: body-touch := TouchArea {
+                if root.rename-pos == -1 && !root.modal-open && !root.drag-in-progress: body-touch := TouchArea {
                     // Estado del gesto en curso. `pressed-here`: hay un press de botón izquierdo
                     // vivo. `dragging`: ya se disparó el arrastre OLE (no repetir). `press-x/y`:
                     // dónde empezó (umbral clic-vs-arrastre). `start-row`: fila bajo el press.
@@ -714,9 +731,13 @@ export component FilePanel inherits FocusScope {
                         // archivo de un tirón (clic + arrastre en un solo gesto) funciona, como en el
                         // Explorador de Windows. Si la fila NO estaba seleccionada, se selecciona ella
                         // sola primero (row-clicked sin modificadores) para arrastrar lo correcto.
+                        // Umbral de 12px (antes 6px): subido a propósito para reducir arrastres OLE
+                        // accidentales por micro-movimientos del mouse al hacer clic (decisión de
+                        // Nicolás: "umbral mayor + confirmar al soltar"). El rubber-band de abajo usa
+                        // el mismo umbral por consistencia.
                         if (self.pressed-here && !self.dragging
                             && self.start-row >= 0 && self.start-row < root.rows.length
-                            && (abs(self.mouse-x - self.press-x) > 6px || abs(self.mouse-y - self.press-y) > 6px)) {
+                            && (abs(self.mouse-x - self.press-x) > 12px || abs(self.mouse-y - self.press-y) > 12px)) {
                             self.dragging = true;
                             self.pressed-here = false;
                             root.activate(root.pane-id);
@@ -732,7 +753,7 @@ export component FilePanel inherits FocusScope {
                         // SOBRE una fila ya no hace rubber-band: hace arrastre OLE (arriba).
                         if (self.pressed-here && !self.dragging
                             && (self.start-row < 0 || self.start-row >= root.rows.length)
-                            && abs(self.mouse-y - self.press-y) > 6px) {
+                            && abs(self.mouse-y - self.press-y) > 12px) {
                             root.activate(root.pane-id);
                             root.rubber-band(root.pane-id, self.start-row, self.cur-row);
                         }
