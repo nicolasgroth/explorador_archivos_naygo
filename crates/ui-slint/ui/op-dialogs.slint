@@ -82,6 +82,55 @@ component DlgBtn inherits Rectangle {
     }
 }
 
+// Una columna comparativa del conflicto de archivo ("Existente" o "Nuevo"). Muestra el
+// encabezado, el nombre del archivo (destacado, elidido si es largo), una línea con tipo·tamaño y
+// la fecha de modificación. `highlight` pinta un borde de acento tenue (se usa en la columna del
+// archivo NUEVO para distinguir de un vistazo cuál es cuál).
+component ConflictCol inherits Rectangle {
+    in property <string> title;
+    in property <string> name;
+    in property <string> size;       // ya formateado ("1,2 MB" / "—")
+    in property <string> date;       // ya formateada / "—"
+    in property <string> kind-label; // "Carpeta" / "TXT" / "Archivo"
+    in property <bool> highlight: false;
+    horizontal-stretch: 1;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.highlight ? Theme.accent.with-alpha(0.55) : Theme.border;
+    background: Theme.row-bg;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+        // Encabezado de la columna (Existente / Nuevo).
+        Text {
+            text: root.title;
+            color: root.highlight ? Theme.accent : Theme.text-dim;
+            font-size: 11px;
+        }
+        // Nombre del archivo: lo más visible.
+        Text {
+            text: root.name;
+            color: white;
+            overflow: elide;
+            wrap: no-wrap;
+        }
+        // Tipo · tamaño en una línea atenuada.
+        Text {
+            text: root.kind-label + " · " + root.size;
+            color: Theme.text-dim;
+            font-size: 12px;
+            overflow: elide;
+        }
+        // Fecha de modificación.
+        Text {
+            text: root.date;
+            color: Theme.text-dim;
+            font-size: 12px;
+            overflow: elide;
+        }
+    }
+}
+
 export component OpDialogs inherits Rectangle {
     in property <OpDialogVm> vm;
     in property <[ResumeRowVm]> resume-rows;
@@ -118,6 +167,9 @@ export component OpDialogs inherits Rectangle {
     // condicional. Uno para el conflicto de archivo (kind 2) y otro para el de carpeta (6).
     property <bool> conflict-apply-all: false;
     property <bool> folder-apply-all: false;
+    // ¿Está expandido el bloque "Más opciones" del conflicto de archivo (kind==2)? Hoisteado a
+    // root (como apply-all) para que persista mientras el modal vive y se resetee al reabrirlo.
+    property <bool> conflict-more: false;
     // Cantidad de botones por kind (para el wrap del TAB). kind 1/4 = 2 botones,
     // kind 2/6 = 4 botones. El resto no usa TAB (3 lo maneja el TextInput; 5 tiene
     // botones por fila).
@@ -137,7 +189,8 @@ export component OpDialogs inherits Rectangle {
         if (root.vm.kind == 2) {
             if (root.focus-idx == 0) { root.conflict-cancel(); }
             if (root.focus-idx == 1) { root.conflict-decide(1, root.conflict-apply-all); }
-            if (root.focus-idx == 2) { root.conflict-rename(); }
+            // idx 2 = "Mantener ambos" (Rename con sufijo, action int 2).
+            if (root.focus-idx == 2) { root.conflict-decide(2, root.conflict-apply-all); }
             if (root.focus-idx == 3) { root.conflict-decide(0, root.conflict-apply-all); }
         }
         if (root.vm.kind == 4) {
@@ -173,7 +226,9 @@ export component OpDialogs inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 380px;
+        // El conflicto de archivo (kind==2) usa una tarjeta MÁS ANCHA para las dos columnas
+        // comparativas lado a lado ("Existente" | "Nuevo"); el resto mantiene 380px.
+        width: root.vm.kind == 2 ? 560px : 380px;
         height: card.preferred-height + 32px;
         background: Theme.panel-bg;
         border-color: Theme.accent.with-alpha(0.4);
@@ -217,13 +272,40 @@ export component OpDialogs inherits Rectangle {
                 }
             }
 
-            // --- 2: Conflicto por-ítem ---
+            // --- 2: Conflicto por-ítem (rediseño estilo Directory Opus: comparación LADO A LADO) ---
             if root.vm.kind == 2: VerticalLayout {
                 spacing: 12px;
                 Text {
-                    text: "Ya existe «" + root.vm.conflict-name + "». ¿Qué hacer?";
+                    // "Ya existe «X». ¿Qué quieres hacer?" (el nombre va inline; la pregunta es i18n).
+                    text: "«" + root.vm.conflict-name + "» — " + Tr.dlg-conflict-question;
                     color: white;
                     wrap: word-wrap;
+                }
+                // Dos columnas comparables: "Existente" (lo que ya está en el destino) | "Nuevo"
+                // (lo que llega). Cada una muestra nombre + tipo·tamaño + fecha. La de "Nuevo" lleva
+                // un borde de acento tenue para distinguir de un vistazo cuál es cuál.
+                HorizontalLayout {
+                    spacing: 10px;
+                    ConflictCol {
+                        title: Tr.dlg-conflict-existing;
+                        name: root.vm.existing-name;
+                        size: root.vm.existing-size;
+                        date: root.vm.existing-date;
+                        kind-label: root.vm.existing-is-dir
+                            ? Tr.dlg-kind-folder
+                            : (root.vm.existing-ext != "" ? root.vm.existing-ext : Tr.dlg-kind-file);
+                        highlight: false;
+                    }
+                    ConflictCol {
+                        title: Tr.dlg-conflict-incoming;
+                        name: root.vm.incoming-name;
+                        size: root.vm.incoming-size;
+                        date: root.vm.incoming-date;
+                        kind-label: root.vm.incoming-is-dir
+                            ? Tr.dlg-kind-folder
+                            : (root.vm.incoming-ext != "" ? root.vm.incoming-ext : Tr.dlg-kind-file);
+                        highlight: true;
+                    }
                 }
                 // "De dónde a dónde": carpeta de origen y de destino (rutas atenuadas, elididas si
                 // son largas para no romper el ancho del modal). Solo si se conocen.
@@ -265,11 +347,12 @@ export component OpDialogs inherits Rectangle {
                     }
                     Text { text: Tr.dlg-apply-all; color: Theme.text; vertical-alignment: center; }
                 }
+                // Acciones PRINCIPALES (las que navega TAB; btn-count()==4):
+                //   [0]=Cancelar todo, [1]=Saltar (default/Enter, segura), [2]=Mantener ambos
+                //   (Rename sufijo), [3]=Sobrescribir (destructivo).
                 HorizontalLayout {
                     alignment: stretch;
                     spacing: 8px;
-                    // Orden de TAB: [0]=Cancelar todo, [1]=Saltar (default/Enter, opción segura),
-                    // [2]=Renombrar, [3]=Sobrescribir (destructivo).
                     DlgBtn {
                         label: Tr.dlg-conflict-cancel-all; shortcut: "Esc";
                         is-default: root.focus-idx == 0;
@@ -280,17 +363,73 @@ export component OpDialogs inherits Rectangle {
                         is-default: root.focus-idx == 1;
                         clicked => { root.conflict-decide(1, root.conflict-apply-all); }
                     }
-                    // "Renombrar" abre el modal de nombre (no aplica a todos: cada archivo necesita
-                    // su propio nombre), por eso ignora la casilla "aplicar a todas".
+                    // "Mantener ambos" = renombrar el NUEVO con sufijo automático (ConflictAction
+                    // Rename, action int 2). Conserva el existente y deja entrar el nuevo con "(N)".
                     DlgBtn {
-                        label: Tr.dlg-rename; shortcut: "R";
+                        label: Tr.dlg-keep-both; shortcut: "M";
                         is-default: root.focus-idx == 2;
-                        clicked => { root.conflict-rename(); }
+                        clicked => { root.conflict-decide(2, root.conflict-apply-all); }
                     }
                     DlgBtn {
                         label: Tr.dlg-overwrite; shortcut: "O"; is-danger: true;
                         is-default: root.focus-idx == 3;
                         clicked => { root.conflict-decide(0, root.conflict-apply-all); }
+                    }
+                }
+                // Desplegable "Más opciones": agrupa las acciones avanzadas (estilo submenú de Opus)
+                // para NO saturar. El usuario lo expande con un clic. La fila extra NO entra en el
+                // TAB de los 4 botones principales (se opera con clic / atajos propios).
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 6px;
+                    Text {
+                        text: (root.conflict-more ? "▾ " : "▸ ")
+                            + (root.conflict-more ? Tr.dlg-fewer-options : Tr.dlg-more-options);
+                        color: Theme.accent;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        more-touch := TouchArea {
+                            clicked => { root.conflict-more = !root.conflict-more; }
+                        }
+                    }
+                }
+                if root.conflict-more: VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        alignment: stretch;
+                        spacing: 8px;
+                        // "Renombrar…" pide un NOMBRE nuevo para el entrante (abre el modal de
+                        // nombre; no aplica a todos: cada archivo necesita su propio nombre).
+                        DlgBtn {
+                            label: Tr.dlg-rename;
+                            clicked => { root.conflict-rename(); }
+                        }
+                        // "Renombrar el existente": aparta el viejo con sufijo y deja entrar el nuevo
+                        // con su nombre original (action int 3 = RenameExisting).
+                        DlgBtn {
+                            label: Tr.dlg-rename-existing;
+                            clicked => { root.conflict-decide(3, root.conflict-apply-all); }
+                        }
+                        // "Saltar idénticos": política (action int 4 = SkipIdentical). Lo natural es
+                        // con "aplicar a todos"; respeta la casilla.
+                        DlgBtn {
+                            label: Tr.dlg-skip-identical;
+                            clicked => { root.conflict-decide(4, root.conflict-apply-all); }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: stretch;
+                        spacing: 8px;
+                        // Atajos directos para "aplicar la misma decisión a TODOS los conflictos":
+                        // Sobrescribir todos / Saltar todos (= la acción + apply_all forzado a true).
+                        DlgBtn {
+                            label: Tr.dlg-overwrite-all; is-danger: true;
+                            clicked => { root.conflict-decide(0, true); }
+                        }
+                        DlgBtn {
+                            label: Tr.dlg-skip-all;
+                            clicked => { root.conflict-decide(1, true); }
+                        }
                     }
                 }
             }
@@ -489,6 +628,7 @@ export component OpDialogs inherits Rectangle {
             // anterior (un default destructivo silencioso en la siguiente copia con conflicto).
             root.conflict-apply-all = false;
             root.folder-apply-all = false;
+            root.conflict-more = false;
             // El modal de nombre (3) enfoca su propio TextInput vía forward-focus; los demás
             // (borrado/conflictos/pegar) necesitan que el FocusScope tome el foco para Enter/Esc.
             name-focus-scope.focus();
@@ -547,9 +687,13 @@ export component OpDialogs inherits Rectangle {
                 if (event.text == "d" || event.text == "D") { root.delete-confirm(); return accept; }
             }
             if (root.vm.kind == 2) {
+                // Atajos del conflicto de archivo: s=Saltar, m=Mantener ambos, o=Sobrescribir
+                // (los 3 principales); r=Renombrar… (abre el modal de nombre, también disponible
+                // en "Más opciones").
                 if (event.text == "s" || event.text == "S") { root.conflict-decide(1, root.conflict-apply-all); return accept; }
-                if (event.text == "r" || event.text == "R") { root.conflict-rename(); return accept; }
+                if (event.text == "m" || event.text == "M") { root.conflict-decide(2, root.conflict-apply-all); return accept; }
                 if (event.text == "o" || event.text == "O") { root.conflict-decide(0, root.conflict-apply-all); return accept; }
+                if (event.text == "r" || event.text == "R") { root.conflict-rename(); return accept; }
             }
             if (root.vm.kind == 4) {
                 if (event.text == "c" || event.text == "C") { root.paste-confirm(); return accept; }

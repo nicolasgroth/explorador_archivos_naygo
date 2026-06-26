@@ -99,6 +99,20 @@ export global Tr {
     // origen y la de destino de la operación, para que el usuario sepa qué se está copiando/moviendo.
     in property <string> dlg-conflict-from: "Origen:";
     in property <string> dlg-conflict-to: "Destino:";
+    // Conflicto de archivo LADO A LADO (kind==2): encabezados de columna, pregunta, etiquetas de
+    // tipo y las acciones extra del desplegable "Más opciones".
+    in property <string> dlg-conflict-existing: "Existente";
+    in property <string> dlg-conflict-incoming: "Nuevo";
+    in property <string> dlg-conflict-question: "¿Qué quieres hacer?";
+    in property <string> dlg-kind-folder: "Carpeta";
+    in property <string> dlg-kind-file: "Archivo";
+    in property <string> dlg-keep-both: "Mantener ambos";
+    in property <string> dlg-more-options: "Más opciones";
+    in property <string> dlg-fewer-options: "Menos opciones";
+    in property <string> dlg-overwrite-all: "Sobrescribir todos";
+    in property <string> dlg-skip-all: "Saltar todos";
+    in property <string> dlg-skip-identical: "Saltar idénticos";
+    in property <string> dlg-rename-existing: "Renombrar el existente";
     // Título del modal de nombre al renombrar un conflicto (BUG 1). El nombre original va entre
     // `pre` y `suf` (Slint no tiene replace).
     in property <string> dlg-rename-to-pre: "Nuevo nombre para «";

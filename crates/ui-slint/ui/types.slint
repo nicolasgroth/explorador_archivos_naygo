@@ -150,6 +150,20 @@ export struct OpDialogVm {
     // kind==6 (carpeta).
     conflict-from: string,
     conflict-to: string,
+    // Comparación LADO A LADO del conflicto de archivo (kind==2): "Existente" | "Nuevo". Cada lado
+    // trae nombre/tamaño/fecha YA formateados y la extensión en mayúsculas (`*-ext`, vacía si no
+    // tiene); `*-is-dir` indica si es carpeta. La UI compone la etiqueta de tipo con i18n
+    // (carpeta/extensión/archivo).
+    existing-name: string,
+    existing-size: string,
+    existing-date: string,
+    existing-ext: string,
+    existing-is-dir: bool,
+    incoming-name: string,
+    incoming-size: string,
+    incoming-date: string,
+    incoming-ext: string,
+    incoming-is-dir: bool,
     // Pedir nombre (nuevo/renombrar):
     name-title: string,
     name-value: string,

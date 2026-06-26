@@ -3595,9 +3595,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let start_timer = start_timer.clone();
         ui.on_conflict_decide(move |action, apply_all| {
             use naygo_core::ops::ConflictAction;
+            // Mapeo int→acción (espeja op-dialogs.slint):
+            //   0=Sobrescribir 1=Saltar 2=Mantener ambos (Rename sufijo)
+            //   3=Renombrar antiguo (RenameExisting) 4=Saltar idénticos (SkipIdentical)
+            // "Reemplazar todo"/"Saltar todo" = 0/1 con apply_all=true (la casilla/desplegable).
             let act = match action {
                 0 => ConflictAction::Overwrite,
                 2 => ConflictAction::Rename,
+                3 => ConflictAction::RenameExisting,
+                4 => ConflictAction::SkipIdentical,
                 _ => ConflictAction::Skip,
             };
             // El id estable de la op en conflicto lo guarda el pending_dialog.
@@ -4747,6 +4753,16 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         conflict_name: SharedString::from(d.conflict_name.as_str()),
         conflict_from: SharedString::from(d.conflict_from.as_str()),
         conflict_to: SharedString::from(d.conflict_to.as_str()),
+        existing_name: SharedString::from(d.existing_name.as_str()),
+        existing_size: SharedString::from(d.existing_size.as_str()),
+        existing_date: SharedString::from(d.existing_date.as_str()),
+        existing_ext: SharedString::from(d.existing_ext.as_str()),
+        existing_is_dir: d.existing_is_dir,
+        incoming_name: SharedString::from(d.incoming_name.as_str()),
+        incoming_size: SharedString::from(d.incoming_size.as_str()),
+        incoming_date: SharedString::from(d.incoming_date.as_str()),
+        incoming_ext: SharedString::from(d.incoming_ext.as_str()),
+        incoming_is_dir: d.incoming_is_dir,
         name_title: SharedString::from(d.name_title.as_str()),
         name_value: SharedString::from(d.name_value.as_str()),
         name_valid: d.name_valid,

@@ -116,6 +116,18 @@ where
     tr.set_dlg_conflict_cancel_all(c.t("slint.dialog.conflict_cancel_all").into());
     tr.set_dlg_conflict_from(c.t("slint.dialog.conflict_from").into());
     tr.set_dlg_conflict_to(c.t("slint.dialog.conflict_to").into());
+    tr.set_dlg_conflict_existing(c.t("slint.dialog.conflict_existing").into());
+    tr.set_dlg_conflict_incoming(c.t("slint.dialog.conflict_incoming").into());
+    tr.set_dlg_conflict_question(c.t("slint.dialog.conflict_question").into());
+    tr.set_dlg_kind_folder(c.t("slint.dialog.kind_folder").into());
+    tr.set_dlg_kind_file(c.t("slint.dialog.kind_file").into());
+    tr.set_dlg_keep_both(c.t("slint.dialog.keep_both").into());
+    tr.set_dlg_more_options(c.t("slint.dialog.more_options").into());
+    tr.set_dlg_fewer_options(c.t("slint.dialog.fewer_options").into());
+    tr.set_dlg_overwrite_all(c.t("slint.dialog.overwrite_all").into());
+    tr.set_dlg_skip_all(c.t("slint.dialog.skip_all").into());
+    tr.set_dlg_skip_identical(c.t("slint.dialog.skip_identical").into());
+    tr.set_dlg_rename_existing(c.t("slint.dialog.rename_existing").into());
     tr.set_dlg_rename_to_pre(c.t("slint.dialog.rename_to_pre").into());
     tr.set_dlg_rename_to_suf(c.t("slint.dialog.rename_to_suf").into());
     tr.set_dlg_folder_exists_pre(c.t("slint.dialog.folder_exists_pre").into());

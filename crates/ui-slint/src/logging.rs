@@ -73,6 +73,12 @@ pub fn set_tz_offset(minutes: i32) {
     let _ = TZ_OFFSET_MIN.set(minutes);
 }
 
+/// Offset del huso local en SEGUNDOS (0 si no se fijó). Lo usa el formateo de fechas fuera del log
+/// (p. ej. el modal de conflicto) para mostrar la hora local, igual que las columnas del panel.
+pub fn tz_offset_secs() -> i64 {
+    TZ_OFFSET_MIN.get().copied().unwrap_or(0) as i64 * 60
+}
+
 /// Ruta del archivo de log del día: junto al ejecutable (mismo criterio que la config
 /// portable), con la fecha local en el nombre: `naygo-YYYY-MM-DD.log`. Así cada día (y cada
 /// tanda de pruebas) queda en su propio archivo y no se mezclan las corridas.

@@ -1046,20 +1046,43 @@ impl OpsCtrl {
                 del_permanent: *permanent,
                 ..Default::default()
             },
-            Some(OpDialog::Conflict { prompt, .. }) => OpDialogVmData {
-                kind: 2,
-                conflict_name: prompt
-                    .existing
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                // "De dónde a dónde": la carpeta que CONTIENE el archivo entrante (`incoming` es el
-                // origen del paso) y la que CONTIENE el archivo que ya existe (`existing` es el
-                // destino). Se muestran como rutas atenuadas bajo el "Ya existe «X»".
-                conflict_from: folder_of(&prompt.incoming),
-                conflict_to: folder_of(&prompt.existing),
-                ..Default::default()
-            },
+            Some(OpDialog::Conflict { prompt, .. }) => {
+                // Comparación LADO A LADO: cada lado (existente | nuevo) trae nombre/tamaño/fecha/
+                // tipo ya formateados para la UI. Tamaño con `SizeFormat::Auto` (igual que el panel
+                // de ops); fecha en la zona local con el formato ISO por defecto.
+                let (ex_name, ex_size, ex_date, ex_ext) = conflict_side(
+                    &prompt.existing,
+                    prompt.existing_size,
+                    prompt.existing_modified,
+                    prompt.existing_is_dir,
+                );
+                let (in_name, in_size, in_date, in_ext) = conflict_side(
+                    &prompt.incoming,
+                    prompt.incoming_size,
+                    prompt.incoming_modified,
+                    prompt.incoming_is_dir,
+                );
+                OpDialogVmData {
+                    kind: 2,
+                    conflict_name: ex_name.clone(),
+                    // "De dónde a dónde": la carpeta que CONTIENE el archivo entrante (`incoming` es
+                    // el origen del paso) y la que CONTIENE el archivo que ya existe (`existing` es el
+                    // destino). Se muestran como rutas atenuadas bajo el encabezado.
+                    conflict_from: folder_of(&prompt.incoming),
+                    conflict_to: folder_of(&prompt.existing),
+                    existing_name: ex_name,
+                    existing_size: ex_size,
+                    existing_date: ex_date,
+                    existing_ext: ex_ext,
+                    existing_is_dir: prompt.existing_is_dir,
+                    incoming_name: in_name,
+                    incoming_size: in_size,
+                    incoming_date: in_date,
+                    incoming_ext: in_ext,
+                    incoming_is_dir: prompt.incoming_is_dir,
+                    ..Default::default()
+                }
+            }
             Some(OpDialog::FolderConflict {
                 name,
                 remaining,
@@ -1524,6 +1547,52 @@ fn folder_of(p: &Path) -> String {
         .to_string()
 }
 
+/// Arma los textos (nombre, tamaño, fecha) + la extensión de UN lado del conflicto de archivo,
+/// listos para mostrar en la columna "Existente" o "Nuevo". El tamaño se formatea con
+/// `SizeFormat::Auto` (carpeta → "—"); la fecha con el formato por defecto en la zona local (sin
+/// fecha → "—"); la extensión va en mayúsculas ("TXT") o vacía si no tiene (la UI compone la
+/// etiqueta de tipo con i18n: carpeta/extensión/archivo).
+fn conflict_side(
+    path: &Path,
+    size: u64,
+    modified: Option<u64>,
+    is_dir: bool,
+) -> (String, String, String, String) {
+    use naygo_core::format::{format_size, format_time, DateFormat, SizeFormat};
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let size_str = if is_dir {
+        "—".to_string()
+    } else {
+        format_size(size, SizeFormat::Auto)
+    };
+    // Fecha local: el epoch del prompt es UTC; se ajusta con el offset del huso (mismo criterio que
+    // las columnas del panel). Sin fecha → "—".
+    let date_str = match modified {
+        Some(secs) => {
+            let local = secs as i64 + crate::logging::tz_offset_secs();
+            format_time(Some(local), DateFormat::default())
+        }
+        None => String::new(),
+    };
+    let date_str = if date_str.is_empty() {
+        "—".to_string()
+    } else {
+        date_str
+    };
+    let ext = if is_dir {
+        String::new()
+    } else {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some(e) if !e.is_empty() => e.to_uppercase(),
+            _ => String::new(),
+        }
+    };
+    (name, size_str, date_str, ext)
+}
+
 /// Datos planos del modal activo (espejo de `OpDialogVm` de Slint).
 #[derive(Clone, Debug, Default)]
 pub struct OpDialogVmData {
@@ -1549,6 +1618,25 @@ pub struct OpDialogVmData {
     pub folder_name: String,
     /// `true` si hay MÁS de una carpeta en conflicto (muestra el checkbox "aplicar a todas").
     pub folder_more: bool,
+    // --- Conflicto de archivo (kind==2): comparación LADO A LADO "Existente" | "Nuevo" ---
+    // Cada lado trae nombre + tamaño + fecha + tipo YA FORMATEADOS como String (listos para la UI).
+    /// Nombre del archivo EXISTENTE (el del destino).
+    pub existing_name: String,
+    /// Tamaño formateado del existente ("1,2 MB") o "—" si es carpeta/desconocido.
+    pub existing_size: String,
+    /// Fecha de modificación formateada del existente, o "—".
+    pub existing_date: String,
+    /// Extensión del existente en mayúsculas ("TXT"); vacía si no tiene. La UI compone la etiqueta
+    /// de tipo con i18n: carpeta → "Carpeta", con extensión → la extensión, sin extensión → "Archivo".
+    pub existing_ext: String,
+    /// `true` si el existente es una carpeta (la UI muestra "Carpeta" como tipo).
+    pub existing_is_dir: bool,
+    /// Nombre del archivo NUEVO (entrante).
+    pub incoming_name: String,
+    pub incoming_size: String,
+    pub incoming_date: String,
+    pub incoming_ext: String,
+    pub incoming_is_dir: bool,
 }
 
 /// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
@@ -2170,19 +2258,19 @@ mod tests {
         let mut op = fake_active_op(42);
         let (tx, rx) = std::sync::mpsc::channel::<ConflictDecision>();
         op.conflict_tx = tx;
-        op.awaiting_conflict = Some(ConflictPrompt {
-            existing: PathBuf::from("C:/dst/a.txt"),
-            incoming: PathBuf::from("C:/src/a.txt"),
-        });
+        op.awaiting_conflict = Some(ConflictPrompt::from_paths(
+            PathBuf::from("C:/dst/a.txt"),
+            PathBuf::from("C:/src/a.txt"),
+        ));
         let token = op.token.clone();
         c.active_ops.push(op);
         // El modal de conflicto está abierto apuntando a esta op.
         c.pending_dialog = Some(OpDialog::Conflict {
             op_id: 42,
-            prompt: ConflictPrompt {
-                existing: PathBuf::from("C:/dst/a.txt"),
-                incoming: PathBuf::from("C:/src/a.txt"),
-            },
+            prompt: ConflictPrompt::from_paths(
+                PathBuf::from("C:/dst/a.txt"),
+                PathBuf::from("C:/src/a.txt"),
+            ),
         });
 
         c.cancel_conflict(42);
@@ -2208,10 +2296,10 @@ mod tests {
         let tok = c.active_ops[0].token.clone();
         c.pending_dialog = Some(OpDialog::Conflict {
             op_id: 999,
-            prompt: ConflictPrompt {
-                existing: PathBuf::from("C:/x/a.txt"),
-                incoming: PathBuf::from("C:/y/a.txt"),
-            },
+            prompt: ConflictPrompt::from_paths(
+                PathBuf::from("C:/x/a.txt"),
+                PathBuf::from("C:/y/a.txt"),
+            ),
         });
         c.cancel_conflict(999);
         assert!(!tok.is_cancelled(), "no toca la op 7 (id distinto)");
@@ -2238,14 +2326,14 @@ mod tests {
         let mut op = fake_active_op(42);
         let (tx, rx) = std::sync::mpsc::channel::<ConflictDecision>();
         op.conflict_tx = tx;
-        op.awaiting_conflict = Some(ConflictPrompt {
-            existing: existing.clone(),
-            incoming: incoming.clone(),
-        });
+        op.awaiting_conflict = Some(ConflictPrompt::from_paths(
+            existing.clone(),
+            incoming.clone(),
+        ));
         c.active_ops.push(op);
         c.pending_dialog = Some(OpDialog::Conflict {
             op_id: 42,
-            prompt: ConflictPrompt { existing, incoming },
+            prompt: ConflictPrompt::from_paths(existing, incoming),
         });
         (c, rx, tmp)
     }
@@ -2315,6 +2403,59 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "no se decidió el choque al cancelar"
+        );
+    }
+
+    #[test]
+    fn dialog_vm_de_conflicto_trae_los_dos_lados_comparados() {
+        // El VM del conflicto (kind 2) expone nombre/tamaño/tipo de AMBOS lados (existente | nuevo)
+        // para la comparación lado a lado. El existente tiene 5 bytes ("VIEJO") y el nuevo también
+        // ("NUEVO"); ambos son .txt → extensión "TXT".
+        let (c, _rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        let vm = c.dialog_vm();
+        assert_eq!(vm.kind, 2);
+        assert_eq!(vm.existing_name, "a.txt");
+        assert_eq!(vm.incoming_name, "a.txt");
+        assert_eq!(vm.existing_ext, "TXT");
+        assert_eq!(vm.incoming_ext, "TXT");
+        assert!(!vm.existing_is_dir && !vm.incoming_is_dir);
+        // Tamaños formateados no vacíos ni "—" (son archivos reales con bytes).
+        assert!(!vm.existing_size.is_empty() && vm.existing_size != "—");
+        assert!(!vm.incoming_size.is_empty() && vm.incoming_size != "—");
+        // Las fechas se leyeron del disco (no "—").
+        assert_ne!(vm.existing_date, "—");
+        assert_ne!(vm.incoming_date, "—");
+    }
+
+    #[test]
+    fn resolve_conflict_reenvia_rename_existing_al_motor() {
+        // "Renombrar el existente" (RenameExisting) llega al motor por el canal con la op correcta.
+        let (mut c, rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        c.resolve_conflict(42, ConflictAction::RenameExisting, false);
+        let got = rx.try_recv().expect("el motor recibe la decisión");
+        assert_eq!(
+            got,
+            ConflictDecision {
+                action: ConflictAction::RenameExisting,
+                apply_all: false,
+            }
+        );
+        assert!(c.pending_dialog.is_none());
+        assert!(c.active_ops[0].awaiting_conflict.is_none());
+    }
+
+    #[test]
+    fn resolve_conflict_reenvia_skip_identical_con_aplicar_a_todos() {
+        // "Saltar idénticos" como política: se manda con apply_all=true.
+        let (mut c, rx, _tmp) = ctrl_en_conflicto_de_archivo();
+        c.resolve_conflict(42, ConflictAction::SkipIdentical, true);
+        let got = rx.try_recv().expect("el motor recibe la decisión");
+        assert_eq!(
+            got,
+            ConflictDecision {
+                action: ConflictAction::SkipIdentical,
+                apply_all: true,
+            }
         );
     }
 
