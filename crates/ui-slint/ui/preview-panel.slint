@@ -54,7 +54,7 @@ export component PreviewPanel inherits Rectangle {
     in property <PreviewVm> view;
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     callback open-in-system();   // abrir el archivo previsualizado con el programa por defecto
-    callback hover-tip(string, length);   // tooltip flotante (texto, x centrada) → AppWindow
+    callback hover-tip(string, length, length);   // tooltip flotante (texto, x centrada, y borde inferior) → AppWindow
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
@@ -96,7 +96,8 @@ export component PreviewPanel inherits Rectangle {
                     clicked => { root.open-in-system(); }
                     changed has-hover => {
                         root.hover-tip(self.has-hover ? Tr.preview-open-tip : "",
-                            self.absolute-position.x + self.width / 2);
+                            self.absolute-position.x + self.width / 2,
+                            self.absolute-position.y + self.height);
                     }
                 }
             }

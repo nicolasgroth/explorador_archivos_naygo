@@ -275,9 +275,9 @@ export component FilePanel inherits FocusScope {
     callback missing-close(int);             // (pane-id) cerrar el panel
     callback fav-toggle(int);                // (pane-id) anclar/quitar la carpeta de favoritos
     callback copy-path(int);                 // (pane-id) copiar la ruta al portapapeles
-    // Tooltip de los íconos de la path-bar: (texto-o-vacío, x-centro en coords de ventana). La
-    // AppWindow lo pinta en su overlay (igual que la toolbar). Vacío al salir el mouse.
-    callback hover-tip(string, length);
+    // Tooltip de los íconos de la path-bar: (texto-o-vacío, x-centro, y-borde-inferior) en coords
+    // de ventana. La AppWindow lo pinta en su overlay JUSTO debajo del ícono. Vacío al salir el mouse.
+    callback hover-tip(string, length, length);
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
     in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
     in property <string> rename-text;        // nombre inicial del editor
@@ -432,7 +432,8 @@ export component FilePanel inherits FocusScope {
                             }
                             changed has-hover => {
                                 root.hover-tip(self.has-hover ? Tr.pathbar-fav-tip : "",
-                                    self.absolute-position.x + self.width / 2);
+                                    self.absolute-position.x + self.width / 2,
+                                    self.absolute-position.y + self.height);
                             }
                         }
                     }
@@ -461,7 +462,8 @@ export component FilePanel inherits FocusScope {
                             }
                             changed has-hover => {
                                 root.hover-tip(self.has-hover ? Tr.pathbar-copy-tip : "",
-                                    self.absolute-position.x + self.width / 2);
+                                    self.absolute-position.x + self.width / 2,
+                                    self.absolute-position.y + self.height);
                             }
                         }
                     }
@@ -491,7 +493,8 @@ export component FilePanel inherits FocusScope {
                             clicked => { root.toggle-deep(root.pane-id); }
                             changed has-hover => {
                                 root.hover-tip(self.has-hover ? Tr.deep-view-tip : "",
-                                    self.absolute-position.x + self.width / 2);
+                                    self.absolute-position.x + self.width / 2,
+                                    self.absolute-position.y + self.height);
                             }
                         }
                     }

@@ -1925,23 +1925,20 @@ fn main() -> Result<(), slint::PlatformError> {
                     ui.set_fwd_history_menu_open(false);
                     ui.set_drive_menu_path("".into());
                     ui.set_view_menu_open(false);
-                    // x de anclaje del menú flotante abierto por teclado. No hay botón al que
-                    // anclarse (vino de un atajo), así que se usa el ancho lógico de la ventana para
-                    // ubicarlo en la zona donde vive cada botón en la toolbar (favoritos a la
-                    // derecha, disposiciones más al centro). Es solo cosmético: el menú funciona igual.
-                    let win = ui.window();
-                    let logical = win.size().to_logical(win.scale_factor());
-                    let w = logical.width;
+                    // x de anclaje del menú flotante abierto por teclado. Aunque no hay botón al que
+                    // anclarse en el gesto (vino de un atajo), la AppWindow expone la posición REAL de
+                    // cada botón (fav-btn-x / layouts-btn-x), siempre al día. Las leemos para que el
+                    // menú salga justo bajo su botón, igual que al abrirlo con el mouse.
                     match req {
                         Tmr::RefreshDrives => ui.invoke_refresh_drives(),
                         Tmr::Favorites => {
                             ui.set_layout_menu_open(false);
-                            ui.set_fav_menu_x(w * 0.75);
+                            ui.set_fav_menu_x(ui.get_fav_btn_x());
                             ui.set_fav_menu_open(true);
                         }
                         Tmr::Layouts => {
                             ui.set_fav_menu_open(false);
-                            ui.set_layout_menu_x(w * 0.45);
+                            ui.set_layout_menu_x(ui.get_layouts_btn_x());
                             ui.set_layout_menu_open(true);
                         }
                     }

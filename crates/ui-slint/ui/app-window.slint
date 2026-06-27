@@ -689,12 +689,16 @@ component ToolBtn inherits Rectangle {
     // Publica el tooltip y su posición X (centro del botón) al pasar el mouse, para que la
     // AppWindow lo pinte ENCIMA del contenido (un tooltip anidado en la toolbar queda tapado
     // por los paneles, que se pintan después en el VerticalLayout).
-    callback hover-tip(string, length);
+    // (texto, x-centro, y-borde-inferior) en coords de ventana, para anclar el tooltip JUSTO
+    // debajo del botón (no a una Y fija en la barra superior).
+    callback hover-tip(string, length, length);
     touch := TouchArea {
         enabled: root.enabled;
         clicked => { root.clicked(); }
         changed has-hover => {
-            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
+            root.hover-tip(self.has-hover ? root.tip : "",
+                root.absolute-position.x + root.width / 2,
+                root.absolute-position.y + root.height);
         }
     }
 }
@@ -805,12 +809,13 @@ component DriveBtn inherits Rectangle {
                 }
                 changed has-hover => {
                     root.hover-tip(self.has-hover ? root.eject-tip : "",
-                        root.absolute-position.x + root.width / 2);
+                        root.absolute-position.x + root.width / 2,
+                        root.absolute-position.y + root.height);
                 }
             }
         }
     }
-    callback hover-tip(string, length);
+    callback hover-tip(string, length, length);
     dtouch := TouchArea {
         // Clic-izquierdo navega; clic-derecho abre el menú de expulsión si es extraíble.
         pointer-event(ev) => {
@@ -821,7 +826,9 @@ component DriveBtn inherits Rectangle {
         }
         clicked => { root.clicked(); }
         changed has-hover => {
-            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
+            root.hover-tip(self.has-hover ? root.tip : "",
+                root.absolute-position.x + root.width / 2,
+                root.absolute-position.y + root.height);
         }
     }
 }
@@ -938,7 +945,7 @@ component HistoryCaret inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tip;
     callback clicked(length);
-    callback hover-tip(string, length);
+    callback hover-tip(string, length, length);
     property <color> tint: root.enabled ? white : Theme.text-dim;
     width: 14px;
     border-radius: 7px;
@@ -961,7 +968,9 @@ component HistoryCaret inherits Rectangle {
         enabled: root.enabled;
         clicked => { root.clicked(root.absolute-position.x + root.width / 2); }
         changed has-hover => {
-            root.hover-tip(self.has-hover ? root.tip : "", root.absolute-position.x + root.width / 2);
+            root.hover-tip(self.has-hover ? root.tip : "",
+                root.absolute-position.x + root.width / 2,
+                root.absolute-position.y + root.height);
         }
     }
 }
@@ -1199,10 +1208,12 @@ export component AppWindow inherits Window {
     callback ctx-dismiss();
     // Clic derecho en la zona vacía del panel → menú contextual de la carpeta (modo carpeta).
     callback empty-context(int, length, length);  // (pane-id, x, y)
-    // Estado del menú ▾ (desplegable de "agregar panel").
+    // Estado del menú ▾ (desplegable de "agregar panel"). x: centro del botón Panel que lo abre.
     property <bool> add-menu-open: false;
-    // Estado del menú del botón "+" (elegir dirección de la división).
+    property <length> add-menu-x: 0;
+    // Estado del menú del botón "+" (elegir dirección de la división). x: centro del botón Dividir.
     property <bool> dir-menu-open: false;
+    property <length> dir-menu-x: 0;
     // Menú ▾ de expulsión de un disco extraíble: raíz del disco (vacío = cerrado) + x de anclaje.
     // in-out para que Rust pueda cerrarlo (setearlo a "") al abrir el menú de historial.
     in-out property <string> drive-menu-path: "";
@@ -1216,6 +1227,11 @@ export component AppWindow inherits Window {
     // Menú flotante ▾ de favoritos (toolbar): muestra el árbol jerárquico, solo navega.
     in-out property <length> fav-menu-x: 0;
     in-out property <bool> fav-menu-open: false;
+    // Posición REAL (x de centro, coords de ventana) de los botones de Favoritos y Layouts,
+    // siempre al día. Cuando estos menús se abren por ATAJO de teclado (Rust no sabe dónde está el
+    // botón), Rust lee estas props para anclar el menú al botón en vez de a un x proporcional.
+    out property <length> fav-btn-x: fav-btn.absolute-position.x + fav-btn.width / 2;
+    out property <length> layouts-btn-x: layouts-btn.absolute-position.x + layouts-btn.width / 2;
     // Paleta de comandos (Ctrl+P): overlay con búsqueda difusa de acciones/archivos/recientes/etc.
     in-out property <bool> palette-open: false;
     in-out property <string> palette-query: "";
@@ -1230,8 +1246,10 @@ export component AppWindow inherits Window {
     // x de centro del botón de Layouts, capturada al abrir para anclar el menú flotante
     // (mismo patrón que el menú de historial / discos). in-out: la fija el botón o el atajo.
     in-out property <length> layout-menu-x: 0;
-    // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo.
+    // Menú de terminales de la toolbar (PS/CMD/WSL/Win Terminal) en el panel activo. x: centro
+    // del botón Terminal que lo abre.
     property <bool> term-menu-open: false;
+    property <length> term-menu-x: 0;
     // ¿WSL / Windows Terminal disponibles? Rust lo setea para mostrar u ocultar esas entradas.
     in property <bool> has-wsl;
     in property <bool> has-wt;
@@ -1310,6 +1328,9 @@ export component AppWindow inherits Window {
     // al pasar el mouse; se pinta como overlay al FINAL de la AppWindow (encima del contenido).
     property <string> hovered-tip: "";
     property <length> hovered-tip-x: 0;
+    // Y del borde inferior del elemento que disparó el tooltip (coords de ventana): el overlay se
+    // dibuja justo debajo de ahí, de modo que el tooltip salga JUNTO al ícono y no en una Y fija.
+    property <length> hovered-tip-y: 0;
     // Toast transitorio (aviso breve, p. ej. "Ruta copiada"). `show-toast(texto)` lo muestra y un
     // Timer lo apaga a los ~1.5s. Reusable para otras confirmaciones.
     property <string> toast-text: "";
@@ -1351,14 +1372,14 @@ export component AppWindow inherits Window {
                     tip: Tr.nav-back-tip;
                     btn-width: 34px;
                     clicked => { root.go-back(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // ▾ del historial hacia atrás (lista las carpetas anteriores del panel activo).
                 HistoryCaret {
                     enabled: root.can-go-back;
                     tip: Tr.nav-back-history-tip;
                     clicked(x) => { root.open-back-history(x); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolBtn {
                     draw-forward: true;
@@ -1367,14 +1388,14 @@ export component AppWindow inherits Window {
                     tip: Tr.nav-forward-tip;
                     btn-width: 34px;
                     clicked => { root.go-forward(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // ▾ del historial hacia adelante (lista las carpetas posteriores del panel activo).
                 HistoryCaret {
                     enabled: root.can-go-forward;
                     tip: Tr.nav-forward-history-tip;
                     clicked(x) => { root.open-forward-history(x); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolBtn {
                     draw-home: true;
@@ -1382,7 +1403,7 @@ export component AppWindow inherits Window {
                     tip: Tr.nav-home-tip;
                     btn-width: 34px;
                     clicked => { root.go-home(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Subir un nivel (carpeta padre). Flecha hacia arriba dibujada con Path.
                 ToolBtn {
@@ -1392,7 +1413,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 64px;
                     clicked => { root.go-up(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolSep { }
                 // --- Grupo VISTA / BUSCAR ---
@@ -1406,7 +1427,7 @@ export component AppWindow inherits Window {
                     tip: Tr.search-tip;
                     btn-width: 34px;
                     clicked => { root.search-toggle(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Visibilidad: el ojo abre un menú flotante con 3 casillas (ocultos / sistema /
                 // dotfiles). Se ancla al botón (su x de centro). Estilo combobox: resalta abierto.
@@ -1419,7 +1440,7 @@ export component AppWindow inherits Window {
                     clicked => {
                         root.open-view-menu(view-btn.absolute-position.x + view-btn.width / 2);
                     }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Historial de carpetas recientes: ícono de reloj abre menú flotante.
                 history-btn := ToolBtn {
@@ -1431,7 +1452,7 @@ export component AppWindow inherits Window {
                     clicked => {
                         root.history-open(history-btn.absolute-position.x + history-btn.width / 2);
                     }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Favoritos: estrella ▾ abre menú flotante con el ÁRBOL de favoritos (solo navega).
                 fav-btn := ToolBtn {
@@ -1450,13 +1471,13 @@ export component AppWindow inherits Window {
                         root.fav-menu-x = fav-btn.absolute-position.x + fav-btn.width / 2;
                         root.fav-menu-open = !root.fav-menu-open;
                     }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolSep { }
                 // --- Grupo PANELES ---
                 // Todo lo que manipula la disposición de paneles, junto: dividir, panel auxiliar,
                 // intercambiar, clonar, apilar en pestañas, plantillas de disposición.
-                ToolBtn {
+                split-btn := ToolBtn {
                     // Dividir el panel en dos: nuevo panel de archivos. Ícono "panel partido"
                     // dibujado con Path (antes era un "+" ambiguo que parecía "nuevo").
                     label: "";
@@ -1464,19 +1485,26 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
                     btn-width: 34px;
-                    clicked => { root.dir-menu-open = !root.dir-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    clicked => {
+                        // Anclar el menú al botón: capturar su x de centro antes de abrir.
+                        root.dir-menu-x = split-btn.absolute-position.x + split-btn.width / 2;
+                        root.dir-menu-open = !root.dir-menu-open;
+                    }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Panel auxiliar (árbol / propiedades / etc.): ícono "panel con columna lateral".
-                ToolBtn {
+                panel-btn := ToolBtn {
                     label: Tr.toolbar-panel;
                     tip: Tr.toolbar-panel-tip;
                     draw-panel: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     highlight: root.add-menu-open;
-                    clicked => { root.add-menu-open = !root.add-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    clicked => {
+                        root.add-menu-x = panel-btn.absolute-position.x + panel-btn.width / 2;
+                        root.add-menu-open = !root.add-menu-open;
+                    }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Intercambiar paneles: ícono de dos flechas opuestas (⇄) dibujado con Path.
                 ToolBtn {
@@ -1486,7 +1514,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.swap-panes(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Clonar el panel: ícono de dos rectángulos con offset (duplicar) dibujado con Path.
                 ToolBtn {
@@ -1496,7 +1524,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 72px;
                     clicked => { root.clone-pane(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Apilar en pestañas: ícono de dos rectángulos escalonados (pestañas) con Path.
                 ToolBtn {
@@ -1506,7 +1534,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.stack-pane(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Menú de plantillas de disposición (F4). Ícono propio (grilla 2x2) para no
                 // confundirse con "Tabs".
@@ -1522,7 +1550,7 @@ export component AppWindow inherits Window {
                         root.layout-menu-x = layouts-btn.absolute-position.x + layouts-btn.width / 2;
                         root.layout-menu-open = !root.layout-menu-open;
                     }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolSep { }
                 // --- Grupo ACCIONES ---
@@ -1535,19 +1563,22 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 110px;
                     clicked => { root.new-folder-toolbar(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
                 // Ícono de terminal dibujado (no hay PNG de terminal en los sets).
-                ToolBtn {
+                term-btn := ToolBtn {
                     label: Tr.toolbar-terminal;
                     tip: Tr.toolbar-terminal-tip;
                     draw-terminal: true;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     highlight: root.term-menu-open;
-                    clicked => { root.term-menu-open = !root.term-menu-open; }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    clicked => {
+                        root.term-menu-x = term-btn.absolute-position.x + term-btn.width / 2;
+                        root.term-menu-open = !root.term-menu-open;
+                    }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolSep { }
                 // --- Grupo SISTEMA ---
@@ -1559,7 +1590,7 @@ export component AppWindow inherits Window {
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.open-config(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolSep { }
                 // --- Grupo UNIDADES (tira de discos) ---
@@ -1570,7 +1601,7 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-refresh-drives;
                     btn-width: 30px;
                     clicked => { root.refresh-drives(); }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Tira de unidades de disco (paridad con egui): clic navega el panel activo.
                 for d in root.drives: DriveBtn {
@@ -1589,7 +1620,7 @@ export component AppWindow inherits Window {
                         root.drive-menu-path = d.path;
                         root.drive-menu-x = x;
                     }
-                    hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                    hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 Rectangle {
                     // Stretchy: ocupa el espacio sobrante de la toolbar. Sin esto, TODOS los
@@ -1746,7 +1777,7 @@ export component AppWindow inherits Window {
                         missing-close(id) => { root.missing-close-pane(id); }
                         fav-toggle(id) => { root.fav-toggle(id); }
                         copy-path(id) => { root.copy-path(id); root.show-toast(Tr.pathbar-copied); }
-                        hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                        hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
                         rename-text: root.rename-pane == p.id ? root.rename-text : "";
                         rename-commit(pos, name) => { root.rename-commit(p.id, pos, name); }
@@ -1827,7 +1858,7 @@ export component AppWindow inherits Window {
                         view: p.preview;
                         focus-pane() => { root.activate(p.id); }
                         open-in-system() => { root.preview-open(p.preview.path); }
-                        hover-tip(t, x) => { root.hovered-tip = t; root.hovered-tip-x = x; }
+                        hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                     }
                     // Panel rico de operaciones montado como pane (Panel ▾ → Operaciones).
                     // Reusa el modelo de filas y los recuentos de nivel-ventana.
@@ -1952,13 +1983,24 @@ export component AppWindow inherits Window {
     // ÚLTIMOS hijos del componente raíz (al final del archivo), para que queden por DELANTE de
     // todos los demás overlays (menús, paleta, etc.) en el z-order de Slint. Ver el final.
 
-    // Tooltip de la toolbar: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido,
-    // así no queda tapado por los paneles). Aparece justo bajo la barra, centrado en el botón.
+    // Tooltip flotante: overlay al nivel de la AppWindow (se pinta DESPUÉS del contenido, así no
+    // queda tapado por los paneles). Aparece JUNTO al elemento que lo disparó: centrado en su X y
+    // justo bajo su borde inferior (hovered-tip-y). Si no cabe abajo (elemento cerca del borde
+    // inferior, p. ej. la path-bar de un panel bajo), se voltea ARRIBA del elemento.
     if root.hovered-tip != "": Rectangle {
+        property <length> tip-h: 22px;
+        // Alto típico del elemento disparador (botón de toolbar / ícono de path-bar). Solo se usa
+        // en el caso de volteo, para subir el tooltip por encima del elemento (hovered-tip-y es su
+        // borde INFERIOR, así que restamos un alto aproximado para librar el elemento).
+        property <length> src-h: 30px;
+        // ¿El tooltip se saldría por abajo si lo dibujamos debajo del elemento? Entonces va arriba.
+        property <bool> flip-up: root.hovered-tip-y + 2px + self.tip-h > root.height;
         x: min(max(root.hovered-tip-x - self.width / 2, 4px), max(4px, root.width - self.width - 4px));
-        y: root.top-bar-h + 2px;
+        y: self.flip-up
+            ? max(4px, root.hovered-tip-y - self.src-h - 2px - self.tip-h)
+            : root.hovered-tip-y + 2px;
         width: htip.preferred-width + 14px;
-        height: 22px;
+        height: self.tip-h;
         background: Theme.panel-bg;
         border-color: Theme.selection-bg;
         border-width: 1px;
@@ -2336,7 +2378,8 @@ export component AppWindow inherits Window {
         clicked => { root.add-menu-open = false; }
     }
     if root.add-menu-open: Rectangle {
-        x: 70px;
+        // Anclado al botón Panel (su x de centro), con clamp para no salirse de la ventana.
+        x: min(root.width - self.width - 4px, max(4px, root.add-menu-x - self.width / 2));
         y: root.top-bar-h + 2px;
         width: 160px;
         height: menu-items.preferred-height + 8px;
@@ -2477,7 +2520,8 @@ export component AppWindow inherits Window {
         clicked => { root.dir-menu-open = false; }
     }
     if root.dir-menu-open: Rectangle {
-        x: 54px;
+        // Anclado al botón Dividir (su x de centro), con clamp para no salirse de la ventana.
+        x: min(root.width - self.width - 4px, max(4px, root.dir-menu-x - self.width / 2));
         y: root.top-bar-h + 2px;
         width: 170px;
         height: dir-items.preferred-height + 8px;
@@ -2500,8 +2544,8 @@ export component AppWindow inherits Window {
         clicked => { root.term-menu-open = false; }
     }
     if root.term-menu-open: Rectangle {
-        // Alineado bajo el botón de terminales (a la derecha de Layouts). Acotado para no salirse.
-        x: min(root.width - self.width - 8px, 360px);
+        // Anclado al botón Terminal (su x de centro), con clamp para no salirse de la ventana.
+        x: min(root.width - self.width - 4px, max(4px, root.term-menu-x - self.width / 2));
         y: root.top-bar-h + 2px;
         width: 200px;
         height: term-items.preferred-height + 8px;
