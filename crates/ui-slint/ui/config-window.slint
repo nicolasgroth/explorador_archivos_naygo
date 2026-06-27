@@ -166,12 +166,16 @@ export component ConfigWindow inherits Window {
     in property <[int]> editing-token-r;
     in property <[int]> editing-token-g;
     in property <[int]> editing-token-b;
-    // Nombres legibles de los 11 tokens (orden = índice del token).
+    // Nombres legibles de los 12 tokens (orden = índice del token; el 12º es row-inactive-bg).
     property <[string]> token-names: [
         Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
         Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
-        Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border,
+        Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border, Tr.theme-tok-row-inactive-bg,
     ];
+    // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
+    // edición).
+    in property <bool> editing-flat-inactive: false;
+    callback theme-set-flat-inactive(bool);
     // Token cuyo picker está abierto/expandido (-1 = ninguno).
     property <int> editing-open-token: -1;
     callback theme-set-name(string);
@@ -650,6 +654,25 @@ export component ConfigWindow inherits Window {
                                                 standard-colors-label: Tr.theme-standard-colors;
                                                 more-colors-label: Tr.theme-more-colors;
                                                 changed(hex) => { root.theme-set-token(ti, hex); }
+                                            }
+                                        }
+                                        // Casilla "paneles inactivos planos": cuando se activa, las filas
+                                        // de un panel NO activo se pintan sin la cebra (todas del color
+                                        // "fila de panel inactivo"). Vive en el tema (se guarda con él) y
+                                        // refleja el preview en vivo igual que los colores.
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-top: 2px;
+                                            Text {
+                                                text: Tr.theme-flat-inactive;
+                                                color: Theme.text;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+                                            Switch {
+                                                checked: root.editing-flat-inactive;
+                                                toggled(v) => { root.theme-set-flat-inactive(v); }
                                             }
                                         }
                                         // Acciones del editor.

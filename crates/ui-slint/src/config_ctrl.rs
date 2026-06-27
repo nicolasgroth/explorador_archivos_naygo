@@ -19,7 +19,7 @@ use naygo_core::theme::{
 use std::path::PathBuf;
 
 /// Cantidad de tokens de color editables de un tema (orden fijo, ver `set_token_color`).
-pub const THEME_TOKEN_COUNT: usize = 11;
+pub const THEME_TOKEN_COUNT: usize = 12;
 
 /// Estado del tema que se está editando (duplicado de un builtin o de uno de usuario). El editor
 /// muta este `Theme` en memoria, aplica el preview en vivo, y al guardar lo escribe a disco.
@@ -134,12 +134,12 @@ impl ConfigCtrl {
 
     // --- Editor de temas (galería de Apariencia) ---
     //
-    // Los 11 tokens de color de un `Theme` se exponen por un índice estable 0..11. El ORDEN ES
+    // Los 12 tokens de color de un `Theme` se exponen por un índice estable 0..12. El ORDEN ES
     // FIJO y debe coincidir entre `editing_token_hex` y `set_token_color` (y con la lista de la
     // UI): 0=accent, 1=panel_bg, 2=row_bg, 3=row_alt_bg, 4=text, 5=text_dim, 6=selection_bg,
-    // 7=active_bar, 8=error, 9=highlight, 10=border.
+    // 7=active_bar, 8=error, 9=highlight, 10=border, 11=row_inactive_bg.
 
-    /// Lee el token `idx` (0..11) de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
+    /// Lee el token `idx` (0..12) de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
     fn token_of(theme: &Theme, idx: usize) -> ThemeColor {
         match idx {
             0 => theme.accent,
@@ -153,11 +153,12 @@ impl ConfigCtrl {
             8 => theme.error,
             9 => theme.highlight,
             10 => theme.border,
+            11 => theme.row_inactive_bg,
             _ => theme.accent,
         }
     }
 
-    /// Escribe el token `idx` (0..11) de un tema. Fuera de rango → no hace nada.
+    /// Escribe el token `idx` (0..12) de un tema. Fuera de rango → no hace nada.
     fn set_token_of(theme: &mut Theme, idx: usize, c: ThemeColor) {
         match idx {
             0 => theme.accent = c,
@@ -171,6 +172,7 @@ impl ConfigCtrl {
             8 => theme.error = c,
             9 => theme.highlight = c,
             10 => theme.border = c,
+            11 => theme.row_inactive_bg = c,
             _ => {}
         }
     }
@@ -281,7 +283,7 @@ impl ConfigCtrl {
         }
     }
 
-    /// Hex "#rrggbb" del token `idx` (0..11) del tema en edición. Sin editor → "#000000".
+    /// Hex "#rrggbb" del token `idx` (0..12) del tema en edición. Sin editor → "#000000".
     pub fn editing_token_hex(&self, idx: usize) -> String {
         self.editing
             .as_ref()
@@ -309,6 +311,22 @@ impl ConfigCtrl {
             if let Some(e) = self.editing.as_mut() {
                 Self::set_token_of(&mut e.theme, idx, c);
             }
+        }
+    }
+
+    /// ¿El tema en edición tiene activado "paneles inactivos planos"? Sin editor → `false`.
+    pub fn editing_flat_inactive(&self) -> bool {
+        self.editing
+            .as_ref()
+            .map(|e| e.theme.flat_inactive_panels)
+            .unwrap_or(false)
+    }
+
+    /// Fija "paneles inactivos planos" del tema en edición. Si no hay editor, no hace nada. El
+    /// llamador re-aplica el preview en vivo leyendo `editing_theme()` tras esta llamada.
+    pub fn set_editing_flat_inactive(&mut self, v: bool) {
+        if let Some(e) = self.editing.as_mut() {
+            e.theme.flat_inactive_panels = v;
         }
     }
 
@@ -372,9 +390,10 @@ impl ConfigCtrl {
         self.editing.take().map(|e| e.prev_theme_id)
     }
 
-    /// Restaura los 11 tokens del tema en edición a los del builtin del que se duplicó (botón
-    /// "Restaurar de fábrica"). Conserva el nombre/base actuales del editor. No hace nada si el
-    /// tema en edición no proviene de un builtin. El llamador re-aplica el preview tras esto.
+    /// Restaura los 12 tokens del tema en edición a los del builtin del que se duplicó (botón
+    /// "Restaurar de fábrica"), incluyendo "paneles inactivos planos". Conserva el nombre/base
+    /// actuales del editor. No hace nada si el tema en edición no proviene de un builtin. El
+    /// llamador re-aplica el preview tras esto.
     pub fn restore_factory_editing(&mut self) {
         let Some(state) = self.editing.as_mut() else {
             return;
@@ -388,6 +407,7 @@ impl ConfigCtrl {
         e.theme.panel_bg = factory.panel_bg;
         e.theme.row_bg = factory.row_bg;
         e.theme.row_alt_bg = factory.row_alt_bg;
+        e.theme.row_inactive_bg = factory.row_inactive_bg;
         e.theme.text = factory.text;
         e.theme.text_dim = factory.text_dim;
         e.theme.selection_bg = factory.selection_bg;
@@ -395,6 +415,7 @@ impl ConfigCtrl {
         e.theme.error = factory.error;
         e.theme.highlight = factory.highlight;
         e.theme.border = factory.border;
+        e.theme.flat_inactive_panels = factory.flat_inactive_panels;
         e.theme.base = factory.base;
     }
 

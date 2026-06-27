@@ -25,6 +25,7 @@ where
     theme.set_panel_bg(col(t.panel_bg));
     theme.set_row_bg(col(t.row_bg));
     theme.set_row_alt_bg(col(t.row_alt_bg));
+    theme.set_row_inactive_bg(col(t.row_inactive_bg));
     theme.set_text(col(t.text));
     theme.set_text_dim(col(t.text_dim));
     theme.set_selection_bg(col(t.selection_bg));
@@ -32,4 +33,5 @@ where
     theme.set_error(col(t.error));
     theme.set_highlight(col(t.highlight));
     theme.set_border(col(t.border));
+    theme.set_flat_inactive_panels(t.flat_inactive_panels);
 }

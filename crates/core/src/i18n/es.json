@@ -673,6 +673,8 @@
   "slint.theme.tok.error": "Error",
   "slint.theme.tok.highlight": "Resaltado",
   "slint.theme.tok.border": "Borde",
+  "slint.theme.tok.row_inactive_bg": "Fila de panel inactivo",
+  "slint.theme.flat_inactive": "Paneles inactivos planos",
   "slint.cfg.language": "Idioma",
   "slint.cfg.icon_set": "Set de íconos",
   "slint.cfg.shortcuts_hint": "Cambiá un atajo con «Cambiar» y presioná la nueva combinación.",

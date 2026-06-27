@@ -673,6 +673,8 @@
   "slint.theme.tok.error": "Error",
   "slint.theme.tok.highlight": "Highlight",
   "slint.theme.tok.border": "Border",
+  "slint.theme.tok.row_inactive_bg": "Inactive panel row",
+  "slint.theme.flat_inactive": "Flat inactive panels",
   "slint.cfg.language": "Language",
   "slint.cfg.icon_set": "Icon set",
   "slint.cfg.shortcuts_hint": "Change a shortcut with “Change” and press the new combination.",

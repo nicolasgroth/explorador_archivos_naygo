@@ -613,15 +613,28 @@ export component FilePanel inherits FocusScope {
                 viewport-y: -(root.scroll-y + root.wheel-scroll);
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
-                    // Fondo: selección > resaltado (recién aparecido) > hover > fila par (cebra
-                    // muy sutil) > nada. La cebra da estructura sin líneas duras (estilo egui).
+                    // Fondo de la cebra para un panel NO activo. Tres casos:
+                    //  - flat-inactive-panels ON  → TODAS las filas con row-inactive-bg (panel plano,
+                    //    sin "líneas"), para que se distinga aún más del panel activo.
+                    //  - flat OFF                 → cebra con row-inactive-bg de base + la franja sutil
+                    //    en las impares (igual estructura que el panel activo, pero sobre el color de
+                    //    inactivo). Con el default (row-inactive-bg = row-bg) no se nota el cambio.
+                    property <brush> inactive-zebra: Theme.flat-inactive-panels
+                        ? Theme.row-inactive-bg
+                        : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : Theme.row-inactive-bg);
+                    // Fondo: selección > resaltado (recién aparecido) > hover > cebra de base. La
+                    // selección, el resaltado y el hover MANDAN por encima de activo/inactivo. La cebra
+                    // de base depende de si el panel está activo: activo = cebra clásica (par transparente
+                    // sobre el panel); inactivo = `inactive-zebra` (atenuable o plana).
                     background: row.selected
                         ? Theme.selection-bg
                         : (row.highlight
                             ? Theme.highlight.with-alpha(0.22)
                             : (i == root.hover-row
                                 ? Theme.row-alt-bg
-                                : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)));
+                                : (root.active
+                                    ? (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)
+                                    : self.inactive-zebra)));
                     border-width: row.focused ? 1px : 0px;
                     border-color: Theme.accent;
                     border-radius: 3px;

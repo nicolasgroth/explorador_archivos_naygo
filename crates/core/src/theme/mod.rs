@@ -89,6 +89,9 @@ pub struct Theme {
     pub panel_bg: ThemeColor,
     pub row_bg: ThemeColor,
     pub row_alt_bg: ThemeColor,
+    /// Fondo de las filas de los paneles NO activos. Por defecto = `row_bg` (no se nota hasta que
+    /// el usuario lo atenúe), para distinguir mejor cuál panel tiene el foco.
+    pub row_inactive_bg: ThemeColor,
     pub text: ThemeColor,
     pub text_dim: ThemeColor,
     pub selection_bg: ThemeColor,
@@ -97,18 +100,22 @@ pub struct Theme {
     /// Color de resaltado para archivos recién aparecidos (vigilancia de carpeta).
     pub highlight: ThemeColor,
     pub border: ThemeColor,
+    /// Cuando es `true`, las filas de un panel NO activo se pintan TODAS del mismo color (sin la
+    /// alternancia cebra), de modo que el panel inactivo se ve "plano". Por defecto `false`.
+    pub flat_inactive_panels: bool,
 }
 
 impl Serialize for Theme {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Theme", 13)?;
+        let mut st = s.serialize_struct("Theme", 15)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("base", &self.base)?;
         st.serialize_field("accent", &self.accent)?;
         st.serialize_field("panel_bg", &self.panel_bg)?;
         st.serialize_field("row_bg", &self.row_bg)?;
         st.serialize_field("row_alt_bg", &self.row_alt_bg)?;
+        st.serialize_field("row_inactive_bg", &self.row_inactive_bg)?;
         st.serialize_field("text", &self.text)?;
         st.serialize_field("text_dim", &self.text_dim)?;
         st.serialize_field("selection_bg", &self.selection_bg)?;
@@ -116,6 +123,7 @@ impl Serialize for Theme {
         st.serialize_field("error", &self.error)?;
         st.serialize_field("highlight", &self.highlight)?;
         st.serialize_field("border", &self.border)?;
+        st.serialize_field("flat_inactive_panels", &self.flat_inactive_panels)?;
         st.end()
     }
 }
@@ -129,6 +137,7 @@ struct ThemeRaw {
     panel_bg: Option<ThemeColor>,
     row_bg: Option<ThemeColor>,
     row_alt_bg: Option<ThemeColor>,
+    row_inactive_bg: Option<ThemeColor>,
     text: Option<ThemeColor>,
     text_dim: Option<ThemeColor>,
     selection_bg: Option<ThemeColor>,
@@ -136,6 +145,7 @@ struct ThemeRaw {
     error: Option<ThemeColor>,
     highlight: Option<ThemeColor>,
     border: Option<ThemeColor>,
+    flat_inactive_panels: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for Theme {
@@ -143,13 +153,18 @@ impl<'de> Deserialize<'de> for Theme {
         let raw = ThemeRaw::deserialize(d)?;
         let base = raw.base.unwrap_or(ThemeBase::Dark);
         let def = Theme::defaults_for(base, raw.name.clone().unwrap_or_default());
+        // Resolver `row_bg` PRIMERO: es el fallback de `row_inactive_bg`, así un tema viejo (o
+        // recién creado) sin ese campo deja los paneles inactivos idénticos a los activos.
+        let row_bg = raw.row_bg.unwrap_or(def.row_bg);
         Ok(Theme {
             name: raw.name.unwrap_or(def.name),
             base,
             accent: raw.accent.unwrap_or(def.accent),
             panel_bg: raw.panel_bg.unwrap_or(def.panel_bg),
-            row_bg: raw.row_bg.unwrap_or(def.row_bg),
+            row_bg,
             row_alt_bg: raw.row_alt_bg.unwrap_or(def.row_alt_bg),
+            // Por defecto = `row_bg` resuelto (no el del default): sin cambio visible hasta atenuar.
+            row_inactive_bg: raw.row_inactive_bg.unwrap_or(row_bg),
             text: raw.text.unwrap_or(def.text),
             text_dim: raw.text_dim.unwrap_or(def.text_dim),
             selection_bg: raw.selection_bg.unwrap_or(def.selection_bg),
@@ -157,6 +172,8 @@ impl<'de> Deserialize<'de> for Theme {
             error: raw.error.unwrap_or(def.error),
             highlight: raw.highlight.unwrap_or(def.highlight),
             border: raw.border.unwrap_or(def.border),
+            // Default false: comportamiento actual (cebra en todos los paneles).
+            flat_inactive_panels: raw.flat_inactive_panels.unwrap_or(false),
         })
     }
 }
@@ -179,6 +196,8 @@ impl Theme {
                 panel_bg: c(0x1e, 0x1e, 0x1e),
                 row_bg: c(0x1e, 0x1e, 0x1e),
                 row_alt_bg: c(0x23, 0x23, 0x23),
+                // Default = igual a `row_bg`: el panel inactivo no cambia hasta que se atenúe.
+                row_inactive_bg: c(0x1e, 0x1e, 0x1e),
                 text: c(0xd4, 0xd4, 0xd4),
                 text_dim: c(0x9b, 0x9b, 0x9b),
                 selection_bg: c(0x37, 0x37, 0x3d),
@@ -186,6 +205,7 @@ impl Theme {
                 error: c(0xe0, 0x6c, 0x5b),
                 highlight: c(0x2e, 0x7d, 0x32),
                 border: c(0x3a, 0x3a, 0x3a),
+                flat_inactive_panels: false,
             },
             ThemeBase::Light => Theme {
                 name,
@@ -197,6 +217,8 @@ impl Theme {
                 panel_bg: c(0xe8, 0xe8, 0xea),
                 row_bg: c(0xee, 0xee, 0xf0),
                 row_alt_bg: c(0xe4, 0xe4, 0xe7),
+                // Default = igual a `row_bg`: el panel inactivo no cambia hasta que se atenúe.
+                row_inactive_bg: c(0xee, 0xee, 0xf0),
                 text: c(0x1f, 0x1f, 0x1f),
                 // Gris medio-oscuro: contrasta bien sobre fondo claro (~7:1). Un gris más claro
                 // (estilo dark mode) queda casi ilegible sobre blanco en las columnas atenuadas.
@@ -206,14 +228,20 @@ impl Theme {
                 error: c(0xc0, 0x39, 0x2b),
                 highlight: c(0xc8, 0xe6, 0xc9),
                 border: c(0xdd, 0xdd, 0xdd),
+                flat_inactive_panels: false,
             },
         }
     }
 }
 
 /// Los ids de los 5 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
-pub const BUILTIN_THEME_IDS: &[&str] =
-    &["dark-blue", "winxp", "green-on-blue", "high-contrast", "neon-retro"];
+pub const BUILTIN_THEME_IDS: &[&str] = &[
+    "dark-blue",
+    "winxp",
+    "green-on-blue",
+    "high-contrast",
+    "neon-retro",
+];
 
 /// ¿Es un tema de fábrica? (no editable/borrable).
 pub fn is_builtin_id(id: &str) -> bool {
@@ -384,6 +412,7 @@ mod tests {
             panel_bg: ThemeColor::new(4, 5, 6),
             row_bg: ThemeColor::new(7, 8, 9),
             row_alt_bg: ThemeColor::new(10, 11, 12),
+            row_inactive_bg: ThemeColor::new(34, 35, 36),
             text: ThemeColor::new(13, 14, 15),
             text_dim: ThemeColor::new(16, 17, 18),
             selection_bg: ThemeColor::new(19, 20, 21),
@@ -391,6 +420,7 @@ mod tests {
             error: ThemeColor::new(25, 26, 27),
             highlight: ThemeColor::new(31, 32, 33),
             border: ThemeColor::new(28, 29, 30),
+            flat_inactive_panels: true,
         };
         let json = serde_json::to_string(&t).unwrap();
         let back: Theme = serde_json::from_str(&json).unwrap();
@@ -420,6 +450,60 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         let back: Theme = serde_json::from_str(&json).unwrap();
         assert_eq!(back.highlight, t.highlight);
+    }
+
+    #[test]
+    fn row_inactive_y_flat_round_trip() {
+        // Round-trip explícito de los dos campos nuevos: deben sobrevivir serializar→deserializar.
+        let mut t = Theme::defaults_for(ThemeBase::Dark, "X".into());
+        t.row_inactive_bg = ThemeColor::new(0x10, 0x20, 0x30);
+        t.flat_inactive_panels = true;
+        let json = serde_json::to_string(&t).unwrap();
+        let back: Theme = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.row_inactive_bg, ThemeColor::new(0x10, 0x20, 0x30));
+        assert!(back.flat_inactive_panels);
+    }
+
+    #[test]
+    fn tema_viejo_sin_campos_nuevos_no_cambia_de_aspecto() {
+        // Un JSON ANTERIOR a esta feature (sin `row_inactive_bg` ni `flat_inactive_panels`) debe
+        // cargar con row_inactive_bg = SU PROPIO row_bg (no el del default) y flat = false, para
+        // que los temas existentes se vean idénticos a antes.
+        let json = r##"{
+            "name": "Viejo",
+            "base": "dark",
+            "row_bg": "#112233"
+        }"##;
+        let t: Theme = Theme::from_json(json).expect("parsea con defaults");
+        assert_eq!(t.row_bg, ThemeColor::new(0x11, 0x22, 0x33));
+        // El default de row_inactive_bg es el row_bg RESUELTO de este tema, no el genérico.
+        assert_eq!(t.row_inactive_bg, t.row_bg);
+        assert_eq!(t.row_inactive_bg, ThemeColor::new(0x11, 0x22, 0x33));
+        assert!(!t.flat_inactive_panels);
+    }
+
+    #[test]
+    fn los_cinco_de_fabrica_cargan_con_campos_nuevos() {
+        // Los 5 temas embebidos (cuyos .json aún no tienen los campos nuevos) deben cargar bien y
+        // dejar row_inactive_bg = su row_bg y flat = false (sin cambio de aspecto).
+        let cat = ThemeCatalog::load(
+            std::path::Path::new("Z:/no/existe"),
+            &ThemeCatalog::default_id(),
+        );
+        for id in [
+            "dark-blue",
+            "winxp",
+            "green-on-blue",
+            "high-contrast",
+            "neon-retro",
+        ] {
+            let t = cat.get(&ThemeId::new(id));
+            assert_eq!(
+                t.row_inactive_bg, t.row_bg,
+                "{id}: row_inactive_bg debe caer a row_bg"
+            );
+            assert!(!t.flat_inactive_panels, "{id}: flat debe ser false");
+        }
     }
 
     #[test]
@@ -473,7 +557,7 @@ mod tests {
     fn tema_borrado_cae_al_default() {
         let dir = tempfile::tempdir().unwrap();
         let cat = ThemeCatalog::load(dir.path(), &ThemeId::new("macos")); // macos ya no existe
-        // get del id viejo no debe panic; available no lo incluye, sí incluye dark-blue.
+                                                                          // get del id viejo no debe panic; available no lo incluye, sí incluye dark-blue.
         let _ = cat.get(&ThemeId::new("macos"));
         assert!(cat.available().iter().any(|t| t.as_str() == "dark-blue"));
         assert!(!cat.available().iter().any(|t| t.as_str() == "macos"));

@@ -2187,11 +2187,12 @@ fn main() -> Result<(), slint::PlatformError> {
                 .collect();
             cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
             // Estado del editor de temas (config → Apariencia). Cuando hay un tema en edición se
-            // vuelcan su nombre/base y los 11 tokens (hex + r/g/b por canal, para inicializar el
-            // color-picker, que no parsea hex).
+            // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 12 tokens (hex +
+            // r/g/b por canal, para inicializar el color-picker, que no parsea hex).
             cfg.set_editing_active(c.config.is_editing_theme());
             cfg.set_editing_name(c.config.editing_name().into());
             cfg.set_editing_base_index(c.config.editing_base_index());
+            cfg.set_editing_flat_inactive(c.config.editing_flat_inactive());
             let n = config_ctrl::THEME_TOKEN_COUNT;
             let mut hexes: Vec<SharedString> = Vec::with_capacity(n);
             let mut rs: Vec<i32> = Vec::with_capacity(n);
@@ -2748,6 +2749,27 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    // Casilla "paneles inactivos planos" del editor → preview en vivo en ambas ventanas + refresh.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_set_flat_inactive(move |v| {
+            ctrl.borrow_mut().config.set_editing_flat_inactive(v);
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
     // Guardar el tema en edición: escribe el .json, lo deja activo y re-aplica el tema activo.
     {
         let ctrl = ctrl.clone();
@@ -2767,7 +2789,7 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
-    // Restaurar de fábrica: resetea los 11 tokens del tema en edición al builtin del que se
+    // Restaurar de fábrica: resetea los 12 tokens del tema en edición al builtin del que se
     // duplicó y re-aplica el preview.
     {
         let ctrl = ctrl.clone();
