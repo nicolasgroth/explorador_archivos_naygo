@@ -6,7 +6,30 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/
 y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
+
+## [0.2.0] — 2026-06-27
 ### Añadido
+- Diálogo de conflicto de archivo estilo Directory Opus: cuando una copia o movimiento va a pisar un
+  archivo que ya existe, se muestran lado a lado el archivo **Existente** y el **Nuevo** con su nombre,
+  tamaño, fecha y tipo, para compararlos de un vistazo. Botones directos: Saltar, Mantener ambos
+  (renombra el nuevo), Sobrescribir; y un desplegable «Más opciones» con Renombrar, **Renombrar el
+  existente**, **Saltar idénticos** (salta sin preguntar los archivos iguales en tamaño y fecha) y
+  Sobrescribir/Saltar todos.
+- El historial de operaciones muestra **qué archivos** se movieron o copiaron: los nombres en la propia
+  fila si son uno o dos, y un enlace «Ver N archivos» que abre un popup con la lista completa (con la
+  ruta relativa, el tamaño y el estado de cada archivo, más el origen, destino y estadísticas de la
+  operación). El popup aprovecha el tamaño de la ventana.
+- Botón «Cancelar todo» en el panel de Operaciones para abortar de una vez todas las operaciones en
+  curso, con confirmación previa.
+- Atajos de teclado configurables para los botones de la barra de herramientas que no los tenían
+  (abrir terminal, dividir panel, refrescar discos, mostrar ocultos, favoritos, configuración,
+  disposiciones). El tooltip de cada botón muestra el atajo real asignado.
+- Al arrastrar archivos entre paneles, Naygo puede pedir confirmación («¿Copiar/Mover X a «carpeta»?»,
+  nombrando los archivos). La confirmación es opcional (Configuración → General → «Preguntar al
+  arrastrar entre paneles»). Si el archivo ya existe en el destino, se va directo al diálogo de
+  conflicto sin preguntar dos veces.
+- Editor de temas: nuevo color «fila de panel inactivo» y casilla «paneles inactivos planos» para
+  atenuar o aplanar los paneles que no están activos, de modo que el panel activo resalte más.
 - Al copiar o mover una carpeta que ya existe en el destino, Naygo pregunta una sola vez qué hacer:
   **Fusionar** (copia dentro, preguntando solo por los archivos que choquen), **Reemplazar** (deja la
   carpeta destino con el contenido del origen), **Saltar** o **Cancelar**. Con varias carpetas en
@@ -87,6 +110,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `--version` muestran la información correspondiente. Útil para accesos directos y para
   "Abrir en Naygo".
 ### Cambiado
+- Barra de herramientas reordenada por función y con íconos redibujados a mano (dividir panel, apilar,
+  clonar, intercambiar, panel auxiliar, refrescar discos), más representativos y consistentes.
+- Los diálogos de operación (eliminar, conflicto, pegar) tienen un borde sutil, el botón con el foco se
+  resalta con un anillo del color de acento (ya no en rojo), TAB mueve el resaltado entre botones, cada
+  botón muestra su atajo de teclado, y los botones se reparten a lo ancho del diálogo por igual.
 - Los temas de fábrica se redujeron a cinco (Dark Blue, Windows XP, Verde sobre azul, High Contrast
   y Neón Retro). El resto se puede recrear a gusto con el nuevo editor de temas.
 - Los avisos y confirmaciones internos (confirmar expulsar una unidad USB, errores al
@@ -102,6 +130,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   cualquier parte de su cuerpo, no solo en la barra de título.
 - El menú de plantillas de disposición aparece junto a su botón en la barra (antes salía lejos).
 ### Corregido
+- Refrescar un panel con F5 ya no **duplica** las filas: antes, re-listar la misma carpeta acumulaba
+  los archivos sobre los que ya estaban; ahora reemplaza la lista de forma limpia.
+- El popup de confirmación al arrastrar entre paneles ya responde **al primer clic** (antes requería
+  dos). El modal no tomaba el foco al aparecer, así que el primer clic se gastaba en enfocarlo.
+- Los tooltips de los íconos de la barra de ruta del panel (favorito ★, copiar ruta 📋, vista profunda)
+  ahora aparecen **junto al ícono**, no arriba en la barra de herramientas.
+- Los menús desplegables de la barra de herramientas aparecen alineados **bajo el botón** que los abre
+  (algunos salían desplazados, sobre todo los abiertos por atajo de teclado).
+- El botón «Deshacer» del historial de acciones distingue ahora cuando una acción **ya fue deshecha**
+  (muestra «Deshecho») en vez de quedar igual; y se diferencia de las acciones que no son deshacibles.
+- «Saltar idénticos» en un conflicto nunca sobrescribe sin confirmar: si los archivos difieren, vuelve
+  a preguntar en vez de pisar el del destino.
+- El nombre del archivo en el diálogo de conflicto es legible también en temas claros.
 - El diálogo «Ya existe…» que aparece al copiar sobre un archivo existente ahora permite **cancelar
   toda la operación** (botón «Cancelar todo», además de Escape). Antes el aviso atrapaba: solo dejaba
   Saltar/Renombrar/Sobrescribir y su fondo tapaba el botón Cancelar del panel. Cerrar el aviso por
