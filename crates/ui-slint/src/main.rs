@@ -1317,30 +1317,41 @@ fn main() -> Result<(), slint::PlatformError> {
                                 cancel_label: tr.get_dlg_cancel(),
                                 danger: false,
                             });
-                            // BUG A (doble clic): tras el bucle modal de `DoDragDrop` (OLE) la
-                            // ventana de Naygo deja de ser la foreground del SO; aunque ya hicimos
-                            // un `bring_to_front` al inicio del drenado, el modal kind 3 se arma
-                            // RECIÉN aquí. Volvemos a traer la ventana al frente AHORA, con el modal
-                            // ya en pantalla, para que el PRIMER clic del usuario vaya al botón en
-                            // vez de gastarse en reactivar la ventana. (No rearmamos el timer: este
-                            // bloque corre dentro de un tick que sigue vivo porque el modal kind 3
-                            // mantiene `get_message().kind != 0`.)
-                            if let Some(hwnd) = naygo_hwnd(&ui) {
-                                naygo_platform::window::bring_to_front(hwnd);
-                            }
-                        } else if direct_drop_ran {
-                            // Confirmación de drop DESACTIVADA: `drop_at` ya arrancó la op directo
-                            // (sin modal kind 3). Refrescar la disposición (pudo aparecer el panel
-                            // Operaciones); el timer sigue vivo en este mismo tick y `pump_ops`
-                            // drenará el progreso y abrirá el modal de CONFLICTO si el archivo ya
-                            // existía en el destino. Traemos la ventana al frente para que ESE modal
-                            // (que llega un par de ticks después) reciba bien el primer clic.
-                            sync_layout();
-                            if let Some(ui) = ui_weak.upgrade() {
-                                if let Some(hwnd) = naygo_hwnd(&ui) {
-                                    naygo_platform::window::bring_to_front(hwnd);
+                            // BUG A (doble clic en el modal kind 3): tras el bucle modal de
+                            // `DoDragDrop` (OLE) la ventana de Naygo deja de ser la foreground del
+                            // SO. Hacer `bring_to_front` AQUÍ (mismo tick que desenrolla el
+                            // DoDragDrop) NO basta: el SO aún no terminó de soltar el foreground del
+                            // arrastre, así que el primer clic se gasta reactivando la ventana. Por
+                            // eso DIFERIMOS el `bring_to_front` un tick con `invoke_from_event_loop`
+                            // —igual que `start_drag`—: cuando corre, el desenrollado del drag ya
+                            // cerró y la ventana toma el foreground limpio, así el PRIMER clic va al
+                            // botón. El timer sigue vivo porque el modal kind 3 mantiene
+                            // `get_message().kind != 0`.
+                            let uiw2 = ui_weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = uiw2.upgrade() {
+                                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                                        naygo_platform::window::bring_to_front(hwnd);
+                                    }
                                 }
-                            }
+                            });
+                        } else if direct_drop_ran {
+                            // Confirmación de drop DESACTIVADA o drop CON conflicto: `drop_at` ya
+                            // arrancó la op directo (sin modal kind 3). Refrescar la disposición
+                            // (pudo aparecer el panel Operaciones); el timer sigue vivo y `pump_ops`
+                            // drenará el progreso y abrirá el modal de CONFLICTO si el archivo ya
+                            // existía en el destino. Diferimos el `bring_to_front` un tick (igual
+                            // que arriba) para que ESE modal (que llega un par de ticks después)
+                            // reciba el foreground limpio y el primer clic vaya al botón.
+                            sync_layout();
+                            let uiw2 = ui_weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = uiw2.upgrade() {
+                                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                                        naygo_platform::window::bring_to_front(hwnd);
+                                    }
+                                }
+                            });
                         }
                     }
                     // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y

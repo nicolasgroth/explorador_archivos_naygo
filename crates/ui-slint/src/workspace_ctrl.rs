@@ -3245,24 +3245,37 @@ impl WorkspaceCtrl {
             dest_dir.display(),
         ));
         self.pending_drop = Some(PendingDrop {
-            paths,
-            dest_dir,
+            paths: paths.clone(),
+            dest_dir: dest_dir.clone(),
             is_move,
             count,
         });
-        // Confirmación opcional (decisión de Nicolás): si el ajuste está APAGADO, no abrimos el
-        // modal "¿Copiar/Mover…?"; ejecutamos directo reusando `confirm_pending_drop` (que arranca
-        // la op y CONSUME `pending_drop`). El modal de CONFLICTO (archivo que ya existe) es
-        // independiente y SIEMPRE aparece: lo dispara `pump_ops`, no esta confirmación.
+        // UN SOLO POPUP COHERENTE (decisión de Nicolás): si el drop CHOCA con archivos que ya
+        // existen en el destino, NO mostramos primero "¿Copiar/Mover…?" y luego el conflicto —
+        // serían dos popups en cadena. En ese caso vamos DIRECTO a la op: el motor abre el diálogo
+        // de CONFLICTO (comparación lado a lado), que YA es la confirmación (Saltar/Sobrescribir/
+        // Mantener ambos/Cancelar). La confirmación "¿Copiar?" solo aporta cuando NO hay choque.
+        let hay_conflicto = {
+            let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
+            self.ops.first_collision(&req)
+        };
+        // Confirmación opcional (decisión de Nicolás): el modal "¿Copiar/Mover…?" se muestra SOLO
+        // cuando (a) el ajuste está encendido Y (b) NO hay conflicto. Si hay conflicto, o el ajuste
+        // está apagado, ejecutamos directo reusando `confirm_pending_drop` (arranca la op y CONSUME
+        // `pending_drop`); el modal de CONFLICTO, si aplica, lo dispara `pump_ops` aparte.
         //
         // Devolvemos `true` en AMBOS casos (el drop fue ENRUTADO y manejado por este panel, así la
-        // UI no cae al fallback `drop_external`). Quién decide abrir el modal es el llamador, que
-        // lee `pending_drop` DESPUÉS: con la confirmación ON queda `Some` → abre el modal; con la
-        // confirmación OFF ya lo consumió `confirm_pending_drop` y queda `None` → no abre nada.
-        if !self.config.settings.confirm_drop_between_panes {
-            crate::logging::breadcrumb(
-                "drop_at: confirmación de drop desactivada → ejecutar directo",
-            );
+        // UI no cae al fallback `drop_external`). Quién decide abrir el modal de confirmación es el
+        // llamador, que lee `pending_drop` DESPUÉS: queda `Some` → abre el modal; `None` (ya
+        // ejecutado directo) → no abre nada (pero el conflicto puede aparecer luego).
+        let confirmar = self.config.settings.confirm_drop_between_panes && !hay_conflicto;
+        if !confirmar {
+            let motivo = if hay_conflicto {
+                "hay conflicto → directo al diálogo de conflicto (sin doble popup)"
+            } else {
+                "confirmación de drop desactivada → ejecutar directo"
+            };
+            crate::logging::breadcrumb(&format!("drop_at: {motivo}"));
             self.confirm_pending_drop();
         }
         true
@@ -7549,9 +7562,14 @@ mod simular_usuario {
         c.ws.set_active(origin);
         let (cx, cy) = pane_center(&c, area, dest);
 
-        // Soltar el archivo sobre el destino (Ctrl=copia, determinista) y CONFIRMAR.
+        // Soltar el archivo sobre el destino (Ctrl=copia, determinista). UN SOLO POPUP: como HAY
+        // conflicto (doc.txt ya existe en el destino), `drop_at` NO deja un drop pendiente de
+        // confirmación — ejecuta directo y va al diálogo de CONFLICTO (que ya es la confirmación).
         assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false));
-        assert!(c.confirm_pending_drop(), "el drop confirmado arranca la op");
+        assert!(
+            c.pending_drop.is_none(),
+            "con conflicto NO se pide confirmación de drop (un solo popup: el de conflicto)"
+        );
 
         // Drenar las ops hasta que el motor PIDA el conflicto (pending_dialog = Conflict). Si en
         // vez de eso la op termina (summary) SIN preguntar, es el bug: sobrescribió en silencio.
@@ -7581,6 +7599,46 @@ mod simular_usuario {
             std::fs::read_to_string(b.path().join("doc.txt")).unwrap(),
             "DESTINO-viejo",
             "el destino no se toca hasta que el usuario decida"
+        );
+    }
+
+    /// UN SOLO POPUP COHERENTE (decisión de Nicolás): con la confirmación de drop ENCENDIDA, un
+    /// drop SIN choque deja un drop pendiente (sale el modal "¿Copiar?"); un drop CON choque NO lo
+    /// deja (va directo al diálogo de conflicto, sin cadena de dos popups).
+    #[test]
+    fn drop_un_solo_popup_segun_haya_conflicto() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("nuevo.txt"), b"x").unwrap();
+        std::fs::write(a.path().join("choca.txt"), b"x").unwrap();
+        std::fs::write(b.path().join("choca.txt"), b"ya-existe").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        // Confirmación de drop ENCENDIDA (default).
+        assert!(c.config.settings.confirm_drop_between_panes);
+        assert!(drain(&mut c));
+        let origin = c.ws.active_id().unwrap();
+        let dest = c.split_for_target().unwrap();
+        c.open_in_pane(dest, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        let area = area();
+        c.set_area(area);
+        c.ws.set_active(origin);
+        let (cx, cy) = pane_center(&c, area, dest);
+
+        // Drop SIN choque → deja pending_drop (sale el modal de confirmación).
+        assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("nuevo.txt")], false));
+        assert!(
+            c.pending_drop.is_some(),
+            "sin conflicto + confirmación ON → se pide confirmar el drop"
+        );
+        c.cancel_pending_drop();
+
+        // Drop CON choque → NO deja pending_drop (va directo al conflicto, un solo popup).
+        assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("choca.txt")], false));
+        assert!(
+            c.pending_drop.is_none(),
+            "con conflicto → sin confirmación de drop (el conflicto es la confirmación)"
         );
     }
 
