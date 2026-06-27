@@ -36,6 +36,20 @@ export component MessageModal inherits Rectangle {
     visible: root.vm.kind > 0;
     background: #000000aa;
 
+    // Espejo de `vm.kind` para detectar la APARICIÓN del modal. Un `changed` sobre un campo de un
+    // struct (`vm.kind`) NO dispara en Slint; espejarlo en una property propia sí dispara `changed k`.
+    // Mismo patrón que op-dialogs.slint (ver su `changed k`).
+    property <int> k: root.vm.kind;
+    // Al APARECER el modal (k pasa de 0 a >0) forzamos el foco al FocusScope. Sin esto, el modal se
+    // pinta pero el FocusScope no tiene el foco: el PRIMER clic del usuario se gasta en dar foco (y
+    // recién el SEGUNDO acciona el botón) — el bug del "doble clic" que reportó Nicolás. op-dialogs
+    // ya hacía esto; el MessageModal (kind 3 = confirmar drop, kind 4 = cancelar todo) faltaba.
+    changed k => {
+        if (root.k > 0) {
+            msg-focus.focus();
+        }
+    }
+
     // Velo: clic fuera de la tarjeta. En confirmaciones de 2 botones (kind 1 = aviso/expulsar,
     // kind 3 = confirmar drop entre paneles, kind 4 = cancelar todas las operaciones) cancela
     // (opción segura: NO ejecuta la acción). En el aviso de 1 botón (kind 2) cierra (que equivale a
