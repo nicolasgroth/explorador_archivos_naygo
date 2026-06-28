@@ -105,6 +105,9 @@ component ToolBtn inherits Rectangle {
             width: 16px;
             height: 16px;
             image-rendering: smooth;
+            // Atenuado cuando el botón está deshabilitado (Atrás/Adelante sin historial). Es un
+            // estado dinámico de runtime, así que va en Slint (el PNG no lo puede pre-hornear).
+            opacity: root.enabled ? 1.0 : 0.4;
         }
         if (!root.icon-only || root.icon.width == 0): Text {
             text: root.label;
@@ -723,8 +726,6 @@ export component AppWindow inherits Window {
     property <bool> layout-save-open: false;
     property <string> layout-save-name: "";
 
-    // (add-pane / layouts / terminal / refresh / eject vuelven a dibujarse con Path —modelo
-    //  flat—, así que ya no hay propiedades de imagen para esos botones.)
     // Tira de unidades de disco de la toolbar (6-fix): label = letra, icon = ícono de disco,
     // path = raíz. Clic navega el panel activo. Rust la rellena al arrancar y al cambiar de USB.
     in property <[NavRow]> drives;
@@ -810,9 +811,9 @@ export component AppWindow inherits Window {
                 padding: 4px;
                 spacing: 6px;
                 // --- Grupo NAVEGACIÓN ---
-                // Atrás / Adelante / Inicio / Subir: navegación tipo navegador. Íconos dibujados
-                // con Path (el render por software no pinta glifos de fuente). Atrás/Adelante se
-                // atenúan y no responden cuando no hay historial en esa dirección.
+                // Atrás / Adelante / Inicio / Subir: navegación tipo navegador. Cada botón pinta el
+                // ícono del set activo (prop tb-*). Atrás/Adelante se atenúan (y no responden) cuando
+                // no hay historial en esa dirección.
                 ToolBtn {
                     icon: root.tb-back;
                     icon-only: true;
@@ -853,7 +854,7 @@ export component AppWindow inherits Window {
                     clicked => { root.go-home(); }
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
-                // Subir un nivel (carpeta padre). Flecha hacia arriba dibujada con Path.
+                // Subir un nivel (carpeta padre). Ícono del set activo (tb-up).
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;
@@ -927,7 +928,7 @@ export component AppWindow inherits Window {
                 // intercambiar, clonar, apilar en pestañas, plantillas de disposición.
                 split-btn := ToolBtn {
                     // Dividir el panel en dos: nuevo panel de archivos. Ícono "panel partido"
-                    // dibujado con Path (antes era un "+" ambiguo que parecía "nuevo").
+                    // del set activo (tb-split; antes era un "+" ambiguo que parecía "nuevo").
                     label: "";
                     icon: root.tb-split;
                     tip: Tr.toolbar-add-tip;
@@ -954,7 +955,7 @@ export component AppWindow inherits Window {
                     }
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
-                // Intercambiar paneles: ícono de dos flechas opuestas (⇄) dibujado con Path.
+                // Intercambiar paneles: ícono de dos flechas opuestas (⇄) del set activo (tb-swap).
                 ToolBtn {
                     label: Tr.toolbar-swap;
                     tip: Tr.toolbar-swap-tip;
@@ -964,7 +965,7 @@ export component AppWindow inherits Window {
                     clicked => { root.swap-panes(); }
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
-                // Clonar el panel: ícono de dos rectángulos con offset (duplicar) dibujado con Path.
+                // Clonar el panel: ícono de dos rectángulos con offset (duplicar) del set activo (tb-clone).
                 ToolBtn {
                     label: Tr.toolbar-clone;
                     tip: Tr.toolbar-clone-tip;
@@ -974,7 +975,7 @@ export component AppWindow inherits Window {
                     clicked => { root.clone-pane(); }
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
-                // Apilar en pestañas: ícono de dos rectángulos escalonados (pestañas) con Path.
+                // Apilar en pestañas: ícono de dos rectángulos escalonados (pestañas) del set activo (tb-tabs).
                 ToolBtn {
                     label: Tr.toolbar-tabs;
                     tip: Tr.toolbar-tabs-tip;
@@ -1003,7 +1004,7 @@ export component AppWindow inherits Window {
                 ToolSep { }
                 // --- Grupo ACCIONES ---
                 // Nueva carpeta en el panel activo (abre el modal multilínea). Ícono "carpeta +"
-                // dibujado con Path.
+                // del set activo (tb-new-folder).
                 ToolBtn {
                     label: Tr.toolbar-new-folder;
                     tip: Tr.toolbar-new-folder-tip;
@@ -1014,7 +1015,7 @@ export component AppWindow inherits Window {
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Terminales (PS/CMD/WSL/Win Terminal) en el panel activo: combo desplegable.
-                // Ícono de terminal dibujado (no hay PNG de terminal en los sets).
+                // Ícono de terminal del set activo (tb-terminal).
                 term-btn := ToolBtn {
                     label: Tr.toolbar-terminal;
                     tip: Tr.toolbar-terminal-tip;
@@ -1030,7 +1031,7 @@ export component AppWindow inherits Window {
                 }
                 ToolSep { }
                 // --- Grupo SISTEMA ---
-                // Configuración de la app. Ícono de engranaje dibujado con Path.
+                // Configuración de la app. Ícono de engranaje del set activo (tb-settings).
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.toolbar-config-tip;
