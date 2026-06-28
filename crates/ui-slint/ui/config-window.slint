@@ -246,6 +246,14 @@ export component ConfigWindow inherits Window {
     callback export-theme();
     callback export-config();
     callback import-pack();
+    // Íconos (cat 9): selector de ícono por objeto, overrides y sets personalizados.
+    callback open-icon-picker(string);          // key → abre el picker (Task 14)
+    callback set-icon-override(string, string); // (key, set_id)
+    callback set-icon-override-png(string);     // key
+    callback clear-icon-override(string);       // key
+    callback reset-icon-overrides();
+    callback import-icon-set();
+    callback export-icon-set();
     // Acerca de: abrir el repositorio en el navegador.
     callback open-repo();
     // Cerrar la ventana.
@@ -277,7 +285,7 @@ export component ConfigWindow inherits Window {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about]: Rectangle {
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about, Tr.cfg-cat-icons]: Rectangle {
                             height: 30px;
                             background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
@@ -1247,6 +1255,133 @@ export component ConfigWindow inherits Window {
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // === Íconos (cat 9) ===
+                            if root.cat == 9: VerticalLayout {
+                                spacing: 6px;
+
+                                // -- Set base --
+                                Text {
+                                    text: Tr.icons-section-base;
+                                    color: Theme.text-dim;
+                                    font-weight: 700;
+                                }
+                                Field {
+                                    label: Tr.cfg-icon-set;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: root.vm.icon-sets;
+                                        current-value: root.vm.icon-set;
+                                        selected => { root.set-icon-set(self.current-value); }
+                                    }
+                                }
+
+                                // -- Íconos por objeto --
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.icons-section-objects;
+                                    color: Theme.text-dim;
+                                    font-weight: 700;
+                                }
+                                // Encabezado de la tabla de íconos.
+                                HorizontalLayout {
+                                    height: 22px;
+                                    spacing: 6px;
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    // Columna ícono
+                                    Rectangle { width: 28px; }
+                                    Text {
+                                        text: Tr.icons-group-actions;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Text {
+                                        text: Tr.icons-override-badge;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        width: 90px;
+                                    }
+                                }
+                                // Lista de filas de íconos. Alto fijo para que scrollee.
+                                Rectangle {
+                                    height: 320px;
+                                    background: Theme.panel-bg;
+                                    border-radius: 4px;
+                                    ListView {
+                                        for row[idx] in root.vm.icon-rows: Rectangle {
+                                            height: 32px;
+                                            background: Math.mod(idx, 2) == 0 ? transparent : Theme.row-alt-bg;
+                                            border-radius: 3px;
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                spacing: 6px;
+                                                // Ícono efectivo.
+                                                Image {
+                                                    source: row.icon;
+                                                    width: 22px;
+                                                    height: 22px;
+                                                    image-fit: contain;
+                                                }
+                                                // Nombre traducido del objeto.
+                                                Text {
+                                                    text: row.label;
+                                                    color: Theme.text;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    overflow: elide;
+                                                }
+                                                // Origen (set base / override).
+                                                Text {
+                                                    text: row.origin;
+                                                    color: Theme.text-dim;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                    width: 110px;
+                                                    overflow: elide;
+                                                }
+                                                // Badge "personalizado" cuando hay override.
+                                                if row.overridden: Text {
+                                                    text: Tr.icons-override-badge;
+                                                    color: Theme.accent;
+                                                    font-size: 10px;
+                                                    vertical-alignment: center;
+                                                    width: 80px;
+                                                }
+                                                if !row.overridden: Rectangle { width: 80px; }
+                                                // Botón Cambiar: abre el picker de ícono.
+                                                CfgBtn {
+                                                    label: Tr.icons-change;
+                                                    clicked => { root.open-icon-picker(row.key); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // -- Set personalizado --
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.icons-section-custom;
+                                    color: Theme.text-dim;
+                                    font-weight: 700;
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    CfgBtn { label: Tr.icons-import; clicked => { root.import-icon-set(); } }
+                                    CfgBtn { label: Tr.icons-export; clicked => { root.export-icon-set(); } }
+                                }
+                                CfgBtn {
+                                    label: Tr.icons-reset;
+                                    danger: true;
+                                    clicked => { root.reset-icon-overrides(); }
                                 }
                             }
                         }
