@@ -24,6 +24,7 @@ pub mod highlight;
 pub mod i18n;
 pub mod icon_kind;
 pub mod icon_set;
+pub mod icon_source;
 pub mod icons;
 pub mod keymap;
 pub mod listing;
