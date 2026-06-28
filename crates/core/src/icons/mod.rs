@@ -83,6 +83,12 @@ macro_rules! set_table {
             ("action_terminal", png!($set, "action_terminal")),
             ("action_eject", png!($set, "action_eject")),
             ("action_panel", png!($set, "action_panel")),
+            ("action_home", png!($set, "action_home")),
+            ("action_search", png!($set, "action_search")),
+            ("action_show_hidden", png!($set, "action_show_hidden")),
+            ("action_history", png!($set, "action_history")),
+            ("action_favorites", png!($set, "action_favorites")),
+            ("action_split", png!($set, "action_split")),
         ];
     };
 }
@@ -205,7 +211,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cada_set_de_fabrica_cubre_las_33_claves() {
+    fn cada_set_de_fabrica_cubre_las_39_claves() {
+        assert_eq!(all_keys().len(), 39, "se esperan exactamente 39 claves");
         for set in ["lucide", "tabler", "material", "flat-color", "mono"] {
             for key in all_keys() {
                 assert!(
