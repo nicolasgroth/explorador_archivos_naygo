@@ -21,7 +21,7 @@ struct SetSpec {
     zip: &'static str,   // ruta relativa al zip, p.ej. "assets/icons/lucide-main.zip"
     prefix: &'static str, // prefijo dentro del zip, p.ej. "lucide-main/icons/"
     tintable: bool,
-    gray: bool,          // mono = true (se tiñe gris en Task 6)
+    gray: bool, // true = forzar tinte gris (solo set mono); independiente de tintable
     maps: &'static [Map],
 }
 
@@ -214,9 +214,11 @@ const FLAT_COLOR: &[Map] = &[
     // up.svg = flecha arriba (subir un nivel)
     Map { key: "action_up",        svg: "up" },
     Map { key: "action_refresh",   svg: "refresh" },
-    // copyleft.svg (C inversa) es el icono más parecido a "copiar" en flat-color
+    // FIXME: flat-color no tiene icono de copiar (ni copy/duplicate/documents/paste);
+    // copyleft (C invertida, de la familia copyright/copia) es lo más cercano disponible
     Map { key: "action_copy",      svg: "copyleft" },
-    // flat-color no tiene scissors/cut; previous.svg (retroceder) es el sustituto aproximado
+    // FIXME: flat-color no tiene icono de cortar (ni scissors/cut); previous (flecha de
+    // retroceso) es lo más cercano disponible — limitación del set, no un descuido
     Map { key: "action_cut",       svg: "previous" },
     // flat-color no tiene clipboard/paste; import.svg es el sustituto de "pegar desde afuera"
     Map { key: "action_paste",     svg: "import" },
@@ -257,7 +259,7 @@ const MONO: &[Map] = LUCIDE;
 // Declaración de los 5 sets
 // ---------------------------------------------------------------------------
 
-fn all_specs() -> [SetSpec; 5] {
+const fn all_specs() -> [SetSpec; 5] {
     [
         SetSpec {
             id: "lucide",
