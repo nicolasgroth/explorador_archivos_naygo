@@ -462,4 +462,5 @@ where
     tr.set_icons_export_ok(c.t("settings.icons.export_ok").into());
     tr.set_icons_group_actions(c.t("settings.icons.group_actions").into());
     tr.set_icons_group_files(c.t("settings.icons.group_files").into());
+    tr.set_icons_personalize(c.t("settings.icons.personalize").into());
 }

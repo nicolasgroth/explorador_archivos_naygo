@@ -3089,6 +3089,36 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    // Personalizar set de íconos: activa el set en caliente Y salta a la pestaña Íconos (cat 9).
+    // Mismo flujo que on_set_icon_set, más el jump de categoría en la ventana de config.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_personalize_icon_set(move |id| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_icon_set(id.to_string());
+                let active = c.config.settings.icon_set.clone();
+                c.icons.set_active(active.clone());
+                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
+                    .is_tintable(&active);
+                let overrides = c.config.settings.icon_overrides.clone();
+                let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
+                c.icons.set_overrides(overrides);
+                c.icons.set_tint(tintable, rgb);
+            }
+            // Saltar a la pestaña Íconos (cat 9) en la ventana de configuración.
+            if let Some(cfg) = cfg_weak.upgrade() {
+                cfg.set_cat(9);
+            }
+            refresh_icons();
+            refresh_drives();
+            refresh();
+        });
+    }
     // --- Íconos por objeto (Task 15): picker, overrides, PNG propio, import, export ---
     // Abrir el selector de ícono: construye las opciones (un tile por set de fábrica) y
     // las inyecta en el SettingsVm antes de llamar cfg.set_vm (ver nota en refresh_config_vm).

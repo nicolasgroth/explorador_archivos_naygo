@@ -121,8 +121,9 @@ export component ConfigWindow inherits Window {
     in property <[ThemeCardVm]> theme-cards;
     in property <string> config-dir;
     in property <string> app-version;
-    // Categoría seleccionada (0..6).
-    property <int> cat: 3;        // arranca en Apariencia (lo más visible)
+    // Categoría seleccionada (0..6). in-out para que Rust pueda saltar a la pestaña Íconos desde
+    // el handler de personalize-icon-set.
+    in-out property <int> cat: 3; // arranca en Apariencia (lo más visible)
     // Acción cuyo atajo se está capturando (vacío = ninguna).
     property <string> capturing: "";
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
@@ -151,6 +152,8 @@ export component ConfigWindow inherits Window {
     callback set-language(string);
     callback set-theme(string);
     callback set-icon-set(string);
+    // Activa el set de íconos Y salta a la pestaña Íconos (cat 9) en un solo gesto.
+    callback personalize-icon-set(string);   // (set_id)
     // --- Editor de temas (galería de Apariencia) ---
     // Abrir el editor: "Personalizar" (builtin → duplica) o "Editar" (de usuario). Eliminar uno
     // de usuario. Todos toman el id de la tarjeta.
@@ -712,13 +715,82 @@ export component ConfigWindow inherits Window {
                                         selected => { root.set-language(self.current-value); }
                                     }
                                 }
-                                Field {
-                                    label: Tr.cfg-icon-set;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: root.vm.icon-sets;
-                                        current-value: root.vm.icon-set;
-                                        selected => { root.set-icon-set(self.current-value); }
+                                // Galería de sets de íconos: misma estructura que la galería de temas.
+                                // Las tarjetas se posicionan por fila/columna calculadas; un clic aplica
+                                // el set en caliente y el botón "Personalizar" lo activa Y salta a Íconos.
+                                Text { text: Tr.cfg-icon-set; color: Theme.text-dim; font-size: 12px; }
+                                icon-gallery := Rectangle {
+                                    property <length> gap: 8px;
+                                    property <length> card-w: 160px;
+                                    property <length> card-h: 100px;
+                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
+                                    property <int> rows: ceil(root.vm.icon-set-cards.length / self.cols);
+                                    height: self.rows * (self.card-h + self.gap) - self.gap;
+
+                                    for ic[i] in root.vm.icon-set-cards: icard := Rectangle {
+                                        property <int> gcol: mod(i, icon-gallery.cols);
+                                        property <int> grow: floor(i / icon-gallery.cols);
+                                        x: icard.gcol * (icon-gallery.card-w + icon-gallery.gap);
+                                        y: icard.grow * (icon-gallery.card-h + icon-gallery.gap);
+                                        width: icon-gallery.card-w;
+                                        height: icon-gallery.card-h;
+                                        background: Theme.row-bg;
+                                        border-radius: 7px;
+                                        border-width: ic.selected ? 2px : 1px;
+                                        border-color: ic.selected ? Theme.accent : Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 6px;
+                                            // Muestra de íconos de muestra del set.
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                for s in ic.samples: Image {
+                                                    source: s;
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    image-fit: contain;
+                                                }
+                                            }
+                                            Text {
+                                                text: ic.label;
+                                                color: Theme.text;
+                                                font-size: 12px;
+                                                font-weight: ic.selected ? 800 : 500;
+                                                overflow: elide;
+                                            }
+                                            // Espaciador empuja botón al fondo.
+                                            Rectangle { vertical-stretch: 1; }
+                                        }
+                                        // TouchArea del cuerpo: aplica el set al hacer clic. Declarada ANTES
+                                        // del botón para que este quede encima y capture sus propios clics.
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-icon-set(ic.id); }
+                                        }
+                                        // Botón "Personalizar": activa el set Y salta a la pestaña Íconos.
+                                        // Al estar declarado DESPUÉS del TouchArea del cuerpo, su propia
+                                        // TouchArea queda encima y no dispara el "aplicar set" al hacer clic.
+                                        Rectangle {
+                                            x: 8px;
+                                            y: parent.height - self.height - 8px;
+                                            width: parent.width - 16px;
+                                            height: 22px;
+                                            border-radius: 4px;
+                                            background: pers-touch.has-hover ? Theme.accent : Theme.row-bg;
+                                            border-width: 1px;
+                                            border-color: Theme.border;
+                                            Text {
+                                                text: Tr.icons-personalize;
+                                                color: pers-touch.has-hover ? white : Theme.text;
+                                                font-size: 11px;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                            pers-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.personalize-icon-set(ic.id); }
+                                            }
+                                        }
                                     }
                                 }
                                 Field {
@@ -1263,19 +1335,58 @@ export component ConfigWindow inherits Window {
                             if root.cat == 9: VerticalLayout {
                                 spacing: 6px;
 
-                                // -- Set base --
+                                // -- Set base: galería de tarjetas (misma que Apariencia) --
                                 Text {
                                     text: Tr.icons-section-base;
                                     color: Theme.text-dim;
                                     font-weight: 700;
                                 }
-                                Field {
-                                    label: Tr.cfg-icon-set;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: root.vm.icon-sets;
-                                        current-value: root.vm.icon-set;
-                                        selected => { root.set-icon-set(self.current-value); }
+                                // Galería de sets en la pestaña Íconos: igual que en Apariencia pero
+                                // sin botón "Personalizar" (ya estamos aquí). Un clic aplica el set en
+                                // caliente y la cuadrícula de objetos de abajo refleja el set nuevo.
+                                icon-gallery-9 := Rectangle {
+                                    property <length> gap: 8px;
+                                    property <length> card-w: 160px;
+                                    property <length> card-h: 80px;
+                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
+                                    property <int> rows: ceil(root.vm.icon-set-cards.length / self.cols);
+                                    height: self.rows * (self.card-h + self.gap) - self.gap;
+
+                                    for ic[i] in root.vm.icon-set-cards: icard9 := Rectangle {
+                                        property <int> gcol: mod(i, icon-gallery-9.cols);
+                                        property <int> grow: floor(i / icon-gallery-9.cols);
+                                        x: icard9.gcol * (icon-gallery-9.card-w + icon-gallery-9.gap);
+                                        y: icard9.grow * (icon-gallery-9.card-h + icon-gallery-9.gap);
+                                        width: icon-gallery-9.card-w;
+                                        height: icon-gallery-9.card-h;
+                                        background: Theme.row-bg;
+                                        border-radius: 7px;
+                                        border-width: ic.selected ? 2px : 1px;
+                                        border-color: ic.selected ? Theme.accent : Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 6px;
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                for s in ic.samples: Image {
+                                                    source: s;
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    image-fit: contain;
+                                                }
+                                            }
+                                            Text {
+                                                text: ic.label;
+                                                color: Theme.text;
+                                                font-size: 12px;
+                                                font-weight: ic.selected ? 800 : 500;
+                                                overflow: elide;
+                                            }
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-icon-set(ic.id); }
+                                        }
                                     }
                                 }
 

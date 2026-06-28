@@ -784,5 +784,6 @@
   "settings.icons.export_err": "Could not export the set.",
   "settings.icons.png_copy_err": "Could not use the selected image.",
   "settings.icons.group_actions": "Toolbar actions",
-  "settings.icons.group_files": "File types"
+  "settings.icons.group_files": "File types",
+  "settings.icons.personalize": "Customize"
 }
