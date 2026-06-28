@@ -2283,7 +2283,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                     format!("{lbl} · override").into()
                                 }
                                 Some(naygo_core::icon_source::IconSource::UserPng { .. }) => {
-                                    "PNG propio".into()
+                                    c.config.t("settings.icons.origin_user_png").into()
                                 }
                                 None => format!("{active_label} (base)").into(),
                             }

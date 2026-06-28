@@ -768,6 +768,7 @@
   "settings.icons.change": "Change",
   "settings.icons.override_badge": "custom",
   "settings.icons.user_png": "Own PNG…",
+  "settings.icons.origin_user_png": "Own PNG",
   "settings.icons.reset": "Reset to base set",
   "settings.icons.import": "Import set (.naygoset)…",
   "settings.icons.export": "Export current set…",
