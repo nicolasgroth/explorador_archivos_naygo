@@ -110,7 +110,7 @@ pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
         .chars()
         .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
         .collect();
-    if safe_name.is_empty() || safe_name.contains("..") {
+    if safe_name.is_empty() || safe_name == "." || safe_name.contains("..") {
         return Err(format!("nombre de pack inválido: {:?}", manifest.name));
     }
     let dest = config_dir.join("icons").join(&safe_name);
