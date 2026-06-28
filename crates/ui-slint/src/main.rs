@@ -3005,7 +3005,7 @@ fn main() -> Result<(), slint::PlatformError> {
             {
                 let mut c = ctrl.borrow_mut();
                 c.config.set_icon_set(id.to_string());
-                // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "flat").
+                // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "lucide").
                 let active = c.config.settings.icon_set.clone();
                 c.icons.set_active(active.clone());
                 // Re-aplicar overrides y tinte para el set nuevo.

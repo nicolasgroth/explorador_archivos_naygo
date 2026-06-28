@@ -778,10 +778,5 @@
   "settings.icons.export_err": "No se pudo exportar el set.",
   "settings.icons.png_copy_err": "No se pudo usar la imagen seleccionada.",
   "settings.icons.group_actions": "Acciones de la barra",
-  "settings.icons.group_files": "Tipos de archivo",
-  "settings.icons.set.lucide": "Lucide (línea)",
-  "settings.icons.set.tabler": "Tabler (línea)",
-  "settings.icons.set.material": "Material (relleno)",
-  "settings.icons.set.flat-color": "Flat Color",
-  "settings.icons.set.mono": "Mono"
+  "settings.icons.group_files": "Tipos de archivo"
 }

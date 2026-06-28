@@ -46,19 +46,30 @@ impl IconCache {
         }
     }
 
-    /// Reemplaza los overrides de ícono (mapa nombre → fuente). Se llama al cargar la config.
+    /// Reemplaza los overrides de ícono (mapa nombre → fuente). Se llama al cargar la config
+    /// y cada vez que el usuario cambia un override. Invalida el cache completo: las entradas
+    /// anteriores podrían haberse resuelto sin el override nuevo.
     pub fn set_overrides(
         &mut self,
         ov: std::collections::BTreeMap<String, naygo_core::icon_source::IconSource>,
     ) {
         self.overrides = ov;
+        self.map.clear();
     }
 
     /// Configura el tinte del set activo. `tintable` indica si el set es máscara blanca;
     /// `rgb` es el color del tema. Si `tintable` es `false`, no se aplica ningún tinte.
+    /// Invalida el cache porque el color de tinte está embebido en los píxeles cacheados.
     pub fn set_tint(&mut self, tintable: bool, rgb: (u8, u8, u8)) {
         self.tintable = tintable;
         self.tint = rgb;
+        self.map.clear();
+    }
+
+    /// Solo para tests: número de entradas actualmente en el cache.
+    #[cfg(test)]
+    pub fn cache_len(&self) -> usize {
+        self.map.len()
     }
 
     /// Cambia el set activo (al cambiarlo en Configuración). No borra el cache: las claves del
@@ -152,7 +163,7 @@ mod tests {
     use naygo_core::icon_kind::IconKey;
 
     fn cache() -> IconCache {
-        IconCache::new("flat", std::path::PathBuf::new())
+        IconCache::new("lucide", std::path::PathBuf::new())
     }
 
     #[test]
@@ -181,6 +192,24 @@ mod tests {
         c.set_tint(true, (200, 100, 50)); // set tintable: aplica color
         let img = c.get(IconKey::Folder);
         assert!(img.size().width > 0); // se resolvió y decodificó sin panic
+    }
+
+    #[test]
+    fn set_overrides_invalida_el_cache() {
+        use naygo_core::icon_source::IconSource;
+        use std::collections::BTreeMap;
+        let mut c = IconCache::new("lucide", std::path::PathBuf::new());
+        // Cachear folder del set base (lucide).
+        let _ = c.get(IconKey::Folder);
+        assert_eq!(c.cache_len(), 1, "debe haber 1 entrada cacheada tras el primer get");
+        // Aplicar override: folder pasa a resolverse desde "material".
+        let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
+        ov.insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        c.set_overrides(ov);
+        assert_eq!(c.cache_len(), 0, "set_overrides debe invalidar el cache completo");
+        // Re-pedir: debe re-decodificar con el override aplicado.
+        let _ = c.get(IconKey::Folder);
+        assert_eq!(c.cache_len(), 1, "se re-decodifica con el override aplicado");
     }
 
     #[test]

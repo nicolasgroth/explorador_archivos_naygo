@@ -525,7 +525,7 @@ impl ConfigCtrl {
     }
 
     /// Set de íconos por id (de los disponibles en el catálogo: embebidos + packs sueltos).
-    /// Lo coacciona contra el catálogo (un id inexistente cae a "flat") y persiste.
+    /// Lo coacciona contra el catálogo (un id inexistente cae a "lucide") y persiste.
     pub fn set_icon_set(&mut self, id: String) {
         let catalog = naygo_core::icon_set::IconSetCatalog::load(&self.config_dir);
         self.settings.icon_set = catalog.resolve(&id);
