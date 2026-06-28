@@ -308,8 +308,20 @@ const fn all_specs() -> [SetSpec; 5] {
 mod raster {
     use std::io::Read;
     use std::path::Path;
+    use std::sync::LazyLock;
+
+    use regex::Regex;
 
     use super::SetSpec;
+
+    // Regex compilados una sola vez para todo el generador (recolor_svg se llama 165
+    // veces; recompilar en cada llamada era innecesario).
+    static RE_FILL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"fill="([^"]+)""#).unwrap());
+    static RE_STROKE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"stroke="([^"]+)""#).unwrap());
+    static RE_SVG_OPEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(<svg\b[^>]*?)(/?>)").unwrap());
 
     /// Lee todas las entradas necesarias del zip en un único recorrido.
     /// Esto es crítico para zips muy grandes (p.ej. material-design-icons ~4GB):
@@ -358,14 +370,11 @@ mod raster {
     ///
     /// Los valores `none` y `url(...)` se preservan intactos.
     pub fn recolor_svg(svg: &str, hex: &str) -> String {
-        use regex::Regex;
-
         // Paso 1: Reemplaza currentColor por el color destino
         let result = svg.replace("currentColor", hex);
 
         // Paso 1b: Reemplaza fill="<valor>" cuando el valor no es "none" ni empieza por "url("
-        let re_fill = Regex::new(r#"fill="([^"]+)""#).unwrap();
-        let result = re_fill.replace_all(&result, |caps: &regex::Captures| {
+        let result = RE_FILL.replace_all(&result, |caps: &regex::Captures| {
             let val = &caps[1];
             if val == "none" || val.starts_with("url(") {
                 caps[0].to_string()
@@ -375,8 +384,7 @@ mod raster {
         });
 
         // Paso 1c: Reemplaza stroke="<valor>" cuando el valor no es "none" ni empieza por "url("
-        let re_stroke = Regex::new(r#"stroke="([^"]+)""#).unwrap();
-        let result = re_stroke.replace_all(&result, |caps: &regex::Captures| {
+        let result = RE_STROKE.replace_all(&result, |caps: &regex::Captures| {
             let val = &caps[1];
             if val == "none" || val.starts_with("url(") {
                 caps[0].to_string()
@@ -388,8 +396,8 @@ mod raster {
         // Paso 2: Inyectar fill en el elemento <svg> raíz si no tiene fill explícito.
         // Esto cubre Material Design (paths sin fill heredan del root en lugar del UA black).
         // Regex: <svg ... > o <svg ... />; inyecta fill="hex" antes del cierre del tag.
-        let re_svg_open = Regex::new(r"(<svg\b[^>]*?)(/?>)").unwrap();
-        let result = re_svg_open.replace(&result, |caps: &regex::Captures| {
+        // .replace (no replace_all): solo el <svg> raíz, no svg anidados.
+        let result = RE_SVG_OPEN.replace(&result, |caps: &regex::Captures| {
             let tag_content = &caps[1];
             let close = &caps[2];
             // Solo inyectar si el <svg> raíz no tiene ya fill (para no duplicarlo)
@@ -406,10 +414,9 @@ mod raster {
     /// Rasteriza `svg_bytes` a PNG de `size`×`size` píxeles.
     /// Si `tint_hex` es `Some(hex)`, recolorea el SVG antes de renderizar.
     ///
-    /// Estrategia de recoloreado (dos pasos complementarios):
-    /// 1. Reemplazo textual: currentColor + fill/stroke explícitos (maneja Lucide/Tabler).
-    /// 2. Hoja de estilo CSS inyectada via usvg: sobreescribe fill/stroke implícitos del
-    ///    navegador (maneja Material Design, donde <path> sin atributos hereda fill=black).
+    /// El recoloreado (cuando `tint_hex` es `Some`) lo realiza `recolor_svg` a nivel
+    /// de texto antes de parsear: reemplaza currentColor + fill/stroke explícitos e
+    /// inyecta fill en el <svg> raíz para los paths sin fill (Material Design).
     pub fn rasterize(svg_bytes: &[u8], tint_hex: Option<&str>, size: u32) -> Result<Vec<u8>, String> {
         // Opcionalmente recolorea el SVG a texto y trabaja sobre esos bytes
         let recolored: Vec<u8>;
@@ -484,6 +491,8 @@ fn main() {
     const SIZE: u32 = 48;
     let specs = all_specs();
 
+    // mono comparte el zip de lucide (mismos SVG, tinte gris): lucide-main.zip se
+    // lee dos veces a propósito. Es barato (~1MB) y mantiene los SetSpec simples.
     for spec in &specs {
         // Determinar color de tinte según el set
         let tint_hex: Option<&str> = if spec.gray {
