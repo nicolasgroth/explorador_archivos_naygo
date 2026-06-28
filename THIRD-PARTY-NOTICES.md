@@ -37,6 +37,21 @@ La vista previa de código resalta la sintaxis con [syntect](https://github.com/
 
 ---
 
+## Íconos (sets de fábrica)
+
+Los sets de íconos de fábrica se generan a partir de estas librerías de código abierto,
+embebidas como PNG en el binario:
+
+- **Lucide** (<https://lucide.dev>) — licencia ISC. Sets `lucide` y `mono`.
+- **Tabler Icons** (<https://tabler.io/icons>) — licencia MIT. Set `tabler`.
+- **Material Symbols / Material Design Icons** (<https://fonts.google.com/icons>) — licencia Apache-2.0. Set `material`.
+- **Flat Color Icons** (<https://github.com/icons8/flat-color-icons>) — licencia MIT. Set `flat-color`.
+
+Todas son licencias permisivas. Los íconos importados por el usuario (sets `.naygoset`
+o packs sueltos) son responsabilidad de quien los distribuye.
+
+---
+
 ## Dependencias por licencia
 
 ### (Apache-2.0 OR MIT) AND BSD-3-Clause  (1)

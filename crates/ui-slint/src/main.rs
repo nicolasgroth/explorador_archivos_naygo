@@ -2295,7 +2295,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         let icon_img = c.icons.get(key);
                         IconRowVm {
                             key: key_str.clone().into(),
-                            label: key_str.into(), // Task 16 añadirá i18n
+                            label: c.config.t(&format!("icons.obj.{key_str}")).into(),
                             icon: icon_img,
                             origin,
                             overridden,
