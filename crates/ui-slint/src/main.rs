@@ -2107,8 +2107,221 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let cfg_weak = cfg_win.as_weak();
         Rc::new(move || {
-            let c = ctrl.borrow();
-            let settings_vm = build_settings_vm(&c.config);
+            // Fase 1: extraer todo lo necesario del borrow inmutable antes de liberarlo.
+            // Esto permite un borrow_mut posterior para los íconos (IconCache::get es &mut).
+            let (
+                settings_vm,
+                recent_limit,
+                auto_hl,
+                footer_en,
+                footer_preset,
+                footer_tpl,
+                footer_prev,
+                home_dir,
+                shortcut_rows,
+                prev_rules,
+                theme_cards,
+                editing_active,
+                editing_name,
+                editing_base_index,
+                editing_flat_inactive,
+                editing_hexes,
+                editing_rs,
+                editing_gs,
+                editing_bs,
+                config_dir_str,
+                // Datos para la grilla de íconos (se usan en fase 2).
+                icon_set_id,
+                icon_overrides,
+                icon_config_dir,
+                icon_catalog_info, // Vec<(id, label, tintable)>
+                icon_tint,
+                icon_tintable,
+            ) = {
+                let c = ctrl.borrow();
+                let settings_vm = build_settings_vm(&c.config);
+                let recent_limit = c.config.settings.recent_limit as i32;
+                let auto_hl = c.config.auto_highlight_code();
+                let footer_en = c.config.footer_enabled();
+                let footer_preset = c.config.footer_preset_index();
+                let footer_tpl = c.config.footer_custom_template().to_string();
+                let footer_prev = c.config.footer_preview().to_string();
+                let home_dir = c.config.home_dir().to_string();
+                let shortcut_rows: Vec<ShortcutRowVm> = c
+                    .config
+                    .shortcut_list()
+                    .into_iter()
+                    .map(|(key, label, chord)| ShortcutRowVm {
+                        action_key: key.into(),
+                        label: label.into(),
+                        chord_text: chord.into(),
+                        conflict: SharedString::new(),
+                    })
+                    .collect();
+                let prev_rules: Vec<PreviewRuleVm> = c
+                    .preview_rules()
+                    .into_iter()
+                    .map(|(ext, enabled, view_index, lang_index)| PreviewRuleVm {
+                        ext: ext.into(),
+                        enabled,
+                        view_index,
+                        lang_index,
+                    })
+                    .collect();
+                let active_theme = c.config.settings.theme.clone();
+                let col = |tc: naygo_core::theme::ThemeColor| {
+                    slint::Color::from_rgb_u8(tc.r, tc.g, tc.b)
+                };
+                let theme_cards: Vec<ThemeCardVm> = c
+                    .config
+                    .themes
+                    .available()
+                    .iter()
+                    .map(|id| {
+                        let t = c.config.themes.get(id);
+                        ThemeCardVm {
+                            id: id.as_str().into(),
+                            name: t.name.clone().into(),
+                            active: id.as_str() == active_theme.as_str(),
+                            is_builtin: naygo_core::theme::is_builtin_id(id.as_str()),
+                            sw_panel: col(t.panel_bg),
+                            sw_accent: col(t.accent),
+                            sw_row: col(t.row_bg),
+                            sw_text: col(t.text),
+                            sw_highlight: col(t.highlight),
+                        }
+                    })
+                    .collect();
+                let editing_active = c.config.is_editing_theme();
+                let editing_name = c.config.editing_name().to_string();
+                let editing_base_index = c.config.editing_base_index();
+                let editing_flat_inactive = c.config.editing_flat_inactive();
+                let n = config_ctrl::THEME_TOKEN_COUNT;
+                let mut editing_hexes: Vec<SharedString> = Vec::with_capacity(n);
+                let mut editing_rs: Vec<i32> = Vec::with_capacity(n);
+                let mut editing_gs: Vec<i32> = Vec::with_capacity(n);
+                let mut editing_bs: Vec<i32> = Vec::with_capacity(n);
+                if editing_active {
+                    for idx in 0..n {
+                        editing_hexes.push(c.config.editing_token_hex(idx).into());
+                        let (r, g, b) = c.config.editing_token_rgb(idx);
+                        editing_rs.push(r as i32);
+                        editing_gs.push(g as i32);
+                        editing_bs.push(b as i32);
+                    }
+                }
+                let config_dir_str = c.config.config_dir.to_string_lossy().to_string();
+                // Datos para la grilla de íconos (Task 15).
+                let icon_set_id = c.config.settings.icon_set.clone();
+                let icon_overrides = c.config.settings.icon_overrides.clone();
+                let icon_config_dir = c.config.config_dir.clone();
+                let catalog =
+                    naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir);
+                let icon_catalog_info: Vec<(String, String, bool)> = catalog
+                    .available()
+                    .iter()
+                    .map(|s| (s.id.clone(), s.label.clone(), s.tintable))
+                    .collect();
+                let icon_tintable = catalog.is_tintable(&icon_set_id);
+                let icon_tint = theme_text_rgb(&c.config.settings, &c.config.themes);
+                (
+                    settings_vm,
+                    recent_limit,
+                    auto_hl,
+                    footer_en,
+                    footer_preset,
+                    footer_tpl,
+                    footer_prev,
+                    home_dir,
+                    shortcut_rows,
+                    prev_rules,
+                    theme_cards,
+                    editing_active,
+                    editing_name,
+                    editing_base_index,
+                    editing_flat_inactive,
+                    editing_hexes,
+                    editing_rs,
+                    editing_gs,
+                    editing_bs,
+                    config_dir_str,
+                    icon_set_id,
+                    icon_overrides,
+                    icon_config_dir,
+                    icon_catalog_info,
+                    icon_tint,
+                    icon_tintable,
+                )
+                // c se libera aquí al salir del bloque
+            };
+
+            // Fase 2: borrow_mut para obtener los íconos del cache (IconCache::get es &mut).
+            // Se hace DESPUÉS de liberar el borrow inmutable de arriba.
+            let (icon_rows_vm, icon_set_labels_vm): (ModelRc<IconRowVm>, ModelRc<SharedString>) = {
+                let mut c = ctrl.borrow_mut();
+                // Etiquetas de cada set (mismo orden que icon_sets en SettingsVm).
+                let set_labels: Vec<SharedString> = icon_catalog_info
+                    .iter()
+                    .map(|(_, label, _)| SharedString::from(label.as_str()))
+                    .collect();
+                // Descripción de la fuente de un ícono: "(base)" o "· override".
+                let active_label = icon_catalog_info
+                    .iter()
+                    .find(|(id, _, _)| id == &icon_set_id)
+                    .map(|(_, l, _)| l.as_str())
+                    .unwrap_or(&icon_set_id);
+                let rows: Vec<IconRowVm> = naygo_core::icons::all_keys()
+                    .into_iter()
+                    .map(|key| {
+                        let key_str =
+                            naygo_core::icon_source::key_to_string(key);
+                        let overridden = icon_overrides.contains_key(&key_str);
+                        let origin: SharedString = if overridden {
+                            match icon_overrides.get(&key_str) {
+                                Some(naygo_core::icon_source::IconSource::Builtin {
+                                    set_id,
+                                }) => {
+                                    let lbl = icon_catalog_info
+                                        .iter()
+                                        .find(|(id, _, _)| id == set_id)
+                                        .map(|(_, l, _)| l.as_str())
+                                        .unwrap_or(set_id.as_str());
+                                    format!("{lbl} · override").into()
+                                }
+                                Some(naygo_core::icon_source::IconSource::UserPng { .. }) => {
+                                    "PNG propio".into()
+                                }
+                                None => format!("{active_label} (base)").into(),
+                            }
+                        } else {
+                            format!("{active_label} (base)").into()
+                        };
+                        let group: i32 =
+                            if key_str.starts_with("action_") { 0 } else { 1 };
+                        let icon_img = c.icons.get(key);
+                        IconRowVm {
+                            key: key_str.clone().into(),
+                            label: key_str.into(), // Task 16 añadirá i18n
+                            icon: icon_img,
+                            origin,
+                            overridden,
+                            group,
+                        }
+                    })
+                    .collect();
+                (
+                    ModelRc::from(Rc::new(VecModel::from(rows))),
+                    ModelRc::from(Rc::new(VecModel::from(set_labels))),
+                )
+            };
+
+            // Fase 3: volcar todo a la UI. El SettingsVm se emite con los campos de íconos ya
+            // rellenos antes de llamar a set_vm / set_settings_vm.
+            let mut settings_vm = settings_vm;
+            settings_vm.icon_rows = icon_rows_vm;
+            settings_vm.icon_set_labels = icon_set_labels_vm;
+            settings_vm.icon_set_tintable = icon_tintable;
+
             // La AppWindow sigue usando `settings-vm` en la toolbar (icon-only, alto de fila),
             // así que se mantiene actualizado ahí además de en la ventana de configuración.
             if let Some(ui) = ui_weak.upgrade() {
@@ -2119,39 +2332,18 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             cfg.set_vm(settings_vm);
             // Poblar el campo de límite de recientes (no está en SettingsVm).
-            cfg.set_recent_limit(c.config.settings.recent_limit as i32);
+            cfg.set_recent_limit(recent_limit);
             // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
             // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
-            cfg.set_auto_highlight_code(c.config.auto_highlight_code());
-            cfg.set_footer_enabled(c.config.footer_enabled());
-            cfg.set_footer_preset_index(c.config.footer_preset_index());
-            cfg.set_footer_custom_template(c.config.footer_custom_template().into());
-            cfg.set_footer_preview(c.config.footer_preview().into());
-            cfg.set_home_dir(c.config.home_dir().into());
-            let rows: Vec<ShortcutRowVm> = c
-                .config
-                .shortcut_list()
-                .into_iter()
-                .map(|(key, label, chord)| ShortcutRowVm {
-                    action_key: key.into(),
-                    label: label.into(),
-                    chord_text: chord.into(),
-                    conflict: SharedString::new(),
-                })
-                .collect();
-            cfg.set_shortcuts(ModelRc::from(Rc::new(VecModel::from(rows))));
+            cfg.set_auto_highlight_code(auto_hl);
+            cfg.set_footer_enabled(footer_en);
+            cfg.set_footer_preset_index(footer_preset);
+            cfg.set_footer_custom_template(footer_tpl.into());
+            cfg.set_footer_preview(footer_prev.into());
+            cfg.set_home_dir(home_dir.into());
+            cfg.set_shortcuts(ModelRc::from(Rc::new(VecModel::from(shortcut_rows))));
             // Reglas de previsualización (C3).
-            let prev: Vec<PreviewRuleVm> = c
-                .preview_rules()
-                .into_iter()
-                .map(|(ext, enabled, view_index, lang_index)| PreviewRuleVm {
-                    ext: ext.into(),
-                    enabled,
-                    view_index,
-                    lang_index,
-                })
-                .collect();
-            cfg.set_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev))));
+            cfg.set_preview_rules(ModelRc::from(Rc::new(VecModel::from(prev_rules))));
             // Nombres legibles de los lenguajes de código para el combobox (orden de CodeLang::all()).
             let lang_names: Vec<SharedString> = naygo_core::preview::CodeLang::all()
                 .iter()
@@ -2159,56 +2351,19 @@ fn main() -> Result<(), slint::PlatformError> {
                 .collect();
             cfg.set_lang_names(ModelRc::from(Rc::new(VecModel::from(lang_names))));
             // Tarjetas de tema para la galería de selección (config → Apariencia).
-            let active = c.config.settings.theme.clone();
-            let col =
-                |tc: naygo_core::theme::ThemeColor| slint::Color::from_rgb_u8(tc.r, tc.g, tc.b);
-            let cards: Vec<ThemeCardVm> = c
-                .config
-                .themes
-                .available()
-                .iter()
-                .map(|id| {
-                    let t = c.config.themes.get(id);
-                    ThemeCardVm {
-                        id: id.as_str().into(),
-                        name: t.name.clone().into(),
-                        active: id.as_str() == active.as_str(),
-                        is_builtin: naygo_core::theme::is_builtin_id(id.as_str()),
-                        sw_panel: col(t.panel_bg),
-                        sw_accent: col(t.accent),
-                        sw_row: col(t.row_bg),
-                        sw_text: col(t.text),
-                        sw_highlight: col(t.highlight),
-                    }
-                })
-                .collect();
-            cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
+            cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(theme_cards))));
             // Estado del editor de temas (config → Apariencia). Cuando hay un tema en edición se
             // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 12 tokens (hex +
             // r/g/b por canal, para inicializar el color-picker, que no parsea hex).
-            cfg.set_editing_active(c.config.is_editing_theme());
-            cfg.set_editing_name(c.config.editing_name().into());
-            cfg.set_editing_base_index(c.config.editing_base_index());
-            cfg.set_editing_flat_inactive(c.config.editing_flat_inactive());
-            let n = config_ctrl::THEME_TOKEN_COUNT;
-            let mut hexes: Vec<SharedString> = Vec::with_capacity(n);
-            let mut rs: Vec<i32> = Vec::with_capacity(n);
-            let mut gs: Vec<i32> = Vec::with_capacity(n);
-            let mut bs: Vec<i32> = Vec::with_capacity(n);
-            if c.config.is_editing_theme() {
-                for idx in 0..n {
-                    hexes.push(c.config.editing_token_hex(idx).into());
-                    let (r, g, b) = c.config.editing_token_rgb(idx);
-                    rs.push(r as i32);
-                    gs.push(g as i32);
-                    bs.push(b as i32);
-                }
-            }
-            cfg.set_editing_token_hex(ModelRc::from(Rc::new(VecModel::from(hexes))));
-            cfg.set_editing_token_r(ModelRc::from(Rc::new(VecModel::from(rs))));
-            cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(gs))));
-            cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(bs))));
-            cfg.set_config_dir(c.config.config_dir.to_string_lossy().to_string().into());
+            cfg.set_editing_active(editing_active);
+            cfg.set_editing_name(editing_name.into());
+            cfg.set_editing_base_index(editing_base_index);
+            cfg.set_editing_flat_inactive(editing_flat_inactive);
+            cfg.set_editing_token_hex(ModelRc::from(Rc::new(VecModel::from(editing_hexes))));
+            cfg.set_editing_token_r(ModelRc::from(Rc::new(VecModel::from(editing_rs))));
+            cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(editing_gs))));
+            cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(editing_bs))));
+            cfg.set_config_dir(config_dir_str.into());
             cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
             // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
             // versión actual. Se setea una sola vez (no cambia en runtime).
@@ -2233,6 +2388,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     .unwrap_or_default();
                 cfg.set_release_notes(ModelRc::new(VecModel::from(sections)));
             }
+            // Suprimir advertencia: icon_tint se extrajo por si se necesita en el futuro
+            // (p. ej. para un picker en la ventana de config); aún no se usa en la fase 3.
+            let _ = icon_tint;
+            let _ = icon_config_dir;
         })
     };
     refresh_config_vm();
@@ -2871,6 +3030,287 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh_icons();
             refresh_drives();
             refresh();
+        });
+    }
+    // --- Íconos por objeto (Task 15): picker, overrides, PNG propio, import, export ---
+    // Abrir el selector de ícono: construye las opciones (un tile por set de fábrica) y
+    // las inyecta en el SettingsVm antes de llamar cfg.set_vm (ver nota en refresh_config_vm).
+    {
+        let ctrl = ctrl.clone();
+        let cfg_weak = cfg_win.as_weak();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_open_icon_picker(move |key| {
+            let Some(cfg) = cfg_weak.upgrade() else {
+                return;
+            };
+            // Construir las opciones con borrow_mut (icons.get necesita &mut).
+            let choices: Vec<IconChoiceVm> = {
+                let c = ctrl.borrow();
+                let Some(icon_key) =
+                    naygo_core::icon_source::key_from_string(key.as_str())
+                else {
+                    return;
+                };
+                let config_dir = c.config.config_dir.clone();
+                let tint = theme_text_rgb(&c.config.settings, &c.config.themes);
+                let catalog =
+                    naygo_core::icon_set::IconSetCatalog::load(&config_dir);
+                drop(c);
+                catalog
+                    .available()
+                    .iter()
+                    .map(|info| {
+                        let tintable = info.tintable;
+                        let icon_img = icons::render_for_set(
+                            icon_key,
+                            &info.id,
+                            tintable,
+                            tint,
+                            &config_dir,
+                        );
+                        IconChoiceVm {
+                            set_id: info.id.as_str().into(),
+                            set_label: info.label.as_str().into(),
+                            icon: icon_img,
+                        }
+                    })
+                    .collect()
+            };
+            // Construir el SettingsVm completo y sobreescribir los campos del picker.
+            // Esto abre el overlay en la UI al setear icon_picker_key != "".
+            let mut vm = {
+                let c = ctrl.borrow();
+                build_settings_vm(&c.config)
+            };
+            vm.icon_picker_key = key;
+            vm.icon_picker_choices =
+                ModelRc::from(Rc::new(VecModel::from(choices)));
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_settings_vm(vm.clone());
+            }
+            cfg.set_vm(vm);
+        });
+    }
+    // Cerrar el selector: basta con hacer refresh (build_settings_vm devuelve icon_picker_key=""
+    // por defecto, lo que cierra el overlay).
+    {
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_close_icon_picker(move || {
+            refresh();
+        });
+    }
+    // Override a un set de íconos (Builtin): persiste + re-aplica cache + refresca.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        cfg_win.on_set_icon_override(move |key, set_id| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.icon_overrides.insert(
+                    key.to_string(),
+                    naygo_core::icon_source::IconSource::Builtin {
+                        set_id: set_id.to_string(),
+                    },
+                );
+                c.config.save();
+                let overrides = c.config.settings.icon_overrides.clone();
+                c.icons.set_overrides(overrides);
+            }
+            refresh_icons();
+            refresh_drives();
+            refresh();
+        });
+    }
+    // Override a un PNG propio: abre selector de archivo, copia el PNG al directorio de usuario
+    // y registra el override de tipo UserPng.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        cfg_win.on_set_icon_override_png(move |key| {
+            let Some(src_path) = rfd::FileDialog::new()
+                .add_filter("PNG", &["png"])
+                .pick_file()
+            else {
+                return;
+            };
+            let config_dir = ctrl.borrow().config.config_dir.clone();
+            let Some(rel_path) = copy_user_png(&config_dir, &src_path) else {
+                return;
+            };
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.icon_overrides.insert(
+                    key.to_string(),
+                    naygo_core::icon_source::IconSource::UserPng { rel_path },
+                );
+                c.config.save();
+                let overrides = c.config.settings.icon_overrides.clone();
+                c.icons.set_overrides(overrides);
+            }
+            refresh_icons();
+            refresh_drives();
+            refresh();
+        });
+    }
+    // Quitar el override de un ícono concreto: vuelve al set base.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        cfg_win.on_clear_icon_override(move |key| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.icon_overrides.remove(key.as_str());
+                c.config.save();
+                let overrides = c.config.settings.icon_overrides.clone();
+                c.icons.set_overrides(overrides);
+            }
+            refresh_icons();
+            refresh_drives();
+            refresh();
+        });
+    }
+    // Resetear todos los overrides: vuelve al set base para todos los íconos.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        cfg_win.on_reset_icon_overrides(move || {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.icon_overrides.clear();
+                c.config.save();
+                c.icons.set_overrides(std::collections::BTreeMap::new());
+            }
+            refresh_icons();
+            refresh_drives();
+            refresh();
+        });
+    }
+    // Importar un .naygoset: activa el set importado y aplica sus overrides.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_import_icon_set(move || {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Set de íconos (.naygoset)", &["naygoset"])
+                .pick_file()
+            else {
+                return;
+            };
+            let config_dir = ctrl.borrow().config.config_dir.clone();
+            match naygo_core::icon_pack::import_pack(&path, &config_dir) {
+                Ok(manifest) => {
+                    {
+                        let mut c = ctrl.borrow_mut();
+                        // Activar el set recién importado y aplicar sus overrides.
+                        let set_id = manifest.name.clone();
+                        c.config.set_icon_set(set_id.clone());
+                        let active = c.config.settings.icon_set.clone();
+                        c.config.settings.icon_overrides.clear();
+                        for entry in &manifest.overrides {
+                            c.config
+                                .settings
+                                .icon_overrides
+                                .insert(entry.key.clone(), entry.source.clone());
+                        }
+                        c.config.save();
+                        c.icons.set_active(active.clone());
+                        let catalog =
+                            naygo_core::icon_set::IconSetCatalog::load(&config_dir);
+                        let tintable = catalog.is_tintable(&active);
+                        let overrides = c.config.settings.icon_overrides.clone();
+                        let rgb =
+                            theme_text_rgb(&c.config.settings, &c.config.themes);
+                        c.icons.set_overrides(overrides);
+                        c.icons.set_tint(tintable, rgb);
+                    }
+                    refresh_icons();
+                    refresh_drives();
+                    refresh();
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let msg = ctrl
+                            .borrow()
+                            .config
+                            .t("settings.icons.import_ok")
+                            .into();
+                        ui.invoke_show_toast(msg);
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let base = ctrl
+                            .borrow()
+                            .config
+                            .t("settings.icons.import_err");
+                        ui.invoke_show_toast(format!("{base}: {e}").into());
+                    }
+                }
+            }
+        });
+    }
+    // Exportar el set efectivo actual a un .naygoset.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_export_icon_set(move || {
+            let (set_id, overrides, config_dir) = {
+                let c = ctrl.borrow();
+                (
+                    c.config.settings.icon_set.clone(),
+                    c.config.settings.icon_overrides.clone(),
+                    c.config.config_dir.clone(),
+                )
+            };
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Set de íconos (.naygoset)", &["naygoset"])
+                .set_file_name(format!("{set_id}.naygoset"))
+                .save_file()
+            else {
+                return;
+            };
+            match naygo_core::icon_pack::export_pack(
+                &path,
+                &set_id,
+                "",
+                &set_id,
+                &overrides,
+                &config_dir,
+            ) {
+                Ok(()) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let msg = ctrl
+                            .borrow()
+                            .config
+                            .t("settings.icons.export_ok")
+                            .into();
+                        ui.invoke_show_toast(msg);
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let tr = ui.global::<Tr>();
+                        ui.set_message(MessageVm {
+                            kind: 2,
+                            level: 2,
+                            title: "Naygo".into(),
+                            body: e.into(),
+                            confirm_label: tr.get_dlg_accept(),
+                            cancel_label: Default::default(),
+                            danger: false,
+                        });
+                    }
+                }
+            }
         });
     }
     // Editor de atajos: capturar la acción a reasignar.
@@ -4690,6 +5130,45 @@ fn int_to_purpose(p: i32) -> PanePurpose {
         6 => PanePurpose::Operations,
         _ => PanePurpose::Files,
     }
+}
+
+/// Copia un PNG de usuario al directorio `<config_dir>/icons/_user/` con un nombre único
+/// (basado en el stem del archivo original más un contador de reintento para evitar colisiones).
+/// Devuelve el nombre relativo del archivo copiado, o `None` si la copia falla.
+fn copy_user_png(config_dir: &std::path::Path, src: &std::path::Path) -> Option<String> {
+    let dest_dir = config_dir.join("icons").join("_user");
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        eprintln!("[naygo] copy_user_png: no se pudo crear el directorio: {e}");
+        return None;
+    }
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("icon");
+    // Sanear: solo alfanuméricos, guiones y guiones bajos.
+    let stem: String = stem
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(32)
+        .collect();
+    // Evitar colisiones con un contador de reintento.
+    let mut rel = format!("{stem}.png");
+    for i in 1u32.. {
+        let candidate = dest_dir.join(&rel);
+        if !candidate.exists() {
+            break;
+        }
+        rel = format!("{stem}_{i}.png");
+        if i > 9999 {
+            // Defensa: no puede haber más de 9999 PNGs con el mismo stem.
+            return None;
+        }
+    }
+    if let Err(e) = std::fs::copy(src, dest_dir.join(&rel)) {
+        eprintln!("[naygo] copy_user_png: error al copiar: {e}");
+        return None;
+    }
+    Some(rel)
 }
 
 /// Muestra un modal de error (temático) si el resultado de un import/export falló;

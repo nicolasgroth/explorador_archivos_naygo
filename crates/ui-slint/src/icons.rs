@@ -96,8 +96,23 @@ impl IconCache {
     }
 }
 
+/// Renderiza el `key` en un set específico (no el activo), aplicando tinte si corresponde.
+/// Se usa en el picker de ícono para mostrar el mismo objeto en cada set disponible.
+pub(crate) fn render_for_set(
+    key: naygo_core::icon_kind::IconKey,
+    set_id: &str,
+    tintable: bool,
+    tint: (u8, u8, u8),
+    config_dir: &std::path::Path,
+) -> Image {
+    let empty_ov = std::collections::BTreeMap::new();
+    let bytes = naygo_core::icons::resolve_with_overrides(set_id, &empty_ov, key, config_dir);
+    let bytes = if tintable { tint_png(&bytes, tint) } else { bytes };
+    decode(&bytes)
+}
+
 /// Decodifica bytes PNG a un `slint::Image` RGBA. Imagen vacía si falla.
-fn decode(bytes: &[u8]) -> Image {
+pub(crate) fn decode(bytes: &[u8]) -> Image {
     match image::load_from_memory_with_format(bytes, image::ImageFormat::Png) {
         Ok(img) => {
             let rgba = img.to_rgba8();
