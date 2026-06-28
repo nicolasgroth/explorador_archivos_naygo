@@ -869,9 +869,9 @@ mod tests {
     }
 
     #[test]
-    fn icon_set_de_pack_borrado_cae_a_flat() {
+    fn icon_set_de_pack_borrado_cae_a_lucide() {
         // Un id de pack suelto guardado cuya carpeta ya no existe en disco se coacciona
-        // a "flat" al cargar (no queda como selección colgada con la toolbar rota).
+        // a "lucide" al cargar (no queda como selección colgada con la toolbar rota).
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("settings.json"),
@@ -879,7 +879,7 @@ mod tests {
         )
         .unwrap();
         let s = load_settings(dir.path());
-        assert_eq!(s.icon_set, "flat");
+        assert_eq!(s.icon_set, "lucide");
     }
 
     #[test]
@@ -907,9 +907,7 @@ mod tests {
         // Un settings.json v1 escrito por un build previo (sin icon_set ni
         // show_parent_entry) debe conservar bar_position/icon_only y solo caer al
         // default en los campos nuevos, gracias a #[serde(default)] (honra CONFIG_VERSION).
-        // Nota: el default de icon_set es "lucide", pero el catálogo actual (Task 2)
-        // todavía no tiene "lucide" como embebido → resolve lo cae a "flat". En Task 3
-        // se agrega "lucide" como embebido y este test se actualizará.
+        // "lucide" es de fábrica desde Task 3 → resolve devuelve "lucide".
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("settings.json"),
@@ -919,7 +917,7 @@ mod tests {
         let s = load_settings(dir.path());
         assert_eq!(s.bar_position, BarPosition::Side, "conserva lo viejo");
         assert!(!s.icon_only, "conserva lo viejo");
-        assert_eq!(s.icon_set, "flat", "lucide aún no es embebido → resolve cae a flat");
+        assert_eq!(s.icon_set, "lucide", "lucide es de fábrica → resolve lo conserva");
         assert!(s.show_parent_entry, "campo nuevo cae al default");
     }
 
