@@ -42,17 +42,6 @@ impl RowDensity {
     }
 }
 
-/// Qué set de íconos usa la app. Flat es el default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum IconSet {
-    /// Multicolor plano (default).
-    Flat,
-    /// Estilo Fluent (Microsoft).
-    Fluent,
-    /// Monocromo temable (Lucide/Tabler).
-    Mono,
-}
-
 /// Estilo de los íconos de la barra de herramientas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolbarIconStyle {

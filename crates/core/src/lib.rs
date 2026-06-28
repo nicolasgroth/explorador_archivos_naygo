@@ -45,7 +45,7 @@ pub mod workspace;
 
 pub use cancel::CancellationToken;
 pub use columns::{sort_key_of, ColumnKind, ColumnSpec, TableState};
-pub use config::{BarPosition, IconSet, OpsDisplay, OpsMode, Settings};
+pub use config::{BarPosition, OpsDisplay, OpsMode, Settings};
 pub use filter::{matches, ColumnFilter, VisibilityFlags};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
 pub use i18n::{pick_default_language, I18n, LangId};

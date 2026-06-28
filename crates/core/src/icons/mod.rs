@@ -1,12 +1,12 @@
-// Naygo — tabla de assets embebidos: (IconSet, IconKey) → bytes PNG. Pura, reusable por toda UI.
+// Naygo — tabla de assets embebidos: (set_id, IconKey) → bytes PNG. Pura, reusable por toda UI.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! Embebe los PNG de los tres sets con `include_bytes!`. `bytes_for` da los bytes
-//! del ícono para un set y una clave; si la clave no tiene asset propio, cae a
-//! `unknown` (genérico), que siempre existe. Función pura y testeable. Vive en
+//! Embebe los PNG de los cinco sets con `include_bytes!`. `bytes_for_id` da los bytes
+//! del ícono para un set (por id string) y una clave; si la clave no tiene asset propio,
+//! cae a `unknown` (genérico), que siempre existe. `resolve_with_overrides` aplica los
+//! overrides por objeto sobre el set base. Función pura y testeable. Vive en
 //! `naygo-core` para que tanto la UI Slint como la egui la compartan.
 
-use crate::config::IconSet;
 use crate::icon_kind::{ActionIcon, FileCategory, IconKey};
 
 /// Nombre de archivo (sin extensión) para una `IconKey`. Debe coincidir con lo que
@@ -87,62 +87,93 @@ macro_rules! set_table {
     };
 }
 
-set_table!(FLAT, "flat");
-set_table!(FLUENT, "fluent");
+set_table!(LUCIDE, "lucide");
+set_table!(TABLER, "tabler");
+set_table!(MATERIAL, "material");
+set_table!(FLAT_COLOR, "flat-color");
 set_table!(MONO, "mono");
 
-/// Tabla de bytes para un set.
-fn table_for(set: IconSet) -> &'static [(&'static str, &'static [u8])] {
-    match set {
-        IconSet::Flat => FLAT,
-        IconSet::Fluent => FLUENT,
-        IconSet::Mono => MONO,
+/// Tabla de bytes para un set identificado por id string; `None` si el id no es embebido.
+fn table_for_id(set_id: &str) -> Option<&'static [(&'static str, &'static [u8])]> {
+    match set_id {
+        "lucide" => Some(LUCIDE),
+        "tabler" => Some(TABLER),
+        "material" => Some(MATERIAL),
+        "flat-color" => Some(FLAT_COLOR),
+        "mono" => Some(MONO),
+        _ => None,
     }
 }
 
-/// Bytes PNG del ícono para `set`+`key`; cae a `unknown` si no hay asset (no falla).
-pub fn bytes_for(set: IconSet, key: IconKey) -> &'static [u8] {
+/// Bytes PNG del ícono para `set_id`+`key`, owned. Cae a `unknown` dentro del set si la
+/// clave no tiene asset propio. Devuelve `Vec` vacío si `set_id` no es un set embebido.
+pub fn bytes_for_id(set_id: &str, key: IconKey) -> Vec<u8> {
     let name = file_name(key);
-    let table = table_for(set);
-    table
-        .iter()
-        .find(|(n, _)| *n == name)
-        .or_else(|| table.iter().find(|(n, _)| *n == "unknown"))
-        .map(|(_, b)| *b)
-        .unwrap_or(&[])
-}
-
-/// Mapea un id de set embebido (`flat`/`fluent`/`mono`) a su enum; cualquier otro id
-/// (un pack suelto del usuario) cae a `Flat` para el fallback embebido.
-pub fn embedded_set(id: &str) -> IconSet {
-    match id {
-        "fluent" => IconSet::Fluent,
-        "mono" => IconSet::Mono,
-        _ => IconSet::Flat,
+    match table_for_id(set_id) {
+        Some(table) => table
+            .iter()
+            .find(|(n, _)| *n == name)
+            .or_else(|| table.iter().find(|(n, _)| *n == "unknown"))
+            .map(|(_, b)| b.to_vec())
+            .unwrap_or_default(),
+        None => Vec::new(),
     }
 }
 
-/// Bytes PNG del ícono `key` para un set identificado por `set_id`, owned:
-/// - sets embebidos (`flat`/`fluent`/`mono`) → de los assets compilados.
-/// - cualquier otro id → pack suelto del usuario en `<config_dir>/icons/<id>/<name>.png`,
-///   con fallback al `unknown` embebido (flat) si el archivo falta o es ilegible.
+/// Resuelve los bytes de `key` aplicando los overrides del usuario sobre el `base_set`.
 ///
-/// Esta es la resolución compartida por las dos UIs (egui y Slint): centralizar acá evita
-/// duplicar la lógica de "embebido vs pack suelto" en cada capa. No falla: siempre devuelve
-/// algún PNG válido (el fallback embebido nunca está vacío).
-pub fn resolve_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
-    let builtin = matches!(set_id, "flat" | "fluent" | "mono");
-    if builtin {
-        return bytes_for(embedded_set(set_id), key).to_vec();
+/// Orden de resolución:
+/// 1. Si existe un override para la clave → usa su fuente (Builtin otro set, o UserPng).
+///    Si la fuente falla (PNG user inexistente, set desconocido), continúa al paso 2.
+/// 2. Bytes del `base_set` (embebido o pack suelto en disco).
+/// 3. Fallback final: `unknown` de lucide (nunca vacío).
+pub fn resolve_with_overrides(
+    base_set: &str,
+    overrides: &std::collections::BTreeMap<String, crate::icon_source::IconSource>,
+    key: IconKey,
+    config_dir: &std::path::Path,
+) -> Vec<u8> {
+    if let Some(src) = overrides.get(file_name(key)) {
+        match src {
+            crate::icon_source::IconSource::Builtin { set_id } => {
+                let b = resolve_set_bytes(set_id, key, config_dir);
+                if !b.is_empty() {
+                    return b;
+                }
+            }
+            crate::icon_source::IconSource::UserPng { rel_path } => {
+                let p = config_dir.join("icons").join("_user").join(rel_path);
+                if let Ok(bytes) = std::fs::read(&p) {
+                    if !bytes.is_empty() {
+                        return bytes;
+                    }
+                }
+            }
+        }
+    }
+    let b = resolve_set_bytes(base_set, key, config_dir);
+    if !b.is_empty() {
+        return b;
+    }
+    bytes_for_id("lucide", IconKey::Unknown)
+}
+
+/// Bytes para `key` desde `set_id`: embebido o pack suelto del usuario en disco.
+fn resolve_set_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
+    if table_for_id(set_id).is_some() {
+        return bytes_for_id(set_id, key);
     }
     let path = config_dir
         .join("icons")
         .join(set_id)
         .join(format!("{}.png", file_name(key)));
-    match std::fs::read(&path) {
-        Ok(bytes) if !bytes.is_empty() => bytes,
-        _ => bytes_for(IconSet::Flat, IconKey::Unknown).to_vec(),
-    }
+    std::fs::read(&path).unwrap_or_default()
+}
+
+/// Resolución sin overrides (solo set base). Compat con código que no necesita overrides.
+pub fn resolve_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
+    let empty = std::collections::BTreeMap::new();
+    resolve_with_overrides(set_id, &empty, key, config_dir)
 }
 
 /// Todas las claves que la app pinta (para precargar el atlas).
@@ -169,13 +200,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cada_clave_tiene_bytes_no_vacios() {
-        for set in [IconSet::Flat, IconSet::Fluent, IconSet::Mono] {
+    fn cada_set_de_fabrica_cubre_las_33_claves() {
+        for set in ["lucide", "tabler", "material", "flat-color", "mono"] {
             for key in all_keys() {
                 assert!(
-                    !bytes_for(set, key).is_empty(),
-                    "asset vacío para {:?}/{:?}",
-                    set,
+                    !bytes_for_id(set, key).is_empty(),
+                    "asset vacío {set}/{:?}",
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cada_clave_tiene_su_propio_asset_no_solo_el_fallback() {
+        // Verifica que el NOMBRE EXACTO de cada clave está en la tabla (no solo el fallback
+        // "unknown"). Un PNG faltante para una clave concreta sí se detecta.
+        for set in ["lucide", "tabler", "material", "flat-color", "mono"] {
+            let table = table_for_id(set).expect("set embebido existe");
+            for key in all_keys() {
+                let name = file_name(key);
+                assert!(
+                    table.iter().any(|(n, _)| *n == name),
+                    "falta el asset propio '{name}' para {set}/{:?}",
                     key
                 );
             }
@@ -184,29 +231,36 @@ mod tests {
 
     #[test]
     fn clave_sin_asset_cae_a_unknown() {
-        let b = bytes_for(
-            IconSet::Flat,
+        // Drive(Fixed) no tiene asset propio → cae a "unknown" (no vacío).
+        let b = bytes_for_id(
+            "lucide",
             IconKey::Drive(crate::icon_kind::DriveKind::Fixed),
         );
         assert!(!b.is_empty());
     }
 
     #[test]
-    fn cada_clave_tiene_su_propio_asset_no_solo_el_fallback() {
-        // Más estricto que el test anterior: verifica que el NOMBRE EXACTO de cada
-        // clave está en la tabla (no que caiga al fallback "unknown"). Así un PNG
-        // faltante para una clave concreta sí se detecta.
-        for set in [IconSet::Flat, IconSet::Fluent, IconSet::Mono] {
-            let table = table_for(set);
-            for key in all_keys() {
-                let name = file_name(key);
-                assert!(
-                    table.iter().any(|(n, _)| *n == name),
-                    "falta el asset propio '{name}' para {:?}/{:?}",
-                    set,
-                    key
-                );
-            }
-        }
+    fn resolve_con_override_builtin_usa_el_set_indicado() {
+        use crate::icon_source::IconSource;
+        use std::collections::BTreeMap;
+        let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
+        ov.insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        let dir = std::path::Path::new("");
+        let with = resolve_with_overrides("lucide", &ov, IconKey::Folder, dir);
+        let material_folder = bytes_for_id("material", IconKey::Folder);
+        assert_eq!(with, material_folder);
+        let copy = resolve_with_overrides("lucide", &ov, IconKey::Action(crate::icon_kind::ActionIcon::Copy), dir);
+        assert_eq!(copy, bytes_for_id("lucide", IconKey::Action(crate::icon_kind::ActionIcon::Copy)));
+    }
+
+    #[test]
+    fn resolve_override_userpng_inexistente_cae_a_unknown() {
+        use crate::icon_source::IconSource;
+        use std::collections::BTreeMap;
+        let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
+        ov.insert("folder".into(), IconSource::UserPng { rel_path: "no-existe.png".into() });
+        let dir = std::path::Path::new("");
+        let bytes = resolve_with_overrides("lucide", &ov, IconKey::Folder, dir);
+        assert!(!bytes.is_empty());
     }
 }

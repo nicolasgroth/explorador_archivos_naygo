@@ -1,21 +1,20 @@
 // Naygo — "packs": preset que activa un tema + un set de íconos juntos.
 // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 
-//! Un `Pack` empareja un `ThemeId` con un `IconSet`. Activar un pack escribe ambos
-//! ajustes (que siguen siendo independientes después). Embebidos + sueltos, patrón
-//! i18n. Puro y testeable.
+//! Un `Pack` empareja un `ThemeId` con un id de set de íconos (string). Activar un pack
+//! escribe ambos ajustes (que siguen siendo independientes después). Embebidos + sueltos,
+//! patrón i18n. Puro y testeable.
 
-use crate::config::IconSet;
 use crate::theme::ThemeId;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Un pack: nombre visible + tema + set de íconos.
+/// Un pack: nombre visible + tema + set de íconos (id string como "lucide", "mono", etc.).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pack {
     pub name: String,
     pub theme: ThemeId,
-    pub icon_set: IconSet,
+    pub icon_set: String,
 }
 
 /// Catálogo de packs: embebidos + sueltos de `<config_dir>/packs/*.json`.
@@ -68,7 +67,7 @@ mod tests {
         let p = Pack {
             name: "X".into(),
             theme: ThemeId::new("dark-blue"),
-            icon_set: IconSet::Flat,
+            icon_set: "lucide".to_string(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pack = serde_json::from_str(&json).unwrap();
@@ -89,5 +88,20 @@ mod tests {
         let cat = PackCatalog::load(Path::new("Z:/no/existe"));
         let db = cat.packs().iter().find(|p| p.name == "Dark Blue").unwrap();
         assert_eq!(db.theme, ThemeId::new("dark-blue"));
+    }
+
+    #[test]
+    fn packs_embebidos_usan_sets_validos() {
+        // Los sets de los packs embebidos deben ser ids válidos de los 5 sets de fábrica.
+        let valid = ["lucide", "tabler", "material", "flat-color", "mono"];
+        let cat = PackCatalog::load(Path::new("Z:/no/existe"));
+        for pack in cat.packs() {
+            assert!(
+                valid.contains(&pack.icon_set.as_str()),
+                "pack '{}' tiene icon_set inválido '{}'",
+                pack.name,
+                pack.icon_set
+            );
+        }
     }
 }
