@@ -1424,12 +1424,14 @@ export component ConfigWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: min(parent.width - 48px, 64px * 7 + 16px * 2 + 8px * 6 + 16px);
+            // 16 padding + ~20 título + 10 spacing + 64 tiles + ~16 holgura inferior
             height: 160px;
             background: Theme.panel-bg;
             border-width: 1px;
             border-color: Theme.border;
             border-radius: 8px;
-            // El clic dentro de la tarjeta NO debe cerrar el picker.
+            // NO BORRAR: este TouchArea vacío absorbe los clics en el espacio muerto de la
+            // tarjeta. Sin él, esos clics caen al backdrop y cierran el picker por accidente.
             TouchArea { }
             VerticalLayout {
                 spacing: 10px;
