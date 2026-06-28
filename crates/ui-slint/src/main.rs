@@ -2625,15 +2625,31 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     // Cambio de tema en caliente: persiste + re-vuelca los colores a Theme. Se aplica a AMBAS
     // ventanas (principal y config), porque cada una tiene su propia copia del global Theme.
+    // También re-tinta los íconos tintables para que adopten el color de texto del nuevo tema.
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
         let ui_weak = ui.as_weak();
         let cfg_weak = cfg_win.as_weak();
         cfg_win.on_set_theme(move |id| {
             ctrl.borrow_mut()
                 .config
                 .set_theme(naygo_core::theme::ThemeId::new(&id));
+            {
+                let mut c = ctrl.borrow_mut();
+                // Re-tinto íconos tintables con el color de texto del nuevo tema.
+                let active = c.config.settings.icon_set.clone();
+                let tintable =
+                    naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
+                        .available()
+                        .iter()
+                        .find(|s| s.id == active)
+                        .map(|s| s.tintable)
+                        .unwrap_or(false);
+                let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
+                c.icons.set_tint(tintable, rgb);
+            }
             let c = ctrl.borrow();
             if let Some(ui) = ui_weak.upgrade() {
                 theme_apply::apply(&ui, c.config.active_theme());
@@ -2642,6 +2658,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 theme_apply::apply(&cfg, c.config.active_theme());
             }
             drop(c);
+            refresh_icons();
             refresh();
         });
     }
@@ -2846,7 +2863,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 c.config.set_icon_set(id.to_string());
                 // Tomar el id ya coaccionado por el catálogo (un id inválido cayó a "flat").
                 let active = c.config.settings.icon_set.clone();
-                c.icons.set_active(active);
+                c.icons.set_active(active.clone());
+                // Re-aplicar overrides y tinte para el set nuevo.
+                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
+                    .available()
+                    .iter()
+                    .find(|s| s.id == active)
+                    .map(|s| s.tintable)
+                    .unwrap_or(false);
+                let overrides = c.config.settings.icon_overrides.clone();
+                let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
+                c.icons.set_overrides(overrides);
+                c.icons.set_tint(tintable, rgb);
             }
             // Repintar los íconos de la toolbar y de la tira de discos con el set nuevo.
             refresh_icons();
@@ -4646,6 +4674,19 @@ fn main() -> Result<(), slint::PlatformError> {
         ));
     }
     ui.run()
+}
+
+/// Devuelve el RGB que deben usar los íconos tintables: el color de texto del tema activo,
+/// salvo que el usuario haya fijado un color explícito con `toolbar_glyph_color`.
+fn theme_text_rgb(
+    settings: &naygo_core::config::Settings,
+    themes: &naygo_core::theme::ThemeCatalog,
+) -> (u8, u8, u8) {
+    if let Some(c) = settings.toolbar_glyph_color {
+        return (c.r, c.g, c.b);
+    }
+    let t = themes.get(&settings.theme);
+    (t.text.r, t.text.g, t.text.b)
 }
 
 fn int_to_purpose(p: i32) -> PanePurpose {
