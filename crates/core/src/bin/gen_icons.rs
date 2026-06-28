@@ -132,8 +132,8 @@ const TABLER: &[Map] = &[
     Map { key: "action_show_hidden", svg: "eye" },
     Map { key: "action_history",     svg: "history" },
     Map { key: "action_favorites",   svg: "star" },
-    // tabler no tiene split.svg; layout-columns es el sustituto de vista dividida
-    Map { key: "action_split",       svg: "layout-columns" },
+    // columns-2 = dividir en 2 columnas (vista dividida)
+    Map { key: "action_split",       svg: "columns-2" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -272,8 +272,8 @@ const FLAT_COLOR: &[Map] = &[
     Map { key: "action_show_hidden", svg: "view_details" },
     // FIXME: flat-color no tiene history; clock (tiempo/reloj) es el sustituto más cercano
     Map { key: "action_history",     svg: "clock" },
-    // FIXME: flat-color no tiene star/favorite; like (pulgar arriba) es el sustituto de "me gusta/favorito"
-    Map { key: "action_favorites",   svg: "like" },
+    // rating.svg = estrella amarilla (favorito), consistente con la estrella usada en toda la app
+    Map { key: "action_favorites",   svg: "rating" },
     // FIXME: flat-color no tiene split; add_column (agregar columna/dividir) es lo más cercano
     Map { key: "action_split",       svg: "add_column" },
 ];
