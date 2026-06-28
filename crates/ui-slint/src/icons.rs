@@ -12,15 +12,26 @@ use slint::{Image, SharedPixelBuffer};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Clave del cache: (set_activo, ícono, color_tinte, tintable).
+type CacheKey = (String, IconKey, (u8, u8, u8), bool);
+
 /// Decodifica y cachea los íconos a `slint::Image` por (set_id, clave). El set activo lo fija
 /// la configuración (`Settings.icon_set`, un id de set). El `config_dir` permite resolver los
 /// packs sueltos del usuario desde disco.
 pub struct IconCache {
-    map: HashMap<(String, IconKey), Image>,
+    /// Clave: (set_activo, clave_ícono, color_tinte, tintable). Incluye el tinte para
+    /// que al cambiar el color del tema se fuerce re-decodificación sin limpiar el cache.
+    map: HashMap<CacheKey, Image>,
     /// Id del set activo (el que devuelve `get`). La UI lo cambia con `set_active`.
     active: String,
     /// Directorio de configuración portable: contiene `icons/<id>/` de los packs del usuario.
     config_dir: PathBuf,
+    /// Overrides por nombre de archivo de ícono (p.ej. "folder") → fuente alternativa.
+    overrides: std::collections::BTreeMap<String, naygo_core::icon_source::IconSource>,
+    /// Color de tinte (RGB) cuando el set activo es tintable.
+    tint: (u8, u8, u8),
+    /// Si es `true`, el set activo es una máscara blanca que se tiñe con `tint`.
+    tintable: bool,
 }
 
 impl IconCache {
@@ -29,7 +40,25 @@ impl IconCache {
             map: HashMap::new(),
             active: active.into(),
             config_dir,
+            overrides: std::collections::BTreeMap::new(),
+            tint: (0, 0, 0),
+            tintable: false,
         }
+    }
+
+    /// Reemplaza los overrides de ícono (mapa nombre → fuente). Se llama al cargar la config.
+    pub fn set_overrides(
+        &mut self,
+        ov: std::collections::BTreeMap<String, naygo_core::icon_source::IconSource>,
+    ) {
+        self.overrides = ov;
+    }
+
+    /// Configura el tinte del set activo. `tintable` indica si el set es máscara blanca;
+    /// `rgb` es el color del tema. Si `tintable` es `false`, no se aplica ningún tinte.
+    pub fn set_tint(&mut self, tintable: bool, rgb: (u8, u8, u8)) {
+        self.tintable = tintable;
+        self.tint = rgb;
     }
 
     /// Cambia el set activo (al cambiarlo en Configuración). No borra el cache: las claves del
@@ -42,16 +71,25 @@ impl IconCache {
         &self.active
     }
 
-    /// El `slint::Image` del ícono `key` en el set activo. Lo decodifica si falta y lo cachea.
-    /// Si el PNG es ilegible, devuelve una imagen vacía (no crashea).
+    /// El `slint::Image` del ícono `key` en el set activo, aplicando overrides y tinte.
+    /// Lo decodifica si falta y lo cachea. Si el PNG es ilegible, devuelve imagen vacía.
     pub fn get(&mut self, key: IconKey) -> Image {
-        let set = self.active.clone();
-        if let Some(img) = self.map.get(&(set.clone(), key)) {
+        let tint = if self.tintable { self.tint } else { (0, 0, 0) };
+        let ck = (self.active.clone(), key, tint, self.tintable);
+        if let Some(img) = self.map.get(&ck) {
             return img.clone();
         }
-        let bytes = naygo_core::icons::resolve_bytes(&set, key, &self.config_dir);
+        let mut bytes = naygo_core::icons::resolve_with_overrides(
+            &self.active,
+            &self.overrides,
+            key,
+            &self.config_dir,
+        );
+        if self.tintable {
+            bytes = tint_png(&bytes, self.tint);
+        }
         let img = decode(&bytes);
-        self.map.insert((set, key), img.clone());
+        self.map.insert(ck, img.clone());
         img
     }
 }
@@ -108,6 +146,24 @@ mod tests {
         // El size es estable y no vacío (el PNG de carpeta existe).
         assert_eq!(a.size(), b.size());
         assert!(a.size().width > 0);
+    }
+
+    #[test]
+    fn cache_aplica_override_y_tiñe() {
+        use naygo_core::icon_source::IconSource;
+        use std::collections::BTreeMap;
+        let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
+        ov.insert(
+            "folder".into(),
+            IconSource::Builtin {
+                set_id: "material".into(),
+            },
+        );
+        let mut c = IconCache::new("lucide", std::path::PathBuf::new());
+        c.set_overrides(ov);
+        c.set_tint(true, (200, 100, 50)); // set tintable: aplica color
+        let img = c.get(IconKey::Folder);
+        assert!(img.size().width > 0); // se resolvió y decodificó sin panic
     }
 
     #[test]
