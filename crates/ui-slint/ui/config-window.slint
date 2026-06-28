@@ -1285,30 +1285,10 @@ export component ConfigWindow inherits Window {
                                     color: Theme.text-dim;
                                     font-weight: 700;
                                 }
-                                // Encabezado de la tabla de íconos.
-                                HorizontalLayout {
-                                    height: 22px;
-                                    spacing: 6px;
-                                    padding-left: 4px;
-                                    padding-right: 4px;
-                                    // Columna ícono
-                                    Rectangle { width: 28px; }
-                                    Text {
-                                        text: Tr.icons-group-actions;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-                                    Text {
-                                        text: Tr.icons-override-badge;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                        vertical-alignment: center;
-                                        width: 90px;
-                                    }
-                                }
-                                // Lista de filas de íconos. Alto fijo para que scrollee.
+                                // Lista de filas de íconos. Alto fijo para que scrollee. Sin header
+                                // de columnas: las filas son autoexplicativas (ícono + nombre +
+                                // origen + botón Cambiar) y un header de 5 columnas alineadas a mano
+                                // es frágil. Basta el encabezado de sección de arriba.
                                 Rectangle {
                                     height: 320px;
                                     background: Theme.panel-bg;
