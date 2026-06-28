@@ -4794,6 +4794,10 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         languages: ModelRc::from(Rc::new(VecModel::from(languages))),
         themes: ModelRc::from(Rc::new(VecModel::from(themes))),
         icon_sets: ModelRc::from(Rc::new(VecModel::from(icon_sets))),
+        // Campos de la grilla de íconos por objeto — se poblarán en Task 15.
+        icon_set_tintable: false,
+        icon_rows: ModelRc::default(),
+        icon_set_labels: ModelRc::default(),
     }
 }
 

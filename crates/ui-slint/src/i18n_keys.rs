@@ -446,4 +446,20 @@ where
     tr.set_cfg_import(c.t("slint.cfg.import").into());
     tr.set_cfg_config_dir(c.t("settings.config_dir").into());
     tr.set_cfg_version(c.t("settings.version").into());
+    // Pestaña "Íconos" en la ventana de configuración.
+    tr.set_cfg_cat_icons(c.t("slint.cfg.cat_icons").into());
+    tr.set_icons_section_base(c.t("settings.icons.section_base").into());
+    tr.set_icons_section_objects(c.t("settings.icons.section_objects").into());
+    tr.set_icons_section_custom(c.t("settings.icons.section_custom").into());
+    tr.set_icons_change(c.t("settings.icons.change").into());
+    tr.set_icons_override_badge(c.t("settings.icons.override_badge").into());
+    tr.set_icons_user_png(c.t("settings.icons.user_png").into());
+    tr.set_icons_reset(c.t("settings.icons.reset").into());
+    tr.set_icons_import(c.t("settings.icons.import").into());
+    tr.set_icons_export(c.t("settings.icons.export").into());
+    tr.set_icons_import_ok(c.t("settings.icons.import_ok").into());
+    tr.set_icons_import_err(c.t("settings.icons.import_err").into());
+    tr.set_icons_export_ok(c.t("settings.icons.export_ok").into());
+    tr.set_icons_group_actions(c.t("settings.icons.group_actions").into());
+    tr.set_icons_group_files(c.t("settings.icons.group_files").into());
 }

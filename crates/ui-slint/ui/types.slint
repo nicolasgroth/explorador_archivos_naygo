@@ -396,6 +396,16 @@ export struct PickVm {
     number: int,
 }
 
+// Una fila de la grilla "íconos por objeto" en Configuración.
+export struct IconRowVm {
+    key: string,        // clave estable ("action_back", "file_image", …)
+    label: string,      // nombre traducido del objeto ("Atrás", "Imagen")
+    icon: image,        // ícono efectivo actual (ya teñido)
+    origin: string,     // "Lucide (base)" / "Material · override"
+    overridden: bool,   // tiene override
+    group: int,         // 0 = acción de barra, 1 = tipo de archivo
+}
+
 // Ajustes editables en la ventana de configuración (espejo de los campos de core::Settings
 // que tocamos en la UI Slint). Las listas son los idiomas/temas disponibles para los combos.
 export struct SettingsVm {
@@ -429,6 +439,9 @@ export struct SettingsVm {
     languages: [string],      // códigos disponibles
     themes: [string],         // ids disponibles
     icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
+    icon-set-tintable: bool,  // el set activo admite teñido por color de acento
+    icon-rows: [IconRowVm],   // filas de la grilla "íconos por objeto"
+    icon-set-labels: [string], // nombres traducidos de los sets (mismo orden que icon-sets)
 }
 
 // Una regla de previsualización editable (C3): extensión, si se previsualiza, y el modo de vista
