@@ -67,6 +67,13 @@ const LUCIDE: &[Map] = &[
     // lucide no tiene eject.svg; disc.svg es el CD/disco expulsable más cercano
     Map { key: "action_eject",      svg: "disc" },
     Map { key: "action_panel",      svg: "panel-right" },
+    // lucide usa house.svg en lugar de home.svg
+    Map { key: "action_home",        svg: "house" },
+    Map { key: "action_search",      svg: "search" },
+    Map { key: "action_show_hidden", svg: "eye" },
+    Map { key: "action_history",     svg: "history" },
+    Map { key: "action_favorites",   svg: "star" },
+    Map { key: "action_split",       svg: "split" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,6 +127,13 @@ const TABLER: &[Map] = &[
     Map { key: "action_eject",      svg: "player-eject" },
     // layout-sidebar-right = panel derecho visible
     Map { key: "action_panel",      svg: "layout-sidebar-right" },
+    Map { key: "action_home",        svg: "home" },
+    Map { key: "action_search",      svg: "search" },
+    Map { key: "action_show_hidden", svg: "eye" },
+    Map { key: "action_history",     svg: "history" },
+    Map { key: "action_favorites",   svg: "star" },
+    // tabler no tiene split.svg; layout-columns es el sustituto de vista dividida
+    Map { key: "action_split",       svg: "layout-columns" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -175,6 +189,15 @@ const MATERIAL: &[Map] = &[
     Map { key: "action_eject",      svg: "action/eject/materialicons/24px.svg" },
     // action/view_quilt = vista de mosaico/panel
     Map { key: "action_panel",      svg: "action/view_quilt/materialicons/24px.svg" },
+    Map { key: "action_home",        svg: "action/home/materialicons/24px.svg" },
+    Map { key: "action_search",      svg: "action/search/materialicons/24px.svg" },
+    // action/visibility = mostrar/ocultar (ojo abierto)
+    Map { key: "action_show_hidden", svg: "action/visibility/materialicons/24px.svg" },
+    Map { key: "action_history",     svg: "action/history/materialicons/24px.svg" },
+    // toggle/star = estrella/favorito
+    Map { key: "action_favorites",   svg: "toggle/star/materialicons/24px.svg" },
+    // action/view_column = dividir en columnas (split de paneles)
+    Map { key: "action_split",       svg: "action/view_column/materialicons/24px.svg" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -243,6 +266,16 @@ const FLAT_COLOR: &[Map] = &[
     Map { key: "action_eject",      svg: "usb" },
     // flat-color no tiene panel; grid.svg (cuadrícula de paneles) es el sustituto
     Map { key: "action_panel",      svg: "grid" },
+    Map { key: "action_home",        svg: "home" },
+    Map { key: "action_search",      svg: "search" },
+    // FIXME: flat-color no tiene eye/visibility; view_details (ojo+detalles) es lo más cercano
+    Map { key: "action_show_hidden", svg: "view_details" },
+    // FIXME: flat-color no tiene history; clock (tiempo/reloj) es el sustituto más cercano
+    Map { key: "action_history",     svg: "clock" },
+    // FIXME: flat-color no tiene star/favorite; like (pulgar arriba) es el sustituto de "me gusta/favorito"
+    Map { key: "action_favorites",   svg: "like" },
+    // FIXME: flat-color no tiene split; add_column (agregar columna/dividir) es lo más cercano
+    Map { key: "action_split",       svg: "add_column" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -655,6 +688,12 @@ mod tests {
         "action_terminal",
         "action_eject",
         "action_panel",
+        "action_home",
+        "action_search",
+        "action_show_hidden",
+        "action_history",
+        "action_favorites",
+        "action_split",
     ];
 
     fn assert_cubre(maps: &[Map], set: &str) {
