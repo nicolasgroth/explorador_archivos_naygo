@@ -2385,12 +2385,37 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     refresh_config_vm();
-    // Volcado de íconos de acción de la toolbar: ya no hace falta. TODOS los botones de la
-    // toolbar (subir, dividir, panel, swap, clonar, tabs, layouts, nueva-carpeta, terminal,
-    // refrescar, config, etc.) se dibujan con Path dentro del .slint (modelo flat consistente),
-    // así que no se vuelca ningún PNG del IconCache. Se conserva un closure vacío para no romper
-    // a los llamadores que lo invocan al cambiar el set de íconos.
-    let refresh_toolbar_icons: Rc<dyn Fn()> = Rc::new(move || {});
+    // Vuelca los 18 íconos de acción de la toolbar al AppWindow (props tb-*).
+    // Se llama al arrancar y cada vez que cambia el set de íconos o el tema (re-tintado).
+    let refresh_toolbar_icons: Rc<dyn Fn()> = {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        Rc::new(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            use naygo_core::icon_kind::{ActionIcon, IconKey};
+            let mut c = ctrl.borrow_mut();
+            ui.set_tb_back(c.icons.get(IconKey::Action(ActionIcon::Back)));
+            ui.set_tb_forward(c.icons.get(IconKey::Action(ActionIcon::Forward)));
+            ui.set_tb_up(c.icons.get(IconKey::Action(ActionIcon::Up)));
+            ui.set_tb_refresh(c.icons.get(IconKey::Action(ActionIcon::Refresh)));
+            ui.set_tb_home(c.icons.get(IconKey::Action(ActionIcon::Home)));
+            ui.set_tb_search(c.icons.get(IconKey::Action(ActionIcon::Search)));
+            ui.set_tb_show_hidden(c.icons.get(IconKey::Action(ActionIcon::ShowHidden)));
+            ui.set_tb_history(c.icons.get(IconKey::Action(ActionIcon::History)));
+            ui.set_tb_favorites(c.icons.get(IconKey::Action(ActionIcon::Favorites)));
+            ui.set_tb_split(c.icons.get(IconKey::Action(ActionIcon::Split)));
+            ui.set_tb_panel(c.icons.get(IconKey::Action(ActionIcon::Panel)));
+            ui.set_tb_tabs(c.icons.get(IconKey::Action(ActionIcon::Tabs)));
+            ui.set_tb_swap(c.icons.get(IconKey::Action(ActionIcon::SwapPanes)));
+            ui.set_tb_clone(c.icons.get(IconKey::Action(ActionIcon::ClonePath)));
+            ui.set_tb_new_folder(c.icons.get(IconKey::Action(ActionIcon::NewFolder)));
+            ui.set_tb_terminal(c.icons.get(IconKey::Action(ActionIcon::Terminal)));
+            ui.set_tb_layouts(c.icons.get(IconKey::Action(ActionIcon::Layouts)));
+            ui.set_tb_settings(c.icons.get(IconKey::Action(ActionIcon::Settings)));
+        })
+    };
     refresh_toolbar_icons();
     // Vuelca la tira de unidades de disco a la toolbar. Se llama al arrancar, al cambiar el set
     // de íconos (los íconos de disco cambian) y al cambiar los dispositivos (USB conectado/sacado).
