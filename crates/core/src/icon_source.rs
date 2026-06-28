@@ -7,7 +7,7 @@
 //! (`"action_back"`, `"file_image"`, `"drive"`, …) usada como clave del mapa de
 //! overrides en `settings.json`. Puro y testeable.
 
-use crate::icon_kind::IconKey;
+use crate::icon_kind::{ActionIcon, DriveKind, FileCategory, IconKey};
 use serde::{Deserialize, Serialize};
 
 /// De dónde sale el ícono de un objeto sobrescrito por el usuario.
@@ -19,8 +19,6 @@ pub enum IconSource {
     /// Un PNG propio del usuario, ruta relativa a `<config_dir>/icons/_user/`.
     UserPng { rel_path: String },
 }
-
-use crate::icon_kind::{ActionIcon, DriveKind, FileCategory};
 
 /// Clave estable de string para una `IconKey` (la misma que el nombre de archivo del
 /// asset). Reutiliza `icons::file_name`.
@@ -34,6 +32,8 @@ pub fn key_from_string(s: &str) -> Option<IconKey> {
     let direct = match s {
         "folder" => Some(IconKey::Folder),
         "unknown" => Some(IconKey::Unknown),
+        // Todos los DriveKind comparten el string "drive"; al deserializar usamos
+        // Unknown (valor canónico; el DriveKind real lo aporta platform en runtime).
         "drive" => Some(IconKey::Drive(DriveKind::Unknown)),
         "file_image" => Some(IconKey::File(Image)),
         "file_video" => Some(IconKey::File(Video)),
