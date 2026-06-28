@@ -93,6 +93,9 @@ set_table!(MATERIAL, "material");
 set_table!(FLAT_COLOR, "flat-color");
 set_table!(MONO, "mono");
 
+/// Set de fábrica usado como último fallback (su `unknown` siempre existe embebido).
+const FALLBACK_SET: &str = "lucide";
+
 /// Tabla de bytes para un set identificado por id string; `None` si el id no es embebido.
 fn table_for_id(set_id: &str) -> Option<&'static [(&'static str, &'static [u8])]> {
     match set_id {
@@ -155,10 +158,12 @@ pub fn resolve_with_overrides(
     if !b.is_empty() {
         return b;
     }
-    bytes_for_id("lucide", IconKey::Unknown)
+    bytes_for_id(FALLBACK_SET, IconKey::Unknown)
 }
 
-/// Bytes para `key` desde `set_id`: embebido o pack suelto del usuario en disco.
+/// Bytes de un set por id: embebido (de fábrica) o pack suelto en disco. Devuelve
+/// Vec vacío si el archivo del pack suelto falta — el fallback lo maneja
+/// `resolve_with_overrides` (punto único de fallback).
 fn resolve_set_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
     if table_for_id(set_id).is_some() {
         return bytes_for_id(set_id, key);
