@@ -92,32 +92,51 @@ pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip inválido: {e}"))?;
 
     let manifest: PackManifest = {
-        let mut mf = archive
+        let mf = archive
             .by_name("manifest.json")
             .map_err(|_| "falta manifest.json".to_string())?;
         let mut s = String::new();
-        mf.read_to_string(&mut s).map_err(|e| e.to_string())?;
+        // Cap el manifest a 1 MiB: defensa anti-bomba (un manifest legítimo es minúsculo).
+        mf.take(1 << 20).read_to_string(&mut s).map_err(|e| e.to_string())?;
         serde_json::from_str(&s).map_err(|e| format!("manifest inválido: {e}"))?
     };
     if manifest.schema != 1 {
         return Err(format!("schema no soportado: {}", manifest.schema));
     }
 
-    let dest = config_dir.join("icons").join(&manifest.name);
+    // El nombre viene del manifest (controlado por quien creó el .naygoset): sanear.
+    let safe_name: String = manifest
+        .name
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
+        .collect();
+    if safe_name.is_empty() || safe_name.contains("..") {
+        return Err(format!("nombre de pack inválido: {:?}", manifest.name));
+    }
+    let dest = config_dir.join("icons").join(&safe_name);
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
-        let mut entry = match archive.by_index(i) {
+        let entry = match archive.by_index(i) {
             Ok(e) => e,
             Err(_) => continue,
         };
         let name = entry.name().to_string();
         if let Some(rel) = name.strip_prefix("icons/") {
+            // Rechazar entradas que escapen del destino (zip-slip): nada con ".." ni rutas absolutas.
+            if rel.contains("..") || std::path::Path::new(rel).is_absolute() {
+                continue;
+            }
             let target = dest.join(rel);
+            // Defensa adicional: el destino final debe quedar dentro del dir del pack.
+            if !target.starts_with(&dest) {
+                continue;
+            }
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             let mut buf = Vec::new();
-            if entry.read_to_end(&mut buf).is_ok() {
+            // Cap cada PNG a 4 MiB: defensa anti-bomba (un ícono real pesa pocos KB).
+            if entry.take(4 * 1024 * 1024).read_to_end(&mut buf).is_ok() {
                 let _ = std::fs::write(&target, &buf);
             }
         }
@@ -175,5 +194,39 @@ mod tests {
         let bad = cfg.path().join("malo.naygoset");
         std::fs::write(&bad, b"esto no es un zip").unwrap();
         assert!(import_pack(&bad, cfg.path()).is_err());
+    }
+
+    #[test]
+    fn import_rechaza_entrada_con_traversal() {
+        use std::io::Write;
+        let cfg = tempfile::tempdir().unwrap();
+        let out = cfg.path().join("malo.naygoset");
+        let file = std::fs::File::create(&out).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(br#"{"schema":1,"name":"x","base_set_id":"lucide"}"#).unwrap();
+        zip.start_file("icons/../escape.png", opts).unwrap();
+        zip.write_all(b"x").unwrap();
+        zip.finish().unwrap();
+        let cfg2 = tempfile::tempdir().unwrap();
+        let _ = import_pack(&out, cfg2.path()); // no debe panic
+        // el archivo de escape NO debe existir fuera del dir del pack
+        assert!(!cfg2.path().join("escape.png").exists());
+    }
+
+    #[test]
+    fn import_rechaza_nombre_de_pack_con_traversal() {
+        use std::io::Write;
+        let cfg = tempfile::tempdir().unwrap();
+        let out = cfg.path().join("malo2.naygoset");
+        let file = std::fs::File::create(&out).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(br#"{"schema":1,"name":"../../evil","base_set_id":"lucide"}"#).unwrap();
+        zip.finish().unwrap();
+        let cfg2 = tempfile::tempdir().unwrap();
+        assert!(import_pack(&out, cfg2.path()).is_err());
     }
 }
