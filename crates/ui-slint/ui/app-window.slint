@@ -81,57 +81,11 @@ component ToolBtn inherits Rectangle {
     in property <string> tip;
     in property <length> btn-width: 34px;
     in property <bool> highlight: false;
-    // Ícono de acción cacheado (6B). Vacío = botón solo-texto (p. ej. el "+").
+    // Ícono del set activo para este botón. Vacío = solo texto. Lo rellena Rust (Task 7).
+    // La imagen llega ya tintada desde IconCache, así que NO se aplica colorize aquí.
     in property <image> icon;
-    // Si true, dibuja un ícono de TERMINAL con Path (no hay PNG de terminal en los sets).
-    in property <bool> draw-terminal: false;
-    // Si true, dibuja un ícono de LAYOUTS (grilla 2x2) con Path: distingue "Layouts" de "Tabs"
-    // (antes compartían el mismo PNG y eran indistinguibles).
-    in property <bool> draw-layouts: false;
-    // Si true, dibuja un ícono de REFRESCAR (flecha circular) con Path.
-    in property <bool> draw-refresh: false;
-    // Si true, dibuja una LUPA (búsqueda) con Path (no hay PNG de búsqueda en los sets).
-    in property <bool> draw-search: false;
-    // Si true, dibuja un RELOJ (historial de carpetas) con Path: círculo + dos manecillas.
-    in property <bool> draw-history: false;
-    // Si true, dibuja un CHEVRON IZQUIERDO (atrás en el historial de navegación) con Path.
-    in property <bool> draw-back: false;
-    // Si true, dibuja un CHEVRON DERECHO (adelante en el historial) con Path (espejo del de atrás).
-    in property <bool> draw-forward: false;
-    // Si true, dibuja una CASITA (ir al inicio / carpeta Home) con Path: techo + cuerpo.
-    in property <bool> draw-home: false;
-    // Si true, dibuja un OJO (menú de visibilidad de archivos) con Path: óvalo + iris central.
-    in property <bool> draw-eye: false;
-    // Si true, dibuja una ESTRELLA (menú de favoritos) con Path + un chevron ▾ a su derecha.
-    in property <bool> draw-star: false;
-    // Si true, dibuja un ícono de DIVIDIR PANEL con Path: un marco partido en dos por una línea
-    // vertical (dos paneles lado a lado). Reemplaza al viejo "+" (draw-plus), que parecía "nuevo".
-    in property <bool> draw-split: false;
-    // Si true, dibuja un ícono de APILAR PESTAÑA con Path: dos rectángulos escalonados (una
-    // pestaña sobre otra). Reemplaza el PNG genérico ic-tabs.
-    in property <bool> draw-tabs: false;
-    // Si true, dibuja un ícono de INTERCAMBIAR con Path: dos flechas horizontales opuestas (⇄).
-    // Reemplaza el PNG genérico ic-swap.
-    in property <bool> draw-swap: false;
-    // Si true, dibuja un ícono de CLONAR con Path: dos rectángulos idénticos con offset diagonal
-    // (el clásico de "duplicar"). Reemplaza el PNG genérico ic-clone.
-    in property <bool> draw-clone: false;
-    // Si true, dibuja un ícono de PANEL ESPECIAL con Path: un marco con un panel lateral angosto
-    // resaltado y un "+" pequeño (agregar panel auxiliar). Reemplaza el PNG genérico ic-panel.
-    in property <bool> draw-panel: false;
-    // Si true, dibuja un ícono de NUEVA CARPETA con Path: una carpeta con un "+" en la esquina.
-    // Reemplaza el PNG genérico ic-new-folder.
-    in property <bool> draw-new-folder: false;
-    // Si true, dibuja un ícono de SUBIR NIVEL con Path: una flecha hacia arriba. Reemplaza el
-    // PNG genérico ic-up.
-    in property <bool> draw-up: false;
-    // Si true, dibuja un ícono de CONFIGURACIÓN con Path: un engranaje. Reemplaza el PNG
-    // genérico ic-settings.
-    in property <bool> draw-settings: false;
     // Si false, el botón se ve atenuado y no dispara `clicked` (Atrás/Adelante sin historial).
     in property <bool> enabled: true;
-    // Color del ícono dibujado por Path. Atenuado cuando el botón está deshabilitado.
-    property <color> icon-tint: root.enabled ? white : Theme.text-dim;
     // Si true, se oculta el texto y queda solo el ícono (Settings.icon_only).
     in property <bool> icon-only: false;
     callback clicked();
@@ -146,540 +100,13 @@ component ToolBtn inherits Rectangle {
         y: max(0px, (parent.height - self.preferred-height) / 2);
         width: self.preferred-width;
         height: self.preferred-height;
-        if root.icon.width > 0 && !root.draw-terminal: Image {
+        if root.icon.width > 0: Image {
             source: root.icon;
             width: 16px;
             height: 16px;
             image-rendering: smooth;
         }
-        // Ícono de terminal dibujado: marco + prompt ">_".
-        if root.draw-terminal: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 16px;
-                height: 16px;
-                stroke: white;
-                stroke-width: 1.2px;
-                fill: transparent;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                // Marco de la consola.
-                MoveTo { x: 1.5; y: 2.5; }
-                LineTo { x: 14.5; y: 2.5; }
-                LineTo { x: 14.5; y: 13.5; }
-                LineTo { x: 1.5; y: 13.5; }
-                Close { }
-                // Prompt ">".
-                MoveTo { x: 4; y: 6; }
-                LineTo { x: 7; y: 8; }
-                LineTo { x: 4; y: 10; }
-                // Cursor "_".
-                MoveTo { x: 8.5; y: 10.5; }
-                LineTo { x: 12; y: 10.5; }
-            }
-        }
-        // Ícono de layouts dibujado: grilla 2x2.
-        if root.draw-layouts: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: white;
-                stroke-width: 1.2px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Marco.
-                MoveTo { x: 1; y: 1; }
-                LineTo { x: 13; y: 1; }
-                LineTo { x: 13; y: 13; }
-                LineTo { x: 1; y: 13; }
-                Close { }
-                // Divisoria vertical y horizontal (grilla 2x2).
-                MoveTo { x: 7; y: 1; }
-                LineTo { x: 7; y: 13; }
-                MoveTo { x: 1; y: 7; }
-                LineTo { x: 13; y: 7; }
-            }
-        }
-        // Ícono de refrescar dibujado: el clásico de recarga = DOS arcos opuestos formando un
-        // círculo, cada uno con su punta de flecha (no un solo arco con palito).
-        if root.draw-refresh: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.4px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Arco superior (de izquierda-arriba a derecha-arriba, por encima del centro).
-                MoveTo { x: 2; y: 5.5; }
-                ArcTo { radius-x: 5; radius-y: 5; x: 11.5; y: 4.5; sweep: true; large-arc: false; }
-                // Punta de flecha del arco superior (apunta a la derecha-abajo, hacia el giro).
-                MoveTo { x: 9; y: 4.5; }
-                LineTo { x: 11.5; y: 4.5; }
-                LineTo { x: 11.5; y: 2; }
-                // Arco inferior (de derecha-abajo a izquierda-abajo, por debajo del centro).
-                MoveTo { x: 12; y: 8.5; }
-                ArcTo { radius-x: 5; radius-y: 5; x: 2.5; y: 9.5; sweep: true; large-arc: false; }
-                // Punta de flecha del arco inferior (apunta a la izquierda-arriba, hacia el giro).
-                MoveTo { x: 5; y: 9.5; }
-                LineTo { x: 2.5; y: 9.5; }
-                LineTo { x: 2.5; y: 12; }
-            }
-        }
-        // Lupa dibujada: círculo (la lente) + mango diagonal.
-        if root.draw-search: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: white;
-                stroke-width: 1.4px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Lente (círculo, dos semiarcos).
-                MoveTo { x: 9.5; y: 6; }
-                ArcTo { radius-x: 3.5; radius-y: 3.5; x: 2.5; y: 6; sweep: false; large-arc: false; }
-                ArcTo { radius-x: 3.5; radius-y: 3.5; x: 9.5; y: 6; sweep: false; large-arc: false; }
-                // Mango.
-                MoveTo { x: 8.5; y: 8.5; }
-                LineTo { x: 12.5; y: 12.5; }
-            }
-        }
-        // Reloj dibujado: círculo (marco) + manecilla corta (hora) + manecilla larga (minutos).
-        if root.draw-history: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: white;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Círculo exterior (dos semiarcos = círculo completo).
-                MoveTo { x: 13; y: 7; }
-                ArcTo { radius-x: 6; radius-y: 6; x: 1; y: 7; sweep: false; large-arc: false; }
-                ArcTo { radius-x: 6; radius-y: 6; x: 13; y: 7; sweep: false; large-arc: false; }
-                // Manecilla larga (apunta arriba: 12 en punto).
-                MoveTo { x: 7; y: 7; }
-                LineTo { x: 7; y: 3; }
-                // Manecilla corta (apunta a las 3 en punto).
-                MoveTo { x: 7; y: 7; }
-                LineTo { x: 11; y: 7; }
-            }
-        }
-        // Chevron izquierdo dibujado: «atrás» en el historial de navegación.
-        if root.draw-back: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 16px;
-                height: 16px;
-                stroke: root.icon-tint;
-                stroke-width: 1.6px;
-                fill: transparent;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                MoveTo { x: 10; y: 3; }
-                LineTo { x: 5; y: 8; }
-                LineTo { x: 10; y: 13; }
-            }
-        }
-        // Chevron derecho dibujado: «adelante» (espejo del de atrás).
-        if root.draw-forward: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 16px;
-                height: 16px;
-                stroke: root.icon-tint;
-                stroke-width: 1.6px;
-                fill: transparent;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                MoveTo { x: 6; y: 3; }
-                LineTo { x: 11; y: 8; }
-                LineTo { x: 6; y: 13; }
-            }
-        }
-        // Casita dibujada: «ir al inicio» (carpeta Home). Techo triangular + cuerpo.
-        if root.draw-home: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 16px;
-                height: 16px;
-                stroke: root.icon-tint;
-                stroke-width: 1.4px;
-                fill: transparent;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                // Techo (triángulo).
-                MoveTo { x: 3; y: 8; }
-                LineTo { x: 8; y: 3; }
-                LineTo { x: 13; y: 8; }
-                // Cuerpo (paredes y base).
-                MoveTo { x: 4.5; y: 7; }
-                LineTo { x: 4.5; y: 13; }
-                LineTo { x: 11.5; y: 13; }
-                LineTo { x: 11.5; y: 7; }
-            }
-        }
-        // Ojo dibujado: «menú de visibilidad». Un óvalo horizontal (los dos párpados, dos
-        // arcos) + un círculo central (el iris). Dibujado con Path (el render por software no
-        // pinta glifos de fuente).
-        if root.draw-eye: Rectangle {
-            width: 16px;
-            height: 16px;
-            // Contorno del ojo: óvalo formado por dos arcos (arriba y abajo).
-            Path {
-                width: 16px;
-                height: 16px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                // Párpado superior (de izquierda a derecha, curvando hacia arriba).
-                MoveTo { x: 2; y: 8; }
-                ArcTo { radius-x: 7; radius-y: 5; x: 14; y: 8; sweep: true; }
-                // Párpado inferior (de derecha a izquierda, curvando hacia abajo).
-                ArcTo { radius-x: 7; radius-y: 5; x: 2; y: 8; sweep: true; }
-                Close { }
-            }
-            // Iris (círculo central) relleno con el tinte.
-            Path {
-                width: 16px;
-                height: 16px;
-                fill: root.icon-tint;
-                viewbox-width: 16;
-                viewbox-height: 16;
-                MoveTo { x: 5.5; y: 8; }
-                ArcTo { radius-x: 2.5; radius-y: 2.5; x: 10.5; y: 8; sweep: true; }
-                ArcTo { radius-x: 2.5; radius-y: 2.5; x: 5.5; y: 8; sweep: true; }
-                Close { }
-            }
-        }
-        // Estrella de 5 puntas (menú de favoritos) + chevron ▾ a su derecha.
-        if root.draw-star: Rectangle {
-            width: 24px;
-            height: 16px;
-            Path {
-                width: 15px;
-                height: 15px;
-                x: 0px;
-                y: 0.5px;
-                fill: root.icon-tint;
-                viewbox-width: 15;
-                viewbox-height: 15;
-                // Estrella de 5 puntas centrada en (7.5, 7.5).
-                MoveTo { x: 7.5; y: 0.5; }
-                LineTo { x: 9.5; y: 5.3; }
-                LineTo { x: 14.5; y: 5.7; }
-                LineTo { x: 10.7; y: 9; }
-                LineTo { x: 11.9; y: 14; }
-                LineTo { x: 7.5; y: 11.3; }
-                LineTo { x: 3.1; y: 14; }
-                LineTo { x: 4.3; y: 9; }
-                LineTo { x: 0.5; y: 5.7; }
-                LineTo { x: 5.5; y: 5.3; }
-                Close { }
-            }
-            // Chevron ▾ pequeño.
-            Path {
-                width: 8px;
-                height: 8px;
-                x: 16px;
-                y: 4px;
-                fill: root.icon-tint;
-                viewbox-width: 8;
-                viewbox-height: 8;
-                MoveTo { x: 1; y: 2.5; }
-                LineTo { x: 7; y: 2.5; }
-                LineTo { x: 4; y: 6.5; }
-                Close { }
-            }
-        }
-        // Dividir panel dibujado: un marco partido en DOS por una línea vertical central (dos
-        // paneles lado a lado). Comunica "dividir en dos paneles" (antes era un "+" ambiguo).
-        if root.draw-split: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Marco exterior.
-                MoveTo { x: 1; y: 2; }
-                LineTo { x: 13; y: 2; }
-                LineTo { x: 13; y: 12; }
-                LineTo { x: 1; y: 12; }
-                Close { }
-                // Divisoria vertical central (dos paneles).
-                MoveTo { x: 7; y: 2; }
-                LineTo { x: 7; y: 12; }
-            }
-        }
-        // Apilar pestaña dibujado: dos rectángulos escalonados (una pestaña sobre otra). El de
-        // atrás-arriba asoma desplazado; el de adelante-abajo está completo.
-        if root.draw-tabs: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Pestaña de atrás (arriba-derecha, desplazada).
-                MoveTo { x: 5; y: 2; }
-                LineTo { x: 12.5; y: 2; }
-                LineTo { x: 12.5; y: 9; }
-                // Pestaña de adelante (abajo-izquierda, completa, encima de la otra).
-                MoveTo { x: 1.5; y: 5; }
-                LineTo { x: 9; y: 5; }
-                LineTo { x: 9; y: 12.5; }
-                LineTo { x: 1.5; y: 12.5; }
-                Close { }
-            }
-        }
-        // Intercambiar dibujado: dos flechas horizontales opuestas (⇄). La de arriba apunta a la
-        // derecha, la de abajo a la izquierda. Comunica "intercambiar entre dos".
-        if root.draw-swap: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Flecha superior (→).
-                MoveTo { x: 2; y: 5; }
-                LineTo { x: 12; y: 5; }
-                MoveTo { x: 9; y: 2; }
-                LineTo { x: 12; y: 5; }
-                LineTo { x: 9; y: 8; }
-                // Flecha inferior (←).
-                MoveTo { x: 12; y: 9.5; }
-                LineTo { x: 2; y: 9.5; }
-                MoveTo { x: 5; y: 6.5; }
-                LineTo { x: 2; y: 9.5; }
-                LineTo { x: 5; y: 12.5; }
-            }
-        }
-        // Clonar dibujado: dos rectángulos idénticos con offset diagonal (el clásico de
-        // "duplicar/copiar"). Distinto de las pestañas: aquí ambos son iguales y se solapan.
-        if root.draw-clone: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Rectángulo de atrás (arriba-izquierda).
-                MoveTo { x: 2; y: 2; }
-                LineTo { x: 9; y: 2; }
-                LineTo { x: 9; y: 9; }
-                LineTo { x: 2; y: 9; }
-                Close { }
-                // Rectángulo de adelante (abajo-derecha, mismo tamaño, offset diagonal).
-                MoveTo { x: 5; y: 5; }
-                LineTo { x: 12; y: 5; }
-                LineTo { x: 12; y: 12; }
-                LineTo { x: 5; y: 12; }
-                Close { }
-            }
-        }
-        // Panel especial dibujado: un marco con una columna lateral angosta resaltada (el panel
-        // auxiliar) y un "+" pequeño dentro de ella (agregar). Se distingue del dividir-panel:
-        // aquí una sola columna fina a un lado, no una mitad-mitad.
-        if root.draw-panel: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Marco exterior.
-                MoveTo { x: 1; y: 2; }
-                LineTo { x: 13; y: 2; }
-                LineTo { x: 13; y: 12; }
-                LineTo { x: 1; y: 12; }
-                Close { }
-                // Divisoria de la columna lateral angosta (panel auxiliar a la izquierda).
-                MoveTo { x: 5.5; y: 2; }
-                LineTo { x: 5.5; y: 12; }
-                // "+" pequeño dentro de la columna lateral (agregar panel).
-                MoveTo { x: 3.25; y: 5.5; }
-                LineTo { x: 3.25; y: 8.5; }
-                MoveTo { x: 1.75; y: 7; }
-                LineTo { x: 4.75; y: 7; }
-            }
-        }
-        // Nueva carpeta dibujada: una carpeta (lengüeta + cuerpo) con un "+" en la esquina
-        // inferior derecha (crear). Reemplaza el PNG genérico.
-        if root.draw-new-folder: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Carpeta: lengüeta + cuerpo.
-                MoveTo { x: 1; y: 4; }
-                LineTo { x: 5; y: 4; }
-                LineTo { x: 6.5; y: 6; }
-                LineTo { x: 13; y: 6; }
-                LineTo { x: 13; y: 12; }
-                LineTo { x: 1; y: 12; }
-                Close { }
-                // "+" en la esquina inferior derecha (crear).
-                MoveTo { x: 10.5; y: 8; }
-                LineTo { x: 10.5; y: 11; }
-                MoveTo { x: 9; y: 9.5; }
-                LineTo { x: 12; y: 9.5; }
-            }
-        }
-        // Subir nivel dibujado: una flecha simple hacia arriba (ir a la carpeta padre).
-        if root.draw-up: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.5px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Asta vertical.
-                MoveTo { x: 7; y: 12; }
-                LineTo { x: 7; y: 2.5; }
-                // Punta de flecha.
-                MoveTo { x: 3; y: 6.5; }
-                LineTo { x: 7; y: 2.5; }
-                LineTo { x: 11; y: 6.5; }
-            }
-        }
-        // Configuración dibujada: un engranaje (círculo central + 8 dientes). Reemplaza el PNG.
-        if root.draw-settings: Rectangle {
-            width: 16px;
-            height: 16px;
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.2px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                // Dientes del engranaje (4 pares en cruz + 4 en diagonal, como rayos cortos).
-                MoveTo { x: 7; y: 1; }
-                LineTo { x: 7; y: 3; }
-                MoveTo { x: 7; y: 11; }
-                LineTo { x: 7; y: 13; }
-                MoveTo { x: 1; y: 7; }
-                LineTo { x: 3; y: 7; }
-                MoveTo { x: 11; y: 7; }
-                LineTo { x: 13; y: 7; }
-                MoveTo { x: 2.75; y: 2.75; }
-                LineTo { x: 4.2; y: 4.2; }
-                MoveTo { x: 9.8; y: 9.8; }
-                LineTo { x: 11.25; y: 11.25; }
-                MoveTo { x: 11.25; y: 2.75; }
-                LineTo { x: 9.8; y: 4.2; }
-                MoveTo { x: 4.2; y: 9.8; }
-                LineTo { x: 2.75; y: 11.25; }
-            }
-            // Anillo del engranaje (círculo exterior, dos semiarcos).
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.2px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                MoveTo { x: 11; y: 7; }
-                ArcTo { radius-x: 4; radius-y: 4; x: 3; y: 7; sweep: false; large-arc: false; }
-                ArcTo { radius-x: 4; radius-y: 4; x: 11; y: 7; sweep: false; large-arc: false; }
-                Close { }
-            }
-            // Núcleo (círculo central pequeño).
-            Path {
-                width: 14px;
-                height: 14px;
-                x: 1px;
-                y: 1px;
-                stroke: root.icon-tint;
-                stroke-width: 1.2px;
-                fill: transparent;
-                viewbox-width: 14;
-                viewbox-height: 14;
-                MoveTo { x: 8.5; y: 7; }
-                ArcTo { radius-x: 1.5; radius-y: 1.5; x: 5.5; y: 7; sweep: false; large-arc: false; }
-                ArcTo { radius-x: 1.5; radius-y: 1.5; x: 8.5; y: 7; sweep: false; large-arc: false; }
-                Close { }
-            }
-        }
-        if (!root.icon-only || root.icon.width == 0) && !root.draw-terminal && !root.draw-layouts && !root.draw-refresh && !root.draw-search && !root.draw-history && !root.draw-back && !root.draw-forward && !root.draw-home && !root.draw-eye && !root.draw-star && !root.draw-split && !root.draw-tabs && !root.draw-swap && !root.draw-clone && !root.draw-panel && !root.draw-new-folder && !root.draw-up && !root.draw-settings: Text {
+        if (!root.icon-only || root.icon.width == 0): Text {
             text: root.label;
             color: white;
             font-size: 12px;
@@ -1322,6 +749,27 @@ export component AppWindow inherits Window {
     // waker lo invoca vía invoke_from_event_loop para re-arrancar el timer si estaba dormido.
     callback wake();
 
+    // Íconos del set activo para cada botón de la toolbar (los rellena Rust al iniciar y al
+    // cambiar de set). Vacíos hasta que Task 7 los llene; la imagen vacía no se muestra.
+    in property <image> tb-back;
+    in property <image> tb-forward;
+    in property <image> tb-up;
+    in property <image> tb-refresh;
+    in property <image> tb-home;
+    in property <image> tb-search;
+    in property <image> tb-show-hidden;
+    in property <image> tb-history;
+    in property <image> tb-favorites;
+    in property <image> tb-split;
+    in property <image> tb-panel;
+    in property <image> tb-tabs;
+    in property <image> tb-swap;
+    in property <image> tb-clone;
+    in property <image> tb-new-folder;
+    in property <image> tb-terminal;
+    in property <image> tb-layouts;
+    in property <image> tb-settings;
+
     // Alto de la barra superior (path-bar + botones). El área de contenido es el resto.
     property <length> top-bar-h: 34px;
     // Tooltip de la toolbar (texto + X del centro del botón). Lo publican los ToolBtn/DriveBtn
@@ -1366,7 +814,7 @@ export component AppWindow inherits Window {
                 // con Path (el render por software no pinta glifos de fuente). Atrás/Adelante se
                 // atenúan y no responden cuando no hay historial en esa dirección.
                 ToolBtn {
-                    draw-back: true;
+                    icon: root.tb-back;
                     icon-only: true;
                     enabled: root.can-go-back;
                     tip: Tr.nav-back-tip;
@@ -1382,7 +830,7 @@ export component AppWindow inherits Window {
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolBtn {
-                    draw-forward: true;
+                    icon: root.tb-forward;
                     icon-only: true;
                     enabled: root.can-go-forward;
                     tip: Tr.nav-forward-tip;
@@ -1398,7 +846,7 @@ export component AppWindow inherits Window {
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 ToolBtn {
-                    draw-home: true;
+                    icon: root.tb-home;
                     icon-only: true;
                     tip: Tr.nav-home-tip;
                     btn-width: 34px;
@@ -1409,7 +857,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-up;
                     tip: Tr.toolbar-up-tip;
-                    draw-up: true;
+                    icon: root.tb-up;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 64px;
                     clicked => { root.go-up(); }
@@ -1422,7 +870,7 @@ export component AppWindow inherits Window {
                 // junto a Config).
                 // Buscar en la carpeta y subcarpetas (Ctrl+F). La lupa abre/cierra el panel.
                 ToolBtn {
-                    draw-search: true;
+                    icon: root.tb-search;
                     icon-only: true;
                     tip: Tr.search-tip;
                     btn-width: 34px;
@@ -1432,7 +880,7 @@ export component AppWindow inherits Window {
                 // Visibilidad: el ojo abre un menú flotante con 3 casillas (ocultos / sistema /
                 // dotfiles). Se ancla al botón (su x de centro). Estilo combobox: resalta abierto.
                 view-btn := ToolBtn {
-                    draw-eye: true;
+                    icon: root.tb-show-hidden;
                     icon-only: true;
                     tip: Tr.view-hidden-tip;
                     btn-width: 34px;
@@ -1444,7 +892,7 @@ export component AppWindow inherits Window {
                 }
                 // Historial de carpetas recientes: ícono de reloj abre menú flotante.
                 history-btn := ToolBtn {
-                    draw-history: true;
+                    icon: root.tb-history;
                     icon-only: true;
                     tip: Tr.history;
                     btn-width: 34px;
@@ -1456,7 +904,7 @@ export component AppWindow inherits Window {
                 }
                 // Favoritos: estrella ▾ abre menú flotante con el ÁRBOL de favoritos (solo navega).
                 fav-btn := ToolBtn {
-                    draw-star: true;
+                    icon: root.tb-favorites;
                     icon-only: true;
                     tip: Tr.fav-menu-tip;
                     btn-width: 40px;
@@ -1481,7 +929,7 @@ export component AppWindow inherits Window {
                     // Dividir el panel en dos: nuevo panel de archivos. Ícono "panel partido"
                     // dibujado con Path (antes era un "+" ambiguo que parecía "nuevo").
                     label: "";
-                    draw-split: true;
+                    icon: root.tb-split;
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
                     btn-width: 34px;
@@ -1496,7 +944,7 @@ export component AppWindow inherits Window {
                 panel-btn := ToolBtn {
                     label: Tr.toolbar-panel;
                     tip: Tr.toolbar-panel-tip;
-                    draw-panel: true;
+                    icon: root.tb-panel;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     highlight: root.add-menu-open;
@@ -1510,7 +958,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-swap;
                     tip: Tr.toolbar-swap-tip;
-                    draw-swap: true;
+                    icon: root.tb-swap;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.swap-panes(); }
@@ -1520,7 +968,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-clone;
                     tip: Tr.toolbar-clone-tip;
-                    draw-clone: true;
+                    icon: root.tb-clone;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 72px;
                     clicked => { root.clone-pane(); }
@@ -1530,7 +978,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-tabs;
                     tip: Tr.toolbar-tabs-tip;
-                    draw-tabs: true;
+                    icon: root.tb-tabs;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 68px;
                     clicked => { root.stack-pane(); }
@@ -1541,7 +989,7 @@ export component AppWindow inherits Window {
                 layouts-btn := ToolBtn {
                     label: Tr.toolbar-layouts;
                     tip: Tr.toolbar-layouts-tip;
-                    draw-layouts: true;
+                    icon: root.tb-layouts;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 84px;
                     highlight: root.layout-menu-open;
@@ -1559,7 +1007,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.toolbar-new-folder;
                     tip: Tr.toolbar-new-folder-tip;
-                    draw-new-folder: true;
+                    icon: root.tb-new-folder;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 110px;
                     clicked => { root.new-folder-toolbar(); }
@@ -1570,7 +1018,7 @@ export component AppWindow inherits Window {
                 term-btn := ToolBtn {
                     label: Tr.toolbar-terminal;
                     tip: Tr.toolbar-terminal-tip;
-                    draw-terminal: true;
+                    icon: root.tb-terminal;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     highlight: root.term-menu-open;
@@ -1586,7 +1034,7 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     label: Tr.cfg-title;
                     tip: Tr.toolbar-config-tip;
-                    draw-settings: true;
+                    icon: root.tb-settings;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 34px : 94px;
                     clicked => { root.open-config(); }
@@ -1596,7 +1044,7 @@ export component AppWindow inherits Window {
                 // --- Grupo UNIDADES (tira de discos) ---
                 // Refrescar unidades a mano (útil para unidades de red, que no avisan al SO).
                 ToolBtn {
-                    draw-refresh: true;
+                    icon: root.tb-refresh;
                     icon-only: true;
                     tip: Tr.toolbar-refresh-drives;
                     btn-width: 30px;
