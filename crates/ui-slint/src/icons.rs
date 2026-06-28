@@ -69,6 +69,28 @@ fn decode(bytes: &[u8]) -> Image {
     }
 }
 
+/// Recolorea un PNG (máscara) al color `(r,g,b)` conservando su canal alfa.
+/// Para sets tintables: el glifo blanco se vuelve del color del tema.
+pub fn tint_png(bytes: &[u8], rgb: (u8, u8, u8)) -> Vec<u8> {
+    let decoded = match image::load_from_memory(bytes) {
+        Ok(d) => d.to_rgba8(),
+        Err(_) => return bytes.to_vec(),
+    };
+    let (w, h) = (decoded.width(), decoded.height());
+    let mut out = image::RgbaImage::new(w, h);
+    for (x, y, p) in decoded.enumerate_pixels() {
+        out.put_pixel(x, y, image::Rgba([rgb.0, rgb.1, rgb.2, p[3]]));
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    if image::DynamicImage::ImageRgba8(out)
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .is_err()
+    {
+        return bytes.to_vec();
+    }
+    buf.into_inner()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +108,23 @@ mod tests {
         // El size es estable y no vacío (el PNG de carpeta existe).
         assert_eq!(a.size(), b.size());
         assert!(a.size().width > 0);
+    }
+
+    #[test]
+    fn tint_recolorea_conservando_alfa() {
+        // un PNG blanco semitransparente: tras teñir a rojo, el RGB es rojo y el alfa se conserva.
+        let mut buf = image::RgbaImage::new(1, 1);
+        buf.put_pixel(0, 0, image::Rgba([255, 255, 255, 128]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(buf)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let out = tint_png(png.get_ref(), (255, 0, 0));
+        let img = image::load_from_memory(&out).unwrap().to_rgba8();
+        let px = img.get_pixel(0, 0);
+        assert_eq!(px[0], 255);
+        assert_eq!(px[1], 0);
+        assert_eq!(px[2], 0);
+        assert_eq!(px[3], 128, "el alfa se conserva");
     }
 }
