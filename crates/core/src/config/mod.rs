@@ -125,6 +125,10 @@ pub struct Settings {
     /// este campo) conserva el resto y solo este cae al default (honra CONFIG_VERSION).
     #[serde(default = "default_icon_set")]
     pub icon_set: String,
+    /// Overrides por objeto sobre el set base: clave estable (`"action_back"`,
+    /// `"file_image"`, …) → fuente del ícono. Vacío = solo el set base.
+    #[serde(default)]
+    pub icon_overrides: std::collections::BTreeMap<String, crate::icon_source::IconSource>,
     /// Estilo de los íconos de la barra de herramientas (glifos vs pack). `#[serde(default)]`
     /// por retro-compat.
     #[serde(default = "default_toolbar_icon_style")]
@@ -330,7 +334,7 @@ fn default_tray_enabled() -> bool {
 
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
 fn default_icon_set() -> String {
-    "flat".to_string()
+    "lucide".to_string()
 }
 
 /// Default de `toolbar_icon_style` para `#[serde(default)]`: glifos Unicode.
@@ -435,7 +439,8 @@ impl Default for Settings {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Top,
             icon_only: true,
-            icon_set: "flat".into(),
+            icon_set: "lucide".into(),
+            icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Glyphs,
             toolbar_glyph_color: None,
             show_parent_entry: true,
@@ -543,8 +548,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
 /// se conserva tal cual (packs sueltos; el catálogo/IconProvider resuelven los desconocidos).
 fn normalize_icon_set_id(id: &str) -> String {
     match id {
-        "Flat" => "flat".to_string(),
-        "Fluent" => "fluent".to_string(),
+        "Flat" | "flat" => "flat-color".to_string(),
+        "Fluent" | "fluent" => "lucide".to_string(),
         "Mono" => "mono".to_string(),
         other => other.to_string(),
     }
@@ -693,6 +698,7 @@ mod tests {
             bar_position: BarPosition::Side,
             icon_only: false,
             icon_set: "mono".to_string(),
+            icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Pack,
             toolbar_glyph_color: Some(crate::theme::ThemeColor::new(0x10, 0x20, 0x30)),
             show_parent_entry: false,
@@ -820,7 +826,7 @@ mod tests {
     #[test]
     fn settings_default_tiene_iconos_flat_y_fila_padre_on() {
         let s = Settings::default();
-        assert_eq!(s.icon_set, "flat");
+        assert_eq!(s.icon_set, "lucide");
         assert!(s.show_parent_entry);
     }
 
@@ -839,19 +845,32 @@ mod tests {
 
     #[test]
     fn icon_set_id_default_es_flat() {
-        assert_eq!(Settings::default().icon_set, "flat");
+        // El default cambió a "lucide" (nuevo set de fábrica principal).
+        assert_eq!(Settings::default().icon_set, "lucide");
     }
 
     #[test]
     fn icon_set_migra_del_enum_viejo() {
+        // "Flat" (mayúscula, enum viejo) → normaliza a "flat-color".
+        // "Mono" sigue siendo "mono" (no cambió).
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("icons").join("flat-color")).unwrap();
         std::fs::write(
             dir.path().join("settings.json"),
             br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"Flat"}"#,
         )
         .unwrap();
         let s = load_settings(dir.path());
-        assert_eq!(s.icon_set, "flat");
+        assert_eq!(s.icon_set, "flat-color");
+
+        // "Mono" (mayúscula) sigue resolviendo a "mono" (embebido).
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"Mono"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "mono");
     }
 
     #[test]
@@ -893,6 +912,9 @@ mod tests {
         // Un settings.json v1 escrito por un build previo (sin icon_set ni
         // show_parent_entry) debe conservar bar_position/icon_only y solo caer al
         // default en los campos nuevos, gracias a #[serde(default)] (honra CONFIG_VERSION).
+        // Nota: el default de icon_set es "lucide", pero el catálogo actual (Task 2)
+        // todavía no tiene "lucide" como embebido → resolve lo cae a "flat". En Task 3
+        // se agrega "lucide" como embebido y este test se actualizará.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("settings.json"),
@@ -902,7 +924,7 @@ mod tests {
         let s = load_settings(dir.path());
         assert_eq!(s.bar_position, BarPosition::Side, "conserva lo viejo");
         assert!(!s.icon_only, "conserva lo viejo");
-        assert_eq!(s.icon_set, "flat", "campo nuevo cae al default");
+        assert_eq!(s.icon_set, "flat", "lucide aún no es embebido → resolve cae a flat");
         assert!(s.show_parent_entry, "campo nuevo cae al default");
     }
 
@@ -1096,5 +1118,47 @@ mod tests {
             !fallback.as_os_str().is_empty(),
             "vacío debe resolver a una ruta"
         );
+    }
+
+    #[test]
+    fn icon_set_default_es_lucide() {
+        assert_eq!(Settings::default().icon_set, "lucide");
+        assert!(Settings::default().icon_overrides.is_empty());
+    }
+
+    #[test]
+    fn migra_flat_a_flat_color_y_fluent_a_lucide() {
+        let dir = tempfile::tempdir().unwrap();
+        for s in ["lucide", "flat-color"] {
+            std::fs::create_dir_all(dir.path().join("icons").join(s)).unwrap();
+        }
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"flat"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "flat-color");
+
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"fluent"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "lucide");
+    }
+
+    #[test]
+    fn overrides_persisten_round_trip() {
+        use crate::icon_source::IconSource;
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Settings::default();
+        s.icon_overrides
+            .insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        save_settings(dir.path(), &s);
+        let back = load_settings(dir.path());
+        assert_eq!(back.icon_overrides.get("folder"),
+            Some(&IconSource::Builtin { set_id: "material".into() }));
     }
 }
