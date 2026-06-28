@@ -824,9 +824,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_tiene_iconos_flat_y_fila_padre_on() {
+    fn settings_default_tiene_iconos_lucide_y_fila_padre_on() {
+        // El default de icon_set lo cubre `icon_set_default_es_lucide`; aquí afirmamos
+        // que la fila virtual ".." viene activada por defecto.
         let s = Settings::default();
-        assert_eq!(s.icon_set, "lucide");
         assert!(s.show_parent_entry);
     }
 
@@ -841,12 +842,6 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.toolbar_icon_style, ToolbarIconStyle::Pack);
         assert_eq!(back.toolbar_glyph_color, s.toolbar_glyph_color);
-    }
-
-    #[test]
-    fn icon_set_id_default_es_flat() {
-        // El default cambió a "lucide" (nuevo set de fábrica principal).
-        assert_eq!(Settings::default().icon_set, "lucide");
     }
 
     #[test]
