@@ -87,4 +87,15 @@ mod tests {
     fn key_from_string_desconocida_es_none() {
         assert!(key_from_string("no_existe").is_none());
     }
+
+    #[test]
+    fn las_6_claves_nuevas_round_trip() {
+        for name in [
+            "action_home", "action_search", "action_show_hidden",
+            "action_history", "action_favorites", "action_split",
+        ] {
+            let key = key_from_string(name).expect("clave válida");
+            assert_eq!(key_to_string(key), name);
+        }
+    }
 }
