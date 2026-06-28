@@ -396,6 +396,13 @@ export struct PickVm {
     number: int,
 }
 
+// Una opción del selector de ícono: el mismo objeto renderizado en un set de fábrica.
+export struct IconChoiceVm {
+    set-id: string,
+    set-label: string,
+    icon: image,    // el objeto en ese set (ya teñido si corresponde)
+}
+
 // Una fila de la grilla "íconos por objeto" en Configuración.
 export struct IconRowVm {
     key: string,        // clave estable ("action_back", "file_image", …)
@@ -442,6 +449,9 @@ export struct SettingsVm {
     icon-set-tintable: bool,  // el set activo admite teñido por color de acento
     icon-rows: [IconRowVm],   // filas de la grilla "íconos por objeto"
     icon-set-labels: [string], // nombres traducidos de los sets (mismo orden que icon-sets)
+    // Selector de ícono por objeto: clave del objeto en edición ("" = cerrado) + opciones.
+    icon-picker-key: string,
+    icon-picker-choices: [IconChoiceVm],
 }
 
 // Una regla de previsualización editable (C3): extensión, si se previsualiza, y el modo de vista

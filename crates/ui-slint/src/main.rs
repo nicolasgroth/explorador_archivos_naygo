@@ -4798,6 +4798,9 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         icon_set_tintable: false,
         icon_rows: ModelRc::default(),
         icon_set_labels: ModelRc::default(),
+        // Picker de ícono por objeto (Task 14): cerrado por defecto.
+        icon_picker_key: SharedString::default(),
+        icon_picker_choices: ModelRc::default(),
     }
 }
 
