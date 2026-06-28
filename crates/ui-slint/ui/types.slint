@@ -212,6 +212,14 @@ export struct ResumeRowVm {
     label: string,
 }
 
+// Una tarjeta de set en la galería (preview estilo temas).
+export struct IconSetCardVm {
+    id: string,
+    label: string,
+    samples: [image],   // ~5 íconos de muestra del set, ya teñidos
+    selected: bool,
+}
+
 // Una tarjeta de tema en la galería de selección (config → Apariencia). Trae el id estable,
 // el nombre legible, si es el activo, y cuatro muestras de color representativas.
 export struct ThemeCardVm {
@@ -452,6 +460,8 @@ export struct SettingsVm {
     // Selector de ícono por objeto: clave del objeto en edición ("" = cerrado) + opciones.
     icon-picker-key: string,
     icon-picker-choices: [IconChoiceVm],
+    // Galería de sets de íconos (una tarjeta por set con ~5 muestras).
+    icon-set-cards: [IconSetCardVm],
 }
 
 // Una regla de previsualización editable (C3): extensión, si se previsualiza, y el modo de vista

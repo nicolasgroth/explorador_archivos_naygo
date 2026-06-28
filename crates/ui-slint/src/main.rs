@@ -2309,12 +2309,54 @@ fn main() -> Result<(), slint::PlatformError> {
                 )
             };
 
+            // Fase 2b: tarjetas de la galería de sets (render_for_set no usa el cache mutable).
+            let icon_set_cards_vm: ModelRc<IconSetCardVm> = {
+                use naygo_core::icon_kind::{ActionIcon, FileCategory, IconKey};
+                let sample_keys = [
+                    IconKey::Folder,
+                    IconKey::File(FileCategory::Image),
+                    IconKey::Action(ActionIcon::Copy),
+                    IconKey::Action(ActionIcon::Settings),
+                    IconKey::Action(ActionIcon::Back),
+                ];
+                let config_path = std::path::Path::new(&config_dir_str);
+                let c = ctrl.borrow();
+                let tint = theme_text_rgb(&c.config.settings, &c.config.themes);
+                drop(c);
+                let active = &icon_set_id;
+                let cards: Vec<IconSetCardVm> = icon_catalog_info
+                    .iter()
+                    .map(|(id, label, tintable)| {
+                        let samples: Vec<slint::Image> = sample_keys
+                            .iter()
+                            .map(|k| {
+                                crate::icons::render_for_set(
+                                    *k,
+                                    id.as_str(),
+                                    *tintable,
+                                    tint,
+                                    config_path,
+                                )
+                            })
+                            .collect();
+                        IconSetCardVm {
+                            id: id.as_str().into(),
+                            label: label.as_str().into(),
+                            samples: ModelRc::from(Rc::new(VecModel::from(samples))),
+                            selected: id == active,
+                        }
+                    })
+                    .collect();
+                ModelRc::from(Rc::new(VecModel::from(cards)))
+            };
+
             // Fase 3: volcar todo a la UI. El SettingsVm se emite con los campos de íconos ya
             // rellenos antes de llamar a set_vm / set_settings_vm.
             let mut settings_vm = settings_vm;
             settings_vm.icon_rows = icon_rows_vm;
             settings_vm.icon_set_labels = icon_set_labels_vm;
             settings_vm.icon_set_tintable = icon_tintable;
+            settings_vm.icon_set_cards = icon_set_cards_vm;
 
             // La AppWindow sigue usando `settings-vm` en la toolbar (icon-only, alto de fila),
             // así que se mantiene actualizado ahí además de en la ventana de configuración.
@@ -5294,6 +5336,8 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         // Picker de ícono por objeto (Task 14): cerrado por defecto.
         icon_picker_key: SharedString::default(),
         icon_picker_choices: ModelRc::default(),
+        // Galería de sets de íconos: se rellena en la fase 2b de refresh_config_vm.
+        icon_set_cards: ModelRc::default(),
     }
 }
 
