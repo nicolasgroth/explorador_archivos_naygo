@@ -79,15 +79,17 @@ impl IconCache {
         if let Some(img) = self.map.get(&ck) {
             return img.clone();
         }
-        let mut bytes = naygo_core::icons::resolve_with_overrides(
+        let bytes = naygo_core::icons::resolve_with_overrides(
             &self.active,
             &self.overrides,
             key,
             &self.config_dir,
         );
-        if self.tintable {
-            bytes = tint_png(&bytes, self.tint);
-        }
+        let bytes = if self.tintable {
+            tint_png(&bytes, self.tint)
+        } else {
+            bytes
+        };
         let img = decode(&bytes);
         self.map.insert(ck, img.clone());
         img
