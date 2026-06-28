@@ -2133,9 +2133,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Datos para la grilla de íconos (se usan en fase 2).
                 icon_set_id,
                 icon_overrides,
-                icon_config_dir,
                 icon_catalog_info, // Vec<(id, label, tintable)>
-                icon_tint,
                 icon_tintable,
             ) = {
                 let c = ctrl.borrow();
@@ -2214,7 +2212,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Datos para la grilla de íconos (Task 15).
                 let icon_set_id = c.config.settings.icon_set.clone();
                 let icon_overrides = c.config.settings.icon_overrides.clone();
-                let icon_config_dir = c.config.config_dir.clone();
                 let catalog =
                     naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir);
                 let icon_catalog_info: Vec<(String, String, bool)> = catalog
@@ -2223,7 +2220,6 @@ fn main() -> Result<(), slint::PlatformError> {
                     .map(|s| (s.id.clone(), s.label.clone(), s.tintable))
                     .collect();
                 let icon_tintable = catalog.is_tintable(&icon_set_id);
-                let icon_tint = theme_text_rgb(&c.config.settings, &c.config.themes);
                 (
                     settings_vm,
                     recent_limit,
@@ -2247,9 +2243,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     config_dir_str,
                     icon_set_id,
                     icon_overrides,
-                    icon_config_dir,
                     icon_catalog_info,
-                    icon_tint,
                     icon_tintable,
                 )
                 // c se libera aquí al salir del bloque
@@ -2388,10 +2382,6 @@ fn main() -> Result<(), slint::PlatformError> {
                     .unwrap_or_default();
                 cfg.set_release_notes(ModelRc::new(VecModel::from(sections)));
             }
-            // Suprimir advertencia: icon_tint se extrajo por si se necesita en el futuro
-            // (p. ej. para un picker en la ventana de config); aún no se usa en la fase 3.
-            let _ = icon_tint;
-            let _ = icon_config_dir;
         })
     };
     refresh_config_vm();
@@ -3130,6 +3120,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         let refresh_icons = refresh_toolbar_icons.clone();
         let refresh_drives = refresh_drives.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_set_icon_override_png(move |key| {
             let Some(src_path) = rfd::FileDialog::new()
                 .add_filter("PNG", &["png"])
@@ -3139,6 +3130,11 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let config_dir = ctrl.borrow().config.config_dir.clone();
             let Some(rel_path) = copy_user_png(&config_dir, &src_path) else {
+                // La copia falló: avisar con un toast (eprintln solo no se ve en GUI).
+                if let Some(ui) = ui_weak.upgrade() {
+                    let msg = ctrl.borrow().config.t("settings.icons.png_copy_err");
+                    ui.invoke_show_toast(msg.into());
+                }
                 return;
             };
             {
@@ -3297,17 +3293,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 Err(e) => {
+                    // Mismo patrón que import: toast (no modal) para ok y err.
                     if let Some(ui) = ui_weak.upgrade() {
-                        let tr = ui.global::<Tr>();
-                        ui.set_message(MessageVm {
-                            kind: 2,
-                            level: 2,
-                            title: "Naygo".into(),
-                            body: e.into(),
-                            confirm_label: tr.get_dlg_accept(),
-                            cancel_label: Default::default(),
-                            danger: false,
-                        });
+                        let base = ctrl.borrow().config.t("settings.icons.export_err");
+                        ui.invoke_show_toast(format!("{base}: {e}").into());
                     }
                 }
             }

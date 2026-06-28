@@ -745,6 +745,8 @@
   "settings.icons.import_ok": "Set importado correctamente.",
   "settings.icons.import_err": "No se pudo importar el set.",
   "settings.icons.export_ok": "Set exportado correctamente.",
+  "settings.icons.export_err": "No se pudo exportar el set.",
+  "settings.icons.png_copy_err": "No se pudo usar la imagen seleccionada.",
   "settings.icons.group_actions": "Acciones de la barra",
   "settings.icons.group_files": "Tipos de archivo",
   "settings.icons.set.lucide": "Lucide (línea)",
