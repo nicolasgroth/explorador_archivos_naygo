@@ -2640,13 +2640,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 let mut c = ctrl.borrow_mut();
                 // Re-tinto íconos tintables con el color de texto del nuevo tema.
                 let active = c.config.settings.icon_set.clone();
-                let tintable =
-                    naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
-                        .available()
-                        .iter()
-                        .find(|s| s.id == active)
-                        .map(|s| s.tintable)
-                        .unwrap_or(false);
+                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
+                    .is_tintable(&active);
                 let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                 c.icons.set_tint(tintable, rgb);
             }
@@ -2866,11 +2861,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 c.icons.set_active(active.clone());
                 // Re-aplicar overrides y tinte para el set nuevo.
                 let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
-                    .available()
-                    .iter()
-                    .find(|s| s.id == active)
-                    .map(|s| s.tintable)
-                    .unwrap_or(false);
+                    .is_tintable(&active);
                 let overrides = c.config.settings.icon_overrides.clone();
                 let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                 c.icons.set_overrides(overrides);
@@ -4678,7 +4669,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
 /// Devuelve el RGB que deben usar los íconos tintables: el color de texto del tema activo,
 /// salvo que el usuario haya fijado un color explícito con `toolbar_glyph_color`.
-fn theme_text_rgb(
+pub(crate) fn theme_text_rgb(
     settings: &naygo_core::config::Settings,
     themes: &naygo_core::theme::ThemeCatalog,
 ) -> (u8, u8, u8) {

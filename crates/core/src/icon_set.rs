@@ -70,6 +70,15 @@ impl IconSetCatalog {
         self.sets.iter().any(|s| s.id == id)
     }
 
+    /// ¿El set con este id se tiñe al color del tema? `false` si el id no existe.
+    pub fn is_tintable(&self, set_id: &str) -> bool {
+        self.sets
+            .iter()
+            .find(|s| s.id == set_id)
+            .map(|s| s.tintable)
+            .unwrap_or(false)
+    }
+
     /// Resuelve un id a uno válido: si no existe, cae a "lucide".
     pub fn resolve(&self, id: &str) -> String {
         if self.contains(id) {
@@ -104,6 +113,15 @@ mod tests {
         assert!(by("material"));
         assert!(by("mono"));
         assert!(!by("flat-color")); // trae su propio color
+    }
+
+    #[test]
+    fn is_tintable_por_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = IconSetCatalog::load(dir.path());
+        assert!(cat.is_tintable("lucide"));
+        assert!(!cat.is_tintable("flat-color"));
+        assert!(!cat.is_tintable("no-existe"));
     }
 
     #[test]

@@ -432,19 +432,8 @@ impl WorkspaceCtrl {
         icons.set_overrides(config.settings.icon_overrides.clone());
         {
             let tintable = naygo_core::icon_set::IconSetCatalog::load(&config_dir)
-                .available()
-                .iter()
-                .find(|s| s.id == config.settings.icon_set)
-                .map(|s| s.tintable)
-                .unwrap_or(false);
-            let rgb = {
-                let t = config.themes.get(&config.settings.theme);
-                if let Some(c) = config.settings.toolbar_glyph_color {
-                    (c.r, c.g, c.b)
-                } else {
-                    (t.text.r, t.text.g, t.text.b)
-                }
-            };
+                .is_tintable(&config.settings.icon_set);
+            let rgb = crate::theme_text_rgb(&config.settings, &config.themes);
             icons.set_tint(tintable, rgb);
         }
         let mut c = WorkspaceCtrl {
