@@ -567,7 +567,7 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
     let settings = match read {
         Some(mut s) if s.version == CONFIG_VERSION => {
             // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
-            // suelto que ya no existe en disco (carpeta borrada) cae a "flat" en vez de
+            // suelto que ya no existe en disco (carpeta borrada) cae a "lucide" en vez de
             // quedar como selección colgada con la toolbar rota.
             let normalized = normalize_icon_set_id(&s.icon_set);
             s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);

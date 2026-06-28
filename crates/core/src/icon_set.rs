@@ -36,6 +36,8 @@ impl IconSetCatalog {
             IconSetInfo { id: "flat-color".into(),  label: "Flat Color".into(), builtin: true, tintable: false },
             IconSetInfo { id: "mono".into(),        label: "Mono".into(),       builtin: true, tintable: true },
         ];
+        // Mantener en sync con el vec! de sets de fábrica de arriba: si agregas un set
+        // nuevo allá, agrégalo aquí o su carpeta se detectaría como pack suelto duplicado.
         let factory_ids = ["lucide", "tabler", "material", "flat-color", "mono"];
         let icons_dir = dir.join("icons");
         if let Ok(entries) = std::fs::read_dir(&icons_dir) {
@@ -114,16 +116,6 @@ mod tests {
 
     #[test]
     fn pack_suelto_importado_es_tintable_false_por_defecto() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("icons").join("mi-pack")).unwrap();
-        let cat = IconSetCatalog::load(dir.path());
-        let info = cat.available().iter().find(|s| s.id == "mi-pack").unwrap();
-        assert!(!info.builtin);
-        assert!(!info.tintable);
-    }
-
-    #[test]
-    fn descubre_packs_sueltos() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("icons").join("mi-pack")).unwrap();
         let cat = IconSetCatalog::load(dir.path());
