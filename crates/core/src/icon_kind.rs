@@ -237,11 +237,15 @@ fn extension_table() -> &'static HashMap<&'static str, FileCategory> {
 
 /// Categoría de una extensión (case-insensitive). Desconocida → `Generic`.
 pub fn category_for_extension(ext: &str) -> FileCategory {
-    let lower = ext.to_ascii_lowercase();
-    extension_table()
-        .get(lower.as_str())
-        .copied()
-        .unwrap_or(FileCategory::Generic)
+    let table = extension_table();
+    // Caso común: la extensión ya viene en minúscula → buscar sin alocar. Solo si tiene
+    // mayúsculas se paga el `to_ascii_lowercase` (la tabla está en minúscula).
+    let direct = if ext.bytes().any(|b| b.is_ascii_uppercase()) {
+        table.get(ext.to_ascii_lowercase().as_str()).copied()
+    } else {
+        table.get(ext).copied()
+    };
+    direct.unwrap_or(FileCategory::Generic)
 }
 
 /// Clave de ícono para un `Entry`.

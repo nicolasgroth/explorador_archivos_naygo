@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Si una entrada es archivo, carpeta o un tipo que no pudimos clasificar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `Ord` deriva del orden de declaración (Directory < File < Other), que coincide con el orden
+/// alfabético que usaba el sort por tipo — así se compara sin alocar Strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EntryKind {
     Directory,
     File,

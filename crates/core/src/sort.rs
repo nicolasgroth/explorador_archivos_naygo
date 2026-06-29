@@ -34,7 +34,9 @@ pub fn cmp_entries(a: &Entry, b: &Entry, spec: &SortSpec) -> std::cmp::Ordering 
             SortKey::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
             SortKey::Modified => a.modified.cmp(&b.modified),
             SortKey::Created => a.created.cmp(&b.created),
-            SortKey::Kind => format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)),
+            // Compara el enum directamente (deriva Ord en el orden de declaración, igual al
+            // alfabético que daba `format!("{:?}")`) — sin alocar Strings por comparación.
+            SortKey::Kind => a.kind.cmp(&b.kind),
         };
 
         if spec.ascending {
