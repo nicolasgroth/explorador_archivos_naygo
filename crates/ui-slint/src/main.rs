@@ -4047,7 +4047,6 @@ fn main() -> Result<(), slint::PlatformError> {
                     let mut c = ctrl.borrow_mut();
                     for pid in &panes {
                         c.release_pane_watcher(PaneId(*pid));
-                        c.mark_pane_ejected(PaneId(*pid));
                     }
                 }
                 if let Some(path) = pending_eject.borrow_mut().take() {
@@ -4057,6 +4056,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     let tr = ui.global::<Tr>();
                     let msg = match outcome {
                         workspace_ctrl::EjectOutcome::Ok => {
+                            // Marcar los paneles como "soltados por expulsión" SOLO si se expulsó
+                            // de verdad (si falla, el disco sigue montado y no corresponde el texto).
+                            {
+                                let mut c = ctrl.borrow_mut();
+                                for pid in &panes {
+                                    c.mark_pane_ejected(PaneId(*pid));
+                                }
+                            }
                             refresh_drives();
                             sync_layout();
                             tr.get_drive_eject_ok()
