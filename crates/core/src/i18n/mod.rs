@@ -324,7 +324,7 @@ mod tests {
         // Claves cuyo valor muestra los propios nombres de los tokens como ayuda al usuario;
         // los nombres de los tokens cambian entre idiomas (ej. {nombre} en ES, {name} en EN),
         // así que no se pueden comparar entre idiomas como si fueran placeholders de Rust.
-        let skip_keys: &[&str] = &["batch.help.text", "batch.help"];
+        let skip_keys: &[&str] = &["batch.help.text"];
         for json in langs {
             let m: HashMap<String, String> = serde_json::from_str(json).unwrap();
             for (k, v_es) in &es {

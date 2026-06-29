@@ -5386,6 +5386,14 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
     let s = &c.settings;
     // Idiomas con marcador experimental para zh/ja/ko/hi.
     const EXPERIMENTAL_LANGS: &[&str] = &["zh", "ja", "ko", "hi"];
+    // Nombre nativo del idioma + sufijo experimental cuando corresponde.
+    let make_label = |code: &str| -> SharedString {
+        let mut label = c.i18n.t(&format!("lang.{code}")).to_string();
+        if EXPERIMENTAL_LANGS.contains(&code) {
+            label.push_str(c.i18n.t("lang.experimental_suffix"));
+        }
+        SharedString::from(label)
+    };
     let lang_codes: Vec<SharedString> = c
         .i18n
         .available()
@@ -5396,24 +5404,15 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         .i18n
         .available()
         .iter()
-        .map(|l| {
-            let code = l.as_str();
-            let mut label = c.i18n.t(&format!("lang.{code}")).to_string();
-            if EXPERIMENTAL_LANGS.contains(&code) {
-                label.push_str(c.i18n.t("lang.experimental_suffix"));
-            }
-            SharedString::from(label)
-        })
+        .map(|l| make_label(l.as_str()))
         .collect();
-    // Nombre nativo del idioma activo (para inicializar el combo en la posición correcta).
+    // Índice del idioma activo dentro de lang_codes, para inicializar el combo en la
+    // posición correcta (ThemeCombo deriva current-value de current-index, no al revés).
     let active_code = s.language.as_str();
-    let active_label = {
-        let mut label = c.i18n.t(&format!("lang.{active_code}")).to_string();
-        if EXPERIMENTAL_LANGS.contains(&active_code) {
-            label.push_str(c.i18n.t("lang.experimental_suffix"));
-        }
-        SharedString::from(label)
-    };
+    let active_idx = lang_codes
+        .iter()
+        .position(|c| c.as_str() == active_code)
+        .unwrap_or(0) as i32;
     let themes: Vec<SharedString> = c
         .themes
         .available()
@@ -5482,7 +5481,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         paste_text_name: s.paste_text_name.clone().into(),
         paste_text_ext: s.paste_text_ext.clone().into(),
         language: s.language.as_str().into(),
-        language_label: active_label,
+        language_index: active_idx,
         theme: s.theme.as_str().into(),
         icon_set: s.icon_set.as_str().into(),
         languages: ModelRc::from(Rc::new(VecModel::from(languages))),

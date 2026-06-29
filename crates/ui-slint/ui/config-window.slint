@@ -712,7 +712,9 @@ export component ConfigWindow inherits Window {
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.languages;
-                                        current-value: root.vm.language-label;
+                                        // ThemeCombo deriva current-value de current-index, así que
+                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
+                                        current-index: root.vm.language-index;
                                         selected => {
                                             // languages muestra nombres nativos; language-codes tiene
                                             // los códigos en el mismo orden. Usamos el índice seleccionado
