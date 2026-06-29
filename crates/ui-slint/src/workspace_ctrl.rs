@@ -5398,6 +5398,26 @@ fn disk_usage(root: &Path) -> Option<naygo_core::disk::DiskUsage> {
     Some(naygo_core::disk::DiskUsage { total, free })
 }
 
+/// ¿La ruta `path` está dentro del disco cuya raíz es `drive_root`? Compara por la LETRA
+/// de unidad (primer componente con `:`), case-insensitive (Windows). Una ruta UNC
+/// (`\\srv\share`) o sin letra de unidad nunca está "en" un disco con letra. Pura y testeable.
+#[allow(dead_code)] // la usa panes_on_drive en la task siguiente
+fn path_is_on_drive(path: &std::path::Path, drive_root: &std::path::Path) -> bool {
+    fn drive_letter(p: &std::path::Path) -> Option<char> {
+        let s = p.to_string_lossy();
+        let bytes = s.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            Some((bytes[0] as char).to_ascii_uppercase())
+        } else {
+            None
+        }
+    }
+    match (drive_letter(path), drive_letter(drive_root)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Carga tolerante del árbol de favoritos desde `<config>/favorites.json`. Ausente o corrupto →
 /// árbol vacío (nunca cae la app; `Favorites::from_json` ya migra el formato plano antiguo).
 fn load_favorites(config_dir: &Path) -> Favorites {
@@ -7359,6 +7379,21 @@ mod tests {
         assert!(c.any_modal_open(), "la ayuda (F1) mantiene vivo el timer");
         c.help_open = false;
         assert!(!c.any_modal_open());
+    }
+
+    #[test]
+    fn path_is_on_drive_casos() {
+        use std::path::Path;
+        let on = |p: &str, d: &str| path_is_on_drive(Path::new(p), Path::new(d));
+        assert!(on(r"E:\foto", r"E:\"));
+        assert!(on(r"E:\a\b\c", r"E:\"));
+        assert!(on(r"E:\", r"E:\"));
+        assert!(on(r"e:\x", r"E:\"));
+        assert!(on(r"E:\x", r"e:\"));
+        assert!(!on(r"C:\", r"E:\"));
+        assert!(!on(r"C:\foto", r"E:\"));
+        assert!(!on(r"EE:\x", r"E:\"));
+        assert!(!on(r"\\srv\share\x", r"E:\"));
     }
 }
 
