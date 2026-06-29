@@ -4032,8 +4032,16 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             // kind 1 = confirmación de expulsar.
             if kind == 1 {
-                // Limpiar la lista de paneles afectados (ya no hace falta, la expulsión procede).
-                pending_eject_panes.borrow_mut().clear();
+                // Soltar los watchers de los paneles que tienen el disco abierto, ANTES de
+                // expulsar, para que el "en uso" no lo cause la propia app. Tras expulsar, esos
+                // paneles mostrarán el aviso in-place "elegir carpeta" (pane_dir_missing lo detecta).
+                let panes = std::mem::take(&mut *pending_eject_panes.borrow_mut());
+                if !panes.is_empty() {
+                    let mut c = ctrl.borrow_mut();
+                    for pid in &panes {
+                        c.release_pane_watcher(PaneId(*pid));
+                    }
+                }
                 if let Some(path) = pending_eject.borrow_mut().take() {
                     let outcome = ctrl
                         .borrow()
@@ -4042,10 +4050,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     let msg = match outcome {
                         workspace_ctrl::EjectOutcome::Ok => {
                             refresh_drives();
+                            sync_layout();
                             tr.get_drive_eject_ok()
                         }
-                        workspace_ctrl::EjectOutcome::InUse => tr.get_drive_eject_in_use(),
-                        workspace_ctrl::EjectOutcome::Failed(_) => tr.get_drive_eject_failed(),
+                        workspace_ctrl::EjectOutcome::InUse
+                        | workspace_ctrl::EjectOutcome::Failed(_) => {
+                            refresh_drives();
+                            tr.get_drive_eject_in_use_external()
+                        }
                     };
                     ui.invoke_show_toast(msg);
                 }

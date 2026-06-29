@@ -2700,7 +2700,6 @@ impl WorkspaceCtrl {
     /// Se llama justo ANTES de expulsar el disco, para que el "en uso" no lo cause la propia app.
     /// El aviso in-place "elegir carpeta" aparece solo tras expulsar (pane_dir_missing detecta el
     /// read_dir fallido). No-op si el panel no tiene watcher.
-    #[allow(dead_code)] // la llama la lógica de expulsión de disco en la task siguiente
     pub fn release_pane_watcher(&mut self, id: PaneId) {
         self.watchers.unwatch(id.0);
     }
@@ -5352,7 +5351,6 @@ impl WorkspaceCtrl {
 
     /// Los paneles Files cuya carpeta actual está en el disco `drive_root` (el que se va a
     /// expulsar). Devuelve `(PaneId, carpeta_actual)`. Puro sobre el estado del workspace.
-    #[allow(dead_code)] // la llama la lógica de expulsión de disco en la task siguiente
     pub fn panes_on_drive(&self, drive_root: &std::path::Path) -> Vec<(PaneId, std::path::PathBuf)> {
         self.ws
             .panes()
