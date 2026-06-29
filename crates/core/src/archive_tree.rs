@@ -73,6 +73,15 @@ pub fn build_tree(entries: &[ArchiveEntry]) -> TreeNode {
                 cur.children[idx].is_dir = false;
                 cur.children[idx].size = e.size;
             }
+            // Componente NO-final: vamos a bajar para colgarle hijos, así que es una carpeta
+            // por fuerza. Si un archivo malformado lo introdujo antes como ARCHIVO (orden
+            // archivo-primero, p. ej. "a/b" antes que "a/b/c.txt"), reconvertirlo a carpeta y
+            // resetear su tamaño para que `render_children` (que solo recursa si is_dir)
+            // no omita sus hijos.
+            if !last {
+                cur.children[idx].is_dir = true;
+                cur.children[idx].size = 0;
+            }
             cur = &mut cur.children[idx];
         }
     }
@@ -263,5 +272,25 @@ mod tests {
         assert!(b.is_dir, "b sigue siendo carpeta (tiene un hijo)");
         assert_eq!(b.children.len(), 1, "c.txt no se perdió");
         assert_eq!(b.children[0].name, "c.txt");
+    }
+
+    #[test]
+    fn build_tree_archivo_primero_luego_dir_no_oculta_hijos() {
+        // Orden archivo-primero: "a/b" llega como ARCHIVO ANTES que "a/b/c.txt". El nodo b
+        // debe reconvertirse a carpeta al descender para colgarle c.txt; de lo contrario
+        // `render_children` (que solo recursa si is_dir) lo omitiría.
+        let entries = vec![
+            ArchiveEntry { path: "a/b".into(), is_dir: false, size: 99 },
+            ArchiveEntry { path: "a/b/c.txt".into(), is_dir: false, size: 10 },
+        ];
+        let root = build_tree(&entries);
+        let a = &root.children[0];
+        let b = &a.children[0];
+        assert_eq!(b.name, "b");
+        assert!(b.is_dir, "b se reconvirtió a carpeta al colgarle un hijo");
+        assert_eq!(b.size, 0, "tamaño reseteado al volverse carpeta");
+        assert_eq!(b.children.len(), 1, "c.txt presente, no oculto");
+        assert_eq!(b.children[0].name, "c.txt");
+        assert_eq!(b.children[0].size, 10);
     }
 }

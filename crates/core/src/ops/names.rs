@@ -19,6 +19,13 @@ pub fn is_valid_name(name: &str) -> bool {
     if name.trim().is_empty() || name.chars().all(|c| c == '.') {
         return false;
     }
+    // Windows recorta silenciosamente el espacio o punto FINAL del nombre completo
+    // (p. ej. "informe " e "informe." quedan como "informe" en disco). Rechazarlos
+    // evita una vista previa engañosa: dos filas distintas que en disco colisionan.
+    // Un punto interno (como en "a.b.txt") sigue siendo válido; solo importa el final.
+    if name.ends_with(' ') || name.ends_with('.') {
+        return false;
+    }
     !name
         .chars()
         .any(|c| FORBIDDEN.contains(&c) || (c as u32) < 0x20)
@@ -114,6 +121,17 @@ mod tests {
             assert!(!is_valid_name(bad), "{bad} debería ser inválido");
         }
         assert!(!is_valid_name(""), "vacío inválido");
+    }
+
+    #[test]
+    fn nombre_invalido_espacio_o_punto_final() {
+        // Windows recorta el espacio/punto final → el nombre real diferiría del mostrado.
+        assert!(!is_valid_name("informe "), "espacio final inválido");
+        assert!(!is_valid_name("informe."), "punto final inválido");
+        assert!(!is_valid_name("informe.txt "), "espacio tras extensión inválido");
+        // Nombres legítimos no deben verse afectados: un punto interno es válido.
+        assert!(is_valid_name("informe.txt"), "extensión normal válida");
+        assert!(is_valid_name("a.b.c"), "puntos internos válidos");
     }
 
     #[test]

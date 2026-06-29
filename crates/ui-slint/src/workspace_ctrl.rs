@@ -2538,7 +2538,11 @@ impl WorkspaceCtrl {
     pub fn close_tab(&mut self, member: PaneId) {
         self.ws.layout.remove_leaf(member);
         self.ws.remove_pane(member);
-        self.listings.remove(&member);
+        // Cancelar el listado en vuelo antes de soltarlo (no dejar workers huérfanos),
+        // igual que en `close_pane`.
+        if let Some(l) = self.listings.remove(&member) {
+            l.cancel();
+        }
         self.trees.remove(&member);
     }
 
