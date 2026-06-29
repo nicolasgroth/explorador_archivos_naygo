@@ -6,6 +6,8 @@
 //! con totales (N archivos, M carpetas, tamaño) y un árbol ASCII indentado (├─ └─ │) del
 //! contenido. Puro y testeable: recibe las entradas ya leídas (sin tocar disco). Determinista.
 
+use crate::format::{format_size, SizeFormat};
+
 /// Una entrada de un archivo comprimido: ruta interna + tamaño descomprimido.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveEntry {
@@ -86,6 +88,51 @@ pub struct ArchiveSummary {
     pub total_entries: usize,
 }
 
+/// Texto del preview: encabezado de totales + árbol ASCII. Puro y determinista.
+pub fn render_archive_tree(
+    entries: &[ArchiveEntry],
+    summary: &ArchiveSummary,
+    name: &str,
+    size_fmt: SizeFormat,
+) -> String {
+    let mut out = String::new();
+    out.push_str(name);
+    out.push('\n');
+    out.push_str(&format!(
+        "{} archivo(s), {} carpeta(s) · {} sin comprimir\n",
+        summary.files, summary.dirs, format_size(summary.total_uncompressed, size_fmt),
+    ));
+    out.push_str("──────────────────────────────\n");
+    let root = build_tree(entries);
+    render_children(&root.children, "", &mut out, size_fmt);
+    if summary.truncated {
+        let extra = summary.total_entries.saturating_sub(entries.len());
+        out.push_str(&format!("\n… y {extra} más\n"));
+    }
+    out
+}
+
+fn render_children(children: &[TreeNode], prefix: &str, out: &mut String, size_fmt: SizeFormat) {
+    let n = children.len();
+    for (i, node) in children.iter().enumerate() {
+        let last = i + 1 == n;
+        let connector = if last { "└─ " } else { "├─ " };
+        out.push_str(prefix);
+        out.push_str(connector);
+        out.push_str(&node.name);
+        if node.is_dir {
+            out.push('/');
+        } else {
+            out.push_str(&format!("  {}", format_size(node.size, size_fmt)));
+        }
+        out.push('\n');
+        if node.is_dir && !node.children.is_empty() {
+            let child_prefix = format!("{}{}", prefix, if last { "   " } else { "│  " });
+            render_children(&node.children, &child_prefix, out, size_fmt);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +144,39 @@ mod tests {
         assert_eq!(s.dirs, 0);
         assert_eq!(s.total_uncompressed, 0);
         assert!(!s.truncated);
+    }
+
+    #[test]
+    fn render_incluye_encabezado_y_arbol_ascii() {
+        use crate::format::SizeFormat;
+        let entries = vec![
+            ArchiveEntry { path: "p/src/main.rs".into(), is_dir: false, size: 4300 },
+            ArchiveEntry { path: "p/README.md".into(), is_dir: false, size: 2100 },
+        ];
+        let summary = ArchiveSummary { files: 2, dirs: 2, total_uncompressed: 6400, truncated: false, total_entries: 2 };
+        let out = render_archive_tree(&entries, &summary, "demo.zip", SizeFormat::Auto);
+        assert!(out.contains("2 archivo"));
+        assert!(out.contains("carpeta"));
+        assert!(out.contains("├─ ") || out.contains("└─ "));
+        assert!(out.contains("main.rs"));
+        assert!(out.contains("README.md"));
+        assert!(out.contains("└─"));
+    }
+
+    #[test]
+    fn render_truncado_agrega_y_n_mas() {
+        use crate::format::SizeFormat;
+        let summary = ArchiveSummary { files: 1, dirs: 0, total_uncompressed: 5, truncated: true, total_entries: 600 };
+        let entries = vec![ArchiveEntry { path: "a.txt".into(), is_dir: false, size: 5 }];
+        let out = render_archive_tree(&entries, &summary, "big.zip", SizeFormat::Auto);
+        assert!(out.contains("más"));
+    }
+
+    #[test]
+    fn render_lista_vacia_no_panica() {
+        use crate::format::SizeFormat;
+        let out = render_archive_tree(&[], &ArchiveSummary::default(), "vacio.zip", SizeFormat::Auto);
+        assert!(out.contains("0 archivo"));
     }
 
     #[test]
