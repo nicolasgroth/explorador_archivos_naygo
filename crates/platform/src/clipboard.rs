@@ -191,6 +191,12 @@ pub(crate) mod windows_impl {
         if ptr.is_null() {
             return None;
         }
+        // El portapapeles es entrada hostil: otro proceso puede publicar un bloque más
+        // chico que un u32. Acotamos contra el tamaño REAL antes de leer (evita OOB read).
+        if (GlobalSize(hglobal) as usize) < std::mem::size_of::<u32>() {
+            let _ = GlobalUnlock(hglobal);
+            return None;
+        }
         let effect = std::ptr::read_unaligned(ptr);
         let _ = GlobalUnlock(hglobal);
         Some((effect & DROPEFFECT_MOVE) != 0)
@@ -379,12 +385,15 @@ pub(crate) mod windows_impl {
         if ptr.is_null() {
             return None;
         }
-        // Recorrer hasta el NUL.
+        // El portapapeles es entrada hostil: otro proceso puede publicar un bloque sin NUL
+        // terminador. Acotamos el recorrido al tamaño REAL del bloque (en unidades u16) para
+        // no leer memoria adyacente ni segfaultear si falta el NUL.
+        let cap = GlobalSize(hglobal) as usize / std::mem::size_of::<u16>();
         let mut len = 0usize;
-        while *ptr.add(len) != 0 {
+        while len < cap && *ptr.add(len) != 0 {
             len += 1;
         }
-        let slice = std::slice::from_raw_parts(ptr, len);
+        let slice = std::slice::from_raw_parts(ptr, len.min(cap));
         let s = String::from_utf16_lossy(slice);
         let _ = GlobalUnlock(hglobal);
         Some(ClipboardContent::Text(s))
