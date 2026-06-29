@@ -41,14 +41,7 @@ export component TreePanel inherits Rectangle {
         }
     VerticalLayout {
         padding: 4px;
-        Text {
-            text: Tr.tree-title;
-            color: Theme.text-dim;
-            font-weight: 700;
-            height: 20px;
-            vertical-alignment: center;
-            x: 4px;
-        }
+        // (Sin título interno: la pestaña del panel ya rotula "Árbol"; repetirlo era redundante.)
         ListView {
             vertical-stretch: 1;
             for n[i] in root.rows: row-rect := Rectangle {

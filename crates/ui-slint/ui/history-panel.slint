@@ -23,13 +23,7 @@ export component HistoryPanel inherits Rectangle {
     VerticalLayout {
         padding: 6px;
         spacing: 4px;
-        Text {
-            text: Tr.history-title;
-            color: Theme.text-dim;
-            font-weight: 700;
-            height: 20px;
-            vertical-alignment: center;
-        }
+        // (Sin título interno: la pestaña del panel ya rotula "Historial".)
         if root.rows.length == 0: Text {
             text: Tr.history-empty;
             color: Theme.text-dim;

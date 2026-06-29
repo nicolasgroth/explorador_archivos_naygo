@@ -45,13 +45,7 @@ export component InspectorPanel inherits Rectangle {
     VerticalLayout {
         padding: 8px;
         spacing: 4px;
-        Text {
-            text: Tr.inspector-title;
-            color: Theme.text-dim;
-            font-weight: 700;
-            height: 22px;
-            vertical-alignment: center;
-        }
+        // (Sin título interno: la pestaña del panel ya rotula "Propiedades".)
         if !root.info.present: Text {
             text: Tr.inspector-no-selection;
             color: Theme.text-dim;

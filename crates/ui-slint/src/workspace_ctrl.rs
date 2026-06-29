@@ -2311,7 +2311,8 @@ impl WorkspaceCtrl {
     /// de lenguaje es la posición en `CodeLang::all()` (0 si el modo no es Código).
     pub fn preview_rules(&self) -> Vec<(String, bool, i32, i32)> {
         use naygo_core::preview::{CodeLang, ViewMode};
-        self.config
+        let mut rows: Vec<(String, bool, i32, i32)> = self
+            .config
             .settings
             .preview_rules
             .iter()
@@ -2327,7 +2328,12 @@ impl WorkspaceCtrl {
                 };
                 (r.ext.clone(), r.enabled, view_idx, lang_idx)
             })
-            .collect()
+            .collect();
+        // Orden alfabético por extensión para que el listado sea cómodo de leer en Configuración.
+        // Los handlers (toggle/set_view/remove) buscan por nombre de extensión, no por índice de
+        // fila, así que ordenar la vista no afecta la edición.
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
     }
 
     /// Alterna si se previsualiza la extensión `ext`. Persiste.
@@ -4097,6 +4103,11 @@ impl WorkspaceCtrl {
         // El toggle global de auto-resaltado controla al worker: se sincroniza antes de lanzarlo.
         self.preview
             .set_auto_highlight(self.config.settings.auto_highlight_code);
+        // Las reglas de preview configuradas por el usuario (extensiones añadidas, "tratar como")
+        // también se sincronizan antes de lanzar el worker; sin esto el worker se quedaba con los
+        // defaults y una extensión nueva como `.sif` nunca se previsualizaba.
+        self.preview
+            .set_rules(self.config.settings.preview_rules.clone());
         if self.preview.should_start(now) {
             self.preview.start();
         }

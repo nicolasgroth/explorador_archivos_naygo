@@ -74,12 +74,16 @@ export component PreviewPanel inherits Rectangle {
         HorizontalLayout {
             height: 20px;
             spacing: 6px;
+            // El rótulo interno muestra el PATH del archivo en preview (recortado con elipsis si
+            // no cabe), no un segundo "Vista previa" redundante con la pestaña. Sin archivo,
+            // cae al título genérico.
             Text {
-                text: Tr.preview-title;
+                text: root.view.path != "" ? root.view.path : Tr.preview-title;
                 color: Theme.text-dim;
                 font-weight: 700;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
+                overflow: elide;
             }
             // Botón abrir con el programa del sistema (visible cuando hay algo en preview).
             if root.view.mode != 0: Rectangle {

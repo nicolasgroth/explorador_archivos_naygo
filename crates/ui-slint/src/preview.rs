@@ -170,6 +170,16 @@ impl PreviewState {
         self.auto_highlight = on;
     }
 
+    /// Reemplaza las reglas de clasificación con las configuradas por el usuario. El controlador
+    /// las sincroniza antes de lanzar el worker; sin esto, el worker se quedaba con las reglas
+    /// por defecto y las extensiones añadidas en Configuración (p. ej. `.sif`) no se
+    /// previsualizaban nunca. Solo asigna si cambiaron (evita trabajo en cada tick).
+    pub fn set_rules(&mut self, rules: Vec<PreviewRule>) {
+        if self.rules != rules {
+            self.rules = rules;
+        }
+    }
+
     /// Actualiza las etiquetas traducidas para el preview de comprimidos. El hilo de UI las
     /// resuelve con `c.config.t(...)` y llama este setter al arrancar y al cambiar el idioma.
     pub fn set_archive_labels(&mut self, labels: naygo_core::archive_tree::ArchiveLabels) {
@@ -833,6 +843,39 @@ mod tests {
                 );
             }
             other => panic!("esperaba texto, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_rules_reemplaza_las_reglas_del_worker() {
+        // Regresión: el worker arrancaba con default_preview_rules() y nunca recibía las reglas
+        // del usuario, así que una extensión añadida (.sif) no se previsualizaba. set_rules debe
+        // reemplazarlas para que el siguiente preview las respete.
+        let mut st = PreviewState::new();
+        let nuevas = vec![preview::PreviewRule {
+            ext: "sif".to_string(),
+            enabled: true,
+            view: preview::ViewMode::Text,
+        }];
+        st.set_rules(nuevas.clone());
+        assert_eq!(st.rules, nuevas, "set_rules reemplaza las reglas del worker");
+    }
+
+    #[test]
+    fn sif_tratado_como_texto_se_previsualiza() {
+        // Con una regla .sif→Text (lo que configura el usuario), el contenido se lee como texto.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("modelo.sif");
+        std::fs::write(&p, b"linea de texto\n").unwrap();
+        let rules = vec![preview::PreviewRule {
+            ext: "sif".to_string(),
+            enabled: true,
+            view: preview::ViewMode::Text,
+        }];
+        let token = CancellationToken::new();
+        match build_payload(&p, &rules, false, &labels_es(), &msgs_es(), &token) {
+            Payload::Text { text, .. } => assert!(text.contains("linea de texto")),
+            other => panic!("esperaba texto para .sif, fue {other:?}"),
         }
     }
 }
