@@ -89,6 +89,9 @@ pub fn rows_from_view(
     // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
     let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
         f.table.visible_columns().map(|c| c.kind).collect();
+    // Conjunto de posiciones seleccionadas: O(1) por fila en vez de `Vec::contains` O(n). Sin
+    // esto, "Seleccionar todo" en una carpeta grande hacía la construcción de filas cuadrática.
+    let selected: std::collections::HashSet<usize> = f.selected.iter().copied().collect();
     let view = f.view_indices();
     view.iter()
         .enumerate()
@@ -102,7 +105,7 @@ pub fn rows_from_view(
                 name: e.name.clone(),
                 cells,
                 is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
-                selected: f.selected.contains(&pos),
+                selected: selected.contains(&pos),
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
                 highlight: is_fresh(&e.path),

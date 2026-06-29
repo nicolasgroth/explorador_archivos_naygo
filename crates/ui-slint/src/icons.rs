@@ -14,7 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Clave del cache: (set_activo, ícono, color_tinte, tintable).
-type CacheKey = (String, IconKey, (u8, u8, u8), bool);
+// La clave NO incluye el set activo: `set_active` limpia el cache al cambiar de set, así el map
+// solo contiene íconos del set vigente. Evita clonar el `String` del set en cada `get` (camino
+// caliente, una vez por fila), a cambio de re-decodificar al cambiar de set (acción rara).
+type CacheKey = (IconKey, (u8, u8, u8), bool);
 
 /// Decodifica y cachea los íconos a `slint::Image` por (set_id, clave). El set activo lo fija
 /// la configuración (`Settings.icon_set`, un id de set). El `config_dir` permite resolver los
@@ -76,7 +79,12 @@ impl IconCache {
     /// Cambia el set activo (al cambiarlo en Configuración). No borra el cache: las claves del
     /// set nuevo se decodifican on-demand; las viejas quedan (memoria despreciable, 28 PNGs).
     pub fn set_active(&mut self, set_id: impl Into<String>) {
-        self.active = set_id.into();
+        let new = set_id.into();
+        if new != self.active {
+            // El cache es solo del set vigente (la clave ya no lleva el set): al cambiar, vaciarlo.
+            self.map.clear();
+            self.active = new;
+        }
     }
 
     pub fn active(&self) -> &str {
@@ -87,7 +95,7 @@ impl IconCache {
     /// Lo decodifica si falta y lo cachea. Si el PNG es ilegible, devuelve imagen vacía.
     pub fn get(&mut self, key: IconKey) -> Image {
         let tint = if self.tintable { self.tint } else { (0, 0, 0) };
-        let ck = (self.active.clone(), key, tint, self.tintable);
+        let ck = (key, tint, self.tintable);
         if let Some(img) = self.map.get(&ck) {
             return img.clone();
         }
