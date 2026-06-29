@@ -1,5 +1,6 @@
 // Naygo — enumeración de unidades de disco del sistema (Win32, aislado).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `drives()` lista las unidades lógicas del equipo para las raíces del árbol.
 //! Tolerante: una unidad que no responde se incluye igual (su expansión dará

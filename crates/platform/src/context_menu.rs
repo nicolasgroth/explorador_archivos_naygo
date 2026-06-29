@@ -1,5 +1,6 @@
 // Naygo — menú contextual nativo de Windows (Win32 IContextMenu, COM, aislado).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `show_native_context_menu` construye y muestra el **menú contextual nativo del
 //! Shell de Windows** (el mismo que aparece al hacer clic derecho en el

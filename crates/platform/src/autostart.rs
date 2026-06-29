@@ -1,5 +1,6 @@
 // Naygo — inicio con Windows (clave Run de HKCU, sin permisos de admin).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Autostart: escribe/borra el valor `Naygo` en
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` con la ruta del exe entre

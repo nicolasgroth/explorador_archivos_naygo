@@ -1,5 +1,6 @@
 // Naygo — modelo de filesystem: tipos POCO sin lógica de I/O.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Tipos planos que describen lo que se ve en un panel. No tocan el disco: son
 //! datos que el motor de `listing` produce y que la UI consume.

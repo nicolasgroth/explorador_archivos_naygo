@@ -1,5 +1,6 @@
 // Naygo — clasificación semántica de íconos (lógica pura, sin GPU ni assets).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Mapea un `Entry` (o una extensión) a una **clave de ícono** semántica
 //! (`IconKey`), no a un archivo de imagen. La UI traduce la clave al asset del set

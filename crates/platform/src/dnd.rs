@@ -1,5 +1,6 @@
 // Naygo — drag & drop con el SO (OLE/COM, aislado): sacar archivos al SO.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Interop OLE de arrastre con Windows. Este módulo cubre solo el lado de **SACAR**
 //! archivos de Naygo hacia el SO (Explorador, escritorio, correo…) vía `DoDragDrop`.

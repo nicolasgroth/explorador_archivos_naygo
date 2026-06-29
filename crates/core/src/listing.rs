@@ -1,5 +1,6 @@
 // Naygo — motor de listado por streaming incremental, cancelable.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lee un directorio en un hilo worker y emite cada entrada por un canal a
 //! medida que la descubre, sin acumular todo antes de responder. Chequea el

@@ -1,5 +1,6 @@
 // Naygo — construcción de OpRequest desde la selección/disparadores (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Funciones puras que arman una `OpRequest` a partir de las rutas seleccionadas y el
 //! destino. Viven en core (sin UI) para reusarse desde cualquier capa (egui y Slint).

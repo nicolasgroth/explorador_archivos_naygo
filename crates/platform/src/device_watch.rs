@@ -1,5 +1,6 @@
 // Naygo — detección de dispositivos (ventana message-only Win32, WM_DEVICECHANGE), aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Crea, EN SU PROPIO HILO, una ventana oculta `HWND_MESSAGE` que escucha
 //! `WM_DEVICECHANGE` (llegada/quita de volúmenes) y emite `DeviceEvent::DrivesChanged`.

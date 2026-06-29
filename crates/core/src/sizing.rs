@@ -1,5 +1,6 @@
 // Naygo — tamaño de carpeta bajo demanda: recorrido recursivo cancelable.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Calcula el tamaño total de una carpeta sumando sus archivos descendientes. El
 //! recorrido es CANCELABLE (token) y usa una pila propia (no recursión de stack, para

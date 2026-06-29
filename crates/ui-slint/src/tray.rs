@@ -1,5 +1,6 @@
 // Naygo — ícono en la bandeja del sistema (Slint, Fase 5E). Port del tray de la capa egui.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Tray icon vía el crate `tray-icon` (Tauri, MIT). Se crea en el hilo del event loop y vive
 // toda la sesión (drop = el ícono desaparece). Los handlers de eventos corren FUERA del bucle

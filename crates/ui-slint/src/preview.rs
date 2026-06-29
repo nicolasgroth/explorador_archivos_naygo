@@ -1,5 +1,6 @@
 // Naygo — preview liviano para la UI Slint: worker con debounce + cancelación.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Espeja el preview de la capa egui: al enfocar un archivo se espera un debounce (150 ms)
 // y recién entonces un worker lee/decodifica en su hilo. El worker produce un `Payload`

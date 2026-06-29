@@ -1,5 +1,6 @@
 // Naygo — espacio libre/total de una unidad (Win32 GetDiskFreeSpaceExW), aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `read_space` consulta el espacio TOTAL y LIBRE de una unidad. Puede tardar en
 //! discos de red/ópticos, así que se llama DESDE un worker (nunca en el hilo de UI).

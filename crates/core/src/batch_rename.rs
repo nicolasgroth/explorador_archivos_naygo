@@ -1,5 +1,6 @@
 // Naygo — batch-rename avanzado (R3): plantillas con comodines + preview puro.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Motor del renombrado en lote. TODO es puro y testeable: la UI manda los ítems
 //! (ruta + fecha de modificación), el `BatchSpec` (plantilla, buscar/reemplazar,

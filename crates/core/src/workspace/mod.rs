@@ -1,5 +1,6 @@
 // Naygo — workspace: paneles independientes componibles (lógica pura).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Modelo del espacio de trabajo: una colección de paneles independientes
 //! (archivos / árbol / inspector), cuál está activo, y la disposición. No depende

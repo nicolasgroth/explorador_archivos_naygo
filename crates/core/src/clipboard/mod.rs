@@ -1,5 +1,6 @@
 // Naygo — pegado inteligente: decidir qué hacer con el portapapeles del SO (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lógica PURA del pegado inteligente. `platform` lee el portapapeles del SO y lo
 //! normaliza a `ClipboardContent`; aquí `decide_paste` decide la acción (`PastePlan`)

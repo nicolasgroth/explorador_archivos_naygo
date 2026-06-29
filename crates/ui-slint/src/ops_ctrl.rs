@@ -1,5 +1,6 @@
 // Naygo — controlador de operaciones de archivo de la UI Slint (Fase 3).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Posee TODO el estado de operaciones: ops en curso/terminadas, el modal activo, el
 // historial de deshacer, el set de rutas "cortadas" (corte visual) y las ops a retomar.

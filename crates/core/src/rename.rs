@@ -1,5 +1,6 @@
 // Naygo — selección del rename inline (ciclo F2): qué parte del nombre se selecciona. Puro.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! El editor de rename inline cicla la selección con F2: 1ª pulsación = nombre sin
 //! extensión, 2ª = solo extensión, 3ª = todo. Aquí va solo el cálculo de rangos (puro,

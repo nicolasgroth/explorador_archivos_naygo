@@ -1,5 +1,6 @@
 // Naygo — disposición serializable, desacoplada de egui_dock.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `SerializableDockLayout` describe la disposición de paneles (un árbol binario
 //! de splits) sin depender de egui_dock. La capa `ui` traduce esto a/desde el

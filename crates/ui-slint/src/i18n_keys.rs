@@ -1,7 +1,8 @@
 // Naygo — puente i18n: vuelca los textos del idioma activo al global `Tr` de Slint. Una sola
 // función (apply) mantiene sincronizados los catálogos (es.json/en.json) con las propiedades
 // del global. Se llama al arrancar y cada vez que cambia el idioma.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use crate::config_ctrl::ConfigCtrl;
 use crate::Tr;

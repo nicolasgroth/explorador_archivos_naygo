@@ -1,5 +1,6 @@
 // Naygo — historial de navegación atrás/adelante de un panel (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `NavHistory` es la pila de rutas visitadas de un panel, con un cursor. Modela
 //! el atrás/adelante de un navegador: `push` a una ruta nueva trunca la rama de

@@ -1,5 +1,6 @@
 // Naygo — clasificación y truncado para la vista previa liviana (puro, sin egui).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lógica PURA del panel Preview: decide qué tipo de vista previa admite una ruta
 //! según las reglas configuradas (toggle + alias por extensión) y trunca el texto a un

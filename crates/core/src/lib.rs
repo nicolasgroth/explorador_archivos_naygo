@@ -1,5 +1,6 @@
 // Naygo — núcleo: lógica pura de filesystem, sin UI ni Windows.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `naygo-core` contiene toda la lógica testeable del explorador: modelo de
 //! filesystem, motor de listado por streaming, ordenamiento y cancelación.

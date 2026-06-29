@@ -1,5 +1,6 @@
 // Naygo — lógica pura de drag & drop: decidir mover vs copiar.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Decide si un drop mueve o copia, con las reglas del Explorador de Windows:
 //! Shift = mover, Ctrl = copiar, sin tecla = mover en el mismo disco / copiar entre

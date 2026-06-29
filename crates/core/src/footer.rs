@@ -1,5 +1,6 @@
 // Naygo — footer por panel: campos, plantillas y render de la barra inferior.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lógica PURA del footer de cada panel (sin UI ni Windows). La UI calcula los datos
 //! crudos por panel (`FooterData`) y `render` produce el string final según la plantilla.

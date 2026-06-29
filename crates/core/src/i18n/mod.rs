@@ -1,5 +1,6 @@
 // Naygo — internacionalización: catálogo de textos por clave (lógica pura).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `I18n` resuelve un texto por clave en el idioma activo, con fallback al idioma
 //! de respaldo (ES) y, si falta, a la clave misma (visible, nunca panic). ES y EN

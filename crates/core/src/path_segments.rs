@@ -1,5 +1,6 @@
 // Naygo — soporte puro de la path-bar: breadcrumbs y autocompletado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Funciones PURAS que alimentan la path-bar interactiva (sin egui ni I/O):
 //! - `split_segments`: ruta → segmentos clicables con su ruta acumulada.

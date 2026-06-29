@@ -1,5 +1,6 @@
 // Naygo — caché LRU de listados de carpetas (solo memoria, puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Caché en memoria de carpetas ya visitadas para navegación instantánea
 //! (*stale-while-revalidate*): al volver a una carpeta cacheada la UI pinta las

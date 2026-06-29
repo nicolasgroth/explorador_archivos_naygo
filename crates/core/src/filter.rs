@@ -1,5 +1,6 @@
 // Naygo — filtros de columna del file panel (puros, sin egui ni Windows).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Filtros por columna y su combinación (AND). `matches` decide si un `Entry`
 //! pasa TODOS los filtros activos. Puro y testeable; el recorrido lo hace la UI

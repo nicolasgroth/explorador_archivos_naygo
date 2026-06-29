@@ -1,5 +1,6 @@
 // Naygo — nombres de archivo: validación y resolución de conflictos (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Funciones puras sobre nombres: validar caracteres prohibidos en Windows y generar
 //! el siguiente nombre libre ante un conflicto (`archivo (2).ext`).

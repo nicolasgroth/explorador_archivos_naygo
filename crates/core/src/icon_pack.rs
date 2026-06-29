@@ -1,5 +1,6 @@
 // Naygo — empaquetado de sets de íconos: export/import del archivo .naygoset (zip).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Un `.naygoset` es un zip con `manifest.json` + `icons/` (los PNG que el set
 //! aporta). Export toma el set efectivo (base + overrides) y lo empaqueta autocontenido;

@@ -1,5 +1,6 @@
 // Naygo — expulsión segura de unidades extraíbles (USB) vía Win32, aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `eject_drive` desmonta y expulsa de forma SEGURA una unidad extraíble (USB).
 //!

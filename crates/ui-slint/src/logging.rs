@@ -1,5 +1,6 @@
 // Naygo — logging básico a archivo + panic handler (diagnóstico de caídas).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Sin telemetría ni red: solo un archivo de texto JUNTO al ejecutable (el mismo
 // `portable_dir()` donde vive settings.json), para poder diagnosticar caídas en VMs y

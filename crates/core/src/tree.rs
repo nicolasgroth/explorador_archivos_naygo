@@ -1,5 +1,6 @@
 // Naygo — modelo del árbol de directorios (puro, sin egui ni Windows).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Estado de un árbol de carpetas: raíces (unidades) + nodos lazy. Las
 //! operaciones son puras y testeables; el I/O (listar hijos, enumerar unidades)

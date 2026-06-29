@@ -2,7 +2,8 @@
 // catálogo i18n, el catálogo de temas y el mapa de atajos, todo cargado desde el core, y los
 // persiste en el directorio portable. La UI (ventana de config, editor de atajos) habla con
 // este controlador; nunca toca el disco directo.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // API foundacional de la Fase 4: este módulo se introduce completo, pero sus consumidores
 // (theme_apply, i18n_keys, la ventana de configuración y el editor de atajos) se cablean en

@@ -1,5 +1,6 @@
 // Naygo — planificación de operaciones: expandir a pasos + validar (recorre FS).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `plan` toma una `OpRequest` y produce un `OpPlan` (lista de pasos + totales),
 //! validando precondiciones (nombres, carpeta-dentro-de-sí-misma). Para Copy/Move

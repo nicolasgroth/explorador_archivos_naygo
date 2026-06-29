@@ -1,5 +1,6 @@
 // Naygo — listado async para la UI Slint: worker del core + drenado por lotes.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // El worker del core emite un Entry por archivo. El controller drena con `poll` (sin
 // bloquear) desde un slint::Timer de ~30ms que se APAGA al terminar (Done): 0 trabajo en

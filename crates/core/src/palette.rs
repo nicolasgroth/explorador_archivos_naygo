@@ -1,5 +1,6 @@
 // Naygo — paleta de comandos: modelo de comandos y fuzzy-match (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lógica PURA de la paleta de comandos (sin UI ni Windows). La UI arma la lista de
 //! `Command` desde sus fuentes (acciones, archivos, recientes, favoritos, temas) y usa

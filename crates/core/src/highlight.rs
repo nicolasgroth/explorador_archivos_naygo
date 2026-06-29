@@ -1,5 +1,6 @@
 // Naygo — resaltado de sintaxis para la vista previa (syntect). Puro: sin UI ni Windows.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Convierte un fragmento de código (que YA debe venir recortado por `crate::preview`:
 //! ≤ TEXT_MAX_LINES líneas y ≤ TEXT_MAX_LINE_CHARS por línea) en líneas → segmentos

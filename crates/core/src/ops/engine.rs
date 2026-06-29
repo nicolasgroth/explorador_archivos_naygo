@@ -1,5 +1,6 @@
 // Naygo — motor de operaciones: ejecuta un OpPlan en un worker, cancelable.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Ejecuta los pasos de un `OpPlan` copiando archivos POR BUFFERS (cancelable a
 //! media copia), emitiendo `OpMsg` por canal. Un error de un paso no aborta la op

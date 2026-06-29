@@ -1,5 +1,6 @@
 // Naygo — pruebas de regresión de FLUJOS de operaciones de archivo (end-to-end por disco).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 //! Suite de regresión de los flujos de operaciones de archivo del núcleo, ejercitados de
 //! PUNTA A PUNTA: se arma el `OpRequest`, se planifica (`plan`), se ejecuta por el motor

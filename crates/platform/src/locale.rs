@@ -1,5 +1,6 @@
 // Naygo — lectura del locale del SO (Win32), aislada en la capa platform.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Devuelve el nombre de locale del usuario (p. ej. "es-CL") consultando Windows.
 //! La elección del idioma a partir de este string la hace `core::pick_default_language`.

@@ -1,5 +1,6 @@
 // Naygo — plantillas de layout y store de recientes/favoritos.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Una `LayoutTemplate` describe una disposición nombrada (qué paneles y cómo se
 //! reparten). Hay built-ins (código) y plantillas del usuario (persistidas). El

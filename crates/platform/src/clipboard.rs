@@ -1,5 +1,6 @@
 // Naygo — portapapeles del SO (Win32: CF_HDROP, CF_DIB, CF_UNICODETEXT), aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lee y escribe el portapapeles del sistema. La lógica de QUÉ hacer con el contenido
 //! vive en `core::clipboard`; aquí solo está la frontera Win32. Tolerante: cualquier

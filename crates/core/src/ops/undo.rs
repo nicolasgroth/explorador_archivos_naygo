@@ -1,5 +1,6 @@
 // Naygo — deshacer operaciones: inversos, validación y re-emisión como OpRequests.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! R2: a partir de una operación TERMINADA (`OpRequest` original + `OpSummary` con
 //! los destinos reales por ítem) se construye su INVERSO como `Vec<UndoAction>`.

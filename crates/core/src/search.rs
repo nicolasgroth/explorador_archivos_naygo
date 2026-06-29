@@ -1,5 +1,6 @@
 // Naygo — búsqueda recursiva por nombre: recorrido cancelable con streaming de resultados.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Busca archivos y carpetas cuyo NOMBRE coincide con una consulta, recorriendo la
 //! carpeta raíz y todas sus subcarpetas. Igual que `sizing`, usa una pila propia (sin

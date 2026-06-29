@@ -1,5 +1,6 @@
 // Naygo — papelera de Windows (Win32 IFileOperation, COM, aislado).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `move_to_trash` envía rutas a la Papelera de reciclaje vía la API COM moderna
 //! `IFileOperation`. El borrado permanente NO vive aquí (lo hace `core::ops`).

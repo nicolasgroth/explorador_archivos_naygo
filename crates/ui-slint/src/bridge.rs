@@ -1,5 +1,6 @@
 // Naygo — puente entre el estado del panel (core) y el modelo de filas de Slint (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use naygo_core::favorites::{FavNode, Favorites};
 use naygo_core::ops::undo::{self, UndoEntry};

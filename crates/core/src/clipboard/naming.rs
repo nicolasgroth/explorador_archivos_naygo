@@ -1,5 +1,6 @@
 // Naygo — expansión de plantillas de nombre para el pegado (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Expande plantillas de nombre como "pegado {fecha}" sin depender de `chrono`.
 //! `{fecha}` → "YYYY-MM-DD HH-MM" en UTC, derivada de los segundos epoch (determinista

@@ -1,6 +1,7 @@
 // Naygo — watchers de carpeta por panel (Fase 5A): vigilan la carpeta abierta de cada panel
 // Files y aplican los cambios sin re-listar, resaltando los archivos nuevos un tiempo.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Bajo consumo: el watcher de cada carpeta corre en su propio hilo (crate notify, vía
 // platform::dir_watch) y está dormido salvo cuando hay un cambio real, que despierta la UI con

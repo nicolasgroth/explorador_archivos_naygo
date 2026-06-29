@@ -1,5 +1,6 @@
 // Naygo — abrir archivos con su programa por defecto (Win32 ShellExecuteW), aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `open_default` abre un archivo con la app asociada (verbo "open"); `open_with_dialog`
 //! lanza el diálogo "Abrir con…" de Windows (verbo "openas"). Tolerante: devuelve un

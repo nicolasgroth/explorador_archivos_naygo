@@ -1,5 +1,6 @@
 // Naygo — catálogo de sets de íconos: embebidos + packs sueltos del usuario.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lista los sets de íconos disponibles: los 5 de fábrica (lucide/tabler/material/
 //! flat-color/mono) más los packs sueltos descubiertos en `<config_dir>/icons/<nombre>/`.

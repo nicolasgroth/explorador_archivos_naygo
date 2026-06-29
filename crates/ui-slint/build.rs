@@ -1,6 +1,7 @@
 // Naygo — compila los .slint de la capa UI Slint y, en Windows, embebe el ícono y los
 // metadatos del ejecutable.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 fn main() {
     slint_build::compile("ui/app-window.slint").expect("compilar app-window.slint");
 
@@ -15,10 +16,10 @@ fn main() {
         res.set_icon(ico);
         res.set("ProductName", "Naygo");
         res.set("FileDescription", "Naygo — explorador de archivos");
-        res.set("CompanyName", "ISGroth — Nicolás Groth");
+        res.set("CompanyName", "ISGroth — Nicolás Groth <ngroth@gmail.com>");
         res.set(
             "LegalCopyright",
-            "Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.",
+            "Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth. MIT License.",
         );
         if let Err(e) = res.compile() {
             // No abortar el build por esto: sin ícono el .exe igual funciona. Solo avisar.

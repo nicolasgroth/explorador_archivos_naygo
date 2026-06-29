@@ -3,7 +3,8 @@
 // slint::Image comparte el buffer. El set activo es un id (String), igual que en la capa egui:
 // `flat`/`fluent`/`mono` resuelven a los assets embebidos; cualquier otro id es un pack suelto
 // del usuario bajo `<config_dir>/icons/<id>/<name>.png` (6E). Ver `naygo_core::icons`.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 // El IconCache se cablea por partes en las tareas 3 y 4 de 6A (filas, combo de set). Hasta
 // entonces, algunos métodos quedan sin usar; el allow evita el ruido de clippy mientras tanto.
 #![allow(dead_code)]

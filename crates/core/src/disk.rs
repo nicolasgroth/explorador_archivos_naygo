@@ -1,5 +1,6 @@
 // Naygo — uso de disco: cálculo puro de espacio usado/libre y umbrales.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `DiskUsage` resume el espacio de una unidad (total y libre, en bytes) y deriva
 //! el porcentaje USADO y los umbrales de alerta. Puro: sin Windows ni I/O. La

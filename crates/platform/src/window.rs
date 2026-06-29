@@ -1,5 +1,6 @@
 // Naygo — helpers de ventana Win32 (conversión de coordenadas). Aislado en platform.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Utilidades de ventana que tocan Win32, mantenidas en `platform` para respetar el
 //! aislamiento de capas: la UI nunca llama a `windows::Win32::*` directo.

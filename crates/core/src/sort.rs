@@ -1,5 +1,6 @@
 // Naygo — ordenamiento puro de entradas de un panel.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Ordena un `Vec<Entry>` según un `SortSpec`. Función pura: misma entrada,
 //! misma salida; sin I/O. Comparación de nombres case-insensitive (estilo

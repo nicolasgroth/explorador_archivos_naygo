@@ -1,6 +1,7 @@
 // Naygo — controlador multi-panel de la UI Slint (Fase 2a). Posee el Workspace (varios
 // FilePaneState + layout) y traduce gestos a llamadas del core.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use crate::bridge::{
     fav_tree_rows, favorite_rows, history_rows, inspector_info, recent_rows, rows_from_view,

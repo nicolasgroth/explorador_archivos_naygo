@@ -1,5 +1,6 @@
 // Naygo — "packs": preset que activa un tema + un set de íconos juntos.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Un `Pack` empareja un `ThemeId` con un id de set de íconos (string). Activar un pack
 //! escribe ambos ajustes (que siguen siendo independientes después). Embebidos + sueltos,

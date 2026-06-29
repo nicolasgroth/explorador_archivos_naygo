@@ -1,5 +1,6 @@
 // Naygo — PROTOTIPO de medición en Slint (renderizador por software, sin GPU).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Objetivo ÚNICO: medir el consumo de CPU de Slint en modo retenido + software
 // renderer, listando carpetas reales con naygo-core, para decidir si reescribir la

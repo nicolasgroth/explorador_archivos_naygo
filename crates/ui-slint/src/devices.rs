@@ -1,6 +1,7 @@
 // Naygo — watcher de dispositivos (Fase 5B): detecta enchufar/quitar unidades (USB) y avisa
 // para re-escanear unidades y reubicar paneles cuya raíz desapareció.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Corre en su propio hilo (platform::device_watch, ventana message-only WM_DEVICECHANGE) y
 // está dormido salvo ante un cambio real, que despierta la UI con el `waker`. El hilo de UI

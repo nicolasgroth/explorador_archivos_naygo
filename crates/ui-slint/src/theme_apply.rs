@@ -1,6 +1,7 @@
 // Naygo — puente de temas: vuelca los colores del tema activo del core al global `Theme` de
 // Slint. Se llama al arrancar y cada vez que se cambia de tema en la configuración.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use crate::Theme;
 use naygo_core::theme::{Theme as CoreTheme, ThemeColor};

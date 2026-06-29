@@ -1,5 +1,6 @@
 // Naygo — formateo de tamaños legibles (B/KB/MB/GB/TB). Puro y reutilizable.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `human_size` formatea un número de bytes a una cadena legible (1 decimal). Base
 //! 1024. Reutilizado por tamaños de archivo, de transferencia y de disco.

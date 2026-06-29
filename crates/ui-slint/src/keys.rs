@@ -1,5 +1,6 @@
 // Naygo — mapeo de teclas de Slint a Chord del keymap del core (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use naygo_core::keymap::{Chord, KeyCode};
 

@@ -1,5 +1,6 @@
 // Naygo — estado de un panel de archivos (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `FilePaneState` es el estado de un panel de archivos: dónde está parado, qué
 //! lista, su historial de navegación, su filtro de carpetas. No toca disco: la UI

@@ -1,5 +1,6 @@
 // Naygo — keymap configurable: combinaciones de teclas → acciones (puro, serde).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Modelo PURO de atajos de teclado: `KeyCode`/`Chord`/`Action`/`KeyMap`. Sin egui ni
 //! Windows. `action_for` resuelve qué acción dispara una combinación (lo consume la UI);

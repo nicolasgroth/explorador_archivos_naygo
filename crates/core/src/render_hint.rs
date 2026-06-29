@@ -1,5 +1,6 @@
 // Naygo — heurística pura: ¿el renderer OpenGL es por software? (sin egui/Windows).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! La capa `ui` lee el nombre del renderer (`GL_RENDERER`) del contexto glow; esta
 //! función PURA decide si es un rasterizador por software (sin GPU). Se usa para activar

@@ -1,5 +1,6 @@
 // Naygo — parseo de argumentos de línea de comandos (carpeta inicial).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Decide la carpeta inicial de Naygo a partir de los argumentos. Soporta
 //! `naygo.exe <ruta>`: si el primer argumento posicional es un directorio existente,

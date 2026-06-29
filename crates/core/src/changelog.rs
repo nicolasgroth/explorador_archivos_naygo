@@ -1,5 +1,6 @@
 // Naygo — parser del CHANGELOG: extrae las notas de una versión concreta.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Parser mínimo de un CHANGELOG con formato "Keep a Changelog":
 //! encabezados de versión `## [X.Y.Z] — fecha`, subsecciones `### Categoría`

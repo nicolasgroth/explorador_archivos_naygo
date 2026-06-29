@@ -1,5 +1,6 @@
 // Naygo — planificación de copia/movimiento en segundo plano (worker + canal + cancelación).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Para una carpeta grande, planificar una copia/movimiento implica recorrer TODO el árbol
 //! de orígenes con `read_dir`/`metadata` (lo hace `plan::expand`). Hacerlo en el hilo de UI

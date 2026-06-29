@@ -1,5 +1,6 @@
 // Naygo — carpetas recientes (MRU global, persistente como lista de rutas).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Historial global de carpetas visitadas, en orden MRU (la más reciente primero),
 //! con tope y sin duplicados. Se persiste como JSON (solo rutas, nada de contenido).

@@ -1,5 +1,6 @@
 // Naygo — journal en disco de operaciones para retomar tras un crash (puro + FS).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Persiste el estado de una operación larga en `<config_dir>/ops-journal/<id>.json`
 //! a medida que avanza (throttle, best-effort). Al arrancar, `scan` detecta las

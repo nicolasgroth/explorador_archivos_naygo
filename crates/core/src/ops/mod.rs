@@ -1,5 +1,6 @@
 // Naygo — operaciones de archivo: modelo de tipos (puro, sin egui ni Windows).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Tipos que describen una operación de archivo (copiar/mover/eliminar/renombrar/
 //! crear), su plan (pasos + bytes), los mensajes del motor (progreso/conflicto/fin)

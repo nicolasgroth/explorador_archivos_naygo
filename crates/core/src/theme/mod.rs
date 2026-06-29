@@ -1,5 +1,6 @@
 // Naygo — sistema de temas (color sets): datos puros, sin egui ni Windows.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Un `Theme` es una paleta de colores con nombre + base claro/oscuro. Los temas se
 //! cargan de JSON embebidos y de archivos sueltos (patrón i18n), son tolerantes a

@@ -1,5 +1,6 @@
 // Naygo — persistencia portable del workspace/plantillas/ajustes (JSON).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Carga y guarda tres archivos JSON independientes junto al ejecutable
 //! (portable). Tolerante: un archivo ausente, corrupto o de versión incompatible

@@ -1,5 +1,6 @@
 // Naygo — token de cancelación compartido para operaciones largas.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `CancellationToken` es un estado compartido entre el hilo de UI (que puede
 //! pedir cancelar o pausar) y un worker (que lo chequea entre cada paso). Clonar

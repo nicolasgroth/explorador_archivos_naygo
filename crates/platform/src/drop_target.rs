@@ -1,5 +1,6 @@
 // Naygo — destino de drop OLE (recibir archivos arrastrados). Aislado en platform.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Registra una ventana como destino de drop OLE (`IDropTarget` + `RegisterDragDrop`) para
 //! que el usuario pueda arrastrar archivos desde el Explorador y soltarlos sobre Naygo.

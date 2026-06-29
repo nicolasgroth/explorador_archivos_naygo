@@ -1,5 +1,6 @@
 // Naygo — vigilar una carpeta (crate notify) y emitir DirEvent coalescidos, aislado.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Envuelve `notify` (vía debouncer) para observar UNA carpeta (no recursivo) y emitir
 //! lotes de `naygo_core::listing::DirEvent` coalescidos (~300 ms). Tolerante: si no se

@@ -1,5 +1,6 @@
 // Naygo — generador build-time de los sets de íconos de fábrica (SVG -> PNG).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // No forma parte del binario de la app. Se ejecuta a mano para regenerar
 // assets/icons/<set>/. Lee los SVG directamente de los .zip de las librerías y

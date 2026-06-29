@@ -1,5 +1,6 @@
 // Naygo — tabla de assets embebidos: (set_id, IconKey) → bytes PNG. Pura, reusable por toda UI.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Embebe los PNG de los cinco sets con `include_bytes!`. `bytes_for_id` da los bytes
 //! del ícono para un set (por id string) y una clave; si la clave no tiene asset propio,

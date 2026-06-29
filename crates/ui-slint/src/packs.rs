@@ -5,7 +5,8 @@
 //   - config:  settings.json (+ keybindings.json si existe)
 // El import detecta el tipo por la(s) entrada(s) del zip y extrae a la subcarpeta correcta del
 // directorio de configuración. Funciones puras (toman rutas explícitas) → testeables.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 use std::io::{Read, Write};
 use std::path::Path;

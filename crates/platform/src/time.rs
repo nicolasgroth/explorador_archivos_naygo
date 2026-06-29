@@ -1,5 +1,6 @@
 // Naygo — zona horaria local (Win32), aislada en la capa platform.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Offset local respecto a UTC, en segundos. Lo consumen los comodines de fecha
 //! del batch-rename (core es puro y no conoce la zona horaria: la UI le pasa este

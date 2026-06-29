@@ -1,5 +1,6 @@
 // Naygo — fuente de un ícono para una clave: un set embebido/pack, o un PNG propio.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `IconSource` describe de dónde sale el ícono de un objeto cuando el usuario lo
 //! sobrescribe: `Builtin` apunta a otro set (por id); `UserPng` a un PNG propio bajo

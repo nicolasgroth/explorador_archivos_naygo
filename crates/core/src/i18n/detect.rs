@@ -1,5 +1,6 @@
 // Naygo — detección del idioma por defecto a partir del locale del SO (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! `pick_default_language` recibe el string de locale del SO (p. ej. "es-CL") ya
 //! leído por la capa `platform`, y la lista de idiomas disponibles, y elige el

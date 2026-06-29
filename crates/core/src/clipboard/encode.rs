@@ -1,5 +1,6 @@
 // Naygo — codificación de imagen del portapapeles a PNG/JPG (puro).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Codifica una `ClipboardImage` (RGBA8) a bytes PNG o JPG en memoria, vía el crate
 //! `image`. Sin Windows. PNG es sin pérdida; JPG usa `jpg_quality` (1..=100).

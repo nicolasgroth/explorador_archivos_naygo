@@ -1,5 +1,6 @@
 // Naygo — arranque de la capa UI en Slint (Fase 2b: multi-panel + paneles especiales).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 //
 // Subsistema GUI en release: sin ventana de consola negra al lanzar el .exe. En debug se
 // conserva la consola para ver stderr/logs.

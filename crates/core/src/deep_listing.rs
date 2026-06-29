@@ -1,5 +1,6 @@
 // Naygo — listado profundo: recorrido recursivo cancelable de TODO el árbol, con streaming.
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Lista todo el contenido bajo una carpeta raíz, recorriendo subcarpetas a cualquier
 //! profundidad. Gemelo del recorrido de `search`, pero SIN filtro de nombre (emite cada
