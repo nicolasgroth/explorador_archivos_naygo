@@ -3930,9 +3930,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // Path pendiente de expulsar mientras el modal de confirmación está abierto.
     let pending_eject: std::rc::Rc<std::cell::RefCell<Option<String>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Ids de los paneles a soltar (cerrar watcher) antes de expulsar, mientras el modal está abierto.
+    let pending_eject_panes: std::rc::Rc<std::cell::RefCell<Vec<u64>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     {
         let ui_weak = ui.as_weak();
+        let ctrl = ctrl.clone();
         let pending_eject = pending_eject.clone();
+        let pending_eject_panes = pending_eject_panes.clone();
         let start_timer = start_timer.clone();
         ui.on_eject_drive(move |path| {
             let Some(ui) = ui_weak.upgrade() else {
@@ -3942,16 +3947,37 @@ fn main() -> Result<(), slint::PlatformError> {
             // accidental). La expulsión real ocurre en on_message_confirm; aquí solo guardamos el
             // path pendiente y abrimos el modal.
             let tr = ui.global::<Tr>();
-            let body = tr
-                .get_drive_eject_confirm()
-                .replace("{drive}", path.as_str());
+            // Detectar paneles con carpeta abierta en el disco a expulsar.
+            let afectados: Vec<u64> = {
+                let c = ctrl.borrow();
+                c.panes_on_drive(std::path::Path::new(path.as_str()))
+                    .into_iter()
+                    .map(|(id, _)| id.0)
+                    .collect()
+            };
+            *pending_eject_panes.borrow_mut() = afectados.clone();
             *pending_eject.borrow_mut() = Some(path.to_string());
+            let (body, confirm_label) = if afectados.is_empty() {
+                (
+                    tr.get_drive_eject_confirm()
+                        .replace("{drive}", path.as_str())
+                        .into(),
+                    tr.get_drive_eject(),
+                )
+            } else {
+                let cuerpo: slint::SharedString = tr
+                    .get_drive_eject_with_panes()
+                    .replace("{drive}", path.as_str())
+                    .replace("{n}", &afectados.len().to_string())
+                    .into();
+                (cuerpo, tr.get_drive_eject_anyway())
+            };
             ui.set_message(MessageVm {
                 kind: 1,
                 level: 1, // warning
                 title: tr.get_drive_eject_confirm_title(),
-                body: body.into(),
-                confirm_label: tr.get_drive_eject(),
+                body,
+                confirm_label,
                 cancel_label: tr.get_dlg_cancel(),
                 danger: false,
             });
@@ -3967,6 +3993,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh_drives = refresh_drives.clone();
         let pending_eject = pending_eject.clone();
+        let pending_eject_panes = pending_eject_panes.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_message_confirm(move || {
@@ -4005,6 +4032,8 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             // kind 1 = confirmación de expulsar.
             if kind == 1 {
+                // Limpiar la lista de paneles afectados (ya no hace falta, la expulsión procede).
+                pending_eject_panes.borrow_mut().clear();
                 if let Some(path) = pending_eject.borrow_mut().take() {
                     let outcome = ctrl
                         .borrow()
@@ -4029,12 +4058,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
         let pending_eject = pending_eject.clone();
+        let pending_eject_panes = pending_eject_panes.clone();
         ui.on_message_cancel(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
             ui.set_message(MessageVm::default());
             pending_eject.borrow_mut().take();
+            pending_eject_panes.borrow_mut().clear();
             // Si había un drop entre paneles esperando confirmación, descartarlo (no-op si no había).
             ctrl.borrow_mut().cancel_pending_drop();
         });
