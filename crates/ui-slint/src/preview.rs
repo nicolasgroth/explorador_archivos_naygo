@@ -225,9 +225,10 @@ fn build_payload(
     auto_highlight: bool,
     token: &CancellationToken,
 ) -> Payload {
-    // Los .zip muestran su contenido (lista de entradas), antes de la clasificación normal.
-    if is_zip(path) {
-        return read_zip_listing(path);
+    // Los comprimidos (zip/tar/tar.gz) muestran su índice como árbol ASCII, antes de la
+    // clasificación normal.
+    if is_archive(path) {
+        return read_archive_listing(path);
     }
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
@@ -240,56 +241,114 @@ fn build_payload(
     }
 }
 
-/// `true` si la extensión (case-insensitive) es `zip`.
-fn is_zip(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false)
+/// Formato de archivo comprimido detectado por extensión.
+enum ArchiveFormat { Zip, Tar, TarGz }
+
+/// Detecta el formato por extensión (case-insensitive). `None` si no es comprimido legible.
+fn archive_format(path: &Path) -> Option<ArchiveFormat> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        Some(ArchiveFormat::TarGz)
+    } else if name.ends_with(".tar") {
+        Some(ArchiveFormat::Tar)
+    } else if name.ends_with(".zip") {
+        Some(ArchiveFormat::Zip)
+    } else {
+        None
+    }
 }
 
-/// Cuántas entradas del zip listar como máximo (evita textos enormes en archivos con miles).
-const ZIP_MAX_ENTRIES: usize = 500;
+/// `true` si el archivo es un comprimido con preview (zip/tar/tar.gz/tgz).
+fn is_archive(path: &Path) -> bool {
+    archive_format(path).is_some()
+}
 
-/// Lee la lista de archivos de un .zip y la devuelve como texto (una entrada por línea, con su
-/// tamaño descomprimido). Las carpetas se marcan con `/` final. No extrae contenido: solo el
-/// índice central del zip, así que es liviano.
-fn read_zip_listing(path: &Path) -> Payload {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Payload::Message("No se pudo leer".to_string());
+/// Cuántas entradas listar como máximo (evita textos enormes en archivos con miles).
+const ARCHIVE_MAX_ENTRIES: usize = 500;
+
+/// Lee el índice de un comprimido (zip/tar/tar.gz) y devuelve el texto del preview (encabezado
+/// + árbol ASCII) vía `naygo_core::archive_tree`. Tolerante: ilegible/corrupto → `Payload::Message`.
+///
+/// No extrae contenido (solo el índice central).
+fn read_archive_listing(path: &Path) -> Payload {
+    use naygo_core::archive_tree::{ArchiveSummary, render_archive_tree};
+    let Some(fmt) = archive_format(path) else {
+        return Payload::Message("No previsualizable".to_string());
     };
-    let Ok(mut archive) = zip::ZipArchive::new(file) else {
-        return Payload::Message("ZIP inválido o dañado".to_string());
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let mut entries = Vec::new();
+    let mut summary = ArchiveSummary::default();
+    let read_ok = match fmt {
+        ArchiveFormat::Zip => read_zip_entries(path, &mut entries, &mut summary),
+        ArchiveFormat::Tar => read_tar_entries(path, &mut entries, &mut summary, false),
+        ArchiveFormat::TarGz => read_tar_entries(path, &mut entries, &mut summary, true),
     };
+    if !read_ok {
+        return Payload::Message("Archivo comprimido inválido o dañado".to_string());
+    }
+    let text = render_archive_tree(&entries, &summary, &name, naygo_core::format::SizeFormat::Auto);
+    Payload::Text { text, truncated: summary.truncated, highlighted: None }
+}
+
+/// Lee las entradas de un .zip. false si no se pudo abrir/leer.
+fn read_zip_entries(
+    path: &Path,
+    entries: &mut Vec<naygo_core::archive_tree::ArchiveEntry>,
+    summary: &mut naygo_core::archive_tree::ArchiveSummary,
+) -> bool {
+    use naygo_core::archive_tree::ArchiveEntry;
+    let Ok(file) = std::fs::File::open(path) else { return false; };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else { return false; };
     let total = archive.len();
-    let mut lines: Vec<String> = Vec::with_capacity(total.min(ZIP_MAX_ENTRIES) + 2);
-    lines.push(format!("{total} elemento(s) en el archivo:"));
-    lines.push(String::new());
-    let shown = total.min(ZIP_MAX_ENTRIES);
+    summary.total_entries = total;
+    let shown = total.min(ARCHIVE_MAX_ENTRIES);
+    summary.truncated = total > shown;
     for i in 0..shown {
-        let Ok(entry) = archive.by_index(i) else {
-            continue;
-        };
-        let name = entry.name().to_string();
-        if entry.is_dir() {
-            lines.push(format!("  {name}"));
-        } else {
-            lines.push(format!(
-                "  {name}  ({})",
-                naygo_core::format::format_size(entry.size(), naygo_core::format::SizeFormat::Auto)
-            ));
+        let Ok(entry) = archive.by_index(i) else { continue; };
+        let is_dir = entry.is_dir();
+        let size = entry.size();
+        if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
+        entries.push(ArchiveEntry { path: entry.name().to_string(), is_dir, size });
+    }
+    true
+}
+
+/// Lee las entradas de un .tar o .tar.gz (si `gz`, descomprime con flate2). false si falla.
+/// tar es secuencial: no se sabe el total sin iterar todo, así que al cortar en el tope
+/// marcamos `truncated` y `total_entries` se aproxima (no se sigue contando, para no leer todo).
+fn read_tar_entries(
+    path: &Path,
+    entries: &mut Vec<naygo_core::archive_tree::ArchiveEntry>,
+    summary: &mut naygo_core::archive_tree::ArchiveSummary,
+    gz: bool,
+) -> bool {
+    use naygo_core::archive_tree::ArchiveEntry;
+    let Ok(file) = std::fs::File::open(path) else { return false; };
+    let reader: Box<dyn std::io::Read> = if gz {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+    let mut archive = tar::Archive::new(reader);
+    let Ok(iter) = archive.entries() else { return false; };
+    for entry in iter {
+        if entries.len() >= ARCHIVE_MAX_ENTRIES {
+            summary.truncated = true;
+            break;
         }
+        let Ok(e) = entry else { continue; };
+        let header = e.header();
+        let is_dir = header.entry_type().is_dir();
+        let size = header.size().unwrap_or(0);
+        let path_str = e.path().ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        if path_str.is_empty() { continue; }
+        if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
+        entries.push(ArchiveEntry { path: path_str, is_dir, size });
     }
-    let truncated = total > shown;
-    if truncated {
-        lines.push(String::new());
-        lines.push(format!("… y {} más", total - shown));
-    }
-    Payload::Text {
-        text: lines.join("\n"),
-        truncated,
-        highlighted: None,
-    }
+    summary.total_entries = entries.len() + if summary.truncated { 1 } else { 0 };
+    true
 }
 
 /// Lee el archivo como texto y, si `lang` está presente (la regla fuerza un lenguaje), resalta
@@ -528,11 +587,13 @@ mod tests {
             zw.write_all(b"fn main() {}").unwrap();
             zw.finish().unwrap();
         }
-        match read_zip_listing(&p) {
+        match read_archive_listing(&p) {
             Payload::Text { text, .. } => {
                 assert!(text.contains("readme.txt"), "lista readme: {text}");
-                assert!(text.contains("src/main.rs"), "lista main: {text}");
-                assert!(text.contains("2 elemento"), "cuenta entradas: {text}");
+                // En el árbol ASCII la carpeta "src" aparece como "src/" y el archivo como "main.rs"
+                assert!(text.contains("src"), "lista src: {text}");
+                assert!(text.contains("main.rs"), "lista main.rs: {text}");
+                assert!(text.contains("2 archivo"), "cuenta archivos: {text}");
             }
             other => panic!("esperaba texto, fue {other:?}"),
         }
@@ -543,10 +604,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("roto.zip");
         std::fs::write(&p, b"esto no es un zip").unwrap();
-        match read_zip_listing(&p) {
+        match read_archive_listing(&p) {
             Payload::Message(_) => {}
             other => panic!("esperaba mensaje, fue {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_archive_listing_zip_muestra_entradas() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("demo.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(file);
+            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            zw.start_file("carpeta/hola.txt", opts).unwrap();
+            zw.write_all(b"hola mundo").unwrap();
+            zw.finish().unwrap();
+        }
+        let payload = read_archive_listing(&zip_path);
+        match payload {
+            Payload::Text { text, .. } => {
+                assert!(text.contains("hola.txt"));
+                assert!(text.contains("carpeta"));
+                assert!(text.contains("archivo"));
+            }
+            _ => panic!("se esperaba Payload::Text"),
+        }
+    }
+
+    #[test]
+    fn read_archive_listing_corrupto_es_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("malo.zip");
+        std::fs::write(&bad, b"esto no es un zip").unwrap();
+        let payload = read_archive_listing(&bad);
+        assert!(matches!(payload, Payload::Message(_)));
     }
 
     #[test]
