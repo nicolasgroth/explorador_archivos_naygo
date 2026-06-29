@@ -8,6 +8,17 @@
 
 use crate::format::{format_size, SizeFormat};
 
+/// Textos traducidos para el encabezado/pie del árbol. La capa de UI los pasa ya resueltos
+/// (core no conoce el catálogo i18n). `and_more` es una plantilla con `{n}`.
+#[derive(Clone, Debug)]
+pub struct ArchiveLabels {
+    pub files: String,
+    pub folders: String,
+    pub uncompressed: String,
+    pub more_entries: String,
+    pub and_more: String,
+}
+
 /// Una entrada de un archivo comprimido: ruta interna + tamaño descomprimido.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveEntry {
@@ -94,13 +105,15 @@ pub fn render_archive_tree(
     summary: &ArchiveSummary,
     name: &str,
     size_fmt: SizeFormat,
+    labels: &ArchiveLabels,
 ) -> String {
     let mut out = String::new();
     out.push_str(name);
     out.push('\n');
     out.push_str(&format!(
-        "{} archivo(s), {} carpeta(s) · {} sin comprimir\n",
-        summary.files, summary.dirs, format_size(summary.total_uncompressed, size_fmt),
+        "{} {}, {} {} · {} {}\n",
+        summary.files, labels.files, summary.dirs, labels.folders,
+        format_size(summary.total_uncompressed, size_fmt), labels.uncompressed,
     ));
     out.push_str("──────────────────────────────\n");
     let root = build_tree(entries);
@@ -108,11 +121,11 @@ pub fn render_archive_tree(
     if summary.truncated {
         let extra = summary.total_entries.saturating_sub(entries.len());
         if extra > 0 {
-            out.push_str(&format!("\n… y {extra} más\n"));
+            out.push_str(&format!("\n{}\n", labels.and_more.replace("{n}", &extra.to_string())));
         } else {
             // tar truncado: no conocemos el total real sin leerlo entero, así que el texto es
             // honesto (hay más, sin afirmar un número que no sabemos).
-            out.push_str("\n… y más entradas\n");
+            out.push_str(&format!("\n{}\n", labels.more_entries));
         }
     }
     out
@@ -143,6 +156,16 @@ fn render_children(children: &[TreeNode], prefix: &str, out: &mut String, size_f
 mod tests {
     use super::*;
 
+    fn labels_es() -> ArchiveLabels {
+        ArchiveLabels {
+            files: "archivo(s)".into(),
+            folders: "carpeta(s)".into(),
+            uncompressed: "sin comprimir".into(),
+            more_entries: "… y más entradas".into(),
+            and_more: "… y {n} más".into(),
+        }
+    }
+
     #[test]
     fn summary_default_es_cero() {
         let s = ArchiveSummary::default();
@@ -160,7 +183,7 @@ mod tests {
             ArchiveEntry { path: "p/README.md".into(), is_dir: false, size: 2100 },
         ];
         let summary = ArchiveSummary { files: 2, dirs: 2, total_uncompressed: 6400, truncated: false, total_entries: 2 };
-        let out = render_archive_tree(&entries, &summary, "demo.zip", SizeFormat::Auto);
+        let out = render_archive_tree(&entries, &summary, "demo.zip", SizeFormat::Auto, &labels_es());
         assert!(out.contains("2 archivo"));
         assert!(out.contains("carpeta"));
         assert!(out.contains("├─ ") || out.contains("└─ "));
@@ -174,15 +197,33 @@ mod tests {
         use crate::format::SizeFormat;
         let summary = ArchiveSummary { files: 1, dirs: 0, total_uncompressed: 5, truncated: true, total_entries: 600 };
         let entries = vec![ArchiveEntry { path: "a.txt".into(), is_dir: false, size: 5 }];
-        let out = render_archive_tree(&entries, &summary, "big.zip", SizeFormat::Auto);
+        let out = render_archive_tree(&entries, &summary, "big.zip", SizeFormat::Auto, &labels_es());
+        assert!(out.contains("599"));
         assert!(out.contains("más"));
     }
 
     #[test]
     fn render_lista_vacia_no_panica() {
         use crate::format::SizeFormat;
-        let out = render_archive_tree(&[], &ArchiveSummary::default(), "vacio.zip", SizeFormat::Auto);
+        let out = render_archive_tree(&[], &ArchiveSummary::default(), "vacio.zip", SizeFormat::Auto, &labels_es());
         assert!(out.contains("0 archivo"));
+    }
+
+    #[test]
+    fn render_usa_los_labels_dados() {
+        let labels = ArchiveLabels {
+            files: "file(s)".into(),
+            folders: "folder(s)".into(),
+            uncompressed: "uncompressed".into(),
+            more_entries: "… and more entries".into(),
+            and_more: "… and {n} more".into(),
+        };
+        let entries = vec![ArchiveEntry { path: "a.txt".into(), is_dir: false, size: 5 }];
+        let summary = ArchiveSummary { files: 1, dirs: 0, total_uncompressed: 5, truncated: false, total_entries: 1 };
+        let out = render_archive_tree(&entries, &summary, "x.zip", SizeFormat::Auto, &labels);
+        assert!(out.contains("file(s)"));
+        assert!(out.contains("uncompressed"));
+        assert!(!out.contains("archivo"), "no debe haber español hardcodeado");
     }
 
     #[test]
