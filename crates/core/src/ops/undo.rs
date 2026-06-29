@@ -39,12 +39,12 @@ pub struct UndoEntry {
 /// Construye el inverso de una op terminada. `None` = esa op no es deshacible
 /// (Delete, o nada terminó `Done`).
 pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction>> {
-    // Destinos que efectivamente se concretaron, en orden de proceso.
-    let done: Vec<&PathBuf> = summary
+    // Ítems que efectivamente se concretaron, en orden de proceso (con destino REAL y
+    // origen explícito).
+    let done: Vec<&super::OpItem> = summary
         .items
         .iter()
-        .filter(|(_, o)| matches!(o, OpOutcome::Done))
-        .map(|(p, _)| p)
+        .filter(|i| matches!(i.outcome, OpOutcome::Done))
         .collect();
     if done.is_empty() {
         return None;
@@ -52,41 +52,34 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
     let actions: Vec<UndoAction> = match &req.kind {
         OpKind::Rename { .. } => {
             let from = req.sources.first()?;
-            let to = done.first()?;
+            let to = &done.first()?.dest;
             vec![UndoAction::MoveBack {
-                now: (*to).clone(),
+                now: to.clone(),
                 back_to: from.clone(),
             }]
         }
         OpKind::Move => {
-            // Emparejar por NOMBRE DE ORIGEN: el summary trae los destinos reales
-            // (robusto ante conflict-rename, donde el destino cambió de nombre los
-            // emparejamos por posición dentro de los Done, que respetan el orden del
-            // plan = orden de sources tras el filtrado de Skipped).
-            let done_in_order = done;
-            let mut acts = Vec::new();
-            let mut di = 0usize;
-            for src in &req.sources {
-                let Some(dest) = done_in_order.get(di) else {
-                    break;
-                };
-                // El paso de `src` pudo haber sido Skipped/Failed: solo consumimos un
-                // Done si su nombre coincide con el de src O si hubo conflict-rename
-                // (nombre distinto pero mismo orden). Heurística por orden con chequeo
-                // de nombre para no desfasar ante saltos.
-                let name_matches = dest.file_name() == src.file_name();
-                let skipped_or_failed = summary.items.iter().any(|(p, o)| {
-                    !matches!(o, OpOutcome::Done) && p.file_name() == src.file_name()
-                });
-                if !name_matches && skipped_or_failed {
-                    continue; // este source no se movió; no consumir el Done
-                }
-                acts.push(UndoAction::MoveBack {
-                    now: (*dest).clone(),
-                    back_to: src.clone(),
-                });
-                di += 1;
-            }
+            // Provenance EXPLÍCITA: cada `OpItem` Done trae su destino REAL (`dest`) y su origen
+            // REAL (`src`). Deshacer = devolver cada archivo movido de su `dest` a su `src`. No se
+            // re-deriva el origen por nombre+orden (heurística que fallaba con carpetas: una
+            // carpeta produce un paso por descendiente, así que hay muchos más ítems que `sources`
+            // y el índice se desincronizaba, emitiendo MoveBack a rutas cruzadas).
+            //
+            // Orden INVERSO al de ejecución: para árboles anidados, devolver primero los
+            // descendientes y al final la carpeta contenedora es lo más seguro (la carpeta padre se
+            // creó antes que su contenido al mover; al revertir conviene vaciar antes de mover el
+            // contenedor de vuelta).
+            let mut acts: Vec<UndoAction> = done
+                .iter()
+                .filter_map(|item| {
+                    let back_to = item.src.clone()?;
+                    Some(UndoAction::MoveBack {
+                        now: item.dest.clone(),
+                        back_to,
+                    })
+                })
+                .collect();
+            acts.reverse();
             acts
         }
         OpKind::BatchRename { new_names } => {
@@ -103,10 +96,11 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
                 .collect();
             let mut acts: Vec<UndoAction> = done
                 .iter()
-                .filter_map(|dest| {
-                    let back = expected.iter().find(|(d, _)| d == *dest).map(|(_, s)| *s)?;
+                .filter_map(|item| {
+                    let dest = &item.dest;
+                    let back = expected.iter().find(|(d, _)| d == dest).map(|(_, s)| *s)?;
                     Some(UndoAction::MoveBack {
-                        now: (*dest).clone(),
+                        now: dest.clone(),
                         back_to: back.clone(),
                     })
                 })
@@ -116,7 +110,9 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
         }
         OpKind::Copy | OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => done
             .into_iter()
-            .map(|p| UndoAction::TrashCreated { path: p.clone() })
+            .map(|item| UndoAction::TrashCreated {
+                path: item.dest.clone(),
+            })
             .collect(),
         OpKind::Delete { .. } => return None,
     };
@@ -251,9 +247,36 @@ mod tests {
         PathBuf::from(s)
     }
 
+    /// Summary SIN origen explícito (`src: None`). Sirve a las ramas que no usan `src`
+    /// (Rename, BatchRename, Copy): emparejan por destino/nombre esperado.
     fn summary(items: Vec<(&str, OpOutcome)>) -> OpSummary {
         OpSummary {
-            items: items.into_iter().map(|(s, o)| (p(s), o)).collect(),
+            items: items
+                .into_iter()
+                .map(|(dest, o)| super::super::OpItem {
+                    dest: p(dest),
+                    outcome: o,
+                    src: None,
+                })
+                .collect(),
+            bytes_done: 0,
+            elapsed_secs: 0.0,
+        }
+    }
+
+    /// Summary CON origen explícito por ítem `(dest, outcome, src)`. Es lo que produce el
+    /// motor para un Move (cada paso registra su `step.from`); deshacer Move se apoya en
+    /// este `src`.
+    fn summary_move(items: Vec<(&str, OpOutcome, &str)>) -> OpSummary {
+        OpSummary {
+            items: items
+                .into_iter()
+                .map(|(dest, o, src)| super::super::OpItem {
+                    dest: p(dest),
+                    outcome: o,
+                    src: Some(p(src)),
+                })
+                .collect(),
             bytes_done: 0,
             elapsed_secs: 0.0,
         }
@@ -281,30 +304,127 @@ mod tests {
     }
 
     #[test]
-    fn move_empareja_sources_con_done_y_excluye_skipped() {
+    fn move_devuelve_solo_los_done_a_su_origen_explicito() {
         let req = OpRequest {
             kind: OpKind::Move,
             sources: vec![p("D:/a/uno.txt"), p("D:/a/dos.txt"), p("D:/a/tres.txt")],
             dest_dir: Some(p("D:/b")),
             conflict: ConflictPolicy::Skip,
         };
-        // dos.txt quedó Skipped (conflicto); uno y tres se movieron.
-        let s = summary(vec![
-            ("D:/b/uno.txt", OpOutcome::Done),
-            ("D:/b/dos.txt", OpOutcome::Skipped),
-            ("D:/b/tres.txt", OpOutcome::Done),
+        // dos.txt quedó Skipped (conflicto); uno y tres se movieron. El motor registró el
+        // ORIGEN de cada paso, así que deshacer no depende del orden de `sources`.
+        let s = summary_move(vec![
+            ("D:/b/uno.txt", OpOutcome::Done, "D:/a/uno.txt"),
+            ("D:/b/dos.txt", OpOutcome::Skipped, "D:/a/dos.txt"),
+            ("D:/b/tres.txt", OpOutcome::Done, "D:/a/tres.txt"),
         ]);
         let acts = build_undo(&req, &s).expect("deshacible");
+        // Inverso en orden inverso de ejecución: tres (último Done) vuelve primero, luego uno.
+        // El Skipped (dos) no genera ninguna acción.
         assert_eq!(
             acts,
             vec![
                 UndoAction::MoveBack {
+                    now: p("D:/b/tres.txt"),
+                    back_to: p("D:/a/tres.txt"),
+                },
+                UndoAction::MoveBack {
                     now: p("D:/b/uno.txt"),
                     back_to: p("D:/a/uno.txt"),
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn undo_move_de_carpeta_devuelve_cada_archivo_a_su_origen() {
+        // Mover una CARPETA `dir/` con 2 archivos dentro. El plan expande la carpeta en un paso por
+        // el directorio + un paso por cada descendiente, así que el summary trae MÁS ítems que
+        // `sources` (acá: 3 Done para 1 source). La heurística vieja (un Done por source, en orden)
+        // se desincronizaba y emitía MoveBack a rutas cruzadas. Con provenance explícita, cada
+        // archivo vuelve a SU origen real, sin importar la cantidad de ítems ni el orden.
+        let req = OpRequest {
+            kind: OpKind::Move,
+            sources: vec![p("D:/origen/dir")],
+            dest_dir: Some(p("D:/destino")),
+            conflict: ConflictPolicy::Skip,
+        };
+        // Pasos tal como los emite el motor para una carpeta: el dir y luego sus archivos, cada uno
+        // con su `src` real.
+        let s = summary_move(vec![
+            ("D:/destino/dir", OpOutcome::Done, "D:/origen/dir"),
+            (
+                "D:/destino/dir/a.txt",
+                OpOutcome::Done,
+                "D:/origen/dir/a.txt",
+            ),
+            (
+                "D:/destino/dir/b.txt",
+                OpOutcome::Done,
+                "D:/origen/dir/b.txt",
+            ),
+        ]);
+        let acts = build_undo(&req, &s).expect("deshacible");
+        // Cada archivo (y la carpeta) vuelve EXACTAMENTE a su origen; en orden inverso de ejecución
+        // (los archivos antes que el contenedor).
+        assert_eq!(
+            acts,
+            vec![
                 UndoAction::MoveBack {
-                    now: p("D:/b/tres.txt"),
-                    back_to: p("D:/a/tres.txt"),
+                    now: p("D:/destino/dir/b.txt"),
+                    back_to: p("D:/origen/dir/b.txt"),
+                },
+                UndoAction::MoveBack {
+                    now: p("D:/destino/dir/a.txt"),
+                    back_to: p("D:/origen/dir/a.txt"),
+                },
+                UndoAction::MoveBack {
+                    now: p("D:/destino/dir"),
+                    back_to: p("D:/origen/dir"),
+                },
+            ]
+        );
+        // Y NINGÚN MoveBack apunta a una ruta cruzada (cada now y su back_to comparten file_name).
+        for a in &acts {
+            if let UndoAction::MoveBack { now, back_to } = a {
+                assert_eq!(
+                    now.file_name(),
+                    back_to.file_name(),
+                    "el archivo debe volver a un origen con su mismo nombre, no a uno cruzado"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn undo_move_con_archivos_homonimos_de_carpetas_distintas() {
+        // Dos sources con el MISMO file_name (`data.txt`) pero distinto padre (`x/` e `y/`), movidos
+        // a un único destino donde el motor desambiguó el segundo a "data (2).txt" (conflict-rename).
+        // La heurística vieja por file_name los confundía: ambos "data.txt" matcheaban contra
+        // cualquier source. Con provenance explícita, cada uno vuelve a SU carpeta correcta.
+        let req = OpRequest {
+            kind: OpKind::Move,
+            sources: vec![p("D:/x/data.txt"), p("D:/y/data.txt")],
+            dest_dir: Some(p("D:/dst")),
+            conflict: ConflictPolicy::Rename,
+        };
+        let s = summary_move(vec![
+            ("D:/dst/data.txt", OpOutcome::Done, "D:/x/data.txt"),
+            // El segundo chocó y el motor lo desambiguó: dest distinto, pero su src es el real.
+            ("D:/dst/data (2).txt", OpOutcome::Done, "D:/y/data.txt"),
+        ]);
+        let acts = build_undo(&req, &s).expect("deshacible");
+        // Orden inverso de ejecución: el de `y/` (último) primero. Cada uno a su PADRE correcto.
+        assert_eq!(
+            acts,
+            vec![
+                UndoAction::MoveBack {
+                    now: p("D:/dst/data (2).txt"),
+                    back_to: p("D:/y/data.txt"),
+                },
+                UndoAction::MoveBack {
+                    now: p("D:/dst/data.txt"),
+                    back_to: p("D:/x/data.txt"),
                 },
             ]
         );

@@ -350,11 +350,25 @@ pub enum OpOutcome {
     Failed(String),
 }
 
+/// Un ítem procesado por la operación: a dónde fue (`dest`), con qué resultado
+/// (`outcome`), y de dónde vino (`src`, `None` para "crear carpeta/archivo vacío"). El
+/// `src` permite deshacer un Move emparejando por provenance EXPLÍCITA (no re-derivando
+/// el origen por nombre, heurística que falla con carpetas: una carpeta produce un paso
+/// por descendiente, así que hay muchos más ítems que `sources`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpItem {
+    /// Ruta destino REAL del paso (puede diferir de `step.to` por conflict-rename).
+    pub dest: PathBuf,
+    pub outcome: OpOutcome,
+    /// Origen del paso que se ejecutó (`step.from`). `None` para crear vacío.
+    pub src: Option<PathBuf>,
+}
+
 /// Resumen de una operación terminada (o cancelada).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpSummary {
-    /// (ruta destino, resultado) por archivo procesado.
-    pub items: Vec<(PathBuf, OpOutcome)>,
+    /// Un `OpItem` (destino + resultado + origen) por archivo procesado.
+    pub items: Vec<OpItem>,
     pub bytes_done: u64,
     pub elapsed_secs: f64,
 }
@@ -363,19 +377,19 @@ impl OpSummary {
     pub fn count_done(&self) -> usize {
         self.items
             .iter()
-            .filter(|(_, o)| matches!(o, OpOutcome::Done))
+            .filter(|i| matches!(i.outcome, OpOutcome::Done))
             .count()
     }
     pub fn count_skipped(&self) -> usize {
         self.items
             .iter()
-            .filter(|(_, o)| matches!(o, OpOutcome::Skipped))
+            .filter(|i| matches!(i.outcome, OpOutcome::Skipped))
             .count()
     }
     pub fn count_failed(&self) -> usize {
         self.items
             .iter()
-            .filter(|(_, o)| matches!(o, OpOutcome::Failed(_)))
+            .filter(|i| matches!(i.outcome, OpOutcome::Failed(_)))
             .count()
     }
 }

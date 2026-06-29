@@ -1327,7 +1327,8 @@ impl OpsCtrl {
         summary
             .items
             .iter()
-            .map(|(path, outcome)| {
+            .map(|item| {
+                let path = &item.dest;
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -1342,7 +1343,7 @@ impl OpsCtrl {
                     _ => String::new(),
                 };
                 // 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
-                let (status, detail) = match outcome {
+                let (status, detail) = match &item.outcome {
                     naygo_core::ops::OpOutcome::Done => (0, String::new()),
                     naygo_core::ops::OpOutcome::Skipped => (1, String::new()),
                     naygo_core::ops::OpOutcome::Failed(why) => (2, why.clone()),
@@ -1634,11 +1635,12 @@ fn file_summary_of(summary: &OpSummary) -> (String, bool, i32) {
     let done: Vec<String> = summary
         .items
         .iter()
-        .filter(|(_, o)| matches!(o, naygo_core::ops::OpOutcome::Done))
-        .map(|(p, _)| {
-            p.file_name()
+        .filter(|i| matches!(i.outcome, naygo_core::ops::OpOutcome::Done))
+        .map(|i| {
+            i.dest
+                .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| p.display().to_string())
+                .unwrap_or_else(|| i.dest.display().to_string())
         })
         .collect();
     let count = done.len() as i32;
@@ -2771,7 +2773,11 @@ mod tests {
         let mk = |items: Vec<(&str, OpOutcome)>| OpSummary {
             items: items
                 .into_iter()
-                .map(|(s, o)| (PathBuf::from(s), o))
+                .map(|(s, o)| naygo_core::ops::OpItem {
+                    dest: PathBuf::from(s),
+                    outcome: o,
+                    src: None,
+                })
                 .collect(),
             bytes_done: 0,
             elapsed_secs: 0.0,
@@ -2799,7 +2805,7 @@ mod tests {
 
     #[test]
     fn op_file_list_marca_saltados_y_fallidos() {
-        use naygo_core::ops::{OpOutcome, OpSummary};
+        use naygo_core::ops::{OpItem, OpOutcome, OpSummary};
         // Inyectamos una op terminada a mano con un mix de outcomes y verificamos el mapeo de estado.
         let mut c = OpsCtrl::new(std::env::temp_dir());
         c.start_op(
@@ -2811,12 +2817,21 @@ mod tests {
         let id = c.active_ops[0].id;
         c.active_ops[0].summary = Some(OpSummary {
             items: vec![
-                (PathBuf::from("D:/dst/ok.txt"), OpOutcome::Done),
-                (PathBuf::from("D:/dst/salt.txt"), OpOutcome::Skipped),
-                (
-                    PathBuf::from("D:/dst/mal.txt"),
-                    OpOutcome::Failed("permiso".into()),
-                ),
+                OpItem {
+                    dest: PathBuf::from("D:/dst/ok.txt"),
+                    outcome: OpOutcome::Done,
+                    src: None,
+                },
+                OpItem {
+                    dest: PathBuf::from("D:/dst/salt.txt"),
+                    outcome: OpOutcome::Skipped,
+                    src: None,
+                },
+                OpItem {
+                    dest: PathBuf::from("D:/dst/mal.txt"),
+                    outcome: OpOutcome::Failed("permiso".into()),
+                    src: None,
+                },
             ],
             bytes_done: 0,
             elapsed_secs: 0.0,

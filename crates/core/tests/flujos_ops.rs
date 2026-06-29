@@ -586,7 +586,11 @@ fn deshacer_un_delete_no_esta_disponible() {
     fs::write(&f, b"x").unwrap();
     let req = ops::delete(vec![f], false);
     let summary = OpSummary {
-        items: vec![(PathBuf::from("a.txt"), OpOutcome::Done)],
+        items: vec![ops::OpItem {
+            dest: PathBuf::from("a.txt"),
+            outcome: OpOutcome::Done,
+            src: None,
+        }],
         ..Default::default()
     };
     assert!(

@@ -10,8 +10,8 @@
 
 use super::journal::JournalWriter;
 use super::{
-    ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpKind, OpMsg, OpOutcome,
-    OpPlan, OpProgress, OpStep, OpSummary,
+    ConflictAction, ConflictDecision, ConflictPolicy, ConflictPrompt, OpItem, OpKind, OpMsg,
+    OpOutcome, OpPlan, OpProgress, OpStep, OpSummary,
 };
 use crate::cancel::CancellationToken;
 use std::io::{Read, Write};
@@ -124,22 +124,27 @@ pub fn run_plan(
             })
         });
         if borraria_un_origen {
-            summary.items.push((
-                target.clone(),
-                OpOutcome::Failed(
+            // Aviso de un borrado previo omitido: no tiene origen (`src: None`); `dest` es la
+            // carpeta destino que no se tocó.
+            summary.items.push(OpItem {
+                dest: target.clone(),
+                outcome: OpOutcome::Failed(
                     "borrado omitido: el destino a reemplazar es (o contiene) un origen de la \
                      operación; nunca se borra un origen"
                         .to_string(),
                 ),
-            ));
+                src: None,
+            });
             continue;
         }
         // Solo borrar si existe; si ya no está, no es un error (objetivo cumplido).
         if target.exists() {
             if let Err(e) = std::fs::remove_dir_all(target) {
-                summary
-                    .items
-                    .push((target.clone(), OpOutcome::Failed(e.to_string())));
+                summary.items.push(OpItem {
+                    dest: target.clone(),
+                    outcome: OpOutcome::Failed(e.to_string()),
+                    src: None,
+                });
             }
         }
     }
@@ -181,7 +186,14 @@ pub fn run_plan(
             files_done += 1;
         }
         let resolved = matches!(outcome, OpOutcome::Done | OpOutcome::Skipped);
-        summary.items.push((record_path, outcome));
+        // Provenance explícita: `dest` es el destino REAL del paso (puede diferir de `step.to`
+        // por conflict-rename); `src` es el origen del paso (`step.from`, `None` al crear vacío).
+        // Guardar el origen aquí es lo que permite deshacer un Move sin re-derivarlo por nombre.
+        summary.items.push(OpItem {
+            dest: record_path,
+            outcome,
+            src: step.from.clone(),
+        });
 
         // El cursor del journal avanza solo mientras los pasos se resuelven de forma
         // contigua. El primer fallo levanta una barrera: a partir de ahí el cursor no
@@ -691,7 +703,7 @@ mod tests {
             !summary
                 .items
                 .iter()
-                .any(|(_, o)| matches!(o, OpOutcome::Failed(_))),
+                .any(|i| matches!(i.outcome, OpOutcome::Failed(_))),
             "no debe fallar ningún paso"
         );
         let anidada = dir.path().join("a").join("b").join("c");
