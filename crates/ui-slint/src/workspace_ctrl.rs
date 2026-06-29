@@ -421,6 +421,22 @@ pub struct BatchRenameState {
     pub tz_offset_secs: i64,
 }
 
+/// Mezcla en `h` TODO lo que de un `Entry` determina su `PlainRow` pintada: nombre, ruta (la usan
+/// `is_cut`/`is_fresh`), tamaño, modificado, creado, y si es directorio. NO incluye `hidden`/
+/// `system` porque la visibilidad ya se hashea aparte y filtra la vista antes de llegar aquí. Sin
+/// allocs: hashea por referencia. La usa `rows_signature` (O-1).
+fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, h: &mut H) {
+    use std::hash::Hash;
+    e.name.hash(h);
+    e.path.hash(h);
+    // `EntryKind` no deriva Hash en core: su discriminante basta (solo importa Directory vs no).
+    std::mem::discriminant(&e.kind).hash(h);
+    e.size.hash(h);
+    // `SystemTime` implementa Hash; `Option` lo propaga.
+    e.modified.hash(h);
+    e.created.hash(h);
+}
+
 impl WorkspaceCtrl {
     /// Arranca con UN panel Files en `start` (el usuario agrega más con el botón). Lanza
     /// su listado inicial. La configuración se carga del directorio portable.
@@ -1262,6 +1278,141 @@ impl WorkspaceCtrl {
             ),
             None => Vec::new(),
         }
+    }
+
+    /// Firma O(n) SIN allocs de TODO lo que determina las filas pintadas del panel `id` (O-1).
+    /// Si entre dos ticks esta firma no cambia, `rows_of` produciría EXACTAMENTE las mismas filas,
+    /// así que `sync_rows` puede saltarse la reconstrucción (que sí aloca decenas de miles de
+    /// `String` por tick en carpetas grandes bajo render por software).
+    ///
+    /// Devuelve `None` cuando NO se debe cachear: el panel tiene resaltado "fresco" vigente, que
+    /// se desvanece por diseño cada tick (`is_fresh_ro` depende de `now`). En ese caso el llamador
+    /// reconstruye siempre para que el fundido se vea. `None` también para paneles no-Files.
+    ///
+    /// La firma cubre, exhaustivamente, cada cosa que afecta una `PlainRow`:
+    ///  - identidad+orden+contenido de las entries VISIBLES (vía `view_indices`): nombre, ruta,
+    ///    tamaño, modificado, creado, y si es directorio. Hashear el CONTENIDO (no solo `len`) es
+    ///    obligatorio: un `DirEvent::Modified` reemplaza un entry IN SITU sin cambiar `len`, lo que
+    ///    cambia la celda de Tamaño/Fecha. Iterar la vista es O(n) pero sin alocar Strings (mucho
+    ///    más barato que reconstruir las filas, que es O(n) CON allocs);
+    ///  - selección (`selected`) y foco (`focused`);
+    ///  - conjunto de columnas visibles, en su orden (qué celdas y en qué orden van);
+    ///  - formato de tamaño y de fecha (cambian el texto de las celdas);
+    ///  - flags de visibilidad (qué entries entran a la vista; ya implícito en `view_indices`, se
+    ///    incluye igual por robustez);
+    ///  - conjunto de rutas "cortadas" (atenúa la fila);
+    ///  - firma del set de íconos (set activo + tinte + overrides): cambia el ícono de cada fila;
+    ///  - vista profunda: flag activo + nº de items del job (otra fuente de filas).
+    ///
+    /// Lo que NO entra a propósito: `drag_over` (es del PaneVm, no de las filas, y `sync_rows` lo
+    /// maneja aparte) y los anchos de columna (no afectan el TEXTO de la fila; van por el modelo
+    /// `columns`, que se sigue refrescando con `columns_of`).
+    pub fn rows_signature(
+        &self,
+        id: PaneId,
+        highlight_secs: u64,
+        now: std::time::Instant,
+    ) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let f = self.ws.pane(id).and_then(|p| p.files.as_ref())?;
+
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+
+        // --- Formato (afecta el texto de celdas) ---
+        std::mem::discriminant(&self.config.settings.size_format).hash(&mut h);
+        std::mem::discriminant(&self.config.settings.date_format).hash(&mut h);
+
+        // --- Visibilidad (qué entries entran a la vista) ---
+        self.visibility_flags().hash(&mut h);
+
+        // --- Columnas visibles, en orden (qué celdas y en qué orden) ---
+        for c in f.table.visible_columns() {
+            c.kind.hash(&mut h);
+        }
+
+        // --- Conjunto cortado (atenúa la fila). Orden-independiente: XOR de hashes por ruta. ---
+        let mut cut_acc: u64 = 0;
+        for p in &self.ops.cut_set {
+            let mut ph = std::collections::hash_map::DefaultHasher::new();
+            p.hash(&mut ph);
+            cut_acc ^= ph.finish();
+        }
+        cut_acc.hash(&mut h);
+
+        // --- Íconos (set activo + tinte + overrides): cambia el ícono de cada fila ---
+        self.icons.signature().hash(&mut h);
+
+        // --- Foco (cambia el flag `focused` de una fila) ---
+        f.focused.hash(&mut h);
+        // --- Selección. Orden-independiente (la vista la consulta como conjunto). ---
+        let mut sel_acc: u64 = 0;
+        for &pos in &f.selected {
+            let mut sh = std::collections::hash_map::DefaultHasher::new();
+            pos.hash(&mut sh);
+            sel_acc ^= sh.finish();
+        }
+        sel_acc.hash(&mut h);
+
+        // --- Vista profunda: otra fuente de filas (deep_items con depth). ---
+        if self.is_deep_active(id) {
+            1u8.hash(&mut h); // marca "modo profundo" (distinto de la vista normal)
+            let items = self.deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
+            items.len().hash(&mut h);
+            // Contenido de cada item visible (mismo razonamiento que la vista normal). La
+            // visibilidad se aplica aquí igual que en `rows_of`.
+            let vis = self.visibility_flags();
+            for (e, depth) in items {
+                if !naygo_core::filter::is_visible(e, vis.show_hidden, vis.show_system, vis.hide_dotfiles)
+                {
+                    continue;
+                }
+                depth.hash(&mut h);
+                hash_entry_for_row(e, &mut h);
+            }
+        } else {
+            0u8.hash(&mut h); // marca "vista normal"
+            // Contenido de las entries VISIBLES, en orden de vista. Captura inserción/borrado
+            // (cambia la vista), reordenamiento, y mutación IN SITU (Modified).
+            let view = f.view_indices();
+            view.len().hash(&mut h);
+            for &real in &view {
+                if let Some(e) = f.entries.get(real) {
+                    hash_entry_for_row(e, &mut h);
+                }
+            }
+        }
+
+        // --- Resaltado "fresco": si hay alguna fila vigente, NO cachear (el fundido cambia cada
+        // tick por diseño). Se evalúa AL FINAL para no pagar el costo si total ya rebota.
+        if self.fresh_active_in_pane(id, highlight_secs, now) {
+            return None;
+        }
+
+        Some(h.finish())
+    }
+
+    /// ¿El panel `id` tiene alguna ruta VISIBLE todavía "fresca" (resaltada)? Si la hay, la fila
+    /// se pinta resaltada y el resaltado se desvanece con el tiempo (`is_fresh_ro` depende de
+    /// `now`), así que la firma no debe cachearse: el llamador reconstruye cada tick. Recorre solo
+    /// la vista (no todas las entries) y corta al primer acierto.
+    fn fresh_active_in_pane(&self, id: PaneId, highlight_secs: u64, now: std::time::Instant) -> bool {
+        if highlight_secs == 0 {
+            return false;
+        }
+        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
+            return false;
+        };
+        if self.is_deep_active(id) {
+            let items = self.deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
+            return items
+                .iter()
+                .any(|(e, _)| self.watchers.is_fresh_ro(id.0, &e.path, highlight_secs, now));
+        }
+        f.view_indices().iter().any(|&real| {
+            f.entries
+                .get(real)
+                .is_some_and(|e| self.watchers.is_fresh_ro(id.0, &e.path, highlight_secs, now))
+        })
     }
 
     /// Etiqueta i18n de una columna (clave `col.*`).
@@ -5733,6 +5884,90 @@ mod tests {
         c.ws.active_files_mut().unwrap().select_single(posf);
         c.open_context_menu(0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
+    }
+
+    /// O-1: la firma de filas por panel detecta TODO lo que cambia una fila pintada y, sin
+    /// cambios, es estable entre llamadas (para saltarse la reconstrucción). Cubre: estabilidad,
+    /// selección, foco, columnas, formato de tamaño y de fecha, contenido de las entries (Modified
+    /// in situ), conjunto cortado, y el caso "fresco" → None (no cachear).
+    #[test]
+    fn rows_signature_detecta_cambios_y_es_estable() {
+        use std::time::Instant;
+        let cfg = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(work.path().join("b.txt"), b"yy").unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let id = c.ws.active_id().unwrap();
+        let now = Instant::now();
+        let secs = c.highlight_secs();
+
+        // Sin nada fresco, la firma es Some y ESTABLE entre dos llamadas idénticas.
+        let s0 = c.rows_signature(id, secs, now).expect("sin fresh: Some");
+        let s0b = c.rows_signature(id, secs, now).expect("Some");
+        assert_eq!(s0, s0b, "dos llamadas sin cambios → misma firma");
+
+        // Cambiar la SELECCIÓN cambia la firma.
+        let pos = active_pos_of(&c, "a.txt").unwrap();
+        c.ws.active_files_mut().unwrap().select_single(pos);
+        let s_sel = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s0, s_sel, "seleccionar cambia la firma");
+        // Y vuelve a ser estable tras el cambio.
+        assert_eq!(s_sel, c.rows_signature(id, secs, now).unwrap());
+
+        // Cambiar el FOCO (sin tocar la selección, Ctrl+↓) cambia la firma.
+        c.ws.active_files_mut().unwrap().move_focus_keep(1);
+        let s_focus = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s_sel, s_focus, "mover el foco cambia la firma");
+
+        // Cambiar las COLUMNAS visibles cambia la firma (Created está oculta por defecto → mostrar).
+        c.column_toggle(id, crate::bridge::column_kind_to_int(naygo_core::columns::ColumnKind::Created));
+        let s_cols = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s_focus, s_cols, "cambiar columnas visibles cambia la firma");
+
+        // Cambiar el FORMATO DE TAMAÑO cambia la firma (afecta el texto de la celda Size).
+        let before = c.rows_signature(id, secs, now).unwrap();
+        c.config.settings.size_format = naygo_core::format::SizeFormat::Bytes;
+        let s_size = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(before, s_size, "cambiar size_format cambia la firma");
+
+        // Cambiar el FORMATO DE FECHA cambia la firma.
+        c.config.settings.date_format = naygo_core::format::DateFormat::DmyDate;
+        let s_date = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s_size, s_date, "cambiar date_format cambia la firma");
+
+        // Mutar una entry IN SITU (como un DirEvent::Modified: mismo len, distinto tamaño) cambia
+        // la firma. Es el caso que un hash solo-por-len se perdería (fila desactualizada).
+        let s_pre_mod = c.rows_signature(id, secs, now).unwrap();
+        {
+            let f = c.ws.active_files_mut().unwrap();
+            if let Some(e) = f.entries.iter_mut().find(|e| e.name == "a.txt") {
+                e.size = Some(99_999);
+            }
+        }
+        let s_mod = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s_pre_mod, s_mod, "mutar el tamaño de una entry cambia la firma");
+
+        // Marcar una ruta como CORTADA cambia la firma (la fila se atenúa).
+        let s_pre_cut = c.rows_signature(id, secs, now).unwrap();
+        c.ops.set_cut(&[work.path().join("a.txt")]);
+        let s_cut = c.rows_signature(id, secs, now).unwrap();
+        assert_ne!(s_pre_cut, s_cut, "cortar una ruta cambia la firma");
+
+        // Resaltado FRESCO vigente → None (no cachear: el fundido cambia cada tick).
+        c.watchers
+            .mark_fresh(id.0, vec![work.path().join("a.txt")], now);
+        assert!(
+            c.rows_signature(id, secs, now).is_none(),
+            "con una fila fresca vigente, la firma es None (no cachear)"
+        );
+        // Pasado el tiempo de resaltado, vuelve a ser Some (cacheable de nuevo).
+        let later = now + std::time::Duration::from_secs(secs + 1);
+        assert!(
+            c.rows_signature(id, secs, later).is_some(),
+            "vencido el resaltado, vuelve a ser cacheable"
+        );
     }
 
     /// C3: agregar/alternar/aliasar/quitar reglas de previsualización; persisten.

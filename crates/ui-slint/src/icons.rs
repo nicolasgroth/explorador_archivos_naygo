@@ -91,6 +91,36 @@ impl IconCache {
         &self.active
     }
 
+    /// Firma O(k) (k = nº de overrides, normalmente 0) del estado que determina el `slint::Image`
+    /// de CADA fila: set activo + tinte + tintable + overrides. Si esta firma no cambia, todos los
+    /// íconos que `get` devolvería son idénticos (mismo buffer cacheado). La usa `rows_signature`
+    /// para incluir el ícono en la firma por panel sin re-decodificar nada. NO aloca: hashea por
+    /// referencia los bytes del id/overrides.
+    pub fn signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.active.hash(&mut h);
+        self.tint.hash(&mut h);
+        self.tintable.hash(&mut h);
+        // El BTreeMap recorre ordenado → hash estable. Normalmente vacío (sin overrides).
+        for (name, src) in &self.overrides {
+            name.hash(&mut h);
+            // `IconSource` no deriva Hash en core: hashear sus variantes a mano (un id de set o
+            // una ruta relativa). El discriminante separa Builtin de UserPng con el mismo string.
+            match src {
+                naygo_core::icon_source::IconSource::Builtin { set_id } => {
+                    0u8.hash(&mut h);
+                    set_id.hash(&mut h);
+                }
+                naygo_core::icon_source::IconSource::UserPng { rel_path } => {
+                    1u8.hash(&mut h);
+                    rel_path.hash(&mut h);
+                }
+            }
+        }
+        h.finish()
+    }
+
     /// El `slint::Image` del ícono `key` en el set activo, aplicando overrides y tinte.
     /// Lo decodifica si falta y lo cachea. Si el PNG es ilegible, devuelve imagen vacía.
     pub fn get(&mut self, key: IconKey) -> Image {

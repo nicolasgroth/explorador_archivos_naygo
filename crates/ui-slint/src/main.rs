@@ -382,12 +382,20 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     };
 
+    // Última firma de filas por panel Files (clave: PaneId.0). `sync_rows` compara la firma de
+    // cada panel contra esta tabla y, si no cambió, NO reconstruye sus filas (O-1: evita decenas
+    // de miles de allocs de String por tick en carpetas grandes bajo render por software). Vive
+    // junto a `models` y lo captura el closure; no va en el controlador para no enredar los
+    // préstamos (`sync_rows` ya tiene `c`/`m` prestados).
+    let last_row_sig: Rc<RefCell<HashMap<u64, u64>>> = Rc::new(RefCell::new(HashMap::new()));
+
     // Actualiza SOLO el contenido (filas + structs + flags) sin tocar la estructura. Barato:
     // corre en cada tick. Mantiene los mismos VecModel → los ListView conservan su scroll.
     let sync_rows = {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
         let models = models.clone();
+        let last_row_sig = last_row_sig.clone();
         move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -430,11 +438,31 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Actualiza los modelos de lista que apliquen al tipo, in situ.
                 match purpose {
                     Some(PanePurpose::Files) => {
-                        let rows: Vec<RowData> = c
-                            .rows_of(id, hl_secs, hl_now)
-                            .into_iter()
-                            .map(to_row_data)
-                            .collect();
+                        // O-1: firma barata del estado que determina las filas. Si no cambió desde
+                        // el tick anterior, `rows_of` daría las MISMAS filas → saltamos su
+                        // construcción (O(n) con allocs de String) y el `set_vec`. `None` = no
+                        // cachear (resaltado fresco vigente: el fundido cambia cada tick).
+                        let sig = c.rows_signature(id, hl_secs, hl_now);
+                        let mut sigs = last_row_sig.borrow_mut();
+                        let rows_unchanged = match sig {
+                            Some(s) => {
+                                if sigs.get(&id.0) == Some(&s) {
+                                    true // misma firma: filas idénticas, no reconstruir
+                                } else {
+                                    sigs.insert(id.0, s);
+                                    false
+                                }
+                            }
+                            None => {
+                                // Sin cache este tick: limpiar la firma guardada para que el
+                                // PRÓXIMO tick (ya sin fresh) reconstruya y vuelva a sembrarla.
+                                sigs.remove(&id.0);
+                                false
+                            }
+                        };
+                        drop(sigs);
+                        // Columnas y menú de columnas son baratos (≤5 entradas): se refrescan
+                        // siempre, no entran al cache de filas.
                         let cols: Vec<ColumnVm> =
                             c.columns_of(id).into_iter().map(to_column_vm).collect();
                         let col_menu: Vec<ColumnToggleVm> = c
@@ -442,10 +470,21 @@ fn main() -> Result<(), slint::PlatformError> {
                             .into_iter()
                             .map(to_column_toggle_vm)
                             .collect();
-                        let pm = m.models_for(id);
-                        pm.rows.set_vec(rows);
-                        pm.columns.set_vec(cols);
-                        pm.col_menu.set_vec(col_menu);
+                        if !rows_unchanged {
+                            let rows: Vec<RowData> = c
+                                .rows_of(id, hl_secs, hl_now)
+                                .into_iter()
+                                .map(to_row_data)
+                                .collect();
+                            let pm = m.models_for(id);
+                            pm.rows.set_vec(rows);
+                            pm.columns.set_vec(cols);
+                            pm.col_menu.set_vec(col_menu);
+                        } else {
+                            let pm = m.models_for(id);
+                            pm.columns.set_vec(cols);
+                            pm.col_menu.set_vec(col_menu);
+                        }
                     }
                     Some(PanePurpose::Tree) => {
                         let rows: Vec<TreeRow> =
