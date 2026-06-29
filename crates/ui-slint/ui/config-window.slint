@@ -712,8 +712,13 @@ export component ConfigWindow inherits Window {
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.languages;
-                                        current-value: root.vm.language;
-                                        selected => { root.set-language(self.current-value); }
+                                        current-value: root.vm.language-label;
+                                        selected => {
+                                            // languages muestra nombres nativos; language-codes tiene
+                                            // los códigos en el mismo orden. Usamos el índice seleccionado
+                                            // para obtener el código y no depender del texto mostrado.
+                                            root.set-language(root.vm.language-codes[self.current-index]);
+                                        }
                                     }
                                 }
                                 // Galería de sets de íconos: misma estructura que la galería de temas.

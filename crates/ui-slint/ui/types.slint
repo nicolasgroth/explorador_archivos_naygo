@@ -451,9 +451,11 @@ export struct SettingsVm {
     default-table-on: bool,   // hay plantilla de tabla por defecto guardada (C4)
     row-h: length,            // alto de fila resuelto (22/26px) — lo usan tabla y árbol
     language: string,         // código del idioma activo
+    language-label: string,   // nombre nativo del idioma activo (para el combo)
     theme: string,            // id del tema activo
     icon-set: string,         // id del set de íconos activo
-    languages: [string],      // códigos disponibles
+    languages: [string],      // nombres nativos disponibles (para mostrar en el combo)
+    language-codes: [string], // códigos correspondientes a languages (mismo orden)
     themes: [string],         // ids disponibles
     icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
     icon-set-tintable: bool,  // el set activo admite teñido por color de acento
