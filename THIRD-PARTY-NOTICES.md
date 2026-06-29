@@ -37,6 +37,17 @@ La vista previa de código resalta la sintaxis con [syntect](https://github.com/
 
 ---
 
+## Vista previa de archivos comprimidos (tar, flate2, miniz_oxide)
+
+La vista previa de `.tar`, `.tar.gz` y `.zip` usa:
+
+- **tar** (<https://crates.io/crates/tar>) — licencia MIT/Apache-2.0. Lee archivos TAR de forma secuencial, en puro Rust, sin dependencias nativas.
+- **flate2** (<https://crates.io/crates/flate2>) — licencia MIT/Apache-2.0. Descompresión gzip (`.tar.gz`). Backend: **miniz_oxide** (MIT/Zlib/Apache-2.0), implementación pura en Rust de miniz.
+
+Todas son licencias permisivas. Ninguna impone regalías ni restricciones de distribución.
+
+---
+
 ## Íconos (sets de fábrica)
 
 Los sets de íconos de fábrica se generan a partir de estas librerías de código abierto,
