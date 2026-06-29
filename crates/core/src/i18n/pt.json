@@ -633,6 +633,7 @@
   "slint.cfg.cat_shortcuts": "Atalhos",
   "slint.cfg.cat_import": "Importar/Exportar",
   "slint.cfg.cat_about": "Sobre",
+  "slint.cfg.cat_language": "Idioma",
   "slint.pathbar.fav_tip": "Fixar/remover esta pasta dos favoritos",
   "slint.pathbar.copy_tip": "Copiar o caminho para a área de transferência",
   "slint.pathbar.copied": "Caminho copiado",

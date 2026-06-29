@@ -314,6 +314,7 @@ where
     tr.set_cfg_cat_shortcuts(c.t("slint.cfg.cat_shortcuts").into());
     tr.set_cfg_cat_import(c.t("slint.cfg.cat_import").into());
     tr.set_cfg_cat_about(c.t("slint.cfg.cat_about").into());
+    tr.set_cfg_cat_language(c.t("slint.cfg.cat_language").into());
     tr.set_cfg_cat_advanced(c.t("slint.cfg.cat_advanced").into());
     tr.set_cfg_cat_preview(c.t("slint.cfg.cat_preview").into());
     tr.set_cfg_preview_hint(c.t("slint.cfg.preview_hint").into());

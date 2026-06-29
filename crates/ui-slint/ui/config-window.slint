@@ -80,20 +80,23 @@ component CfgBtn inherits Rectangle {
     in property <bool> danger: false;
     callback clicked();
     height: 26px;
-    min-width: 80px;
+    // El botón crece con su texto: el ancho mínimo es el del texto + padding lateral, así
+    // ninguna etiqueta (ni la traducción más larga) se recorta. El piso de 80px mantiene un
+    // tamaño consistente para los botones cortos.
+    min-width: max(80px, lbl.preferred-width + 20px);
     background: touch.has-hover
         ? (root.danger ? Theme.error : Theme.selection-bg)
         : Theme.row-bg;
     border-radius: 4px;
     border-width: 1px;
     border-color: Theme.border;
-    Text {
+    lbl := Text {
         text: root.label;
         color: Theme.text;
         font-size: 12px;
         horizontal-alignment: center;
         vertical-alignment: center;
-        x: 8px;
+        x: (parent.width - self.width) / 2;
     }
     touch := TouchArea { clicked => { root.clicked(); } }
 }
@@ -290,7 +293,7 @@ export component ConfigWindow inherits Window {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about, Tr.cfg-cat-icons]: Rectangle {
+                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about, Tr.cfg-cat-icons, Tr.cfg-cat-language]: Rectangle {
                             height: 30px;
                             background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
@@ -707,22 +710,8 @@ export component ConfigWindow inherits Window {
                                         }
                                     }
                                 }
-                                Field {
-                                    label: Tr.cfg-language;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: root.vm.languages;
-                                        // ThemeCombo deriva current-value de current-index, así que
-                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
-                                        current-index: root.vm.language-index;
-                                        selected => {
-                                            // languages muestra nombres nativos; language-codes tiene
-                                            // los códigos en el mismo orden. Usamos el índice seleccionado
-                                            // para obtener el código y no depender del texto mostrado.
-                                            root.set-language(root.vm.language-codes[self.current-index]);
-                                        }
-                                    }
-                                }
+                                // (El selector de idioma se movió a su propia categoría "Idioma"
+                                // del sidebar para que sea fácil de encontrar; ya no vive aquí.)
                                 // Galería de sets de íconos: misma estructura que la galería de temas.
                                 // Las tarjetas se posicionan por fila/columna calculadas; un clic aplica
                                 // el set en caliente y el botón "Personalizar" lo activa Y salta a Íconos.
@@ -1069,7 +1058,8 @@ export component ConfigWindow inherits Window {
                                         LineEdit {
                                             width: root.ctl-w - 90px;
                                             text: root.home-dir;
-                                            placeholder-text: Tr.cfg-home-dir-empty;
+                                            // Sin placeholder largo aquí (se cortaba en el campo
+                                            // angosto). La explicación va completa en el Text de abajo.
                                             edited(t) => { root.set-home-dir(t); }
                                         }
                                         CfgBtn {
@@ -1480,6 +1470,28 @@ export component ConfigWindow inherits Window {
                                     label: Tr.icons-reset;
                                     danger: true;
                                     clicked => { root.reset-icon-overrides(); }
+                                }
+                            }
+
+                            // === Idioma (cat 10) — categoría propia para que sea fácil de hallar ===
+                            if root.cat == 10: VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Field {
+                                    label: Tr.cfg-language;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: root.vm.languages;
+                                        // ThemeCombo deriva current-value de current-index, así que
+                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
+                                        current-index: root.vm.language-index;
+                                        selected => {
+                                            // languages muestra nombres nativos; language-codes tiene
+                                            // los códigos en el mismo orden. Usamos el índice seleccionado
+                                            // para obtener el código y no depender del texto mostrado.
+                                            root.set-language(root.vm.language-codes[self.current-index]);
+                                        }
+                                    }
                                 }
                             }
                         }

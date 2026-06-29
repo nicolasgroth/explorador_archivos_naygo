@@ -113,8 +113,13 @@ export component PreviewPanel inherits Rectangle {
         if root.view.mode == 1: VerticalLayout {
             vertical-stretch: 1;
             spacing: 2px;
-            ScrollView {
+            sv := ScrollView {
                 vertical-stretch: 1;
+                // Al cambiar de archivo previsualizado, el ScrollView conservaba el scroll del
+                // anterior y un comprimido largo salía mostrado por el final. Reseteamos el
+                // viewport al inicio cuando cambia la ruta del archivo (espejo de view.path).
+                property <string> for-path: root.view.path;
+                changed for-path => { self.viewport-y = 0; }
                 // Código resaltado: una fila por línea (un Text por segmento, sin ajuste), con
                 // SCROLL HORIZONTAL como un editor — respeta la indentación y conserva el color.
                 // El viewport toma el ancho natural del contenido; si supera el visible, el
