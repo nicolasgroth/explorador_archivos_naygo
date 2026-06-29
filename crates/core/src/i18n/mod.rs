@@ -273,4 +273,76 @@ mod tests {
         assert!(codes.contains(&"es"));
         assert!(codes.contains(&"en"));
     }
+
+    #[test]
+    fn todos_los_idiomas_tienen_las_claves_de_es() {
+        let langs: &[(&str, &str)] = &[
+            ("en", EN_JSON),
+            ("pt", PT_JSON),
+            ("fr", FR_JSON),
+            ("de", DE_JSON),
+            ("it", IT_JSON),
+            ("zh", ZH_JSON),
+            ("ja", JA_JSON),
+            ("ko", KO_JSON),
+            ("hi", HI_JSON),
+        ];
+        let es: std::collections::HashMap<String, String> =
+            serde_json::from_str(ES_JSON).unwrap();
+        let es_keys: std::collections::BTreeSet<&String> = es.keys().collect();
+        for (code, json) in langs {
+            let m: std::collections::HashMap<String, String> =
+                serde_json::from_str(json).unwrap();
+            let keys: std::collections::BTreeSet<&String> = m.keys().collect();
+            assert_eq!(
+                keys, es_keys,
+                "el idioma {code} no tiene exactamente las claves de es.json"
+            );
+        }
+    }
+
+    #[test]
+    fn placeholders_consistentes_entre_idiomas() {
+        use std::collections::{BTreeSet, HashMap};
+        fn extract(s: &str) -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            let mut rest = s;
+            while let Some(start) = rest.find('{') {
+                if let Some(len) = rest[start..].find('}') {
+                    out.insert(rest[start..start + len + 1].to_string());
+                    rest = &rest[start + len + 1..];
+                } else {
+                    break;
+                }
+            }
+            out
+        }
+        let es: HashMap<String, String> = serde_json::from_str(ES_JSON).unwrap();
+        let langs: &[&str] = &[
+            EN_JSON, PT_JSON, FR_JSON, DE_JSON, IT_JSON, ZH_JSON, JA_JSON, KO_JSON, HI_JSON,
+        ];
+        // Claves cuyo valor muestra los propios nombres de los tokens como ayuda al usuario;
+        // los nombres de los tokens cambian entre idiomas (ej. {nombre} en ES, {name} en EN),
+        // así que no se pueden comparar entre idiomas como si fueran placeholders de Rust.
+        let skip_keys: &[&str] = &["batch.help.text", "batch.help"];
+        for json in langs {
+            let m: HashMap<String, String> = serde_json::from_str(json).unwrap();
+            for (k, v_es) in &es {
+                if skip_keys.contains(&k.as_str()) {
+                    continue;
+                }
+                let ph = extract(v_es);
+                if ph.is_empty() {
+                    continue;
+                }
+                if let Some(v) = m.get(k) {
+                    assert_eq!(
+                        extract(v),
+                        ph,
+                        "placeholders distintos en la clave {k}"
+                    );
+                }
+            }
+        }
+    }
 }
