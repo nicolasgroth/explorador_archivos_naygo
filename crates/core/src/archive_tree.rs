@@ -58,7 +58,7 @@ pub fn build_tree(entries: &[ArchiveEntry]) -> TreeNode {
                     cur.children.len() - 1
                 }
             };
-            if want_file {
+            if want_file && cur.children[idx].children.is_empty() {
                 cur.children[idx].is_dir = false;
                 cur.children[idx].size = e.size;
             }
@@ -199,5 +199,22 @@ mod tests {
         assert_eq!(a.children[0].children.len(), 1);
         assert_eq!(a.children[0].children[0].name, "c.txt");
         assert_eq!(a.children[0].children[0].size, 10);
+    }
+
+    #[test]
+    fn build_tree_archivo_malformado_no_corrompe_carpeta() {
+        // Archivo (malformado) con "a/b/c.txt" Y "a/b" como ARCHIVO: la carpeta b con su hijo
+        // c.txt no se debe corromper (el contenido no se pierde).
+        let entries = vec![
+            ArchiveEntry { path: "a/b/c.txt".into(), is_dir: false, size: 10 },
+            ArchiveEntry { path: "a/b".into(), is_dir: false, size: 99 },
+        ];
+        let root = build_tree(&entries);
+        let a = &root.children[0];
+        let b = &a.children[0];
+        assert_eq!(b.name, "b");
+        assert!(b.is_dir, "b sigue siendo carpeta (tiene un hijo)");
+        assert_eq!(b.children.len(), 1, "c.txt no se perdió");
+        assert_eq!(b.children[0].name, "c.txt");
     }
 }
