@@ -107,7 +107,13 @@ pub fn render_archive_tree(
     render_children(&root.children, "", &mut out, size_fmt);
     if summary.truncated {
         let extra = summary.total_entries.saturating_sub(entries.len());
-        out.push_str(&format!("\n… y {extra} más\n"));
+        if extra > 0 {
+            out.push_str(&format!("\n… y {extra} más\n"));
+        } else {
+            // tar truncado: no conocemos el total real sin leerlo entero, así que el texto es
+            // honesto (hay más, sin afirmar un número que no sabemos).
+            out.push_str("\n… y más entradas\n");
+        }
     }
     out
 }

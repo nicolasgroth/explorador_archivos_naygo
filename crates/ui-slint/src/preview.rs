@@ -314,8 +314,9 @@ fn read_zip_entries(
 }
 
 /// Lee las entradas de un .tar o .tar.gz (si `gz`, descomprime con flate2). false si falla.
-/// tar es secuencial: no se sabe el total sin iterar todo, así que al cortar en el tope
-/// marcamos `truncated` y `total_entries` se aproxima (no se sigue contando, para no leer todo).
+/// tar es secuencial: no se sabe el total sin iterar todo, así que al cortar en el tope solo
+/// marcamos `truncated` (sin un total exacto). `render_archive_tree` lo refleja como "… y más
+/// entradas" cuando no hay un número confiable, en vez de mentir un conteo.
 fn read_tar_entries(
     path: &Path,
     entries: &mut Vec<naygo_core::archive_tree::ArchiveEntry>,
@@ -347,7 +348,9 @@ fn read_tar_entries(
         if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
         entries.push(ArchiveEntry { path: path_str, is_dir, size });
     }
-    summary.total_entries = entries.len() + if summary.truncated { 1 } else { 0 };
+    // No sumamos un "+1" engañoso: dejamos `total_entries == entries.len()` y confiamos en
+    // `truncated` para que el preview muestre "… y más entradas" (sin un número falso).
+    summary.total_entries = entries.len();
     true
 }
 
