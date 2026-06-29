@@ -5340,6 +5340,18 @@ impl WorkspaceCtrl {
             last_action: crate::logging::last_breadcrumb(),
         }
     }
+
+    /// Los paneles Files cuya carpeta actual está en el disco `drive_root` (el que se va a
+    /// expulsar). Devuelve `(PaneId, carpeta_actual)`. Puro sobre el estado del workspace.
+    #[allow(dead_code)] // la llama la lógica de expulsión de disco en la task siguiente
+    pub fn panes_on_drive(&self, drive_root: &std::path::Path) -> Vec<(PaneId, std::path::PathBuf)> {
+        self.ws
+            .panes()
+            .iter()
+            .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.current_dir.clone())))
+            .filter(|(_, dir)| path_is_on_drive(dir, drive_root))
+            .collect()
+    }
 }
 
 /// Construye un `DirTree` inicial con una raíz por unidad del sistema.
@@ -5401,7 +5413,6 @@ fn disk_usage(root: &Path) -> Option<naygo_core::disk::DiskUsage> {
 /// ¿La ruta `path` está dentro del disco cuya raíz es `drive_root`? Compara por la LETRA
 /// de unidad (primer componente con `:`), case-insensitive (Windows). Una ruta UNC
 /// (`\\srv\share`) o sin letra de unidad nunca está "en" un disco con letra. Pura y testeable.
-#[allow(dead_code)] // la usa panes_on_drive en la task siguiente
 fn path_is_on_drive(path: &std::path::Path, drive_root: &std::path::Path) -> bool {
     fn drive_letter(p: &std::path::Path) -> Option<char> {
         let s = p.to_string_lossy();
@@ -7394,6 +7405,31 @@ mod tests {
         assert!(!on(r"C:\foto", r"E:\"));
         assert!(!on(r"EE:\x", r"E:\"));
         assert!(!on(r"\\srv\share\x", r"E:\"));
+    }
+
+    #[test]
+    fn panes_on_drive_filtra_por_disco() {
+        let work = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        // El panel inicial está en `work` (en el disco del tempdir, p.ej. C:).
+        // Derivar la letra de ese disco desde la ruta real del tempdir:
+        let work_path = work.path().to_path_buf();
+        let drive_root = {
+            // Raíz del disco del tempdir: "<letra>:\"
+            let s = work_path.to_string_lossy();
+            let letter = s.chars().next().unwrap();
+            std::path::PathBuf::from(format!("{letter}:\\"))
+        };
+        // panes_on_drive sobre el disco del tempdir => incluye el panel inicial
+        let en_disco = c.panes_on_drive(&drive_root);
+        assert_eq!(en_disco.len(), 1, "el panel inicial está en el disco del tempdir");
+        // panes_on_drive sobre un disco que seguro no es el del tempdir => vacío.
+        // Elegir una letra distinta a la del tempdir:
+        let otra_letra = if drive_root.to_string_lossy().to_uppercase().starts_with('Z') { 'Y' } else { 'Z' };
+        let otro_disco = std::path::PathBuf::from(format!("{otra_letra}:\\"));
+        let fuera = c.panes_on_drive(&otro_disco);
+        assert!(fuera.is_empty(), "ningún panel está en un disco inexistente");
     }
 }
 
