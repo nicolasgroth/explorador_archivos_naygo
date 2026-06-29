@@ -159,6 +159,8 @@ where
     tr.set_dlg_invalid_name(c.t("slint.dialog.invalid_name").into());
     tr.set_dlg_accept(c.t("slint.dialog.accept").into());
     tr.set_dlg_create(c.t("slint.dialog.create").into());
+    tr.set_dlg_paste_img(c.t("slint.dialog.paste_img").into());
+    tr.set_dlg_paste_txt(c.t("slint.dialog.paste_txt").into());
     tr.set_dlg_resume_q(c.t("slint.dialog.resume_q").into());
     tr.set_dlg_resume(c.t("slint.dialog.resume").into());
     tr.set_dlg_discard(c.t("slint.dialog.discard").into());

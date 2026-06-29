@@ -501,6 +501,8 @@
   "slint.dialog.invalid_name": "Nombre no válido.",
   "slint.dialog.accept": "Aceptar",
   "slint.dialog.create": "Crear",
+  "slint.dialog.paste_img": "Pegar imagen como:",
+  "slint.dialog.paste_txt": "Pegar texto como:",
   "slint.dialog.resume_q": "Hay operaciones que no terminaron. ¿Retomarlas?",
   "slint.dialog.resume": "Retomar",
   "slint.dialog.discard": "Descartar",

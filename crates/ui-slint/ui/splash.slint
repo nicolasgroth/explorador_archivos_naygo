@@ -26,6 +26,8 @@ export component Splash inherits Window {
                 font-weight: 800;
                 horizontal-alignment: center;
             }
+            // Subtítulo del splash (visible ~1s antes de que cargue i18n): texto fijo a propósito;
+            // cablear Tr a esta ventana efímera no compensa.
             Text {
                 text: "Explorador de archivos";
                 color: Theme.text-dim;

@@ -569,7 +569,7 @@ export component OpDialogs inherits Rectangle {
             if root.vm.kind == 4: VerticalLayout {
                 spacing: 12px;
                 Text {
-                    text: root.vm.paste-is-image ? "Pegar imagen como:" : "Pegar texto como:";
+                    text: root.vm.paste-is-image ? Tr.dlg-paste-img : Tr.dlg-paste-txt;
                     color: white;
                 }
                 Text { text: root.vm.paste-name; color: Theme.text; }
