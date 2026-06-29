@@ -3408,6 +3408,7 @@ dependencies = [
 name = "naygo-ui-slint"
 version = "0.2.0"
 dependencies = [
+ "flate2",
  "i-slint-backend-winit",
  "image",
  "lopdf 0.41.0",
@@ -3420,6 +3421,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "tar",
  "tempfile",
  "tiny-skia 0.12.0",
  "tray-icon",
