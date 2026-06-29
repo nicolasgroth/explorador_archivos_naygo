@@ -4711,8 +4711,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
-        ui.on_row_context(move |_id, _pos, x, y| {
-            ctrl.borrow_mut().open_context_menu(x, y);
+        ui.on_row_context(move |id, _pos, x, y| {
+            ctrl.borrow_mut()
+                .open_context_menu(PaneId(id as u64), x, y);
             sync_rows();
             // El menú contextual necesita que el event loop siga vivo para resaltar sus ítems al
             // pasar el mouse: rearmar el timer al abrirlo (igual criterio que con los modales).

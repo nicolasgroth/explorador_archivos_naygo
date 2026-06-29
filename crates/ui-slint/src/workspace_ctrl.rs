@@ -3740,7 +3740,11 @@ impl WorkspaceCtrl {
     /// Abre el menú contextual en (x,y) sobre la fila `pos` del panel `id`. Si la fila no
     /// estaba seleccionada, la selecciona (Explorer hace lo mismo). El objetivo del menú es
     /// la selección actual.
-    pub fn open_context_menu(&mut self, x: f32, y: f32) {
+    pub fn open_context_menu(&mut self, pane: PaneId, x: f32, y: f32) {
+        // Activar el panel del clic derecho: el menú (Copiar/Cortar/…) opera sobre ese panel, no
+        // sobre el que estaba activo. Sin esto, clic derecho en un panel inactivo copiaba/cortaba
+        // la selección de OTRO panel.
+        self.ws.set_active(pane);
         let targets = self.selected_paths();
         if targets.is_empty() {
             return;
@@ -5917,14 +5921,14 @@ mod tests {
         let pos = active_pos_of(&c, "sub").unwrap();
         c.ws.active_files_mut().unwrap().select_single(pos);
         // El menú contextual toma la selección como objetivo.
-        c.open_context_menu(0.0, 0.0);
+        c.open_context_menu(c.ws.active_id().unwrap(), 0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(sub.as_path()));
 
         // Seleccionar un ARCHIVO → cae a la carpeta del panel (no se abre terminal en un archivo).
         c.column_menu_close();
         let posf = active_pos_of(&c, "a.txt").unwrap();
         c.ws.active_files_mut().unwrap().select_single(posf);
-        c.open_context_menu(0.0, 0.0);
+        c.open_context_menu(c.ws.active_id().unwrap(), 0.0, 0.0);
         assert_eq!(c.terminal_dir().as_deref(), Some(work.path()));
     }
 
@@ -7763,7 +7767,7 @@ mod tests {
         assert!(!c.any_modal_open(), "al cerrar el modal vuelve a dormir");
 
         // El menú contextual (clic derecho) también cuenta: necesita hover vivo.
-        c.open_context_menu(0.0, 0.0);
+        c.open_context_menu(c.ws.active_id().unwrap(), 0.0, 0.0);
         assert!(
             c.any_modal_open(),
             "el menú contextual mantiene vivo el timer"
