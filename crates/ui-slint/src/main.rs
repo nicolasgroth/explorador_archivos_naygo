@@ -1036,6 +1036,9 @@ fn main() -> Result<(), slint::PlatformError> {
             // El espacio en disco pudo cambiar (USB conectado/expulsado): invalida la caché del
             // footer para que se relea en el próximo tick, igual que se refresca la tira de discos.
             ctrl.borrow_mut().invalidate_footer_disk_cache();
+            // Un disco que se va/llega puede cambiar el estado "carpeta no encontrada" de paneles
+            // abiertos en él: recalcular el caché (fuera del tick de render).
+            ctrl.borrow_mut().refresh_missing_cache();
             let moved = ctrl.borrow_mut().relocate_orphans(&home);
             for id in moved {
                 let dir = ctrl
@@ -4075,6 +4078,9 @@ fn main() -> Result<(), slint::PlatformError> {
                                 for pid in &panes {
                                     c.mark_pane_ejected(PaneId(*pid));
                                 }
+                                // El disco ya no está: recalcular el caché para que esos paneles
+                                // muestren el aviso "carpeta no encontrada" de inmediato.
+                                c.refresh_missing_cache();
                             }
                             refresh_drives();
                             sync_layout();

@@ -206,6 +206,11 @@ pub struct WorkspaceCtrl {
     /// Cambia solo el TEXTO del aviso in-place ("disco expulsado" vs "carpeta no encontrada").
     /// Se limpia cuando el panel navega a una carpeta válida.
     pub ejected_panes: std::collections::HashSet<u64>,
+    /// Caché del estado "carpeta no encontrada" por panel: `(missing, has_existing_ancestor)`.
+    /// Evita el `read_dir`/`exists` SÍNCRONO en el hilo de UI en CADA tick de `sync_rows` (un
+    /// share de red caído podía bloquear la UI segundos). Se recalcula solo ante eventos reales
+    /// (navegar, reintentar, expulsar, cambio de discos) vía `refresh_missing_cache`.
+    missing_cache: std::collections::HashMap<u64, (bool, bool)>,
 }
 
 /// Petición de un atajo de teclado que necesita que la UI abra un menú/acción de la toolbar cuyos
@@ -490,6 +495,7 @@ impl WorkspaceCtrl {
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
             ejected_panes: std::collections::HashSet::new(),
+            missing_cache: std::collections::HashMap::new(),
         };
         c.push_recent(start.clone());
         c.start_listing(id, start);
@@ -825,22 +831,46 @@ impl WorkspaceCtrl {
             .unwrap_or(-1)
     }
 
-    /// ¿La carpeta del panel `id` dejó de existir / es ilegible? Lo consulta el builder del
-    /// PaneVm para mostrar el aviso DENTRO de ese panel (in-place), con sus opciones.
+    /// ¿La carpeta del panel `id` dejó de existir / es ilegible? Lee del CACHÉ (sin I/O), que
+    /// se recalcula en eventos reales (`refresh_missing_cache`). Antes hacía un `read_dir`
+    /// síncrono en el hilo de UI en cada tick, lo que congelaba la app sobre un share de red
+    /// caído. Lo consulta el builder del PaneVm para el aviso in-place.
     pub fn pane_dir_missing(&self, id: PaneId) -> bool {
-        match self.pane_current_dir(id) {
-            Some(dir) => std::fs::read_dir(&dir).is_err(),
-            None => false,
-        }
+        self.missing_cache.get(&id.0).map(|(m, _)| *m).unwrap_or(false)
     }
 
     /// ¿El panel `id` (en estado "carpeta no encontrada") tiene un ancestro existente real al
-    /// que subir? Falso si la unidad entera se desconectó (no hay a dónde subir con sentido); en
-    /// ese caso el aviso oculta el botón "subir un nivel".
+    /// que subir? Falso si la unidad entera se desconectó. Lee del CACHÉ (sin I/O).
     pub fn pane_has_existing_ancestor(&self, id: PaneId) -> bool {
-        self.pane_current_dir(id)
-            .and_then(|d| Self::nearest_existing_ancestor(&d))
-            .is_some()
+        self.missing_cache.get(&id.0).map(|(_, a)| *a).unwrap_or(false)
+    }
+
+    /// Recalcula el caché del estado "carpeta no encontrada" de TODOS los paneles Files (hace el
+    /// I/O real: `read_dir` + búsqueda de ancestro). Se llama ante eventos que pueden cambiarlo
+    /// (navegar, reintentar, expulsar, conectar/desconectar disco), NUNCA en el tick de render.
+    /// El `read_dir` solo se evalúa si la carpeta podría estar perdida; en disco local sano es
+    /// instantáneo, y al sacarlo del tick un share caído ya no bloquea la UI repetidamente.
+    pub fn refresh_missing_cache(&mut self) {
+        // Solo paneles de archivos (los demás no tienen "carpeta no encontrada").
+        let ids: Vec<PaneId> = self
+            .ws
+            .panes()
+            .iter()
+            .filter(|p| p.files.is_some())
+            .map(|p| p.id)
+            .collect();
+        self.missing_cache.retain(|k, _| ids.iter().any(|id| id.0 == *k));
+        for id in ids {
+            let (missing, has_anc) = match self.pane_current_dir(id) {
+                Some(dir) => {
+                    let missing = std::fs::read_dir(&dir).is_err();
+                    let has_anc = missing && Self::nearest_existing_ancestor(&dir).is_some();
+                    (missing, has_anc)
+                }
+                None => (false, false),
+            };
+            self.missing_cache.insert(id.0, (missing, has_anc));
+        }
     }
 
     /// Reintentar en el panel `id`: si su carpeta volvió a existir (USB reconectado), re-listar; si
@@ -925,6 +955,8 @@ impl WorkspaceCtrl {
         // limpiar el flag para que el aviso vuelva a ser el genérico si vuelve a desconectarse.
         self.ejected_panes.remove(&id.0);
         self.listings.insert(id, Listing::start(dir));
+        // Recalcular el estado "carpeta no encontrada" tras navegar (sale del tick de render).
+        self.refresh_missing_cache();
     }
 
     /// Marca el panel `id` como "soltado por expulsión" (cambia el texto del aviso).
@@ -6769,8 +6801,12 @@ mod tests {
         let mut c = WorkspaceCtrl::new_in(sub.clone(), tmp.path().to_path_buf());
         assert!(drain(&mut c));
         let id = c.ws.active_id().unwrap();
+        c.refresh_missing_cache();
         assert!(!c.pane_dir_missing(id), "al inicio la carpeta existe");
         std::fs::remove_dir_all(&sub).unwrap(); // "sacar el USB"
+        // El estado "missing" se cachea y se recalcula en eventos reales (aquí simulamos el
+        // evento de cambio de discos / tick que dispara el refresco).
+        c.refresh_missing_cache();
         assert!(
             c.pane_dir_missing(id),
             "el panel detecta su carpeta perdida"
