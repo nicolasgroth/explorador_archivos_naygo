@@ -332,12 +332,16 @@ fn read_tar_entries(
     };
     let mut archive = tar::Archive::new(reader);
     let Ok(iter) = archive.entries() else { return false; };
+    let mut had_error = false;
     for entry in iter {
         if entries.len() >= ARCHIVE_MAX_ENTRIES {
             summary.truncated = true;
             break;
         }
-        let Ok(e) = entry else { continue; };
+        let e = match entry {
+            Ok(e) => e,
+            Err(_) => { had_error = true; continue; }
+        };
         let header = e.header();
         let is_dir = header.entry_type().is_dir();
         let size = header.size().unwrap_or(0);
@@ -347,6 +351,10 @@ fn read_tar_entries(
         if path_str.is_empty() { continue; }
         if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
         entries.push(ArchiveEntry { path: path_str, is_dir, size });
+    }
+    // Si no se pudo leer ninguna entrada Y hubo errores, el archivo es corrupto/inválido.
+    if entries.is_empty() && had_error {
+        return false;
     }
     // No sumamos un "+1" engañoso: dejamos `total_entries == entries.len()` y confiamos en
     // `truncated` para que el preview muestre "… y más entradas" (sin un número falso).
@@ -638,12 +646,38 @@ mod tests {
     }
 
     #[test]
-    fn read_archive_listing_corrupto_es_message() {
+    fn read_archive_listing_targz_muestra_entradas() {
         let dir = tempfile::tempdir().unwrap();
-        let bad = dir.path().join("malo.zip");
-        std::fs::write(&bad, b"esto no es un zip").unwrap();
+        let tgz_path = dir.path().join("demo.tar.gz");
+        {
+            let file = std::fs::File::create(&tgz_path).unwrap();
+            let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut tar = tar::Builder::new(enc);
+            let data = b"contenido";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_cksum();
+            tar.append_data(&mut header, "dir/archivo.txt", &data[..]).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+        }
+        let payload = read_archive_listing(&tgz_path);
+        match payload {
+            Payload::Text { text, .. } => {
+                assert!(text.contains("archivo.txt"), "lista el archivo del tar.gz");
+                assert!(text.contains("dir"), "lista la carpeta del tar.gz");
+            }
+            _ => panic!("se esperaba Payload::Text, fue {:?}", payload),
+        }
+    }
+
+    #[test]
+    fn read_archive_listing_targz_corrupto_es_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("malo.tar.gz");
+        // bytes que no son un gzip válido → GzDecoder/tar fallan → Message, no panic
+        std::fs::write(&bad, b"esto no es un gzip valido").unwrap();
         let payload = read_archive_listing(&bad);
-        assert!(matches!(payload, Payload::Message(_)));
+        assert!(matches!(payload, Payload::Message(_)), "tar.gz dañado => Message, no panic");
     }
 
     #[test]
