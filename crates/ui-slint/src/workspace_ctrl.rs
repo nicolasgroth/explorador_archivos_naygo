@@ -2335,6 +2335,16 @@ impl WorkspaceCtrl {
         }
         self.trees.remove(&id);
         self.reveal_targets.remove(&id);
+        // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers
+        // (si no, quedaban dirs-only sin cancelar al cerrar el panel).
+        self.tree_listings.retain(|(pane, _), l| {
+            if *pane == id {
+                l.cancel();
+                false
+            } else {
+                true
+            }
+        });
         // Sacarlo del layout (el split se colapsa en su hermano) y del workspace (reasigna activo).
         self.ws.layout.remove_leaf(id);
         self.ws.remove_pane(id);
@@ -2733,6 +2743,15 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.trees.remove(&member);
+        // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
+        self.tree_listings.retain(|(pane, _), l| {
+            if *pane == member {
+                l.cancel();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Los grupos de pestañas actuales: (miembros, índice activo). Para que la UI pinte las
