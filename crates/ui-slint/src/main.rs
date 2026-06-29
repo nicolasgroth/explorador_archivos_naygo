@@ -250,10 +250,12 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_has_wsl(ctrl.borrow().wsl_available());
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
-    // Inicializar las etiquetas del preview de comprimidos con el idioma activo al arranque.
+    // Inicializar las etiquetas y mensajes de error del preview con el idioma activo al arranque.
     {
         let labels = archive_labels_from_config(&ctrl.borrow().config);
+        let msgs = preview_msgs_from_config(&ctrl.borrow().config);
         ctrl.borrow_mut().preview.set_archive_labels(labels);
+        ctrl.borrow_mut().preview.set_preview_msgs(msgs);
     }
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
     theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
@@ -2848,10 +2850,12 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(cfg) = cfg_weak.upgrade() {
                 i18n_keys::apply(&cfg, &c.config);
             }
-            // Actualizar las etiquetas del preview de comprimidos al nuevo idioma.
+            // Actualizar las etiquetas y mensajes de error del preview al nuevo idioma.
             let labels = archive_labels_from_config(&c.config);
+            let msgs = preview_msgs_from_config(&c.config);
             drop(c);
             ctrl.borrow_mut().preview.set_archive_labels(labels);
+            ctrl.borrow_mut().preview.set_preview_msgs(msgs);
             refresh();
         });
     }
@@ -5284,6 +5288,25 @@ fn archive_labels_from_config(
         uncompressed: cfg.t("archive.uncompressed"),
         more_entries: cfg.t("archive.more_entries"),
         and_more: cfg.t("archive.and_more"),
+    }
+}
+
+/// Arma los mensajes de error del preview desde el catálogo i18n activo.
+/// Se usa al arrancar y al cambiar el idioma, igual que `archive_labels_from_config`.
+fn preview_msgs_from_config(
+    cfg: &crate::config_ctrl::ConfigCtrl,
+) -> crate::preview::PreviewMessages {
+    crate::preview::PreviewMessages {
+        not_previewable: cfg.t("preview.err.not_previewable"),
+        archive_bad: cfg.t("preview.err.archive_bad"),
+        read: cfg.t("preview.err.read"),
+        image_big: cfg.t("preview.err.image_big"),
+        cancelled: cfg.t("preview.err.cancelled"),
+        decode: cfg.t("preview.err.decode"),
+        svg_big: cfg.t("preview.err.svg_big"),
+        svg_bad: cfg.t("preview.err.svg_bad"),
+        rasterize: cfg.t("preview.err.rasterize"),
+        pdf_big: cfg.t("preview.err.pdf_big"),
     }
 }
 

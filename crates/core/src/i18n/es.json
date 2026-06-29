@@ -795,5 +795,15 @@
   "archive.folders": "carpeta(s)",
   "archive.uncompressed": "sin comprimir",
   "archive.more_entries": "… y más entradas",
-  "archive.and_more": "… y {n} más"
+  "archive.and_more": "… y {n} más",
+  "preview.err.not_previewable": "No previsualizable",
+  "preview.err.archive_bad": "Archivo comprimido inválido o dañado",
+  "preview.err.read": "No se pudo leer",
+  "preview.err.image_big": "Imagen muy grande",
+  "preview.err.cancelled": "Cancelado",
+  "preview.err.decode": "No se pudo decodificar",
+  "preview.err.svg_big": "SVG muy grande",
+  "preview.err.svg_bad": "SVG inválido",
+  "preview.err.rasterize": "No se pudo rasterizar",
+  "preview.err.pdf_big": "PDF muy grande"
 }

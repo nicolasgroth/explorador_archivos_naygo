@@ -57,6 +57,40 @@ pub enum Payload {
     Message(String),
 }
 
+/// Mensajes de error del preview, ya traducidos (los resuelve el hilo de UI, como ArchiveLabels).
+/// El worker los usa directamente; así `Payload::Message` sigue siendo `String` y no hay
+/// lógica de i18n en el hilo del worker.
+#[derive(Clone, Debug)]
+pub struct PreviewMessages {
+    pub not_previewable: String,
+    pub archive_bad: String,
+    pub read: String,
+    pub image_big: String,
+    pub cancelled: String,
+    pub decode: String,
+    pub svg_big: String,
+    pub svg_bad: String,
+    pub rasterize: String,
+    pub pdf_big: String,
+}
+
+impl Default for PreviewMessages {
+    fn default() -> Self {
+        PreviewMessages {
+            not_previewable: "No previsualizable".into(),
+            archive_bad: "Archivo comprimido inválido o dañado".into(),
+            read: "No se pudo leer".into(),
+            image_big: "Imagen muy grande".into(),
+            cancelled: "Cancelado".into(),
+            decode: "No se pudo decodificar".into(),
+            svg_big: "SVG muy grande".into(),
+            svg_bad: "SVG inválido".into(),
+            rasterize: "No se pudo rasterizar".into(),
+            pdf_big: "PDF muy grande".into(),
+        }
+    }
+}
+
 /// Estado del preview: qué se quiere, desde cuándo (debounce), qué está cargado, el worker
 /// en vuelo y su token. Es propiedad del controlador.
 pub struct PreviewState {
@@ -77,6 +111,8 @@ pub struct PreviewState {
     auto_highlight: bool,
     /// Etiquetas traducidas para el preview de comprimidos (las resuelve el hilo de UI con i18n).
     archive_labels: naygo_core::archive_tree::ArchiveLabels,
+    /// Mensajes de error del preview, ya traducidos (los resuelve el hilo de UI con i18n).
+    preview_msgs: PreviewMessages,
     /// Última vista entregada (para pintar en cada tick). `None` = nada cargado aún.
     last: Option<ViewCache>,
 }
@@ -98,6 +134,7 @@ impl Default for PreviewState {
                 more_entries: "… y más entradas".into(),
                 and_more: "… y {n} más".into(),
             },
+            preview_msgs: PreviewMessages::default(),
             last: None,
         }
     }
@@ -139,6 +176,12 @@ impl PreviewState {
         self.archive_labels = labels;
     }
 
+    /// Actualiza los mensajes de error del preview. El hilo de UI los resuelve con
+    /// `c.config.t(...)` y llama este setter al arrancar y al cambiar el idioma.
+    pub fn set_preview_msgs(&mut self, msgs: PreviewMessages) {
+        self.preview_msgs = msgs;
+    }
+
     /// La última vista entregada, para pintar (None = nada cargado).
     pub fn last_view(&self) -> Option<&ViewCache> {
         self.last.as_ref()
@@ -167,11 +210,12 @@ impl PreviewState {
         let rules = self.rules.clone();
         let auto_highlight = self.auto_highlight;
         let archive_labels = self.archive_labels.clone();
+        let preview_msgs = self.preview_msgs.clone();
         let token = CancellationToken::new();
         let worker_token = token.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let payload = build_payload(&path, &rules, auto_highlight, &archive_labels, &worker_token);
+            let payload = build_payload(&path, &rules, auto_highlight, &archive_labels, &preview_msgs, &worker_token);
             let _ = tx.send((path, payload));
         });
         self.token = Some(token);
@@ -240,21 +284,22 @@ fn build_payload(
     rules: &[PreviewRule],
     auto_highlight: bool,
     archive_labels: &naygo_core::archive_tree::ArchiveLabels,
+    msgs: &PreviewMessages,
     token: &CancellationToken,
 ) -> Payload {
     // Los comprimidos (zip/tar/tar.gz) muestran su índice como árbol ASCII, antes de la
     // clasificación normal.
     if is_archive(path) {
-        return read_archive_listing(path, archive_labels);
+        return read_archive_listing(path, archive_labels, msgs);
     }
     match preview::classify_rules(path, rules) {
-        PreviewKind::None => Payload::Message("No previsualizable".to_string()),
+        PreviewKind::None => Payload::Message(msgs.not_previewable.clone()),
         // Si la regla fuerza un lenguaje y el toggle global está activo, `code_lang_for` lo
         // devuelve y el texto se resalta; con el toggle en `false` cae a texto plano.
-        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, auto_highlight)),
-        PreviewKind::Image => read_image(path, token),
-        PreviewKind::Svg => read_svg(path, token),
-        PreviewKind::Pdf => read_pdf(path),
+        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, auto_highlight), msgs),
+        PreviewKind::Image => read_image(path, token, msgs),
+        PreviewKind::Svg => read_svg(path, token, msgs),
+        PreviewKind::Pdf => read_pdf(path, msgs),
     }
 }
 
@@ -288,10 +333,10 @@ const ARCHIVE_MAX_ENTRIES: usize = 500;
 ///
 /// No extrae contenido (solo el índice central). `labels` son los textos ya traducidos por el
 /// hilo de UI (core no conoce el catálogo i18n).
-fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveLabels) -> Payload {
+fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveLabels, msgs: &PreviewMessages) -> Payload {
     use naygo_core::archive_tree::{ArchiveSummary, render_archive_tree};
     let Some(fmt) = archive_format(path) else {
-        return Payload::Message("No previsualizable".to_string());
+        return Payload::Message(msgs.not_previewable.clone());
     };
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
     let mut entries = Vec::new();
@@ -302,7 +347,7 @@ fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveL
         ArchiveFormat::TarGz => read_tar_entries(path, &mut entries, &mut summary, true),
     };
     if !read_ok {
-        return Payload::Message("Archivo comprimido inválido o dañado".to_string());
+        return Payload::Message(msgs.archive_bad.clone());
     }
     let text = render_archive_tree(&entries, &summary, &name, naygo_core::format::SizeFormat::Auto, labels);
     Payload::Text { text, truncated: summary.truncated, highlighted: None }
@@ -387,11 +432,11 @@ fn read_tar_entries(
 
 /// Lee el archivo como texto y, si `lang` está presente (la regla fuerza un lenguaje), resalta
 /// el texto YA recortado con `core::highlight` (defensa i16 intacta: se resalta lo recortado).
-fn read_text(path: &Path, lang: Option<CodeLang>) -> Payload {
+fn read_text(path: &Path, lang: Option<CodeLang>, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{truncate_text, TEXT_MAX_BYTES};
     use std::io::Read;
     let Ok(mut file) = std::fs::File::open(path) else {
-        return Payload::Message("No se pudo leer".to_string());
+        return Payload::Message(msgs.read.clone());
     };
     let mut buf = Vec::with_capacity(TEXT_MAX_BYTES.min(8192));
     let mut chunk = [0u8; 8192];
@@ -407,7 +452,7 @@ fn read_text(path: &Path, lang: Option<CodeLang>) -> Payload {
                     break;
                 }
             }
-            Err(_) => return Payload::Message("No se pudo leer".to_string()),
+            Err(_) => return Payload::Message(msgs.read.clone()),
         }
     }
     let t = truncate_text(&buf, hit_cap);
@@ -421,23 +466,23 @@ fn read_text(path: &Path, lang: Option<CodeLang>) -> Payload {
     }
 }
 
-fn read_image(path: &Path, token: &CancellationToken) -> Payload {
+fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
     match std::fs::metadata(path) {
         Ok(m) if m.len() > IMAGE_MAX_BYTES => {
-            return Payload::Message("Imagen muy grande".to_string())
+            return Payload::Message(msgs.image_big.clone())
         }
         Ok(_) => {}
-        Err(_) => return Payload::Message("No se pudo leer".to_string()),
+        Err(_) => return Payload::Message(msgs.read.clone()),
     }
     if token.is_cancelled() {
-        return Payload::Message("Cancelado".to_string());
+        return Payload::Message(msgs.cancelled.clone());
     }
     let Ok(img) = image::open(path) else {
-        return Payload::Message("No se pudo decodificar".to_string());
+        return Payload::Message(msgs.decode.clone());
     };
     if token.is_cancelled() {
-        return Payload::Message("Cancelado".to_string());
+        return Payload::Message(msgs.cancelled.clone());
     }
     let (w, h) = (img.width(), img.height());
     let scaled = if w > IMAGE_MAX_SIDE || h > IMAGE_MAX_SIDE {
@@ -456,30 +501,30 @@ fn read_image(path: &Path, token: &CancellationToken) -> Payload {
 /// Rasteriza un SVG a RGBA con resvg (puro Rust, sin DLLs). Lo escala para que el lado mayor
 /// quede en ~`IMAGE_MAX_SIDE` px (nítido pero acotado). Como el SVG es vectorial, se respeta el
 /// tope de bytes del ARCHIVO fuente (no del bitmap resultante). Cancelable entre etapas.
-fn read_svg(path: &Path, token: &CancellationToken) -> Payload {
+fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
     let bytes = match std::fs::metadata(path) {
         Ok(m) if m.len() > IMAGE_MAX_BYTES => {
-            return Payload::Message("SVG muy grande".to_string())
+            return Payload::Message(msgs.svg_big.clone())
         }
         Ok(_) => match std::fs::read(path) {
             Ok(b) => b,
-            Err(_) => return Payload::Message("No se pudo leer".to_string()),
+            Err(_) => return Payload::Message(msgs.read.clone()),
         },
-        Err(_) => return Payload::Message("No se pudo leer".to_string()),
+        Err(_) => return Payload::Message(msgs.read.clone()),
     };
     if token.is_cancelled() {
-        return Payload::Message("Cancelado".to_string());
+        return Payload::Message(msgs.cancelled.clone());
     }
     // usvg parsea el SVG a un árbol simplificado. Opciones por defecto (sin fuentes externas:
     // el texto del SVG usa la BD de fuentes por defecto, suficiente para un preview).
     let opt = usvg::Options::default();
     let tree = match usvg::Tree::from_data(&bytes, &opt) {
         Ok(t) => t,
-        Err(_) => return Payload::Message("SVG inválido".to_string()),
+        Err(_) => return Payload::Message(msgs.svg_bad.clone()),
     };
     if token.is_cancelled() {
-        return Payload::Message("Cancelado".to_string());
+        return Payload::Message(msgs.cancelled.clone());
     }
     // Escala para encajar el lado mayor en IMAGE_MAX_SIDE (sin agrandar SVGs ya pequeños).
     let size = tree.size();
@@ -490,12 +535,12 @@ fn read_svg(path: &Path, token: &CancellationToken) -> Payload {
     let ph = (sh * scale).ceil().max(1.0) as u32;
     let mut pixmap = match tiny_skia::Pixmap::new(pw, ph) {
         Some(p) => p,
-        None => return Payload::Message("No se pudo rasterizar".to_string()),
+        None => return Payload::Message(msgs.rasterize.clone()),
     };
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     if token.is_cancelled() {
-        return Payload::Message("Cancelado".to_string());
+        return Payload::Message(msgs.cancelled.clone());
     }
     // El pixmap de tiny-skia ya es RGBA8 (alpha premultiplicado). Para el preview sobre el panel
     // es aceptable mostrarlo tal cual; lo des-premultiplicamos a RGBA recto para que los bordes
@@ -531,11 +576,11 @@ const PDF_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Preview LIVIANO de un PDF: extrae el texto (puro Rust, sin DLLs) y un encabezado con el nº de
 /// páginas. NO renderiza la página (eso requeriría una DLL nativa). Devuelve `Payload::Text`.
-fn read_pdf(path: &Path) -> Payload {
+fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
     match std::fs::metadata(path) {
-        Ok(m) if m.len() > PDF_MAX_BYTES => return Payload::Message("PDF muy grande".to_string()),
+        Ok(m) if m.len() > PDF_MAX_BYTES => return Payload::Message(msgs.pdf_big.clone()),
         Ok(_) => {}
-        Err(_) => return Payload::Message("No se pudo leer".to_string()),
+        Err(_) => return Payload::Message(msgs.read.clone()),
     }
     // Nº de páginas vía lopdf (barato: solo recorre el árbol de páginas).
     let pages = lopdf::Document::load(path)
@@ -589,6 +634,11 @@ mod tests {
         }
     }
 
+    /// Mensajes de error en español para los tests (valores por defecto del struct).
+    fn msgs_es() -> PreviewMessages {
+        PreviewMessages::default()
+    }
+
     #[test]
     fn debounce_no_arranca_antes_del_plazo() {
         let mut s = PreviewState::new();
@@ -632,7 +682,7 @@ mod tests {
             zw.write_all(b"fn main() {}").unwrap();
             zw.finish().unwrap();
         }
-        match read_archive_listing(&p, &labels_es()) {
+        match read_archive_listing(&p, &labels_es(), &msgs_es()) {
             Payload::Text { text, .. } => {
                 assert!(text.contains("readme.txt"), "lista readme: {text}");
                 // En el árbol ASCII la carpeta "src" aparece como "src/" y el archivo como "main.rs"
@@ -649,7 +699,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("roto.zip");
         std::fs::write(&p, b"esto no es un zip").unwrap();
-        match read_archive_listing(&p, &labels_es()) {
+        match read_archive_listing(&p, &labels_es(), &msgs_es()) {
             Payload::Message(_) => {}
             other => panic!("esperaba mensaje, fue {other:?}"),
         }
@@ -668,7 +718,7 @@ mod tests {
             zw.write_all(b"hola mundo").unwrap();
             zw.finish().unwrap();
         }
-        let payload = read_archive_listing(&zip_path, &labels_es());
+        let payload = read_archive_listing(&zip_path, &labels_es(), &msgs_es());
         match payload {
             Payload::Text { text, .. } => {
                 assert!(text.contains("hola.txt"));
@@ -694,7 +744,7 @@ mod tests {
             tar.append_data(&mut header, "dir/archivo.txt", &data[..]).unwrap();
             tar.into_inner().unwrap().finish().unwrap();
         }
-        let payload = read_archive_listing(&tgz_path, &labels_es());
+        let payload = read_archive_listing(&tgz_path, &labels_es(), &msgs_es());
         match payload {
             Payload::Text { text, .. } => {
                 assert!(text.contains("archivo.txt"), "lista el archivo del tar.gz");
@@ -710,7 +760,7 @@ mod tests {
         let bad = dir.path().join("malo.tar.gz");
         // bytes que no son un gzip válido → GzDecoder/tar fallan → Message, no panic
         std::fs::write(&bad, b"esto no es un gzip valido").unwrap();
-        let payload = read_archive_listing(&bad, &labels_es());
+        let payload = read_archive_listing(&bad, &labels_es(), &msgs_es());
         assert!(matches!(payload, Payload::Message(_)), "tar.gz dañado => Message, no panic");
     }
 
@@ -721,7 +771,7 @@ mod tests {
         std::fs::write(&p, b"linea1\nlinea2\n").unwrap();
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
-        match build_payload(&p, &rules, true, &labels_es(), &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &msgs_es(), &token) {
             Payload::Text {
                 text, highlighted, ..
             } => {
@@ -746,7 +796,7 @@ mod tests {
         }];
         let token = CancellationToken::new();
         // Con el toggle activo, la regla de código produce líneas resaltadas.
-        match build_payload(&p, &rules, true, &labels_es(), &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &msgs_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 let lines = highlighted.expect("debe traer líneas resaltadas");
                 assert!(!lines.is_empty(), "el resaltado produce líneas");
@@ -765,7 +815,7 @@ mod tests {
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
 
-        match build_payload(&p, &rules, true, &labels_es(), &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &msgs_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 assert!(
                     highlighted.is_some(),
@@ -775,7 +825,7 @@ mod tests {
             other => panic!("esperaba texto, fue {other:?}"),
         }
 
-        match build_payload(&p, &rules, false, &labels_es(), &token) {
+        match build_payload(&p, &rules, false, &labels_es(), &msgs_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 assert!(
                     highlighted.is_none(),

@@ -795,5 +795,15 @@
   "archive.folders": "folder(s)",
   "archive.uncompressed": "uncompressed",
   "archive.more_entries": "… and more entries",
-  "archive.and_more": "… and {n} more"
+  "archive.and_more": "… and {n} more",
+  "preview.err.not_previewable": "Not previewable",
+  "preview.err.archive_bad": "Invalid or damaged archive",
+  "preview.err.read": "Could not read",
+  "preview.err.image_big": "Image too large",
+  "preview.err.cancelled": "Cancelled",
+  "preview.err.decode": "Could not decode",
+  "preview.err.svg_big": "SVG too large",
+  "preview.err.svg_bad": "Invalid SVG",
+  "preview.err.rasterize": "Could not rasterize",
+  "preview.err.pdf_big": "PDF too large"
 }
