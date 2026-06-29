@@ -294,8 +294,9 @@ pub fn folder_conflicts(req: &OpRequest) -> Vec<FolderConflict> {
         // GUARDA CRÍTICA: copiar/mover una carpeta a SU PROPIO directorio padre hace que
         // `dest_root == src` (la carpeta de origen MISMA). Eso NO es un conflicto: reportarlo
         // permitiría que el usuario eligiera "Reemplazar" y el motor borrara el origen entero
-        // (pérdida total de datos). Lo descartamos antes de siquiera tocar el FS.
-        if dest_root == *src {
+        // (pérdida total de datos). Lo descartamos antes de siquiera tocar el FS. La comparación
+        // es case-insensitive: en Windows `D:\Foto` y `D:\foto` son el MISMO directorio.
+        if plan::paths_eq_ci(&dest_root, src) {
             continue;
         }
         if dest_root.is_dir() {
@@ -465,6 +466,30 @@ mod folder_conflict_tests {
         assert!(
             folder_conflicts(&req).is_empty(),
             "copiar una carpeta a su propio lugar no es un conflicto"
+        );
+    }
+
+    #[test]
+    fn folder_conflicts_ignora_su_propio_lugar_aunque_cambie_la_capitalizacion() {
+        // BUG DE PÉRDIDA DE DATOS (case-sensitivity): copiar una carpeta a su propio lugar pero
+        // con el directorio padre escrito con OTRA capitalización (`sub` vs `SUB`) producía
+        // `dest_root != src` con `==` crudo, así que se reportaba como conflicto. El usuario
+        // podía elegir Reemplazar y el motor borraba el ORIGEN. En Windows `sub` y `SUB` son el
+        // MISMO directorio: la guarda case-insensitive DEBE descartar este caso.
+        let dir = tempfile::tempdir().unwrap();
+        // El directorio real se llama "sub"; dentro vive la carpeta a copiar.
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let src = sub.join("carpeta");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"origen").unwrap();
+        // El destino apunta al MISMO padre pero con otra capitalización: dest.join("carpeta")
+        // será ".../SUB/carpeta", que en un FS case-insensitive es la carpeta de origen MISMA.
+        let dest = dir.path().join("SUB");
+        let req = transfer(false, vec![src], dest);
+        assert!(
+            folder_conflicts(&req).is_empty(),
+            "con distinta capitalización del padre sigue siendo el propio lugar: no es conflicto"
         );
     }
 

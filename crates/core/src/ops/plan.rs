@@ -190,8 +190,9 @@ pub(super) fn plan_transfer_with(
         let base_to = dest.join(src.file_name().unwrap_or_default());
         // Copiar/mover un origen a SU PROPIO lugar (`dest.join(name) == src`) es un no-op: no
         // generamos pasos `from == to` (que serían ruidosos y, en el caso de carpeta, podrían
-        // alimentar un `pre_delete` peligroso aguas arriba). Saltamos ese origen.
-        if base_to == *src {
+        // alimentar un `pre_delete` peligroso aguas arriba). Saltamos ese origen. Comparamos
+        // case-insensitive: en Windows `D:\Foto` y `D:\foto` son el MISMO directorio.
+        if paths_eq_ci(&base_to, src) {
             continue;
         }
         expand(
@@ -293,9 +294,40 @@ fn expand(
     Ok(())
 }
 
-/// `true` si `inner` está dentro de (o es igual a) `outer`.
+/// ¿`a` y `b` son la MISMA ruta en un FS case-insensitive (Windows trata `D:\Proj` y
+/// `D:\proj` como el mismo directorio)? Compara componente a componente, en minúscula,
+/// para no dar falsos negativos por capitalización distinta. Mismo estilo que la `key()`
+/// del renombrado en lote, pero por componente (no por string completo), para que sea
+/// consistente con `path_starts_with_ci`.
+pub(super) fn paths_eq_ci(a: &Path, b: &Path) -> bool {
+    let ca: Vec<_> = a.components().collect();
+    let cb: Vec<_> = b.components().collect();
+    ca.len() == cb.len()
+        && ca.iter().zip(&cb).all(|(x, y)| {
+            x.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
+        })
+}
+
+/// ¿`child` está dentro de (o es igual a) `ancestor`, comparando case-insensitive?
+/// Compara componente a componente: evita tanto el falso negativo por capitalización
+/// (`D:\foto\backup` bajo `D:\Foto`) como el falso positivo de comparar el string crudo
+/// (`D:\fotos` NO está bajo `D:\foto`, aunque sea prefijo textual).
+pub(super) fn path_starts_with_ci(child: &Path, ancestor: &Path) -> bool {
+    let cc: Vec<_> = child.components().collect();
+    let ca: Vec<_> = ancestor.components().collect();
+    cc.len() >= ca.len()
+        && ca.iter().zip(&cc).all(|(x, y)| {
+            x.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
+        })
+}
+
+/// `true` si `inner` está dentro de (o es igual a) `outer`. Case-insensitive (Windows).
 fn is_inside(inner: &Path, outer: &Path) -> bool {
-    inner.starts_with(outer)
+    path_starts_with_ci(inner, outer)
 }
 
 #[cfg(test)]
@@ -538,5 +570,53 @@ mod tests {
         fs::write(&src, b"x").unwrap();
         let e = plan(&req(OpKind::Copy, vec![src], None)).unwrap_err();
         assert_eq!(e, PlanError::MissingDest);
+    }
+
+    #[test]
+    fn paths_eq_ci_ignora_capitalizacion() {
+        // Misma ruta con distinta capitalización → iguales (semántica de Windows).
+        assert!(paths_eq_ci(
+            Path::new("D:\\Proj"),
+            Path::new("D:\\proj")
+        ));
+        assert!(paths_eq_ci(
+            Path::new("D:\\Foto\\Backup"),
+            Path::new("d:\\foto\\backup")
+        ));
+        // Rutas realmente distintas → NO iguales.
+        assert!(!paths_eq_ci(
+            Path::new("D:\\Proj"),
+            Path::new("D:\\Proj2")
+        ));
+        // Mismo prefijo textual pero distinto número de componentes → NO iguales.
+        assert!(!paths_eq_ci(
+            Path::new("D:\\foto"),
+            Path::new("D:\\foto\\backup")
+        ));
+    }
+
+    #[test]
+    fn path_starts_with_ci_contiene_case_insensitive() {
+        // Hijo bajo un ancestro con otra capitalización → contenido.
+        assert!(path_starts_with_ci(
+            Path::new("D:\\foto\\backup"),
+            Path::new("D:\\Foto")
+        ));
+        // Igual a sí mismo (distinta capitalización) → contenido (es igual o dentro).
+        assert!(path_starts_with_ci(
+            Path::new("D:\\Foto"),
+            Path::new("d:\\foto")
+        ));
+        // No es un prefijo de componentes → NO contenido (evita el falso positivo del
+        // `starts_with` textual: `D:\fotos` NO está bajo `D:\foto`).
+        assert!(!path_starts_with_ci(
+            Path::new("D:\\fotos"),
+            Path::new("D:\\foto")
+        ));
+        // Hermano, no descendiente.
+        assert!(!path_starts_with_ci(
+            Path::new("D:\\foto\\a"),
+            Path::new("D:\\otra")
+        ));
     }
 }

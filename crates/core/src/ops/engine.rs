@@ -114,10 +114,14 @@ pub fn run_plan(
         // fuera, `remove_dir_all` se llevaría por delante un ORIGEN de la copia (pérdida total de
         // datos). Aunque `folder_conflicts` ya descarta `dest_root == src`, esta guarda protege
         // ante CUALQUIER camino que contamine `pre_delete`. No se borra; se registra el aviso.
+        // Comparación case-insensitive (Windows): `D:\Proj` y `D:\proj` son el MISMO
+        // directorio. Con `==`/`starts_with` crudos, un destino igual al origen pero con otra
+        // capitalización se colaría y `remove_dir_all` borraría el árbol de origen.
         let borraria_un_origen = plan.steps.iter().any(|s| {
-            s.from
-                .as_ref()
-                .is_some_and(|from| from == target || from.starts_with(target))
+            s.from.as_ref().is_some_and(|from| {
+                super::plan::paths_eq_ci(from, target)
+                    || super::plan::path_starts_with_ci(from, target)
+            })
         });
         if borraria_un_origen {
             summary.items.push((
@@ -933,6 +937,69 @@ mod tests {
         assert!(
             origen.join("a.txt").exists(),
             "el motor borró un ancestro del origen: pérdida de datos"
+        );
+    }
+
+    #[test]
+    fn pre_delete_no_borra_un_origen_que_solo_difiere_en_capitalizacion() {
+        // BUG DE PÉRDIDA DE DATOS (case-sensitivity): el `pre_delete` apunta al origen pero escrito
+        // con OTRA capitalización (`CARPETA` vs el real `carpeta`). Con `==`/`starts_with` crudos,
+        // la red de seguridad NO reconocía que es el mismo directorio y `remove_dir_all` borraba el
+        // ORIGEN. En Windows ambas grafías son la MISMA carpeta: la guarda case-insensitive DEBE
+        // abstenerse de borrar.
+        let dir = tempfile::tempdir().unwrap();
+        // El directorio real en disco se llama "carpeta".
+        let origen = dir.path().join("carpeta");
+        fs::create_dir(&origen).unwrap();
+        fs::write(origen.join("a.txt"), b"datos-importantes").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let dest_root = dest.join("carpeta");
+        // `pre_delete` apunta al origen pero con la grafía "CARPETA" (mismo dir en Windows).
+        let origen_otra_grafia = dir.path().join("CARPETA");
+
+        let plan = OpPlan {
+            steps: vec![
+                OpStep {
+                    from: None,
+                    to: dest_root.clone(),
+                    bytes: 0,
+                    is_dir: true,
+                },
+                OpStep {
+                    from: Some(origen.join("a.txt")),
+                    to: dest_root.join("a.txt"),
+                    bytes: 17,
+                    is_dir: false,
+                },
+            ],
+            total_bytes: 17,
+            total_files: 1,
+            pre_delete: vec![origen_otra_grafia],
+        };
+
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let _ = run_plan(
+            &plan,
+            &OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(tx);
+
+        // LO CRUCIAL: el origen NO se borró pese a la grafía distinta en pre_delete.
+        assert!(
+            origen.join("a.txt").exists(),
+            "el motor borró el origen por diferencia de capitalización: pérdida total de datos"
+        );
+        assert_eq!(
+            fs::read(origen.join("a.txt")).unwrap(),
+            b"datos-importantes"
         );
     }
 
