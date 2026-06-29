@@ -790,5 +790,10 @@
   "settings.icons.png_copy_err": "Could not use the selected image.",
   "settings.icons.group_actions": "Toolbar actions",
   "settings.icons.group_files": "File types",
-  "settings.icons.personalize": "Customize"
+  "settings.icons.personalize": "Customize",
+  "archive.files": "file(s)",
+  "archive.folders": "folder(s)",
+  "archive.uncompressed": "uncompressed",
+  "archive.more_entries": "… and more entries",
+  "archive.and_more": "… and {n} more"
 }

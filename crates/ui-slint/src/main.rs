@@ -250,6 +250,19 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_has_wsl(ctrl.borrow().wsl_available());
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
+    // Inicializar las etiquetas del preview de comprimidos con el idioma activo al arranque.
+    {
+        let c = ctrl.borrow();
+        let labels = naygo_core::archive_tree::ArchiveLabels {
+            files: c.config.t("archive.files"),
+            folders: c.config.t("archive.folders"),
+            uncompressed: c.config.t("archive.uncompressed"),
+            more_entries: c.config.t("archive.more_entries"),
+            and_more: c.config.t("archive.and_more"),
+        };
+        drop(c);
+        ctrl.borrow_mut().preview.set_archive_labels(labels);
+    }
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
     theme_apply::apply(&ui, ctrl.borrow().config.active_theme());
 
@@ -2843,7 +2856,16 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(cfg) = cfg_weak.upgrade() {
                 i18n_keys::apply(&cfg, &c.config);
             }
+            // Actualizar las etiquetas del preview de comprimidos al nuevo idioma.
+            let labels = naygo_core::archive_tree::ArchiveLabels {
+                files: c.config.t("archive.files"),
+                folders: c.config.t("archive.folders"),
+                uncompressed: c.config.t("archive.uncompressed"),
+                more_entries: c.config.t("archive.more_entries"),
+                and_more: c.config.t("archive.and_more"),
+            };
             drop(c);
+            ctrl.borrow_mut().preview.set_archive_labels(labels);
             refresh();
         });
     }

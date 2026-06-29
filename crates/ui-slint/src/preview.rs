@@ -75,6 +75,8 @@ pub struct PreviewState {
     /// Toggle global de auto-resaltado de código (`Settings.auto_highlight_code`). Si está en
     /// `false`, el worker pinta el código como texto plano aunque la regla fuerce un lenguaje.
     auto_highlight: bool,
+    /// Etiquetas traducidas para el preview de comprimidos (las resuelve el hilo de UI con i18n).
+    archive_labels: naygo_core::archive_tree::ArchiveLabels,
     /// Última vista entregada (para pintar en cada tick). `None` = nada cargado aún.
     last: Option<ViewCache>,
 }
@@ -89,6 +91,13 @@ impl Default for PreviewState {
             token: None,
             rules: preview::default_preview_rules(),
             auto_highlight: true,
+            archive_labels: naygo_core::archive_tree::ArchiveLabels {
+                files: "archivo(s)".into(),
+                folders: "carpeta(s)".into(),
+                uncompressed: "sin comprimir".into(),
+                more_entries: "… y más entradas".into(),
+                and_more: "… y {n} más".into(),
+            },
             last: None,
         }
     }
@@ -124,6 +133,12 @@ impl PreviewState {
         self.auto_highlight = on;
     }
 
+    /// Actualiza las etiquetas traducidas para el preview de comprimidos. El hilo de UI las
+    /// resuelve con `c.config.t(...)` y llama este setter al arrancar y al cambiar el idioma.
+    pub fn set_archive_labels(&mut self, labels: naygo_core::archive_tree::ArchiveLabels) {
+        self.archive_labels = labels;
+    }
+
     /// La última vista entregada, para pintar (None = nada cargado).
     pub fn last_view(&self) -> Option<&ViewCache> {
         self.last.as_ref()
@@ -151,11 +166,12 @@ impl PreviewState {
         };
         let rules = self.rules.clone();
         let auto_highlight = self.auto_highlight;
+        let archive_labels = self.archive_labels.clone();
         let token = CancellationToken::new();
         let worker_token = token.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let payload = build_payload(&path, &rules, auto_highlight, &worker_token);
+            let payload = build_payload(&path, &rules, auto_highlight, &archive_labels, &worker_token);
             let _ = tx.send((path, payload));
         });
         self.token = Some(token);
@@ -223,12 +239,13 @@ fn build_payload(
     path: &Path,
     rules: &[PreviewRule],
     auto_highlight: bool,
+    archive_labels: &naygo_core::archive_tree::ArchiveLabels,
     token: &CancellationToken,
 ) -> Payload {
     // Los comprimidos (zip/tar/tar.gz) muestran su índice como árbol ASCII, antes de la
     // clasificación normal.
     if is_archive(path) {
-        return read_archive_listing(path);
+        return read_archive_listing(path, archive_labels);
     }
     match preview::classify_rules(path, rules) {
         PreviewKind::None => Payload::Message("No previsualizable".to_string()),
@@ -269,8 +286,9 @@ const ARCHIVE_MAX_ENTRIES: usize = 500;
 /// Lee el índice de un comprimido (zip/tar/tar.gz) y devuelve el texto del preview (encabezado
 /// + árbol ASCII) vía `naygo_core::archive_tree`. Tolerante: ilegible/corrupto → `Payload::Message`.
 ///
-/// No extrae contenido (solo el índice central).
-fn read_archive_listing(path: &Path) -> Payload {
+/// No extrae contenido (solo el índice central). `labels` son los textos ya traducidos por el
+/// hilo de UI (core no conoce el catálogo i18n).
+fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveLabels) -> Payload {
     use naygo_core::archive_tree::{ArchiveSummary, render_archive_tree};
     let Some(fmt) = archive_format(path) else {
         return Payload::Message("No previsualizable".to_string());
@@ -286,7 +304,7 @@ fn read_archive_listing(path: &Path) -> Payload {
     if !read_ok {
         return Payload::Message("Archivo comprimido inválido o dañado".to_string());
     }
-    let text = render_archive_tree(&entries, &summary, &name, naygo_core::format::SizeFormat::Auto);
+    let text = render_archive_tree(&entries, &summary, &name, naygo_core::format::SizeFormat::Auto, labels);
     Payload::Text { text, truncated: summary.truncated, highlighted: None }
 }
 
@@ -560,6 +578,17 @@ fn read_pdf(path: &Path) -> Payload {
 mod tests {
     use super::*;
 
+    /// Etiquetas en español para los tests de archive listing.
+    fn labels_es() -> naygo_core::archive_tree::ArchiveLabels {
+        naygo_core::archive_tree::ArchiveLabels {
+            files: "archivo(s)".into(),
+            folders: "carpeta(s)".into(),
+            uncompressed: "sin comprimir".into(),
+            more_entries: "… y más entradas".into(),
+            and_more: "… y {n} más".into(),
+        }
+    }
+
     #[test]
     fn debounce_no_arranca_antes_del_plazo() {
         let mut s = PreviewState::new();
@@ -603,7 +632,7 @@ mod tests {
             zw.write_all(b"fn main() {}").unwrap();
             zw.finish().unwrap();
         }
-        match read_archive_listing(&p) {
+        match read_archive_listing(&p, &labels_es()) {
             Payload::Text { text, .. } => {
                 assert!(text.contains("readme.txt"), "lista readme: {text}");
                 // En el árbol ASCII la carpeta "src" aparece como "src/" y el archivo como "main.rs"
@@ -620,7 +649,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("roto.zip");
         std::fs::write(&p, b"esto no es un zip").unwrap();
-        match read_archive_listing(&p) {
+        match read_archive_listing(&p, &labels_es()) {
             Payload::Message(_) => {}
             other => panic!("esperaba mensaje, fue {other:?}"),
         }
@@ -639,7 +668,7 @@ mod tests {
             zw.write_all(b"hola mundo").unwrap();
             zw.finish().unwrap();
         }
-        let payload = read_archive_listing(&zip_path);
+        let payload = read_archive_listing(&zip_path, &labels_es());
         match payload {
             Payload::Text { text, .. } => {
                 assert!(text.contains("hola.txt"));
@@ -665,7 +694,7 @@ mod tests {
             tar.append_data(&mut header, "dir/archivo.txt", &data[..]).unwrap();
             tar.into_inner().unwrap().finish().unwrap();
         }
-        let payload = read_archive_listing(&tgz_path);
+        let payload = read_archive_listing(&tgz_path, &labels_es());
         match payload {
             Payload::Text { text, .. } => {
                 assert!(text.contains("archivo.txt"), "lista el archivo del tar.gz");
@@ -681,7 +710,7 @@ mod tests {
         let bad = dir.path().join("malo.tar.gz");
         // bytes que no son un gzip válido → GzDecoder/tar fallan → Message, no panic
         std::fs::write(&bad, b"esto no es un gzip valido").unwrap();
-        let payload = read_archive_listing(&bad);
+        let payload = read_archive_listing(&bad, &labels_es());
         assert!(matches!(payload, Payload::Message(_)), "tar.gz dañado => Message, no panic");
     }
 
@@ -692,7 +721,7 @@ mod tests {
         std::fs::write(&p, b"linea1\nlinea2\n").unwrap();
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
-        match build_payload(&p, &rules, true, &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &token) {
             Payload::Text {
                 text, highlighted, ..
             } => {
@@ -717,7 +746,7 @@ mod tests {
         }];
         let token = CancellationToken::new();
         // Con el toggle activo, la regla de código produce líneas resaltadas.
-        match build_payload(&p, &rules, true, &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 let lines = highlighted.expect("debe traer líneas resaltadas");
                 assert!(!lines.is_empty(), "el resaltado produce líneas");
@@ -736,7 +765,7 @@ mod tests {
         let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
 
-        match build_payload(&p, &rules, true, &token) {
+        match build_payload(&p, &rules, true, &labels_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 assert!(
                     highlighted.is_some(),
@@ -746,7 +775,7 @@ mod tests {
             other => panic!("esperaba texto, fue {other:?}"),
         }
 
-        match build_payload(&p, &rules, false, &token) {
+        match build_payload(&p, &rules, false, &labels_es(), &token) {
             Payload::Text { highlighted, .. } => {
                 assert!(
                     highlighted.is_none(),

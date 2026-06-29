@@ -790,5 +790,10 @@
   "settings.icons.png_copy_err": "No se pudo usar la imagen seleccionada.",
   "settings.icons.group_actions": "Acciones de la barra",
   "settings.icons.group_files": "Tipos de archivo",
-  "settings.icons.personalize": "Personalizar"
+  "settings.icons.personalize": "Personalizar",
+  "archive.files": "archivo(s)",
+  "archive.folders": "carpeta(s)",
+  "archive.uncompressed": "sin comprimir",
+  "archive.more_entries": "… y más entradas",
+  "archive.and_more": "… y {n} más"
 }
