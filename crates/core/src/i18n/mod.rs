@@ -64,6 +64,14 @@ impl Catalog {
 /// Catálogos embebidos en el binario (siempre disponibles).
 const ES_JSON: &str = include_str!("es.json");
 const EN_JSON: &str = include_str!("en.json");
+const PT_JSON: &str = include_str!("pt.json");
+const FR_JSON: &str = include_str!("fr.json");
+const DE_JSON: &str = include_str!("de.json");
+const IT_JSON: &str = include_str!("it.json");
+const ZH_JSON: &str = include_str!("zh.json");
+const JA_JSON: &str = include_str!("ja.json");
+const KO_JSON: &str = include_str!("ko.json");
+const HI_JSON: &str = include_str!("hi.json");
 
 /// Estado de i18n: idioma activo + fallback (ES) + idiomas disponibles.
 pub struct I18n {
@@ -80,6 +88,14 @@ impl I18n {
         let mut catalogs: HashMap<String, Catalog> = HashMap::new();
         catalogs.insert("es".into(), Catalog::from_json("es", ES_JSON));
         catalogs.insert("en".into(), Catalog::from_json("en", EN_JSON));
+        catalogs.insert("pt".into(), Catalog::from_json("pt", PT_JSON));
+        catalogs.insert("fr".into(), Catalog::from_json("fr", FR_JSON));
+        catalogs.insert("de".into(), Catalog::from_json("de", DE_JSON));
+        catalogs.insert("it".into(), Catalog::from_json("it", IT_JSON));
+        catalogs.insert("zh".into(), Catalog::from_json("zh", ZH_JSON));
+        catalogs.insert("ja".into(), Catalog::from_json("ja", JA_JSON));
+        catalogs.insert("ko".into(), Catalog::from_json("ko", KO_JSON));
+        catalogs.insert("hi".into(), Catalog::from_json("hi", HI_JSON));
 
         // Cargar archivos sueltos: dir/lang/*.json (cada uno mergea/añade).
         let lang_dir = dir.join("lang");
