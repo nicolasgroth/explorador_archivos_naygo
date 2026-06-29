@@ -252,15 +252,7 @@ fn main() -> Result<(), slint::PlatformError> {
     i18n_keys::apply(&ui, &ctrl.borrow().config);
     // Inicializar las etiquetas del preview de comprimidos con el idioma activo al arranque.
     {
-        let c = ctrl.borrow();
-        let labels = naygo_core::archive_tree::ArchiveLabels {
-            files: c.config.t("archive.files"),
-            folders: c.config.t("archive.folders"),
-            uncompressed: c.config.t("archive.uncompressed"),
-            more_entries: c.config.t("archive.more_entries"),
-            and_more: c.config.t("archive.and_more"),
-        };
-        drop(c);
+        let labels = archive_labels_from_config(&ctrl.borrow().config);
         ctrl.borrow_mut().preview.set_archive_labels(labels);
     }
     // Volcar los colores del tema activo al global Theme (la UI arranca con el tema guardado).
@@ -2857,13 +2849,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 i18n_keys::apply(&cfg, &c.config);
             }
             // Actualizar las etiquetas del preview de comprimidos al nuevo idioma.
-            let labels = naygo_core::archive_tree::ArchiveLabels {
-                files: c.config.t("archive.files"),
-                folders: c.config.t("archive.folders"),
-                uncompressed: c.config.t("archive.uncompressed"),
-                more_entries: c.config.t("archive.more_entries"),
-                and_more: c.config.t("archive.and_more"),
-            };
+            let labels = archive_labels_from_config(&c.config);
             drop(c);
             ctrl.borrow_mut().preview.set_archive_labels(labels);
             refresh();
@@ -5285,6 +5271,20 @@ pub(crate) fn theme_text_rgb(
     }
     let t = themes.get(&settings.theme);
     (t.text.r, t.text.g, t.text.b)
+}
+
+/// Arma los textos traducidos del preview de comprimidos desde el catálogo i18n activo.
+/// Se usa al arrancar y al cambiar el idioma, para no duplicar las claves en cada sitio.
+fn archive_labels_from_config(
+    cfg: &crate::config_ctrl::ConfigCtrl,
+) -> naygo_core::archive_tree::ArchiveLabels {
+    naygo_core::archive_tree::ArchiveLabels {
+        files: cfg.t("archive.files"),
+        folders: cfg.t("archive.folders"),
+        uncompressed: cfg.t("archive.uncompressed"),
+        more_entries: cfg.t("archive.more_entries"),
+        and_more: cfg.t("archive.and_more"),
+    }
 }
 
 fn int_to_purpose(p: i32) -> PanePurpose {
