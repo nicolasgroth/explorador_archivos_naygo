@@ -2696,6 +2696,15 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Suelta el handle que la app mantiene sobre la carpeta del panel `id`: cierra su watcher.
+    /// Se llama justo ANTES de expulsar el disco, para que el "en uso" no lo cause la propia app.
+    /// El aviso in-place "elegir carpeta" aparece solo tras expulsar (pane_dir_missing detecta el
+    /// read_dir fallido). No-op si el panel no tiene watcher.
+    #[allow(dead_code)] // la llama la lógica de expulsión de disco en la task siguiente
+    pub fn release_pane_watcher(&mut self, id: PaneId) {
+        self.watchers.unwatch(id.0);
+    }
+
     /// Filas del historial de deshacer (validadas contra el disco).
     pub fn history_rows(&self) -> Vec<HistRow> {
         history_rows(&self.ops.undo_history)
@@ -7430,6 +7439,26 @@ mod tests {
         let otro_disco = std::path::PathBuf::from(format!("{otra_letra}:\\"));
         let fuera = c.panes_on_drive(&otro_disco);
         assert!(fuera.is_empty(), "ningún panel está en un disco inexistente");
+    }
+
+    #[test]
+    fn release_pane_watcher_quita_el_watcher() {
+        let work = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        let id = c.ws.active_id().expect("hay un panel activo al arrancar");
+        // Waker no-op: no hay UI que despertar en el test.
+        let waker: naygo_platform::dir_watch::Waker = std::sync::Arc::new(|| {});
+        c.watchers.watch(id.0, work.path().to_path_buf(), waker);
+        assert!(
+            c.watchers.watched_panes().contains(&id.0),
+            "el watcher está activo tras watch()"
+        );
+        c.release_pane_watcher(id);
+        assert!(
+            !c.watchers.watched_panes().contains(&id.0),
+            "release_pane_watcher debe quitar el watcher del panel"
+        );
     }
 }
 
