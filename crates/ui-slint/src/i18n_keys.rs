@@ -60,6 +60,9 @@ where
     tr.set_drive_eject_failed(c.t("slint.drive.eject_failed").into());
     tr.set_drive_eject_confirm_title(c.t("slint.drive.eject_confirm_title").into());
     tr.set_drive_eject_confirm(c.t("slint.drive.eject_confirm").into());
+    tr.set_drive_eject_with_panes(c.t("drive.eject_with_panes").into());
+    tr.set_drive_eject_anyway(c.t("drive.eject_anyway").into());
+    tr.set_drive_eject_in_use_external(c.t("drive.eject_in_use_external").into());
     tr.set_toolbar_config_tip(tip("slint.toolbar.config_tip", Action::OpenConfig));
     tr.set_toolbar_layouts(c.t("slint.toolbar.layouts").into());
     tr.set_toolbar_layouts_tip(tip("slint.toolbar.layouts_tip", Action::LayoutsMenu));
