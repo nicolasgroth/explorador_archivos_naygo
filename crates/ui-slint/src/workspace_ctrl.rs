@@ -255,6 +255,9 @@ pub struct PendingDrop {
     pub paths: Vec<PathBuf>,
     /// Carpeta destino resuelta (el panel bajo el cursor al soltar).
     pub dest_dir: PathBuf,
+    /// Panel destino (el que estaba bajo el cursor): se activa al confirmar, para que el foco
+    /// quede donde el usuario soltó los archivos.
+    pub dest_pane: PaneId,
     /// `true` = mover, `false` = copiar (ya decidido por modificadores + mismo disco).
     pub is_move: bool,
     /// Cuántos elementos (para el texto del modal; == `paths.len()`).
@@ -3244,7 +3247,18 @@ impl WorkspaceCtrl {
     /// Rutas reales de los ítems SELECCIONADOS del panel Files activo (o, si no hay
     /// selección, el ítem enfocado). Vacío si no hay nada. Para las operaciones de archivo.
     pub fn selected_paths(&self) -> Vec<PathBuf> {
-        let Some(f) = self.ws.active_files() else {
+        match self.ws.active_id() {
+            Some(id) => self.selected_paths_of(id),
+            None => Vec::new(),
+        }
+    }
+
+    /// Rutas seleccionadas (o la enfocada si no hay selección) del panel `id` CONCRETO, sin
+    /// depender de cuál esté activo. Lo usa el arrastre entre paneles: el origen es el panel donde
+    /// nació el gesto, no el activo (si no, arrastrar desde un panel inactivo no movía nada y
+    /// obligaba a un clic extra para activarlo primero). Vacío si `id` no es un panel Files.
+    pub fn selected_paths_of(&self, id: PaneId) -> Vec<PathBuf> {
+        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
             return Vec::new();
         };
         let view = f.view_indices();
@@ -3494,6 +3508,7 @@ impl WorkspaceCtrl {
         self.pending_drop = Some(PendingDrop {
             paths: paths.clone(),
             dest_dir: dest_dir.clone(),
+            dest_pane: target,
             is_move,
             count,
         });
@@ -3541,6 +3556,14 @@ impl WorkspaceCtrl {
             pd.count,
             pd.dest_dir.display(),
         ));
+        // Activar el panel destino: tras soltar, el foco queda donde aterrizaron los archivos (lo
+        // más intuitivo para seguir trabajando ahí). Solo si sigue existiendo.
+        if self.ws.pane(pd.dest_pane).is_some() {
+            self.ws.set_active(pd.dest_pane);
+            if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+                self.sync_trees_active(dir);
+            }
+        }
         let req = naygo_core::ops::transfer(pd.is_move, pd.paths, pd.dest_dir);
         self.ensure_ops_pane();
         self.ops.start_op(req, label.to_string(), true);
@@ -6399,6 +6422,39 @@ mod tests {
         );
     }
 
+    /// Regresión: arrastrar desde un panel que NO está activo debe tomar los archivos de ESE
+    /// panel (el del gesto), no del activo. Antes `selected_paths()` leía siempre el panel activo,
+    /// así que arrastrar desde el inactivo no movía nada (obligaba a un clic extra para activarlo).
+    #[test]
+    fn selected_paths_of_toma_el_panel_pedido_no_el_activo() {
+        let cfg = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("en_a.txt"), b"x").unwrap();
+        std::fs::write(b.path().join("en_b.txt"), b"y").unwrap();
+        let mut c = WorkspaceCtrl::new_in(a.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let pane_a = c.ws.active_id().unwrap();
+        let pane_b = c.split_for_target().unwrap();
+        c.open_in_pane(pane_b, b.path().to_path_buf());
+        assert!(drain(&mut c));
+        // Seleccionar el archivo en cada panel (la fila 0 de su vista).
+        c.ws.pane_mut(pane_a).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
+        c.ws.pane_mut(pane_b).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
+        // Activo = A. Arrastrar desde B (el inactivo) debe devolver el archivo de B, no el de A.
+        c.ws.set_active(pane_a);
+        let desde_b = c.selected_paths_of(pane_b);
+        assert_eq!(desde_b.len(), 1);
+        assert!(
+            desde_b[0].ends_with("en_b.txt"),
+            "arrastrar desde el panel inactivo B toma su archivo, no el del activo A: {:?}",
+            desde_b
+        );
+        // Y desde A devuelve el de A (sanity).
+        let desde_a = c.selected_paths_of(pane_a);
+        assert!(desde_a[0].ends_with("en_a.txt"));
+    }
+
     /// `pane_at` resuelve el panel Files bajo un punto de contenido (mismo hit-test que `drop_at`,
     /// para resaltar EN VIVO el panel mientras se arrastra encima). El centro de cada panel cae en
     /// ESE panel; un punto fuera de toda área devuelve `None`. Además `set_drag_over` solo reporta
@@ -7848,6 +7904,7 @@ mod simular_usuario {
         let mk = |paths: Vec<&str>| PendingDrop {
             paths: paths.into_iter().map(std::path::PathBuf::from).collect(),
             dest_dir: std::path::PathBuf::from("C:\\dest"),
+            dest_pane: PaneId(0),
             is_move: false,
             count: 0,
         };

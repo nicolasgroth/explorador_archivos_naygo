@@ -1630,9 +1630,11 @@ fn main() -> Result<(), slint::PlatformError> {
         // usa `try_borrow_mut` y se salta el tick si el controlador está prestado.
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
-        ui.on_row_drag_out(move |_id| {
-            // Borrow corto: clonar las rutas seleccionadas y soltar el préstamo de inmediato.
-            let paths = ctrl.borrow().selected_paths();
+        ui.on_row_drag_out(move |id| {
+            // El origen del arrastre es el panel donde NACIÓ el gesto (`id`), NO el activo: así
+            // arrastrar desde un panel inactivo mueve/copia sus archivos sin obligar a un clic
+            // previo para activarlo. Borrow corto: clonar las rutas y soltar el préstamo.
+            let paths = ctrl.borrow().selected_paths_of(PaneId(id as u64));
             if paths.is_empty() {
                 return;
             }
