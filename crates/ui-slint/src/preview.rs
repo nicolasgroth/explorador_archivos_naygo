@@ -356,6 +356,11 @@ fn read_tar_entries(
     if entries.is_empty() && had_error {
         return false;
     }
+    // Si hubo errores pero alcanzamos a leer algunas entradas, el listado es parcial:
+    // marcar truncado para que el preview muestre "… y más entradas" (honesto).
+    if had_error && !entries.is_empty() {
+        summary.truncated = true;
+    }
     // No sumamos un "+1" engañoso: dejamos `total_entries == entries.len()` y confiamos en
     // `truncated` para que el preview muestre "… y más entradas" (sin un número falso).
     summary.total_entries = entries.len();
