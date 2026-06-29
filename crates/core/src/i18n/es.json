@@ -531,6 +531,8 @@
   "slint.missing.ancestor": "Subir un nivel",
   "slint.missing.choose": "Elegir otra…",
   "slint.missing.close": "Cerrar panel",
+  "slint.missing.ejected_title": "Disco expulsado",
+  "slint.missing.ejected_body": "El disco fue expulsado. Elige otra carpeta.",
   "slint.view.hidden_tip": "Mostrar u ocultar archivos",
   "slint.view.show_hidden": "Mostrar archivos ocultos",
   "slint.view.show_system": "Mostrar archivos de sistema",

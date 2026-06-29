@@ -202,6 +202,10 @@ pub struct WorkspaceCtrl {
     /// Se vacía al navegar (vía `start_listing`) para que el espacio libre se refresque al
     /// entrar a otra carpeta/unidad. Ver `footer_text_for`.
     footer_disk_cache: std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+    /// Paneles cuya carpeta se perdió por una expulsión de disco (no por "carpeta borrada").
+    /// Cambia solo el TEXTO del aviso in-place ("disco expulsado" vs "carpeta no encontrada").
+    /// Se limpia cuando el panel navega a una carpeta válida.
+    pub ejected_panes: std::collections::HashSet<u64>,
 }
 
 /// Petición de un atajo de teclado que necesita que la UI abra un menú/acción de la toolbar cuyos
@@ -485,6 +489,7 @@ impl WorkspaceCtrl {
             toolbar_menu_requested: None,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
+            ejected_panes: std::collections::HashSet::new(),
         };
         c.push_recent(start.clone());
         c.start_listing(id, start);
@@ -916,7 +921,20 @@ impl WorkspaceCtrl {
         // Navegar (o refrescar) puede cambiar de unidad: invalida la caché de disco del footer
         // para que el espacio libre/total se relea. Es pequeña; se repuebla a demanda por tick.
         self.footer_disk_cache.clear();
+        // Si el panel estaba marcado como "expulsado" y ahora navega a una carpeta válida,
+        // limpiar el flag para que el aviso vuelva a ser el genérico si vuelve a desconectarse.
+        self.ejected_panes.remove(&id.0);
         self.listings.insert(id, Listing::start(dir));
+    }
+
+    /// Marca el panel `id` como "soltado por expulsión" (cambia el texto del aviso).
+    pub fn mark_pane_ejected(&mut self, id: PaneId) {
+        self.ejected_panes.insert(id.0);
+    }
+
+    /// ¿El panel `id` fue soltado por una expulsión? (para el texto del aviso).
+    pub fn pane_was_ejected(&self, id: PaneId) -> bool {
+        self.ejected_panes.contains(&id.0)
     }
 
     /// Invalida la caché de disco del footer. La llama main.rs cuando cambian los dispositivos
@@ -8533,5 +8551,19 @@ mod simular_usuario {
             !src.path().join("reg.txt").exists(),
             "el move_hint forzó MOVER pese a ctrl/shift en false (regresión del Shift)"
         );
+    }
+
+    #[test]
+    fn mark_y_pane_was_ejected() {
+        let work = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+        let id = c.ws.active_id().expect("hay un panel activo al arrancar");
+        assert!(!c.pane_was_ejected(id), "recién creado no está marcado como expulsado");
+        c.mark_pane_ejected(id);
+        assert!(c.pane_was_ejected(id), "tras marcar, pane_was_ejected debe ser true");
+        // navegar a una carpeta válida limpia el flag:
+        c.start_listing(id, work.path().to_path_buf());
+        assert!(!c.pane_was_ejected(id), "navegar limpia el flag de expulsado");
     }
 }

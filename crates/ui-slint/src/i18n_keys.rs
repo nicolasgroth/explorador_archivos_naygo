@@ -191,6 +191,8 @@ where
     tr.set_missing_ancestor(c.t("slint.missing.ancestor").into());
     tr.set_missing_choose(c.t("slint.missing.choose").into());
     tr.set_missing_close(c.t("slint.missing.close").into());
+    tr.set_missing_title_ejected(c.t("slint.missing.ejected_title").into());
+    tr.set_missing_body_ejected(c.t("slint.missing.ejected_body").into());
     tr.set_view_hidden_tip(tip("slint.view.hidden_tip", Action::ToggleHidden));
     tr.set_view_show_hidden(c.t("slint.view.show_hidden").into());
     tr.set_view_show_system(c.t("slint.view.show_system").into());

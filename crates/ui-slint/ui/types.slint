@@ -530,6 +530,9 @@ export struct PaneVm {
     // ¿Hay un ancestro existente real al que subir? Si la unidad entera se desconectó es false y
     // el aviso oculta el botón "subir un nivel" (no tendría sentido: caería al HOME).
     missing-has-ancestor: bool,
+    // ¿La carpeta se perdió porque se expulsó un disco? Cambia el texto del aviso
+    // ("Disco expulsado" en vez del genérico "Carpeta no encontrada").
+    missing-ejected: bool,
     deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
     footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta

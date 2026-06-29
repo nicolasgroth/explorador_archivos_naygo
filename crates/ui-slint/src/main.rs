@@ -519,6 +519,11 @@ fn main() -> Result<(), slint::PlatformError> {
                             pv.missing_has_ancestor = miss_anc;
                             changed = true;
                         }
+                        let miss_ejected = c.pane_was_ejected(id);
+                        if pv.missing_ejected != miss_ejected {
+                            pv.missing_ejected = miss_ejected;
+                            changed = true;
+                        }
                         // Estado del botón de vista profunda: on/off según el job activo.
                         let deep = c.is_deep_active(id);
                         if pv.deep_active != deep {
@@ -866,6 +871,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             missing_path: SharedString::from(ctrl.borrow().path_of(*id).as_str()),
                             // "Subir un nivel" solo tiene sentido si hay un ancestro existente real.
                             missing_has_ancestor: ctrl.borrow().pane_has_existing_ancestor(*id),
+                            // ¿La pérdida fue por expulsión de disco? Cambia el texto del aviso.
+                            missing_ejected: ctrl.borrow().pane_was_ejected(*id),
                             // Fila enfocada (índice de vista) para el auto-scroll por teclado (C1).
                             focused_row: ctrl.borrow().focused_view_of(*id),
                             deep_active: ctrl.borrow().is_deep_active(*id),
@@ -4040,6 +4047,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let mut c = ctrl.borrow_mut();
                     for pid in &panes {
                         c.release_pane_watcher(PaneId(*pid));
+                        c.mark_pane_ejected(PaneId(*pid));
                     }
                 }
                 if let Some(path) = pending_eject.borrow_mut().take() {

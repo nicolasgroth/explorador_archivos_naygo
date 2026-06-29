@@ -531,6 +531,8 @@
   "slint.missing.ancestor": "Go up one level",
   "slint.missing.choose": "Choose another…",
   "slint.missing.close": "Close panel",
+  "slint.missing.ejected_title": "Drive ejected",
+  "slint.missing.ejected_body": "The drive was ejected. Choose another folder.",
   "slint.view.hidden_tip": "Show or hide files",
   "slint.view.show_hidden": "Show hidden files",
   "slint.view.show_system": "Show system files",
