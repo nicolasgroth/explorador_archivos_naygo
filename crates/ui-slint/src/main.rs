@@ -1231,6 +1231,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     // solo marca cambio si el panel difiere, así no re-pintamos en cada movimiento.
                     // RE-ENTRANCIA: cada acceso a `ctrl` va en su propio statement (el `Ref`/`RefMut`
                     // temporal muere al terminar la línea) para no solapar borrow con borrow_mut.
+                    // Si un arrastre acaba de terminar, el bucle modal de DoDragDrop se tragó el
+                    // key-release de Shift/Ctrl → quedaron pegados en el controlador. Limpiarlos
+                    // aquí (hilo de UI, con acceso a `ctrl`) evita que el siguiente clic/drag haga
+                    // una selección por rango fantasma. Flag de un solo uso: se baja tras limpiar.
+                    if let Some(ui) = ui_weak.upgrade() {
+                        if ui.get_drag_just_ended() {
+                            ui.set_drag_just_ended(false);
+                            ctrl.borrow_mut().clear_modifiers();
+                        }
+                    }
                     {
                         let mut last: Option<naygo_platform::drop_target::DragHover> = None;
                         while let Ok(msg) = drag_rx.try_recv() {
@@ -1638,6 +1648,12 @@ fn main() -> Result<(), slint::PlatformError> {
             // El origen del arrastre es el panel donde NACIÓ el gesto (`id`), NO el activo: así
             // arrastrar desde un panel inactivo mueve/copia sus archivos sin obligar a un clic
             // previo para activarlo. Borrow corto: clonar las rutas y soltar el préstamo.
+            // DEFENSA DE ENTRADA: el .slint hace `row-clicked` justo antes de este callback al
+            // arrastrar una fila no seleccionada; si un modificador quedó pegado (Shift/Ctrl), ese
+            // row-clicked ya envenenó la selección con un rango fantasma → el drag arrastraría lo
+            // incorrecto. No podemos deshacer ese row-clicked, pero limpiar aquí evita que el
+            // estado sucio se propague y deja la selección coherente para el siguiente gesto.
+            ctrl.borrow_mut().clear_modifiers();
             let paths = ctrl.borrow().selected_paths_of(PaneId(id as u64));
             if paths.is_empty() {
                 return;
@@ -1662,11 +1678,19 @@ fn main() -> Result<(), slint::PlatformError> {
                 // `start_drag` es BLOQUEANTE: corre el bucle modal de DoDragDrop hasta que el
                 // usuario suelta. Al volver, el gesto terminó (drop dentro/fuera o cancelado).
                 let _outcome = naygo_platform::dnd::start_drag(&paths);
-                // Re-montar los TouchArea: el gesto del body-touch del origen renace LIMPIO (sin
-                // `pressed-here` ni grab). Un drop intra-app entre paneles llega aparte por
-                // `drop_rx` en el tick del timer; este flag solo controla el montaje del TouchArea.
                 if let Some(ui) = ui_weak.upgrade() {
+                    // Re-montar los TouchArea: el gesto del body-touch del origen renace LIMPIO (sin
+                    // `pressed-here` ni grab). Un drop intra-app entre paneles llega aparte por
+                    // `drop_rx` en el tick del timer; este flag solo controla el montaje del TouchArea.
                     ui.set_drag_in_progress(false);
+                    // CRÍTICO: señalar que el drag terminó para que el tick limpie los modificadores.
+                    // Durante el bucle modal de DoDragDrop la app NO recibe eventos de teclado, así
+                    // que el `key-release` de Shift/Ctrl NUNCA llega a `on_key_release` y quedan
+                    // PEGADOS en true. Eso envenena el siguiente `row-clicked` (selección por rango
+                    // fantasma al iniciar otro drag o al clicar en otro panel). El controlador no es
+                    // accesible aquí (Rc no es Send en `invoke_from_event_loop`), así que lo marca un
+                    // flag y el tick del timer (hilo de UI, con acceso a ctrl) hace `clear_modifiers`.
+                    ui.set_drag_just_ended(true);
                 }
             });
         });

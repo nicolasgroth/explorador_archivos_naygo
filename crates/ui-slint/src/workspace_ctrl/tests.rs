@@ -641,6 +641,46 @@ fn selected_paths_of_toma_el_panel_pedido_no_el_activo() {
     assert!(desde_a[0].ends_with("en_a.txt"));
 }
 
+/// Regresión del Shift/Ctrl "pegado" tras un arrastre: durante el bucle modal de DoDragDrop la
+/// app no recibe eventos de teclado, así que el key-release de un modificador NUNCA llega y
+/// `shift_down`/`ctrl_down` quedan en true. Eso envenena el siguiente `on_row_clicked`: con Shift
+/// pegado hace una selección por RANGO en vez de seleccionar una sola fila (lo que el usuario vio
+/// como "marcó varios" y como "el drag no movió lo correcto"). `clear_modifiers` debe limpiarlos.
+#[test]
+fn clear_modifiers_evita_la_seleccion_por_rango_fantasma_tras_un_drag() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+        std::fs::write(dir.path().join(n), b"x").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    let now = std::time::Instant::now();
+    // Clic simple en la fila 0 → una sola seleccionada.
+    c.on_row_clicked(id, 0, now);
+    assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
+    // Simular Shift PEGADO (como si un drag se hubiera tragado su key-release).
+    c.on_key("", false, true, false); // ctrl=false, shift=true
+    // Con Shift pegado, un clic (p.ej. el que el .slint hace al iniciar un drag) seleccionaría
+    // por RANGO: de la fila 0 a la 3 → 4 filas. Eso es el bug.
+    c.on_row_clicked(id, 3, now);
+    assert_eq!(
+        c.ws.active_files().unwrap().selected.len(),
+        4,
+        "con Shift pegado, on_row_clicked selecciona por rango (el bug que ve el usuario)"
+    );
+    // El fix: clear_modifiers (que el tick llama tras el drag) baja el Shift fantasma.
+    c.clear_modifiers();
+    // Ahora un clic vuelve a seleccionar UNA sola fila, no un rango.
+    c.on_row_clicked(id, 1, now);
+    assert_eq!(
+        c.ws.active_files().unwrap().selected.len(),
+        1,
+        "tras clear_modifiers, el clic selecciona una sola fila (Shift ya no está pegado)"
+    );
+}
+
 /// El flujo de comprimir desde el menú: `op_compress_prompt` abre el modal de nombre con el
 /// nombre por defecto, y al confirmarlo (`ops.name_confirm`) arranca la op `Compress` que, al
 /// drenarla, crea el `.zip` (con la extensión asegurada) en la carpeta activa.

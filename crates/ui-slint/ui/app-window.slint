@@ -595,6 +595,10 @@ export component AppWindow inherits Window {
     // file-panel.slint `drag-in-progress`). Rust lo pone en true al lanzar el arrastre y en false al
     // terminar (drop procesado o cancelado).
     in property <bool> drag-in-progress: false;
+    // Señal de un solo uso: el arrastre acaba de terminar. El tick del timer la lee para limpiar
+    // los modificadores (Shift/Ctrl) que quedaron pegados porque el bucle modal de DoDragDrop se
+    // tragó su key-release, y la vuelve a false. Ver `on_row_drag_out` y el tick en main.rs.
+    in-out property <bool> drag-just-ended: false;
     // Popup "Archivos de la operación": el enlace "Ver N archivos" de una fila del historial pide
     // a Rust la lista completa (op-show-files con el id de la op); Rust llena `op-file-list` +
     // `op-file-list-label` y abre el modal poniendo `op-file-list-open`.
