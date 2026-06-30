@@ -148,7 +148,9 @@ pub fn compress_zip(
                         break;
                     }
                     done += n as u64;
-                    on_progress(done, total);
+                    // Acota a `total`: si un archivo crece entre el escaneo de metadata y la
+                    // lectura, `done` podría superar `total` (barra >100%).
+                    on_progress(done.min(total), total);
                 }
                 items.push(ArchiveOpItem {
                     path: disk.clone(),
@@ -283,7 +285,9 @@ pub fn extract_zip(
         match std::fs::File::create(&final_target) {
             Ok(mut out) => {
                 let mut buf = [0u8; 64 * 1024];
-                let mut failed = false;
+                // Captura el error real del OS (lectura del zip o escritura del disco) para el
+                // resumen, en vez de un genérico "write". `None` = se copió completo.
+                let mut fail_msg: Option<String> = None;
                 loop {
                     if token.is_cancelled() {
                         return Err(ArchiveError::Cancelled);
@@ -291,24 +295,25 @@ pub fn extract_zip(
                     let n = match entry.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => n,
-                        Err(_) => {
-                            failed = true;
+                        Err(e) => {
+                            fail_msg = Some(e.to_string());
                             break;
                         }
                     };
-                    if out.write_all(&buf[..n]).is_err() {
-                        failed = true;
+                    if let Err(e) = out.write_all(&buf[..n]) {
+                        fail_msg = Some(e.to_string());
                         break;
                     }
                     done += n as u64;
-                    on_progress(done, total);
+                    // Acota a `total`: un zip con `size` declarado menor al real haría done > total
+                    // (barra >100%). Nunca reportamos progreso por encima del total.
+                    on_progress(done.min(total), total);
                 }
                 items.push(ArchiveOpItem {
                     path: final_target,
-                    outcome: if failed {
-                        ArchiveOutcome::Failed("write".into())
-                    } else {
-                        ArchiveOutcome::Done
+                    outcome: match fail_msg {
+                        Some(m) => ArchiveOutcome::Failed(m),
+                        None => ArchiveOutcome::Done,
                     },
                 });
             }
@@ -517,5 +522,61 @@ mod tests {
         token.cancel();
         let r = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token);
         assert!(matches!(r, Err(ArchiveError::Cancelled)));
+    }
+
+    /// Una entrada con datos comprimidos corruptos NO debe abortar la extracción: la entrada
+    /// dañada queda Failed y las sanas siguen extrayéndose.
+    ///
+    /// Enfoque determinista: se crea un .zip deflated con dos entradas; la PRIMERA con contenido
+    /// muy comprimible (su stream deflate es válido y verificable por CRC). Luego se corrompen
+    /// unos bytes en la región de datos de esa primera entrada — justo después de su cabecera
+    /// local (Local File Header) — dejando intactos el resto del archivo y el directorio central
+    /// al final, para que `ZipArchive::new` abra bien pero `read()` falle (inflate/CRC) en la
+    /// entrada dañada. La cabecera local mide 30 bytes + nombre (sin extra field por defecto).
+    #[test]
+    fn extract_entrada_corrupta_falla_sin_abortar() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("danado.zip");
+        // Crear el zip deflated a mano para controlar el método de compresión.
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            // Contenido repetitivo → el stream deflate es no trivial y su CRC valida bien.
+            z.start_file("malo.txt", opts).unwrap();
+            z.write_all(&vec![b'A'; 4096]).unwrap();
+            z.start_file("bueno.txt", opts).unwrap();
+            z.write_all(&vec![b'B'; 4096]).unwrap();
+            z.finish().unwrap();
+        }
+        // Corromper bytes en la región de datos de "malo.txt": tras su Local File Header.
+        // LFH = 30 bytes fijos + longitud del nombre ("malo.txt" = 8) = 38 bytes de offset 0.
+        let mut bytes = std::fs::read(&zip_path).unwrap();
+        let data_off = 30 + "malo.txt".len();
+        for b in bytes.iter_mut().skip(data_off).take(16) {
+            *b ^= 0xFF;
+        }
+        std::fs::write(&zip_path, &bytes).unwrap();
+
+        let dest = dir.path().join("out");
+        let token = CancellationToken::new();
+        // No debe entrar en pánico ni abortar: devuelve Ok con el detalle por entrada.
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .expect("entrada corrupta no aborta la operación");
+        // La entrada sana se extrajo bien.
+        assert!(
+            items.iter().any(|i| i.outcome == ArchiveOutcome::Done),
+            "la entrada sana debe extraerse (Done)"
+        );
+        assert_eq!(std::fs::read(dest.join("bueno.txt")).unwrap(), vec![b'B'; 4096]);
+        // La entrada dañada quedó marcada Failed (no Done).
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i.outcome, ArchiveOutcome::Failed(_))),
+            "la entrada corrupta debe quedar Failed: {items:?}"
+        );
     }
 }
