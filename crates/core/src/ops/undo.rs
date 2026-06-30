@@ -115,6 +115,8 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
             })
             .collect(),
         OpKind::Delete { .. } => return None,
+        // El deshacer de comprimir/extraer lo arma el worker de zip (ui-slint), NO build_undo.
+        OpKind::Compress { .. } | OpKind::Extract => return None,
     };
     if actions.is_empty() {
         None

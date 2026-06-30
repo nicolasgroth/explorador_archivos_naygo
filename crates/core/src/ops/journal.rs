@@ -81,6 +81,9 @@ impl OpJournal {
             OpKind::Delete { .. } => "Eliminar",
             OpKind::Rename { .. } | OpKind::BatchRename { .. } => "Renombrar",
             OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => "Crear",
+            // El worker de zip (ui-slint) no usa este journal del motor de copia; arma defensiva.
+            OpKind::Compress { .. } => "Comprimir",
+            OpKind::Extract => "Extraer",
         };
         format!("{verb} → {dest}")
     }

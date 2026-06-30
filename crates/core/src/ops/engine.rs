@@ -289,6 +289,16 @@ fn exec_step(
             let outcome = exec_create_file(&step.to);
             (step.to.clone(), outcome, 0, true)
         }
+        OpKind::Compress { .. } | OpKind::Extract => {
+            // El worker de zip (ui-slint) maneja estas ops; nunca deberían llegar al engine de pasos.
+            debug_assert!(false, "Compress/Extract no pasan por exec_step");
+            (
+                step.to.clone(),
+                OpOutcome::Failed("compress/extract fuera del engine".into()),
+                0,
+                false,
+            )
+        }
     }
 }
 

@@ -81,6 +81,15 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 pre_delete: Vec::new(),
             })
         }
+        // Compress/Extract NO pasan por este planificador: las maneja el worker de zip
+        // (ui-slint) con su propia lógica. Si llegaran aquí, devolvemos un plan vacío
+        // (sin pasos) en vez de inventar semántica del motor de copia.
+        OpKind::Compress { .. } | OpKind::Extract => Ok(OpPlan {
+            steps: Vec::new(),
+            total_bytes: 0,
+            total_files: 0,
+            pre_delete: Vec::new(),
+        }),
     }
 }
 

@@ -52,6 +52,12 @@ pub enum OpKind {
     CreateFile {
         name: String,
     },
+    /// Comprimir `sources` en un `.zip` llamado `dest_name`, dentro de `dest_dir` del OpRequest.
+    Compress {
+        dest_name: String,
+    },
+    /// Extraer el `.zip` (único source) dentro de `dest_dir` del OpRequest.
+    Extract,
 }
 
 /// Qué hacer ante un nombre que ya existe en el destino.
