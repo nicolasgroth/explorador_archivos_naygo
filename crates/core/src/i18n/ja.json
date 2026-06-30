@@ -640,6 +640,7 @@
   "slint.cfg.cat_import": "インポート／エクスポート",
   "slint.cfg.cat_about": "バージョン情報",
   "slint.cfg.cat_language": "言語",
+  "slint.cfg.search": "設定を検索…",
   "slint.pathbar.fav_tip": "このフォルダーをお気に入りにピン留め／解除",
   "slint.pathbar.copy_tip": "パスをクリップボードにコピー",
   "slint.pathbar.copied": "パスをコピーしました",

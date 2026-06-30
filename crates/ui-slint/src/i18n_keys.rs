@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::config_ctrl::ConfigCtrl;
-use crate::Tr;
+use crate::{TextUtil, Tr};
 use slint::{ComponentHandle, Global};
 
 /// Aplica todos los textos del idioma activo al global `Tr` de la ventana `ui`.
@@ -16,8 +16,15 @@ pub fn apply<'a, W>(ui: &'a W, c: &ConfigCtrl)
 where
     W: ComponentHandle,
     Tr<'a>: Global<'a, W>,
+    TextUtil<'a>: Global<'a, W>,
 {
     use naygo_core::keymap::Action;
+    // Respaldo del `contains` que Slint no expone: el buscador de opciones de la config lo usa para
+    // un match de subcadena case-insensitive (los strings llegan ya en minúsculas desde Slint). Se
+    // (re)liga en cada apply; basta con un contains plano de `&str`.
+    ui.global::<TextUtil>().on_contains(|haystack, needle| {
+        haystack.as_str().contains(needle.as_str())
+    });
     let tr = ui.global::<Tr>();
     // Tooltip de un botón de la toolbar CON atajo: concatena el texto base i18n con el atajo REAL
     // configurado en el keymap (formato legible, p. ej. "Atrás (Alt+←)"). Si el usuario cambió el
@@ -321,6 +328,7 @@ where
     tr.set_cfg_cat_language(c.t("slint.cfg.cat_language").into());
     tr.set_cfg_cat_advanced(c.t("slint.cfg.cat_advanced").into());
     tr.set_cfg_cat_preview(c.t("slint.cfg.cat_preview").into());
+    tr.set_cfg_search(c.t("slint.cfg.search").into());
     tr.set_cfg_preview_hint(c.t("slint.cfg.preview_hint").into());
     tr.set_cfg_preview_ext(c.t("slint.cfg.preview_ext").into());
     tr.set_cfg_preview_on(c.t("slint.cfg.preview_on").into());

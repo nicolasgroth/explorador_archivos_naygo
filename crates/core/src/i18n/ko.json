@@ -640,6 +640,7 @@
   "slint.cfg.cat_import": "가져오기/내보내기",
   "slint.cfg.cat_about": "정보",
   "slint.cfg.cat_language": "언어",
+  "slint.cfg.search": "설정 검색…",
   "slint.pathbar.fav_tip": "이 폴더를 즐겨찾기에 고정/고정 해제",
   "slint.pathbar.copy_tip": "경로를 클립보드에 복사",
   "slint.pathbar.copied": "경로 복사됨",

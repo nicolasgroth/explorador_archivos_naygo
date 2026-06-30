@@ -348,6 +348,8 @@ export global Tr {
     in property <string> cfg-cat-language: "Idioma";
     in property <string> cfg-cat-advanced: "Avanzado";
     in property <string> cfg-cat-preview: "Previsualización";
+    // Placeholder del buscador de opciones del sidebar de configuración.
+    in property <string> cfg-search: "Buscar opción…";
     // Sección Previsualización (C3).
     in property <string> cfg-preview-hint: "Qué extensiones se previsualizan y con qué modo de vista mostrarlas.";
     in property <string> cfg-preview-ext: "Extensión";
@@ -503,4 +505,13 @@ export global Tr {
     in property <string> icons-group-actions: "Acciones de la barra";
     in property <string> icons-group-files: "Tipos de archivo";
     in property <string> icons-personalize: "Personalizar";
+}
+
+// Utilidades de texto que Slint no expone como builtin. `contains` lo respalda Rust (ver
+// i18n_keys.rs): devuelve true si `needle` está contenido en `haystack`. Se usa para el buscador
+// de opciones del sidebar de configuración (Slint 1.16 no tiene substring/contains en sus
+// expresiones, así que la búsqueda case-insensitive se delega a Rust). Es `pure` para poder usarla
+// dentro de bindings de propiedad.
+export global TextUtil {
+    pure callback contains(string /* haystack */, string /* needle */) -> bool;
 }

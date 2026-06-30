@@ -640,6 +640,7 @@
   "slint.cfg.cat_import": "आयात/निर्यात",
   "slint.cfg.cat_about": "के बारे में",
   "slint.cfg.cat_language": "भाषा",
+  "slint.cfg.search": "सेटिंग खोजें…",
   "slint.pathbar.fav_tip": "इस फ़ोल्डर को पसंदीदा से पिन/अनपिन करें",
   "slint.pathbar.copy_tip": "पथ क्लिपबोर्ड पर कॉपी करें",
   "slint.pathbar.copied": "पथ कॉपी किया गया",

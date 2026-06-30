@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: MIT
 import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm, NewsSection, IconChoiceVm } from "types.slint";
-import { Tr } from "i18n.slint";
+import { Tr, TextUtil } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
 import { ColorPicker } from "color-picker.slint";
@@ -30,6 +30,97 @@ component CloseIcon inherits Rectangle {
         MoveTo { x: 9; y: 1; }
         LineTo { x: 1; y: 9; }
     }
+}
+
+// Ícono "✓" (check) para el botón Guardar. Dibujado con Path (igual razón que CloseIcon: el
+// glifo de fuente puede faltar bajo render por software).
+component SaveIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.8px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        MoveTo { x: 2.5; y: 8.5; }
+        LineTo { x: 6.5; y: 12.5; }
+        LineTo { x: 13.5; y: 3.5; }
+    }
+}
+
+// Ícono "↻" (flecha circular) para el botón Restaurar. Se aproxima el arco con segmentos rectos
+// (MoveTo/LineTo) en vez de ArcTo para no depender de esa primitiva: así compila seguro bajo el
+// render por software. Recorre ~300° de un círculo (centro 8,8 radio 5) dejando un hueco arriba a
+// la derecha, con una punta de flecha en el extremo de arranque.
+component RestoreIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        // Polilínea que aproxima el arco (sentido horario, arrancando arriba a la derecha).
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 12.5; y: 5.5; }
+        LineTo { x: 13; y: 8; }
+        LineTo { x: 12.5; y: 10.5; }
+        LineTo { x: 11; y: 12.5; }
+        LineTo { x: 8.5; y: 13; }
+        LineTo { x: 6; y: 12.5; }
+        LineTo { x: 4; y: 11; }
+        LineTo { x: 3; y: 8.5; }
+        LineTo { x: 3.2; y: 6; }
+        LineTo { x: 4.5; y: 4; }
+        // Punta de flecha en el extremo de arranque (arriba a la derecha).
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 7.8; y: 4.2; }
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 11.4; y: 0.8; }
+    }
+}
+
+// Botón chico de texto + ícono (acciones del editor de temas). Misma estética que CfgBtn pero con
+// un ícono a la izquierda del label. El llamador pasa qué ícono mostrar (kind: "save"/"restore"/"cancel").
+component CfgIconBtn inherits Rectangle {
+    in property <string> label;
+    in property <string> kind;          // "save" | "restore" | "cancel"
+    in property <bool> danger: false;
+    callback clicked();
+    height: 26px;
+    min-width: max(90px, row.preferred-width + 20px);
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : Theme.row-bg;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    row := HorizontalLayout {
+        spacing: 6px;
+        alignment: center;
+        x: (parent.width - self.preferred-width) / 2;
+        // Ícono según el tipo (uno solo se muestra a la vez).
+        if root.kind == "save": SaveIcon { width: 14px; height: 26px; tint: Theme.text; }
+        if root.kind == "restore": RestoreIcon { width: 14px; height: 26px; tint: Theme.text; }
+        if root.kind == "cancel": CloseIcon { width: 14px; height: 26px; tint: Theme.text; }
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
 }
 
 // Una fila etiqueta + control (layout consistente).
@@ -133,6 +224,25 @@ export component ConfigWindow inherits Window {
     // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
+    // Orden VISUAL del sidebar (label, cat). `cat` es el índice interno del bloque `if root.cat == N`
+    // y NO cambia: solo reordenamos las entradas y mapeamos cada una a su cat interno. Así los 11
+    // bloques de contenido quedan intactos (frágiles de reindexar). El orden de abajo agrupa por
+    // afinidad temática. "Idioma" (cat 10) ya no aparece: su selector vive ahora en General (cat 0).
+    property <[{label: string, cat: int}]> nav-items: [
+        { label: Tr.cfg-cat-general, cat: 0 },
+        { label: Tr.cfg-cat-appearance, cat: 3 },
+        { label: Tr.cfg-cat-icons, cat: 9 },
+        { label: Tr.cfg-cat-preview, cat: 7 },
+        { label: Tr.cfg-cat-ops, cat: 1 },
+        { label: Tr.cfg-cat-paste, cat: 2 },
+        { label: Tr.cfg-cat-shortcuts, cat: 4 },
+        { label: Tr.cfg-cat-advanced, cat: 6 },
+        { label: Tr.cfg-cat-import, cat: 5 },
+        { label: Tr.cfg-cat-about, cat: 8 },
+    ];
+    // Texto del buscador de opciones (filtra las pestañas del sidebar por nombre). Vacío = todas
+    // visibles. Estado puramente local: no se persiste ni se cablea a Rust.
+    property <string> search-text: "";
     // Easter egg de "Acerca de": 5 clics seguidos en el logo disparan ~8s de "lluvia de Naygo"
     // con un mensaje que se escribe letra a letra. `egg-progress` (0..1) lo anima un Timer; el
     // contador de clics se reinicia si pasan más de 2s entre clics (ventana de encadenado).
@@ -293,17 +403,37 @@ export component ConfigWindow inherits Window {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        for c[i] in [Tr.cfg-cat-general, Tr.cfg-cat-ops, Tr.cfg-cat-paste, Tr.cfg-cat-appearance, Tr.cfg-cat-shortcuts, Tr.cfg-cat-import, Tr.cfg-cat-advanced, Tr.cfg-cat-preview, Tr.cfg-cat-about, Tr.cfg-cat-icons, Tr.cfg-cat-language]: Rectangle {
-                            height: 30px;
-                            background: root.cat == i ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
+                        // Buscador de opciones: filtra las pestañas por nombre (substring,
+                        // case-insensitive). Vacío = todas visibles. El estado vive en `search-text`.
+                        LineEdit {
+                            height: 28px;
+                            placeholder-text: Tr.cfg-search;
+                            text: root.search-text;
+                            edited => { root.search-text = self.text; }
+                        }
+                        // Pestañas en el ORDEN VISUAL de `nav-items`. El `cat-touch` salta al cat
+                        // INTERNO del par (it.cat), no al índice de iteración, así el reorden no afecta
+                        // a los bloques `if root.cat == N`. El `if` filtra por el buscador: con texto,
+                        // solo se muestran las pestañas cuyo label contiene el texto.
+                        for it[i] in root.nav-items: Rectangle {
+                            // `matches`: la pestaña coincide con el buscador (o el buscador está vacío).
+                            // Slint 1.16 no tiene `contains`/substring en sus expresiones, así que el
+                            // match de subcadena (case-insensitive) lo resuelve Rust vía TextUtil.contains.
+                            // Lowercaseamos aquí (Slint sí tiene to-lowercase) y Rust hace un contains plano.
+                            property <bool> matches: root.search-text == "" || TextUtil.contains(it.label.to-lowercase(), root.search-text.to-lowercase());
+                            // Las filas ocultas no deben reservar alto: en un VerticalLayout `visible:false`
+                            // igual deja su hueco, así que colapsamos también el alto (0px) cuando no coincide.
+                            height: self.matches ? 30px : 0px;
+                            visible: self.matches;
+                            background: root.cat == it.cat ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
-                            Text { text: c; color: Theme.text; vertical-alignment: center; x: 10px; }
-                            cat-touch := TouchArea { clicked => { root.cat = i; root.capturing = ""; root.reset-armed = false; } }
+                            Text { text: it.label; color: Theme.text; vertical-alignment: center; x: 10px; }
+                            cat-touch := TouchArea { clicked => { root.cat = it.cat; root.capturing = ""; root.reset-armed = false; } }
                         }
                         // Espaciador estirable: da a esta columna max-height infinito. Sin él, la
-                        // suma de los ítems fijos (9×30px) le ponía un tope finito a la FILA, y la
-                        // fila —aun con vertical-stretch— no podía crecer al alto de la ventana
-                        // (dejaba espacio muerto abajo). Con el spacer, la fila estira a fondo.
+                        // suma de los ítems fijos le ponía un tope finito a la FILA, y la fila —aun
+                        // con vertical-stretch— no podía crecer al alto de la ventana (dejaba espacio
+                        // muerto abajo). Con el spacer, la fila estira a fondo.
                         Rectangle { vertical-stretch: 1; }
                     }
                 }
@@ -369,6 +499,24 @@ export component ConfigWindow inherits Window {
                                             label: Tr.cfg-default-table-clear;
                                             danger: root.vm.default-table-on;
                                             clicked => { root.clear-default-table(); }
+                                        }
+                                    }
+                                }
+                                // Idioma (movido aquí desde su antigua categoría propia, que se eliminó;
+                                // se cambia en caliente). Usa el mismo modelo/callback que antes.
+                                Field {
+                                    label: Tr.cfg-language;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: root.vm.languages;
+                                        // ThemeCombo deriva current-value de current-index, así que
+                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
+                                        current-index: root.vm.language-index;
+                                        selected => {
+                                            // languages muestra nombres nativos; language-codes tiene
+                                            // los códigos en el mismo orden. Usamos el índice seleccionado
+                                            // para obtener el código y no depender del texto mostrado.
+                                            root.set-language(root.vm.language-codes[self.current-index]);
                                         }
                                     }
                                 }
@@ -591,6 +739,28 @@ export component ConfigWindow inherits Window {
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 8px;
+                                        // Acciones DUPLICADAS arriba (mismas callbacks que la fila de
+                                        // abajo) para no tener que scrollear hasta el final del editor.
+                                        // Llevan ícono reconocible (✓ guardar, ↻ restaurar, ✕ cancelar).
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-bottom: 2px;
+                                            CfgIconBtn {
+                                                label: Tr.theme-save;
+                                                kind: "save";
+                                                clicked => { root.editing-open-token = -1; root.theme-save(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-restore;
+                                                kind: "restore";
+                                                clicked => { root.theme-restore(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-cancel;
+                                                kind: "cancel";
+                                                clicked => { root.editing-open-token = -1; root.theme-cancel(); }
+                                            }
+                                        }
                                         // Nombre del tema.
                                         Field {
                                             label: Tr.theme-name;
@@ -691,20 +861,24 @@ export component ConfigWindow inherits Window {
                                                 toggled(v) => { root.theme-set-flat-inactive(v); }
                                             }
                                         }
-                                        // Acciones del editor.
+                                        // Acciones del editor (también abajo, para tenerlas a mano
+                                        // tras revisar los tokens). Mismas callbacks e íconos que arriba.
                                         HorizontalLayout {
                                             spacing: 8px;
                                             padding-top: 4px;
-                                            CfgBtn {
+                                            CfgIconBtn {
                                                 label: Tr.theme-save;
+                                                kind: "save";
                                                 clicked => { root.editing-open-token = -1; root.theme-save(); }
                                             }
-                                            CfgBtn {
+                                            CfgIconBtn {
                                                 label: Tr.theme-restore;
+                                                kind: "restore";
                                                 clicked => { root.theme-restore(); }
                                             }
-                                            CfgBtn {
+                                            CfgIconBtn {
                                                 label: Tr.theme-cancel;
+                                                kind: "cancel";
                                                 clicked => { root.editing-open-token = -1; root.theme-cancel(); }
                                             }
                                         }
@@ -1473,27 +1647,8 @@ export component ConfigWindow inherits Window {
                                 }
                             }
 
-                            // === Idioma (cat 10) — categoría propia para que sea fácil de hallar ===
-                            if root.cat == 10: VerticalLayout {
-                                spacing: 6px;
-                                alignment: start;
-                                Field {
-                                    label: Tr.cfg-language;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: root.vm.languages;
-                                        // ThemeCombo deriva current-value de current-index, así que
-                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
-                                        current-index: root.vm.language-index;
-                                        selected => {
-                                            // languages muestra nombres nativos; language-codes tiene
-                                            // los códigos en el mismo orden. Usamos el índice seleccionado
-                                            // para obtener el código y no depender del texto mostrado.
-                                            root.set-language(root.vm.language-codes[self.current-index]);
-                                        }
-                                    }
-                                }
-                            }
+                            // (La antigua categoría "Idioma" (cat 10) se eliminó: su selector vive
+                            // ahora al final de General (cat 0). El sidebar ya no la lista.)
                         }
                     }
                 }

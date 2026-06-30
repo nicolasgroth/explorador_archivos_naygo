@@ -640,6 +640,7 @@
   "slint.cfg.cat_import": "导入/导出",
   "slint.cfg.cat_about": "关于",
   "slint.cfg.cat_language": "语言",
+  "slint.cfg.search": "搜索设置…",
   "slint.pathbar.fav_tip": "将此文件夹固定到收藏夹或取消固定",
   "slint.pathbar.copy_tip": "将路径复制到剪贴板",
   "slint.pathbar.copied": "路径已复制",

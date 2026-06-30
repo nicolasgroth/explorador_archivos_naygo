@@ -640,6 +640,7 @@
   "slint.cfg.cat_import": "Importa/Esporta",
   "slint.cfg.cat_about": "Informazioni",
   "slint.cfg.cat_language": "Lingua",
+  "slint.cfg.search": "Cerca opzione…",
   "slint.pathbar.fav_tip": "Aggiungi/rimuovi questa cartella dai preferiti",
   "slint.pathbar.copy_tip": "Copia il percorso negli appunti",
   "slint.pathbar.copied": "Percorso copiato",
