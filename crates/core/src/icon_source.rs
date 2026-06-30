@@ -63,13 +63,17 @@ mod tests {
 
     #[test]
     fn icon_source_serde_round_trip() {
-        let a = IconSource::Builtin { set_id: "material".into() };
+        let a = IconSource::Builtin {
+            set_id: "material".into(),
+        };
         let json = serde_json::to_string(&a).unwrap();
         assert_eq!(json, r#"{"kind":"builtin","set_id":"material"}"#);
         let back: IconSource = serde_json::from_str(&json).unwrap();
         assert_eq!(back, a);
 
-        let b = IconSource::UserPng { rel_path: "ab12.png".into() };
+        let b = IconSource::UserPng {
+            rel_path: "ab12.png".into(),
+        };
         let json = serde_json::to_string(&b).unwrap();
         let back: IconSource = serde_json::from_str(&json).unwrap();
         assert_eq!(back, b);
@@ -92,8 +96,12 @@ mod tests {
     #[test]
     fn las_6_claves_nuevas_round_trip() {
         for name in [
-            "action_home", "action_search", "action_show_hidden",
-            "action_history", "action_favorites", "action_split",
+            "action_home",
+            "action_search",
+            "action_show_hidden",
+            "action_history",
+            "action_favorites",
+            "action_split",
         ] {
             let key = key_from_string(name).expect("clave válida");
             assert_eq!(key_to_string(key), name);

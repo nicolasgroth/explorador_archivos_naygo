@@ -56,17 +56,20 @@ pub fn export_pack(
         base_set_id: base_set_id.to_string(),
         overrides: overrides
             .iter()
-            .map(|(k, s)| OverrideEntry { key: k.clone(), source: s.clone() })
+            .map(|(k, s)| OverrideEntry {
+                key: k.clone(),
+                source: s.clone(),
+            })
             .collect(),
     };
-    let file =
-        std::fs::File::create(out).map_err(|e| format!("crear {}: {e}", out.display()))?;
+    let file = std::fs::File::create(out).map_err(|e| format!("crear {}: {e}", out.display()))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts: zip::write::FileOptions<()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let json = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-    zip.start_file("manifest.json", opts).map_err(|e| e.to_string())?;
+    zip.start_file("manifest.json", opts)
+        .map_err(|e| e.to_string())?;
     zip.write_all(&json).map_err(|e| e.to_string())?;
 
     for src in overrides.values() {
@@ -88,8 +91,7 @@ pub fn export_pack(
 /// Tolerante: una entrada PNG corrupta no aborta la importación. Solo el zip
 /// inválido o el manifest ilegible son errores fatales.
 pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
-    let file =
-        std::fs::File::open(path).map_err(|e| format!("abrir {}: {e}", path.display()))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("abrir {}: {e}", path.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip inválido: {e}"))?;
 
     let manifest: PackManifest = {
@@ -98,7 +100,9 @@ pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
             .map_err(|_| "falta manifest.json".to_string())?;
         let mut s = String::new();
         // Cap el manifest a 1 MiB: defensa anti-bomba (un manifest legítimo es minúsculo).
-        mf.take(1 << 20).read_to_string(&mut s).map_err(|e| e.to_string())?;
+        mf.take(1 << 20)
+            .read_to_string(&mut s)
+            .map_err(|e| e.to_string())?;
         serde_json::from_str(&s).map_err(|e| format!("manifest inválido: {e}"))?
     };
     if manifest.schema != 1 {
@@ -109,7 +113,13 @@ pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
     let safe_name: String = manifest
         .name
         .chars()
-        .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     if safe_name.is_empty() || safe_name == "." || safe_name.contains("..") {
         return Err(format!("nombre de pack inválido: {:?}", manifest.name));
@@ -158,7 +168,9 @@ mod tests {
             base_set_id: "lucide".into(),
             overrides: vec![OverrideEntry {
                 key: "folder".into(),
-                source: IconSource::Builtin { set_id: "material".into() },
+                source: IconSource::Builtin {
+                    set_id: "material".into(),
+                },
             }],
         };
         let json = serde_json::to_string(&m).unwrap();
@@ -175,8 +187,18 @@ mod tests {
         std::fs::write(user_dir.join("ab12.png"), b"\x89PNG\r\n\x1a\nFAKE").unwrap();
 
         let mut overrides: BTreeMap<String, IconSource> = BTreeMap::new();
-        overrides.insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
-        overrides.insert("file_image".into(), IconSource::UserPng { rel_path: "ab12.png".into() });
+        overrides.insert(
+            "folder".into(),
+            IconSource::Builtin {
+                set_id: "material".into(),
+            },
+        );
+        overrides.insert(
+            "file_image".into(),
+            IconSource::UserPng {
+                rel_path: "ab12.png".into(),
+            },
+        );
 
         let out = cfg.path().join("mi.naygoset");
         export_pack(&out, "Mi set", "Nico", "lucide", &overrides, cfg.path()).unwrap();
@@ -206,13 +228,14 @@ mod tests {
         let mut zip = zip::ZipWriter::new(file);
         let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
         zip.start_file("manifest.json", opts).unwrap();
-        zip.write_all(br#"{"schema":1,"name":"x","base_set_id":"lucide"}"#).unwrap();
+        zip.write_all(br#"{"schema":1,"name":"x","base_set_id":"lucide"}"#)
+            .unwrap();
         zip.start_file("icons/../escape.png", opts).unwrap();
         zip.write_all(b"x").unwrap();
         zip.finish().unwrap();
         let cfg2 = tempfile::tempdir().unwrap();
         let _ = import_pack(&out, cfg2.path()); // no debe panic
-        // el archivo de escape NO debe existir fuera del dir del pack
+                                                // el archivo de escape NO debe existir fuera del dir del pack
         assert!(!cfg2.path().join("escape.png").exists());
     }
 
@@ -225,7 +248,8 @@ mod tests {
         let mut zip = zip::ZipWriter::new(file);
         let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
         zip.start_file("manifest.json", opts).unwrap();
-        zip.write_all(br#"{"schema":1,"name":"../../evil","base_set_id":"lucide"}"#).unwrap();
+        zip.write_all(br#"{"schema":1,"name":"../../evil","base_set_id":"lucide"}"#)
+            .unwrap();
         zip.finish().unwrap();
         let cfg2 = tempfile::tempdir().unwrap();
         assert!(import_pack(&out, cfg2.path()).is_err());

@@ -245,10 +245,7 @@ mod tests {
     #[test]
     fn clave_sin_asset_cae_a_unknown() {
         // Drive(Fixed) no tiene asset propio → cae a "unknown" (no vacío).
-        let b = bytes_for_id(
-            "lucide",
-            IconKey::Drive(crate::icon_kind::DriveKind::Fixed),
-        );
+        let b = bytes_for_id("lucide", IconKey::Drive(crate::icon_kind::DriveKind::Fixed));
         assert!(!b.is_empty());
     }
 
@@ -257,13 +254,29 @@ mod tests {
         use crate::icon_source::IconSource;
         use std::collections::BTreeMap;
         let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
-        ov.insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        ov.insert(
+            "folder".into(),
+            IconSource::Builtin {
+                set_id: "material".into(),
+            },
+        );
         let dir = std::path::Path::new("");
         let with = resolve_with_overrides("lucide", &ov, IconKey::Folder, dir);
         let material_folder = bytes_for_id("material", IconKey::Folder);
         assert_eq!(with, material_folder);
-        let copy = resolve_with_overrides("lucide", &ov, IconKey::Action(crate::icon_kind::ActionIcon::Copy), dir);
-        assert_eq!(copy, bytes_for_id("lucide", IconKey::Action(crate::icon_kind::ActionIcon::Copy)));
+        let copy = resolve_with_overrides(
+            "lucide",
+            &ov,
+            IconKey::Action(crate::icon_kind::ActionIcon::Copy),
+            dir,
+        );
+        assert_eq!(
+            copy,
+            bytes_for_id(
+                "lucide",
+                IconKey::Action(crate::icon_kind::ActionIcon::Copy)
+            )
+        );
     }
 
     #[test]
@@ -271,7 +284,12 @@ mod tests {
         use crate::icon_source::IconSource;
         use std::collections::BTreeMap;
         let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
-        ov.insert("folder".into(), IconSource::UserPng { rel_path: "no-existe.png".into() });
+        ov.insert(
+            "folder".into(),
+            IconSource::UserPng {
+                rel_path: "no-existe.png".into(),
+            },
+        );
         let dir = std::path::Path::new("");
         let bytes = resolve_with_overrides("lucide", &ov, IconKey::Folder, dir);
         assert!(!bytes.is_empty());

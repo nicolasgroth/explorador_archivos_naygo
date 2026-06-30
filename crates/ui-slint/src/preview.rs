@@ -233,7 +233,14 @@ impl PreviewState {
         let worker_token = token.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let payload = build_payload(&path, &rules, auto_highlight, &archive_labels, &preview_msgs, &worker_token);
+            let payload = build_payload(
+                &path,
+                &rules,
+                auto_highlight,
+                &archive_labels,
+                &preview_msgs,
+                &worker_token,
+            );
             let _ = tx.send((path, payload));
         });
         self.token = Some(token);
@@ -314,7 +321,11 @@ fn build_payload(
         PreviewKind::None => Payload::Message(msgs.not_previewable.clone()),
         // Si la regla fuerza un lenguaje y el toggle global está activo, `code_lang_for` lo
         // devuelve y el texto se resalta; con el toggle en `false` cae a texto plano.
-        PreviewKind::Text => read_text(path, preview::code_lang_for(path, rules, auto_highlight), msgs),
+        PreviewKind::Text => read_text(
+            path,
+            preview::code_lang_for(path, rules, auto_highlight),
+            msgs,
+        ),
         PreviewKind::Image => read_image(path, token, msgs),
         PreviewKind::Svg => read_svg(path, token, msgs),
         PreviewKind::Pdf => read_pdf(path, msgs),
@@ -322,7 +333,11 @@ fn build_payload(
 }
 
 /// Formato de archivo comprimido detectado por extensión.
-enum ArchiveFormat { Zip, Tar, TarGz }
+enum ArchiveFormat {
+    Zip,
+    Tar,
+    TarGz,
+}
 
 /// Detecta el formato por extensión (case-insensitive). `None` si no es comprimido legible.
 fn archive_format(path: &Path) -> Option<ArchiveFormat> {
@@ -351,12 +366,20 @@ const ARCHIVE_MAX_ENTRIES: usize = 500;
 ///
 /// No extrae contenido (solo el índice central). `labels` son los textos ya traducidos por el
 /// hilo de UI (core no conoce el catálogo i18n).
-fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveLabels, msgs: &PreviewMessages) -> Payload {
-    use naygo_core::archive_tree::{ArchiveSummary, render_archive_tree};
+fn read_archive_listing(
+    path: &Path,
+    labels: &naygo_core::archive_tree::ArchiveLabels,
+    msgs: &PreviewMessages,
+) -> Payload {
+    use naygo_core::archive_tree::{render_archive_tree, ArchiveSummary};
     let Some(fmt) = archive_format(path) else {
         return Payload::Message(msgs.not_previewable.clone());
     };
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
     let mut entries = Vec::new();
     let mut summary = ArchiveSummary::default();
     let read_ok = match fmt {
@@ -367,8 +390,18 @@ fn read_archive_listing(path: &Path, labels: &naygo_core::archive_tree::ArchiveL
     if !read_ok {
         return Payload::Message(msgs.archive_bad.clone());
     }
-    let text = render_archive_tree(&entries, &summary, &name, naygo_core::format::SizeFormat::Auto, labels);
-    Payload::Text { text, truncated: summary.truncated, highlighted: None }
+    let text = render_archive_tree(
+        &entries,
+        &summary,
+        &name,
+        naygo_core::format::SizeFormat::Auto,
+        labels,
+    );
+    Payload::Text {
+        text,
+        truncated: summary.truncated,
+        highlighted: None,
+    }
 }
 
 /// Lee las entradas de un .zip. false si no se pudo abrir/leer.
@@ -378,18 +411,33 @@ fn read_zip_entries(
     summary: &mut naygo_core::archive_tree::ArchiveSummary,
 ) -> bool {
     use naygo_core::archive_tree::ArchiveEntry;
-    let Ok(file) = std::fs::File::open(path) else { return false; };
-    let Ok(mut archive) = zip::ZipArchive::new(file) else { return false; };
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
     let total = archive.len();
     summary.total_entries = total;
     let shown = total.min(ARCHIVE_MAX_ENTRIES);
     summary.truncated = total > shown;
     for i in 0..shown {
-        let Ok(entry) = archive.by_index(i) else { continue; };
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
         let is_dir = entry.is_dir();
         let size = entry.size();
-        if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
-        entries.push(ArchiveEntry { path: entry.name().to_string(), is_dir, size });
+        if is_dir {
+            summary.dirs += 1;
+        } else {
+            summary.files += 1;
+            summary.total_uncompressed += size;
+        }
+        entries.push(ArchiveEntry {
+            path: entry.name().to_string(),
+            is_dir,
+            size,
+        });
     }
     true
 }
@@ -405,14 +453,18 @@ fn read_tar_entries(
     gz: bool,
 ) -> bool {
     use naygo_core::archive_tree::ArchiveEntry;
-    let Ok(file) = std::fs::File::open(path) else { return false; };
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
     let reader: Box<dyn std::io::Read> = if gz {
         Box::new(flate2::read::GzDecoder::new(file))
     } else {
         Box::new(file)
     };
     let mut archive = tar::Archive::new(reader);
-    let Ok(iter) = archive.entries() else { return false; };
+    let Ok(iter) = archive.entries() else {
+        return false;
+    };
     let mut had_error = false;
     for entry in iter {
         if entries.len() >= ARCHIVE_MAX_ENTRIES {
@@ -421,17 +473,33 @@ fn read_tar_entries(
         }
         let e = match entry {
             Ok(e) => e,
-            Err(_) => { had_error = true; continue; }
+            Err(_) => {
+                had_error = true;
+                continue;
+            }
         };
         let header = e.header();
         let is_dir = header.entry_type().is_dir();
         let size = header.size().unwrap_or(0);
-        let path_str = e.path().ok()
+        let path_str = e
+            .path()
+            .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
-        if path_str.is_empty() { continue; }
-        if is_dir { summary.dirs += 1; } else { summary.files += 1; summary.total_uncompressed += size; }
-        entries.push(ArchiveEntry { path: path_str, is_dir, size });
+        if path_str.is_empty() {
+            continue;
+        }
+        if is_dir {
+            summary.dirs += 1;
+        } else {
+            summary.files += 1;
+            summary.total_uncompressed += size;
+        }
+        entries.push(ArchiveEntry {
+            path: path_str,
+            is_dir,
+            size,
+        });
     }
     // Si no se pudo leer ninguna entrada Y hubo errores, el archivo es corrupto/inválido.
     if entries.is_empty() && had_error {
@@ -487,9 +555,7 @@ fn read_text(path: &Path, lang: Option<CodeLang>, msgs: &PreviewMessages) -> Pay
 fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
     match std::fs::metadata(path) {
-        Ok(m) if m.len() > IMAGE_MAX_BYTES => {
-            return Payload::Message(msgs.image_big.clone())
-        }
+        Ok(m) if m.len() > IMAGE_MAX_BYTES => return Payload::Message(msgs.image_big.clone()),
         Ok(_) => {}
         Err(_) => return Payload::Message(msgs.read.clone()),
     }
@@ -522,9 +588,7 @@ fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) ->
 fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
     let bytes = match std::fs::metadata(path) {
-        Ok(m) if m.len() > IMAGE_MAX_BYTES => {
-            return Payload::Message(msgs.svg_big.clone())
-        }
+        Ok(m) if m.len() > IMAGE_MAX_BYTES => return Payload::Message(msgs.svg_big.clone()),
         Ok(_) => match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return Payload::Message(msgs.read.clone()),
@@ -762,7 +826,8 @@ mod tests {
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_cksum();
-            tar.append_data(&mut header, "dir/archivo.txt", &data[..]).unwrap();
+            tar.append_data(&mut header, "dir/archivo.txt", &data[..])
+                .unwrap();
             tar.into_inner().unwrap().finish().unwrap();
         }
         let payload = read_archive_listing(&tgz_path, &labels_es(), &msgs_es());
@@ -782,7 +847,10 @@ mod tests {
         // bytes que no son un gzip válido → GzDecoder/tar fallan → Message, no panic
         std::fs::write(&bad, b"esto no es un gzip valido").unwrap();
         let payload = read_archive_listing(&bad, &labels_es(), &msgs_es());
-        assert!(matches!(payload, Payload::Message(_)), "tar.gz dañado => Message, no panic");
+        assert!(
+            matches!(payload, Payload::Message(_)),
+            "tar.gz dañado => Message, no panic"
+        );
     }
 
     #[test]
@@ -869,7 +937,10 @@ mod tests {
             view: preview::ViewMode::Text,
         }];
         st.set_rules(nuevas.clone());
-        assert_eq!(st.rules, nuevas, "set_rules reemplaza las reglas del worker");
+        assert_eq!(
+            st.rules, nuevas,
+            "set_rules reemplaza las reglas del worker"
+        );
     }
 
     #[test]

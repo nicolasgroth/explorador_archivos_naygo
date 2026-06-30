@@ -157,7 +157,11 @@ pub(crate) fn render_for_set(
 ) -> Image {
     let empty_ov = std::collections::BTreeMap::new();
     let bytes = naygo_core::icons::resolve_with_overrides(set_id, &empty_ov, key, config_dir);
-    let bytes = if tintable { tint_png(&bytes, tint) } else { bytes };
+    let bytes = if tintable {
+        tint_png(&bytes, tint)
+    } else {
+        bytes
+    };
     decode(&bytes)
 }
 
@@ -240,15 +244,32 @@ mod tests {
         let mut c = IconCache::new("lucide", std::path::PathBuf::new());
         // Cachear folder del set base (lucide).
         let _ = c.get(IconKey::Folder);
-        assert_eq!(c.cache_len(), 1, "debe haber 1 entrada cacheada tras el primer get");
+        assert_eq!(
+            c.cache_len(),
+            1,
+            "debe haber 1 entrada cacheada tras el primer get"
+        );
         // Aplicar override: folder pasa a resolverse desde "material".
         let mut ov: BTreeMap<String, IconSource> = BTreeMap::new();
-        ov.insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        ov.insert(
+            "folder".into(),
+            IconSource::Builtin {
+                set_id: "material".into(),
+            },
+        );
         c.set_overrides(ov);
-        assert_eq!(c.cache_len(), 0, "set_overrides debe invalidar el cache completo");
+        assert_eq!(
+            c.cache_len(),
+            0,
+            "set_overrides debe invalidar el cache completo"
+        );
         // Re-pedir: debe re-decodificar con el override aplicado.
         let _ = c.get(IconKey::Folder);
-        assert_eq!(c.cache_len(), 1, "se re-decodifica con el override aplicado");
+        assert_eq!(
+            c.cache_len(),
+            1,
+            "se re-decodifica con el override aplicado"
+        );
     }
 
     #[test]

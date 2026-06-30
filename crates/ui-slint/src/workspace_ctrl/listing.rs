@@ -51,13 +51,19 @@ impl WorkspaceCtrl {
     /// síncrono en el hilo de UI en cada tick, lo que congelaba la app sobre un share de red
     /// caído. Lo consulta el builder del PaneVm para el aviso in-place.
     pub fn pane_dir_missing(&self, id: PaneId) -> bool {
-        self.missing_cache.get(&id.0).map(|(m, _)| *m).unwrap_or(false)
+        self.missing_cache
+            .get(&id.0)
+            .map(|(m, _)| *m)
+            .unwrap_or(false)
     }
 
     /// ¿El panel `id` (en estado "carpeta no encontrada") tiene un ancestro existente real al
     /// que subir? Falso si la unidad entera se desconectó. Lee del CACHÉ (sin I/O).
     pub fn pane_has_existing_ancestor(&self, id: PaneId) -> bool {
-        self.missing_cache.get(&id.0).map(|(_, a)| *a).unwrap_or(false)
+        self.missing_cache
+            .get(&id.0)
+            .map(|(_, a)| *a)
+            .unwrap_or(false)
     }
 
     /// Recalcula el caché del estado "carpeta no encontrada" de TODOS los paneles Files (hace el
@@ -74,7 +80,8 @@ impl WorkspaceCtrl {
             .filter(|p| p.files.is_some())
             .map(|p| p.id)
             .collect();
-        self.missing_cache.retain(|k, _| ids.iter().any(|id| id.0 == *k));
+        self.missing_cache
+            .retain(|k, _| ids.iter().any(|id| id.0 == *k));
         for id in ids {
             let (missing, has_anc) = match self.pane_current_dir(id) {
                 Some(dir) => {
@@ -358,7 +365,10 @@ impl WorkspaceCtrl {
             // se destructura `self` en préstamos disjuntos: `deep_job`, `ops` e `icons` son campos
             // distintos, así que sus `&` no se solapan y el borrow checker los acepta.
             let WorkspaceCtrl {
-                deep_job, ops, icons, ..
+                deep_job,
+                ops,
+                icons,
+                ..
             } = self;
             let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
                 deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
@@ -490,14 +500,22 @@ impl WorkspaceCtrl {
         // --- Vista profunda: otra fuente de filas (deep_items con depth). ---
         if self.is_deep_active(id) {
             1u8.hash(&mut h); // marca "modo profundo" (distinto de la vista normal)
-            let items = self.deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
+            let items = self
+                .deep_job
+                .as_ref()
+                .map(|d| d.items.as_slice())
+                .unwrap_or(&[]);
             items.len().hash(&mut h);
             // Contenido de cada item visible (mismo razonamiento que la vista normal). La
             // visibilidad se aplica aquí igual que en `rows_of`.
             let vis = self.visibility_flags();
             for (e, depth) in items {
-                if !naygo_core::filter::is_visible(e, vis.show_hidden, vis.show_system, vis.hide_dotfiles)
-                {
+                if !naygo_core::filter::is_visible(
+                    e,
+                    vis.show_hidden,
+                    vis.show_system,
+                    vis.hide_dotfiles,
+                ) {
                     continue;
                 }
                 depth.hash(&mut h);
@@ -505,8 +523,8 @@ impl WorkspaceCtrl {
             }
         } else {
             0u8.hash(&mut h); // marca "vista normal"
-            // Contenido de las entries VISIBLES, en orden de vista. Captura inserción/borrado
-            // (cambia la vista), reordenamiento, y mutación IN SITU (Modified).
+                              // Contenido de las entries VISIBLES, en orden de vista. Captura inserción/borrado
+                              // (cambia la vista), reordenamiento, y mutación IN SITU (Modified).
             let view = f.view_indices();
             view.len().hash(&mut h);
             for &real in &view {
@@ -529,7 +547,12 @@ impl WorkspaceCtrl {
     /// se pinta resaltada y el resaltado se desvanece con el tiempo (`is_fresh_ro` depende de
     /// `now`), así que la firma no debe cachearse: el llamador reconstruye cada tick. Recorre solo
     /// la vista (no todas las entries) y corta al primer acierto.
-    fn fresh_active_in_pane(&self, id: PaneId, highlight_secs: u64, now: std::time::Instant) -> bool {
+    fn fresh_active_in_pane(
+        &self,
+        id: PaneId,
+        highlight_secs: u64,
+        now: std::time::Instant,
+    ) -> bool {
         if highlight_secs == 0 {
             return false;
         }
@@ -537,15 +560,21 @@ impl WorkspaceCtrl {
             return false;
         };
         if self.is_deep_active(id) {
-            let items = self.deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
-            return items
-                .iter()
-                .any(|(e, _)| self.watchers.is_fresh_ro(id.0, &e.path, highlight_secs, now));
+            let items = self
+                .deep_job
+                .as_ref()
+                .map(|d| d.items.as_slice())
+                .unwrap_or(&[]);
+            return items.iter().any(|(e, _)| {
+                self.watchers
+                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
+            });
         }
         f.view_indices().iter().any(|&real| {
-            f.entries
-                .get(real)
-                .is_some_and(|e| self.watchers.is_fresh_ro(id.0, &e.path, highlight_secs, now))
+            f.entries.get(real).is_some_and(|e| {
+                self.watchers
+                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
+            })
         })
     }
 

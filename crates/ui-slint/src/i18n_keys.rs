@@ -22,9 +22,8 @@ where
     // Respaldo del `contains` que Slint no expone: el buscador de opciones de la config lo usa para
     // un match de subcadena case-insensitive (los strings llegan ya en minúsculas desde Slint). Se
     // (re)liga en cada apply; basta con un contains plano de `&str`.
-    ui.global::<TextUtil>().on_contains(|haystack, needle| {
-        haystack.as_str().contains(needle.as_str())
-    });
+    ui.global::<TextUtil>()
+        .on_contains(|haystack, needle| haystack.as_str().contains(needle.as_str()));
     let tr = ui.global::<Tr>();
     // Tooltip de un botón de la toolbar CON atajo: concatena el texto base i18n con el atajo REAL
     // configurado en el keymap (formato legible, p. ej. "Atrás (Alt+←)"). Si el usuario cambió el

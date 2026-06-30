@@ -184,7 +184,8 @@ pub fn compress_zip(
             }),
         }
     }
-    zipw.finish().map_err(|e| ArchiveError::Zip(e.to_string()))?;
+    zipw.finish()
+        .map_err(|e| ArchiveError::Zip(e.to_string()))?;
     Ok(items)
 }
 
@@ -390,7 +391,10 @@ fn unique_path(path: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     let parent = path.parent().unwrap_or(Path::new(""));
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("archivo");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archivo");
     let ext = path.extension().and_then(|s| s.to_str());
     for n in 2..10_000 {
         let name = match ext {
@@ -411,12 +415,18 @@ mod tests {
 
     #[test]
     fn default_zip_name_un_archivo_usa_su_stem() {
-        assert_eq!(default_zip_name(&[PathBuf::from("C:/x/informe.txt")]), "informe.zip");
+        assert_eq!(
+            default_zip_name(&[PathBuf::from("C:/x/informe.txt")]),
+            "informe.zip"
+        );
     }
 
     #[test]
     fn default_zip_name_una_carpeta_usa_su_nombre() {
-        assert_eq!(default_zip_name(&[PathBuf::from("C:/x/proyecto")]), "proyecto.zip");
+        assert_eq!(
+            default_zip_name(&[PathBuf::from("C:/x/proyecto")]),
+            "proyecto.zip"
+        );
     }
 
     #[test]
@@ -478,7 +488,10 @@ mod tests {
         assert!(dest_zip.exists(), "se creó el .zip desambiguado");
         let f = std::fs::File::open(&dest_zip).unwrap();
         let mut z = zip::ZipArchive::new(f).unwrap();
-        assert!(z.by_name("nuevo.txt").is_ok(), "el .zip nuevo trae la fuente");
+        assert!(
+            z.by_name("nuevo.txt").is_ok(),
+            "el .zip nuevo trae la fuente"
+        );
     }
 
     #[test]
@@ -488,7 +501,13 @@ mod tests {
         std::fs::write(&src, b"contenido").unwrap();
         let zip_path = dir.path().join("out.zip");
         let token = CancellationToken::new();
-        let items = compress_zip(std::slice::from_ref(&src), &zip_path, &mut noop_progress(), &token).unwrap();
+        let items = compress_zip(
+            std::slice::from_ref(&src),
+            &zip_path,
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         assert!(zip_path.exists());
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].outcome, ArchiveOutcome::Done);
@@ -506,10 +525,18 @@ mod tests {
         std::fs::write(root.join("src/main.rs"), b"fn main(){}").unwrap();
         let zip_path = dir.path().join("p.zip");
         let token = CancellationToken::new();
-        compress_zip(std::slice::from_ref(&root), &zip_path, &mut noop_progress(), &token).unwrap();
+        compress_zip(
+            std::slice::from_ref(&root),
+            &zip_path,
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         let f = std::fs::File::open(&zip_path).unwrap();
         let mut z = zip::ZipArchive::new(f).unwrap();
-        let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
+        let names: Vec<String> = (0..z.len())
+            .map(|i| z.by_index(i).unwrap().name().to_string())
+            .collect();
         assert!(names.iter().any(|n| n.ends_with("proyecto/README.md")));
         assert!(names.iter().any(|n| n.ends_with("proyecto/src/main.rs")));
     }
@@ -545,7 +572,10 @@ mod tests {
         // Puede alcanzar a terminar antes de cancelar (archivo chico para el disco); si canceló,
         // el parcial NO debe quedar. Aceptamos ambos finales pero sin .zip a medias.
         if matches!(r, Err(ArchiveError::Cancelled)) {
-            assert!(!zip_path.exists(), "cancelado a media copia: parcial borrado");
+            assert!(
+                !zip_path.exists(),
+                "cancelado a media copia: parcial borrado"
+            );
         }
     }
 
@@ -578,7 +608,14 @@ mod tests {
         let zip_path = make_zip(dir.path(), "in.zip", &[("a/b.txt", b"hola"), ("a/", b"")]);
         let dest = dir.path().join("salida");
         let token = CancellationToken::new();
-        let items = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token).unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         assert!(items.iter().any(|i| i.outcome == ArchiveOutcome::Done));
         assert_eq!(std::fs::read(dest.join("a/b.txt")).unwrap(), b"hola");
     }
@@ -586,12 +623,26 @@ mod tests {
     #[test]
     fn extract_rechaza_zip_slip() {
         let dir = tempfile::tempdir().unwrap();
-        let zip_path = make_zip(dir.path(), "evil.zip", &[("../escape.txt", b"pwn"), ("ok.txt", b"bien")]);
+        let zip_path = make_zip(
+            dir.path(),
+            "evil.zip",
+            &[("../escape.txt", b"pwn"), ("ok.txt", b"bien")],
+        );
         let dest = dir.path().join("destino");
         let token = CancellationToken::new();
-        let items = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token).unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(dest.join("ok.txt")).unwrap(), b"bien");
-        assert!(!dir.path().join("escape.txt").exists(), "zip-slip bloqueado: nada fuera del destino");
+        assert!(
+            !dir.path().join("escape.txt").exists(),
+            "zip-slip bloqueado: nada fuera del destino"
+        );
         assert!(items.iter().any(|i| i.outcome == ArchiveOutcome::Skipped));
     }
 
@@ -605,7 +656,11 @@ mod tests {
         let token = CancellationToken::new();
         let mut skip = |_p: &Path| ExtractConflict::Skip;
         extract_zip(&zip_path, &dest, &mut skip, &mut noop_progress(), &token).unwrap();
-        assert_eq!(std::fs::read(dest.join("dato.txt")).unwrap(), b"viejo", "Skip no pisa el existente");
+        assert_eq!(
+            std::fs::read(dest.join("dato.txt")).unwrap(),
+            b"viejo",
+            "Skip no pisa el existente"
+        );
     }
 
     #[test]
@@ -630,7 +685,13 @@ mod tests {
         let dest = dir.path().join("d");
         let token = CancellationToken::new();
         token.cancel();
-        let r = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token);
+        let r = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        );
         assert!(matches!(r, Err(ArchiveError::Cancelled)));
     }
 
@@ -672,15 +733,23 @@ mod tests {
         let dest = dir.path().join("out");
         let token = CancellationToken::new();
         // No debe entrar en pánico ni abortar: devuelve Ok con el detalle por entrada.
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .expect("entrada corrupta no aborta la operación");
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .expect("entrada corrupta no aborta la operación");
         // La entrada sana se extrajo bien.
         assert!(
             items.iter().any(|i| i.outcome == ArchiveOutcome::Done),
             "la entrada sana debe extraerse (Done)"
         );
-        assert_eq!(std::fs::read(dest.join("bueno.txt")).unwrap(), vec![b'B'; 4096]);
+        assert_eq!(
+            std::fs::read(dest.join("bueno.txt")).unwrap(),
+            vec![b'B'; 4096]
+        );
         // La entrada dañada quedó marcada Failed (no Done).
         assert!(
             items
@@ -703,7 +772,13 @@ mod tests {
         std::fs::write(&src, b"contenido").unwrap();
         let zip_path = dir.path().join("out.zip");
         let token = CancellationToken::new();
-        let items = compress_zip(std::slice::from_ref(&src), &zip_path, &mut noop_progress(), &token).unwrap();
+        let items = compress_zip(
+            std::slice::from_ref(&src),
+            &zip_path,
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].path, src, "el item apunta al ORIGEN, no al .zip");
         assert_ne!(items[0].path, zip_path, "el .zip NO aparece como item");
@@ -719,15 +794,24 @@ mod tests {
         // usuario YA tenía (poblada). Esa carpeta NO la creó la op → created=false, para que
         // deshacer no la mande a la papelera con el contenido previo del usuario.
         let dir = tempfile::tempdir().unwrap();
-        let zip_path = make_zip(dir.path(), "z.zip", &[("sub/", b""), ("sub/nuevo.txt", b"x")]);
+        let zip_path = make_zip(
+            dir.path(),
+            "z.zip",
+            &[("sub/", b""), ("sub/nuevo.txt", b"x")],
+        );
         let dest = dir.path().join("d");
         // El usuario ya tenía `d/sub/` con un archivo propio.
         std::fs::create_dir_all(dest.join("sub")).unwrap();
         std::fs::write(dest.join("sub/previo.txt"), b"mio").unwrap();
         let token = CancellationToken::new();
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         // La entrada de carpeta `sub/` apunta a la carpeta preexistente: created=false.
         let sub_item = items
             .iter()
@@ -746,17 +830,29 @@ mod tests {
     fn extract_dir_nuevo_si_es_created() {
         // Una carpeta que NO existía antes SÍ la creó la op → created=true (trasheable al deshacer).
         let dir = tempfile::tempdir().unwrap();
-        let zip_path = make_zip(dir.path(), "z.zip", &[("nueva/", b""), ("nueva/a.txt", b"x")]);
+        let zip_path = make_zip(
+            dir.path(),
+            "z.zip",
+            &[("nueva/", b""), ("nueva/a.txt", b"x")],
+        );
         let dest = dir.path().join("d"); // d/ no tiene "nueva/" todavía
         let token = CancellationToken::new();
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         let nueva = items
             .iter()
             .find(|i| i.path == dest.join("nueva"))
             .expect("debe haber un item para la carpeta nueva/");
-        assert!(nueva.created, "carpeta nueva creada por la op → created=true");
+        assert!(
+            nueva.created,
+            "carpeta nueva creada por la op → created=true"
+        );
         // El archivo dentro también es nuevo.
         let archivo = items
             .iter()
@@ -772,10 +868,18 @@ mod tests {
         let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
         let dest = dir.path().join("d");
         let token = CancellationToken::new();
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .unwrap();
-        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.path == dest.join("dato.txt"))
+            .unwrap();
         assert_eq!(item.outcome, ArchiveOutcome::Done);
         assert!(item.created, "archivo nuevo → created=true");
     }
@@ -791,10 +895,18 @@ mod tests {
         std::fs::create_dir_all(&dest).unwrap();
         std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
         let token = CancellationToken::new();
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .unwrap();
-        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.path == dest.join("dato.txt"))
+            .unwrap();
         assert_eq!(item.outcome, ArchiveOutcome::Done, "se sobrescribió (Done)");
         assert!(
             !item.created,
@@ -813,8 +925,7 @@ mod tests {
         std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
         let token = CancellationToken::new();
         let mut keep = |_p: &Path| ExtractConflict::KeepBoth;
-        let items =
-            extract_zip(&zip_path, &dest, &mut keep, &mut noop_progress(), &token).unwrap();
+        let items = extract_zip(&zip_path, &dest, &mut keep, &mut noop_progress(), &token).unwrap();
         // El item es la ruta con sufijo y es created=true.
         let item = items
             .iter()
@@ -823,7 +934,9 @@ mod tests {
         assert!(item.created, "la ruta '(2)' es nueva → created=true");
         // El preexistente intacto y NO aparece como ruta creada.
         assert_eq!(std::fs::read(dest.join("dato.txt")).unwrap(), b"viejo");
-        assert!(!items.iter().any(|i| i.path == dest.join("dato.txt") && i.created));
+        assert!(!items
+            .iter()
+            .any(|i| i.path == dest.join("dato.txt") && i.created));
     }
 
     #[test]
@@ -837,7 +950,10 @@ mod tests {
         let token = CancellationToken::new();
         let mut skip = |_p: &Path| ExtractConflict::Skip;
         let items = extract_zip(&zip_path, &dest, &mut skip, &mut noop_progress(), &token).unwrap();
-        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.path == dest.join("dato.txt"))
+            .unwrap();
         assert_eq!(item.outcome, ArchiveOutcome::Skipped);
         assert!(!item.created, "Skip no crea nada → created=false");
     }
@@ -849,9 +965,14 @@ mod tests {
         let zip_path = make_zip(dir.path(), "evil.zip", &[("../escape.txt", b"pwn")]);
         let dest = dir.path().join("destino");
         let token = CancellationToken::new();
-        let items =
-            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
-                .unwrap();
+        let items = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        )
+        .unwrap();
         assert!(
             !items.iter().any(|i| i.created),
             "una entrada rechazada por zip-slip no es created"

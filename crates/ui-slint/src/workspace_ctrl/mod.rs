@@ -443,17 +443,17 @@ fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, h: 
 // --- Submódulos por responsabilidad (O-12) ---
 // Cada uno aporta su propio `impl WorkspaceCtrl`. Rust permite varios `impl` del
 // mismo tipo repartidos en módulos del mismo crate.
-mod session;
-mod listing;
 mod columns;
-mod layout_panes;
-mod templates;
-mod favorites;
-mod ops;
 mod context;
-mod tree;
-mod navigation;
+mod favorites;
 mod input;
+mod layout_panes;
+mod listing;
+mod navigation;
+mod ops;
+mod session;
+mod templates;
+mod tree;
 
 impl WorkspaceCtrl {
     /// Arranca con UN panel Files en `start` (el usuario agrega más con el botón). Lanza

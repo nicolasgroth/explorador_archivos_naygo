@@ -128,7 +128,10 @@ mod tests {
         // Windows recorta el espacio/punto final → el nombre real diferiría del mostrado.
         assert!(!is_valid_name("informe "), "espacio final inválido");
         assert!(!is_valid_name("informe."), "punto final inválido");
-        assert!(!is_valid_name("informe.txt "), "espacio tras extensión inválido");
+        assert!(
+            !is_valid_name("informe.txt "),
+            "espacio tras extensión inválido"
+        );
         // Nombres legítimos no deben verse afectados: un punto interno es válido.
         assert!(is_valid_name("informe.txt"), "extensión normal válida");
         assert!(is_valid_name("a.b.c"), "puntos internos válidos");

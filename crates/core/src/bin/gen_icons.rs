@@ -15,7 +15,7 @@ struct Map {
 /// Especificación de un set: id, zip fuente, prefijo dentro del zip, tintable, mapeo.
 struct SetSpec {
     id: &'static str,
-    zip: &'static str,    // ruta relativa al zip, p.ej. "assets/icons/lucide-main.zip"
+    zip: &'static str, // ruta relativa al zip, p.ej. "assets/icons/lucide-main.zip"
     prefix: &'static str, // prefijo dentro del zip, p.ej. "lucide-main/icons/"
     tintable: bool,
     gray: bool, // true = forzar tinte gris (solo set mono); independiente de tintable
@@ -27,54 +27,171 @@ struct SetSpec {
 // Estructura: lucide-main/icons/<name>.svg
 // ---------------------------------------------------------------------------
 const LUCIDE: &[Map] = &[
-    Map { key: "folder",            svg: "folder" },
-    Map { key: "drive",             svg: "hard-drive" },
-    Map { key: "unknown",           svg: "file" },
-    Map { key: "file_image",        svg: "file-image" },
+    Map {
+        key: "folder",
+        svg: "folder",
+    },
+    Map {
+        key: "drive",
+        svg: "hard-drive",
+    },
+    Map {
+        key: "unknown",
+        svg: "file",
+    },
+    Map {
+        key: "file_image",
+        svg: "file-image",
+    },
     // lucide no tiene file-video.svg; el más cercano es file-video-camera
-    Map { key: "file_video",        svg: "file-video-camera" },
-    Map { key: "file_audio",        svg: "file-music" },
-    Map { key: "file_document",     svg: "file-text" },
-    Map { key: "file_code",         svg: "file-code" },
-    Map { key: "file_archive",      svg: "file-archive" },
+    Map {
+        key: "file_video",
+        svg: "file-video-camera",
+    },
+    Map {
+        key: "file_audio",
+        svg: "file-music",
+    },
+    Map {
+        key: "file_document",
+        svg: "file-text",
+    },
+    Map {
+        key: "file_code",
+        svg: "file-code",
+    },
+    Map {
+        key: "file_archive",
+        svg: "file-archive",
+    },
     // lucide no tiene file-executable; file-terminal es lo más representativo
-    Map { key: "file_executable",   svg: "file-terminal" },
+    Map {
+        key: "file_executable",
+        svg: "file-terminal",
+    },
     // box.svg existe en lucide (verificado)
-    Map { key: "file_model3d",      svg: "box" },
+    Map {
+        key: "file_model3d",
+        svg: "box",
+    },
     // lucide no tiene file-font; type.svg (la letra T) es el sustituto tipográfico
-    Map { key: "file_font",         svg: "type" },
-    Map { key: "file_generic",      svg: "file" },
-    Map { key: "action_back",       svg: "arrow-left" },
-    Map { key: "action_forward",    svg: "arrow-right" },
-    Map { key: "action_up",         svg: "arrow-up" },
-    Map { key: "action_refresh",    svg: "refresh-cw" },
-    Map { key: "action_copy",       svg: "copy" },
-    Map { key: "action_cut",        svg: "scissors" },
-    Map { key: "action_paste",      svg: "clipboard" },
-    Map { key: "action_delete",     svg: "trash" },
-    Map { key: "action_new_file",   svg: "file-plus" },
-    Map { key: "action_new_folder", svg: "folder-plus" },
+    Map {
+        key: "file_font",
+        svg: "type",
+    },
+    Map {
+        key: "file_generic",
+        svg: "file",
+    },
+    Map {
+        key: "action_back",
+        svg: "arrow-left",
+    },
+    Map {
+        key: "action_forward",
+        svg: "arrow-right",
+    },
+    Map {
+        key: "action_up",
+        svg: "arrow-up",
+    },
+    Map {
+        key: "action_refresh",
+        svg: "refresh-cw",
+    },
+    Map {
+        key: "action_copy",
+        svg: "copy",
+    },
+    Map {
+        key: "action_cut",
+        svg: "scissors",
+    },
+    Map {
+        key: "action_paste",
+        svg: "clipboard",
+    },
+    Map {
+        key: "action_delete",
+        svg: "trash",
+    },
+    Map {
+        key: "action_new_file",
+        svg: "file-plus",
+    },
+    Map {
+        key: "action_new_folder",
+        svg: "folder-plus",
+    },
     // panel-left como "agregar panel" (añade columna izquierda)
-    Map { key: "action_add_pane",   svg: "panel-left" },
-    Map { key: "action_swap_panes", svg: "arrow-left-right" },
+    Map {
+        key: "action_add_pane",
+        svg: "panel-left",
+    },
+    Map {
+        key: "action_swap_panes",
+        svg: "arrow-left-right",
+    },
     // copy-plus = "clonar ruta / duplicar panel"
-    Map { key: "action_clone_path", svg: "copy-plus" },
-    Map { key: "action_new_window", svg: "app-window" },
-    Map { key: "action_settings",   svg: "settings" },
+    Map {
+        key: "action_clone_path",
+        svg: "copy-plus",
+    },
+    Map {
+        key: "action_new_window",
+        svg: "app-window",
+    },
+    Map {
+        key: "action_settings",
+        svg: "settings",
+    },
     // lucide no tiene tabs.svg; file-stack (apilar archivos) es el sustituto
-    Map { key: "action_tabs",       svg: "file-stack" },
-    Map { key: "action_layouts",    svg: "layout-panel-left" },
-    Map { key: "action_terminal",   svg: "terminal" },
+    Map {
+        key: "action_tabs",
+        svg: "file-stack",
+    },
+    Map {
+        key: "action_layouts",
+        svg: "layout-panel-left",
+    },
+    Map {
+        key: "action_terminal",
+        svg: "terminal",
+    },
     // lucide no tiene eject.svg; disc.svg es el CD/disco expulsable más cercano
-    Map { key: "action_eject",      svg: "disc" },
-    Map { key: "action_panel",      svg: "panel-right" },
+    Map {
+        key: "action_eject",
+        svg: "disc",
+    },
+    Map {
+        key: "action_panel",
+        svg: "panel-right",
+    },
     // lucide usa house.svg en lugar de home.svg
-    Map { key: "action_home",        svg: "house" },
-    Map { key: "action_search",      svg: "search" },
-    Map { key: "action_show_hidden", svg: "eye" },
-    Map { key: "action_history",     svg: "history" },
-    Map { key: "action_favorites",   svg: "star" },
-    Map { key: "action_split",       svg: "split" },
+    Map {
+        key: "action_home",
+        svg: "house",
+    },
+    Map {
+        key: "action_search",
+        svg: "search",
+    },
+    Map {
+        key: "action_show_hidden",
+        svg: "eye",
+    },
+    Map {
+        key: "action_history",
+        svg: "history",
+    },
+    Map {
+        key: "action_favorites",
+        svg: "star",
+    },
+    Map {
+        key: "action_split",
+        svg: "split",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -82,59 +199,176 @@ const LUCIDE: &[Map] = &[
 // Estructura: tabler-icons-main/icons/outline/<name>.svg
 // ---------------------------------------------------------------------------
 const TABLER: &[Map] = &[
-    Map { key: "folder",            svg: "folder" },
+    Map {
+        key: "folder",
+        svg: "folder",
+    },
     // tabler no tiene hard-drive.svg; device-desktop (monitor de escritorio) es lo más cercano
-    Map { key: "drive",             svg: "device-desktop" },
-    Map { key: "unknown",           svg: "file-unknown" },
+    Map {
+        key: "drive",
+        svg: "device-desktop",
+    },
+    Map {
+        key: "unknown",
+        svg: "file-unknown",
+    },
     // tabler no tiene file-image; photo.svg es el equivalente
-    Map { key: "file_image",        svg: "photo" },
-    Map { key: "file_video",        svg: "video" },
-    Map { key: "file_audio",        svg: "file-music" },
-    Map { key: "file_document",     svg: "file-text" },
-    Map { key: "file_code",         svg: "file-code" },
+    Map {
+        key: "file_image",
+        svg: "photo",
+    },
+    Map {
+        key: "file_video",
+        svg: "video",
+    },
+    Map {
+        key: "file_audio",
+        svg: "file-music",
+    },
+    Map {
+        key: "file_document",
+        svg: "file-text",
+    },
+    Map {
+        key: "file_code",
+        svg: "file-code",
+    },
     // tabler no tiene file-archive; file-zip es el equivalente comprimido
-    Map { key: "file_archive",      svg: "file-zip" },
+    Map {
+        key: "file_archive",
+        svg: "file-zip",
+    },
     // tabler no tiene file-executable ni file-terminal; file-code-2 es lo más técnico
-    Map { key: "file_executable",   svg: "file-code-2" },
+    Map {
+        key: "file_executable",
+        svg: "file-code-2",
+    },
     // tabler tiene file-3d (verificado)
-    Map { key: "file_model3d",      svg: "file-3d" },
+    Map {
+        key: "file_model3d",
+        svg: "file-3d",
+    },
     // tabler no tiene file-font; typography.svg (letra T con serifa) es el sustituto
-    Map { key: "file_font",         svg: "typography" },
-    Map { key: "file_generic",      svg: "file" },
-    Map { key: "action_back",       svg: "arrow-left" },
-    Map { key: "action_forward",    svg: "arrow-right" },
-    Map { key: "action_up",         svg: "arrow-up" },
-    Map { key: "action_refresh",    svg: "refresh" },
-    Map { key: "action_copy",       svg: "copy" },
-    Map { key: "action_cut",        svg: "scissors" },
+    Map {
+        key: "file_font",
+        svg: "typography",
+    },
+    Map {
+        key: "file_generic",
+        svg: "file",
+    },
+    Map {
+        key: "action_back",
+        svg: "arrow-left",
+    },
+    Map {
+        key: "action_forward",
+        svg: "arrow-right",
+    },
+    Map {
+        key: "action_up",
+        svg: "arrow-up",
+    },
+    Map {
+        key: "action_refresh",
+        svg: "refresh",
+    },
+    Map {
+        key: "action_copy",
+        svg: "copy",
+    },
+    Map {
+        key: "action_cut",
+        svg: "scissors",
+    },
     // tabler no tiene clipboard-paste; clipboard.svg es el sustituto genérico
-    Map { key: "action_paste",      svg: "clipboard" },
-    Map { key: "action_delete",     svg: "trash" },
-    Map { key: "action_new_file",   svg: "file-plus" },
-    Map { key: "action_new_folder", svg: "folder-plus" },
+    Map {
+        key: "action_paste",
+        svg: "clipboard",
+    },
+    Map {
+        key: "action_delete",
+        svg: "trash",
+    },
+    Map {
+        key: "action_new_file",
+        svg: "file-plus",
+    },
+    Map {
+        key: "action_new_folder",
+        svg: "folder-plus",
+    },
     // columns-2 = dos columnas (agregar panel lateral)
-    Map { key: "action_add_pane",   svg: "columns-2" },
+    Map {
+        key: "action_add_pane",
+        svg: "columns-2",
+    },
     // arrows-exchange = intercambiar paneles
-    Map { key: "action_swap_panes", svg: "arrows-exchange" },
+    Map {
+        key: "action_swap_panes",
+        svg: "arrows-exchange",
+    },
     // copy-plus = clonar ruta en panel nuevo
-    Map { key: "action_clone_path", svg: "copy-plus" },
-    Map { key: "action_new_window", svg: "app-window" },
-    Map { key: "action_settings",   svg: "settings" },
+    Map {
+        key: "action_clone_path",
+        svg: "copy-plus",
+    },
+    Map {
+        key: "action_new_window",
+        svg: "app-window",
+    },
+    Map {
+        key: "action_settings",
+        svg: "settings",
+    },
     // tabler no tiene tabs.svg; layout-sidebar es el más cercano para gestión de paneles
-    Map { key: "action_tabs",       svg: "layout-sidebar" },
-    Map { key: "action_layouts",    svg: "layout-columns" },
-    Map { key: "action_terminal",   svg: "terminal" },
+    Map {
+        key: "action_tabs",
+        svg: "layout-sidebar",
+    },
+    Map {
+        key: "action_layouts",
+        svg: "layout-columns",
+    },
+    Map {
+        key: "action_terminal",
+        svg: "terminal",
+    },
     // tabler no tiene eject.svg; player-eject existe (verificado)
-    Map { key: "action_eject",      svg: "player-eject" },
+    Map {
+        key: "action_eject",
+        svg: "player-eject",
+    },
     // layout-sidebar-right = panel derecho visible
-    Map { key: "action_panel",      svg: "layout-sidebar-right" },
-    Map { key: "action_home",        svg: "home" },
-    Map { key: "action_search",      svg: "search" },
-    Map { key: "action_show_hidden", svg: "eye" },
-    Map { key: "action_history",     svg: "history" },
-    Map { key: "action_favorites",   svg: "star" },
+    Map {
+        key: "action_panel",
+        svg: "layout-sidebar-right",
+    },
+    Map {
+        key: "action_home",
+        svg: "home",
+    },
+    Map {
+        key: "action_search",
+        svg: "search",
+    },
+    Map {
+        key: "action_show_hidden",
+        svg: "eye",
+    },
+    Map {
+        key: "action_history",
+        svg: "history",
+    },
+    Map {
+        key: "action_favorites",
+        svg: "star",
+    },
     // columns-2 = dividir en 2 columnas (vista dividida)
-    Map { key: "action_split",       svg: "columns-2" },
+    Map {
+        key: "action_split",
+        svg: "columns-2",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -144,61 +378,178 @@ const TABLER: &[Map] = &[
 // "<category>/<name>/materialicons/24px.svg" para reflejar la jerarquía real del zip.
 // ---------------------------------------------------------------------------
 const MATERIAL: &[Map] = &[
-    Map { key: "folder",            svg: "file/folder/materialicons/24px.svg" },
+    Map {
+        key: "folder",
+        svg: "file/folder/materialicons/24px.svg",
+    },
     // device/storage = ícono de almacenamiento (cilindro de base de datos)
-    Map { key: "drive",             svg: "device/storage/materialicons/24px.svg" },
-    Map { key: "unknown",           svg: "action/help/materialicons/24px.svg" },
-    Map { key: "file_image",        svg: "image/image/materialicons/24px.svg" },
-    Map { key: "file_video",        svg: "av/video_file/materialicons/24px.svg" },
-    Map { key: "file_audio",        svg: "av/audio_file/materialicons/24px.svg" },
-    Map { key: "file_document",     svg: "action/description/materialicons/24px.svg" },
-    Map { key: "file_code",         svg: "action/code/materialicons/24px.svg" },
-    Map { key: "file_archive",      svg: "content/archive/materialicons/24px.svg" },
+    Map {
+        key: "drive",
+        svg: "device/storage/materialicons/24px.svg",
+    },
+    Map {
+        key: "unknown",
+        svg: "action/help/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_image",
+        svg: "image/image/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_video",
+        svg: "av/video_file/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_audio",
+        svg: "av/audio_file/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_document",
+        svg: "action/description/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_code",
+        svg: "action/code/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_archive",
+        svg: "content/archive/materialicons/24px.svg",
+    },
     // action/terminal es el ícono de consola/ejecutable más cercano
-    Map { key: "file_executable",   svg: "action/terminal/materialicons/24px.svg" },
+    Map {
+        key: "file_executable",
+        svg: "action/terminal/materialicons/24px.svg",
+    },
     // action/view_in_ar = modelo en realidad aumentada (3D)
-    Map { key: "file_model3d",      svg: "action/view_in_ar/materialicons/24px.svg" },
-    Map { key: "file_font",         svg: "content/font_download/materialicons/24px.svg" },
+    Map {
+        key: "file_model3d",
+        svg: "action/view_in_ar/materialicons/24px.svg",
+    },
+    Map {
+        key: "file_font",
+        svg: "content/font_download/materialicons/24px.svg",
+    },
     // editor/insert_drive_file = archivo genérico
-    Map { key: "file_generic",      svg: "editor/insert_drive_file/materialicons/24px.svg" },
-    Map { key: "action_back",       svg: "navigation/arrow_back/materialicons/24px.svg" },
-    Map { key: "action_forward",    svg: "navigation/arrow_forward/materialicons/24px.svg" },
-    Map { key: "action_up",         svg: "navigation/arrow_upward/materialicons/24px.svg" },
-    Map { key: "action_refresh",    svg: "navigation/refresh/materialicons/24px.svg" },
-    Map { key: "action_copy",       svg: "content/content_copy/materialicons/24px.svg" },
-    Map { key: "action_cut",        svg: "content/content_cut/materialicons/24px.svg" },
-    Map { key: "action_paste",      svg: "content/content_paste/materialicons/24px.svg" },
-    Map { key: "action_delete",     svg: "action/delete/materialicons/24px.svg" },
+    Map {
+        key: "file_generic",
+        svg: "editor/insert_drive_file/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_back",
+        svg: "navigation/arrow_back/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_forward",
+        svg: "navigation/arrow_forward/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_up",
+        svg: "navigation/arrow_upward/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_refresh",
+        svg: "navigation/refresh/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_copy",
+        svg: "content/content_copy/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_cut",
+        svg: "content/content_cut/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_paste",
+        svg: "content/content_paste/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_delete",
+        svg: "action/delete/materialicons/24px.svg",
+    },
     // action/note_add = nuevo archivo (nota con +)
-    Map { key: "action_new_file",   svg: "action/note_add/materialicons/24px.svg" },
-    Map { key: "action_new_folder", svg: "file/create_new_folder/materialicons/24px.svg" },
+    Map {
+        key: "action_new_file",
+        svg: "action/note_add/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_new_folder",
+        svg: "file/create_new_folder/materialicons/24px.svg",
+    },
     // action/view_sidebar = panel lateral (agregar panel)
-    Map { key: "action_add_pane",   svg: "action/view_sidebar/materialicons/24px.svg" },
+    Map {
+        key: "action_add_pane",
+        svg: "action/view_sidebar/materialicons/24px.svg",
+    },
     // action/swap_horiz = intercambiar paneles horizontalmente
-    Map { key: "action_swap_panes", svg: "action/swap_horiz/materialicons/24px.svg" },
+    Map {
+        key: "action_swap_panes",
+        svg: "action/swap_horiz/materialicons/24px.svg",
+    },
     // content/file_copy = clonar/duplicar archivo o ruta
-    Map { key: "action_clone_path", svg: "content/file_copy/materialicons/24px.svg" },
+    Map {
+        key: "action_clone_path",
+        svg: "content/file_copy/materialicons/24px.svg",
+    },
     // action/open_in_new = abrir en nueva ventana
-    Map { key: "action_new_window", svg: "action/open_in_new/materialicons/24px.svg" },
-    Map { key: "action_settings",   svg: "action/settings/materialicons/24px.svg" },
+    Map {
+        key: "action_new_window",
+        svg: "action/open_in_new/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_settings",
+        svg: "action/settings/materialicons/24px.svg",
+    },
     // action/tab = pestaña individual (sin "tabs" en plural en material)
-    Map { key: "action_tabs",       svg: "action/tab/materialicons/24px.svg" },
+    Map {
+        key: "action_tabs",
+        svg: "action/tab/materialicons/24px.svg",
+    },
     // action/view_column = vista de columnas (gestión de layouts)
-    Map { key: "action_layouts",    svg: "action/view_column/materialicons/24px.svg" },
-    Map { key: "action_terminal",   svg: "action/terminal/materialicons/24px.svg" },
+    Map {
+        key: "action_layouts",
+        svg: "action/view_column/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_terminal",
+        svg: "action/terminal/materialicons/24px.svg",
+    },
     // material tiene eject nativo (verificado en action/)
-    Map { key: "action_eject",      svg: "action/eject/materialicons/24px.svg" },
+    Map {
+        key: "action_eject",
+        svg: "action/eject/materialicons/24px.svg",
+    },
     // action/view_quilt = vista de mosaico/panel
-    Map { key: "action_panel",      svg: "action/view_quilt/materialicons/24px.svg" },
-    Map { key: "action_home",        svg: "action/home/materialicons/24px.svg" },
-    Map { key: "action_search",      svg: "action/search/materialicons/24px.svg" },
+    Map {
+        key: "action_panel",
+        svg: "action/view_quilt/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_home",
+        svg: "action/home/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_search",
+        svg: "action/search/materialicons/24px.svg",
+    },
     // action/visibility = mostrar/ocultar (ojo abierto)
-    Map { key: "action_show_hidden", svg: "action/visibility/materialicons/24px.svg" },
-    Map { key: "action_history",     svg: "action/history/materialicons/24px.svg" },
+    Map {
+        key: "action_show_hidden",
+        svg: "action/visibility/materialicons/24px.svg",
+    },
+    Map {
+        key: "action_history",
+        svg: "action/history/materialicons/24px.svg",
+    },
     // toggle/star = estrella/favorito
-    Map { key: "action_favorites",   svg: "toggle/star/materialicons/24px.svg" },
+    Map {
+        key: "action_favorites",
+        svg: "toggle/star/materialicons/24px.svg",
+    },
     // action/view_column = dividir en columnas (split de paneles)
-    Map { key: "action_split",       svg: "action/view_column/materialicons/24px.svg" },
+    Map {
+        key: "action_split",
+        svg: "action/view_column/materialicons/24px.svg",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -207,76 +558,193 @@ const MATERIAL: &[Map] = &[
 // NOTA: este set tiene color plano; tintable = false.
 // ---------------------------------------------------------------------------
 const FLAT_COLOR: &[Map] = &[
-    Map { key: "folder",            svg: "folder" },
+    Map {
+        key: "folder",
+        svg: "folder",
+    },
     // flat-color no tiene ícono de disco duro; display (monitor) es el sustituto más cercano
-    Map { key: "drive",             svg: "display" },
+    Map {
+        key: "drive",
+        svg: "display",
+    },
     // flat-color no tiene ícono genérico de "desconocido"; file.svg es el sustituto
-    Map { key: "unknown",           svg: "file" },
-    Map { key: "file_image",        svg: "image_file" },
-    Map { key: "file_video",        svg: "video_file" },
-    Map { key: "file_audio",        svg: "audio_file" },
-    Map { key: "file_document",     svg: "document" },
+    Map {
+        key: "unknown",
+        svg: "file",
+    },
+    Map {
+        key: "file_image",
+        svg: "image_file",
+    },
+    Map {
+        key: "file_video",
+        svg: "video_file",
+    },
+    Map {
+        key: "file_audio",
+        svg: "audio_file",
+    },
+    Map {
+        key: "file_document",
+        svg: "document",
+    },
     // flat-color no tiene ícono de código; file.svg es el sustituto genérico
-    Map { key: "file_code",         svg: "file" },
+    Map {
+        key: "file_code",
+        svg: "file",
+    },
     // package.svg = caja empaquetada (archivo comprimido)
-    Map { key: "file_archive",      svg: "package" },
+    Map {
+        key: "file_archive",
+        svg: "package",
+    },
     // flat-color no tiene ejecutable; command_line es el sustituto más técnico
-    Map { key: "file_executable",   svg: "command_line" },
+    Map {
+        key: "file_executable",
+        svg: "command_line",
+    },
     // flat-color no tiene 3D; tree_structure es el sustituto estructural
-    Map { key: "file_model3d",      svg: "tree_structure" },
+    Map {
+        key: "file_model3d",
+        svg: "tree_structure",
+    },
     // flat-color no tiene fuentes tipográficas; news.svg (texto/papel) es el sustituto
-    Map { key: "file_font",         svg: "news" },
-    Map { key: "file_generic",      svg: "file" },
+    Map {
+        key: "file_font",
+        svg: "news",
+    },
+    Map {
+        key: "file_generic",
+        svg: "file",
+    },
     // left.svg = flecha izquierda (volver atrás)
-    Map { key: "action_back",       svg: "left" },
+    Map {
+        key: "action_back",
+        svg: "left",
+    },
     // right.svg = flecha derecha (avanzar)
-    Map { key: "action_forward",    svg: "right" },
+    Map {
+        key: "action_forward",
+        svg: "right",
+    },
     // up.svg = flecha arriba (subir un nivel)
-    Map { key: "action_up",         svg: "up" },
-    Map { key: "action_refresh",    svg: "refresh" },
+    Map {
+        key: "action_up",
+        svg: "up",
+    },
+    Map {
+        key: "action_refresh",
+        svg: "refresh",
+    },
     // FIXME: flat-color no tiene icono de copiar (ni copy/duplicate/documents/paste);
     // copyleft (C invertida, de la familia copyright/copia) es lo más cercano disponible
-    Map { key: "action_copy",       svg: "copyleft" },
+    Map {
+        key: "action_copy",
+        svg: "copyleft",
+    },
     // FIXME: flat-color no tiene icono de cortar (ni scissors/cut); previous (flecha de
     // retroceso) es lo más cercano disponible — limitación del set, no un descuido
-    Map { key: "action_cut",        svg: "previous" },
+    Map {
+        key: "action_cut",
+        svg: "previous",
+    },
     // flat-color no tiene clipboard/paste; import.svg es el sustituto de "pegar desde afuera"
-    Map { key: "action_paste",      svg: "import" },
+    Map {
+        key: "action_paste",
+        svg: "import",
+    },
     // empty_trash = eliminar (papelera vacía lista para usar)
-    Map { key: "action_delete",     svg: "empty_trash" },
+    Map {
+        key: "action_delete",
+        svg: "empty_trash",
+    },
     // flat-color no tiene new-file; plus.svg es el genérico de "agregar"
-    Map { key: "action_new_file",   svg: "plus" },
+    Map {
+        key: "action_new_file",
+        svg: "plus",
+    },
     // opened_folder = carpeta abierta (abrir/crear carpeta nueva)
-    Map { key: "action_new_folder", svg: "opened_folder" },
+    Map {
+        key: "action_new_folder",
+        svg: "opened_folder",
+    },
     // flat-color no tiene iconos de panel; internal.svg (dividir internamente) es el sustituto
-    Map { key: "action_add_pane",   svg: "internal" },
+    Map {
+        key: "action_add_pane",
+        svg: "internal",
+    },
     // flat-color no tiene swap; currency_exchange (intercambio) es el sustituto visual
-    Map { key: "action_swap_panes", svg: "currency_exchange" },
+    Map {
+        key: "action_swap_panes",
+        svg: "currency_exchange",
+    },
     // flat-color no tiene clonar ruta; external.svg (flecha afuera) es el sustituto
-    Map { key: "action_clone_path", svg: "external" },
+    Map {
+        key: "action_clone_path",
+        svg: "external",
+    },
     // flat-color no tiene new-window; advance.svg (ventana con flecha) es el sustituto
-    Map { key: "action_new_window", svg: "advance" },
-    Map { key: "action_settings",   svg: "settings" },
+    Map {
+        key: "action_new_window",
+        svg: "advance",
+    },
+    Map {
+        key: "action_settings",
+        svg: "settings",
+    },
     // flat-color no tiene tabs; smartphone_tablet.svg (múltiples pantallas) es el sustituto
-    Map { key: "action_tabs",       svg: "smartphone_tablet" },
+    Map {
+        key: "action_tabs",
+        svg: "smartphone_tablet",
+    },
     // flat-color no tiene layouts; serial_tasks.svg (columnas en serie) es el sustituto
-    Map { key: "action_layouts",    svg: "serial_tasks" },
+    Map {
+        key: "action_layouts",
+        svg: "serial_tasks",
+    },
     // command_line.svg = terminal (consola de comandos)
-    Map { key: "action_terminal",   svg: "command_line" },
+    Map {
+        key: "action_terminal",
+        svg: "command_line",
+    },
     // flat-color no tiene eject; usb.svg (dispositivo extraíble USB) es el sustituto
-    Map { key: "action_eject",      svg: "usb" },
+    Map {
+        key: "action_eject",
+        svg: "usb",
+    },
     // flat-color no tiene panel; grid.svg (cuadrícula de paneles) es el sustituto
-    Map { key: "action_panel",      svg: "grid" },
-    Map { key: "action_home",        svg: "home" },
-    Map { key: "action_search",      svg: "search" },
+    Map {
+        key: "action_panel",
+        svg: "grid",
+    },
+    Map {
+        key: "action_home",
+        svg: "home",
+    },
+    Map {
+        key: "action_search",
+        svg: "search",
+    },
     // FIXME: flat-color no tiene eye/visibility; view_details (ojo+detalles) es lo más cercano
-    Map { key: "action_show_hidden", svg: "view_details" },
+    Map {
+        key: "action_show_hidden",
+        svg: "view_details",
+    },
     // FIXME: flat-color no tiene history; clock (tiempo/reloj) es el sustituto más cercano
-    Map { key: "action_history",     svg: "clock" },
+    Map {
+        key: "action_history",
+        svg: "clock",
+    },
     // rating.svg = estrella amarilla (favorito), consistente con la estrella usada en toda la app
-    Map { key: "action_favorites",   svg: "rating" },
+    Map {
+        key: "action_favorites",
+        svg: "rating",
+    },
     // FIXME: flat-color no tiene split; add_column (agregar columna/dividir) es lo más cercano
-    Map { key: "action_split",       svg: "add_column" },
+    Map {
+        key: "action_split",
+        svg: "add_column",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -350,8 +818,7 @@ mod raster {
 
     // Regex compilados una sola vez para todo el generador (recolor_svg se llama 165
     // veces; recompilar en cada llamada era innecesario).
-    static RE_FILL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"fill="([^"]+)""#).unwrap());
+    static RE_FILL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"fill="([^"]+)""#).unwrap());
     static RE_STROKE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"stroke="([^"]+)""#).unwrap());
     static RE_SVG_OPEN: LazyLock<Regex> =
@@ -376,15 +843,15 @@ mod raster {
         let mut result = std::collections::HashMap::new();
         let len = archive.len();
         for i in 0..len {
-            let mut entry = archive.by_index(i).map_err(|e| {
-                format!("error leyendo entrada #{} de '{}': {}", i, zip_path, e)
-            })?;
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("error leyendo entrada #{} de '{}': {}", i, zip_path, e))?;
             let name = entry.name().to_owned();
             if needed.contains(&name) {
                 let mut bytes = Vec::with_capacity(entry.size() as usize);
-                entry.read_to_end(&mut bytes).map_err(|e| {
-                    format!("error leyendo '{}' de '{}': {}", name, zip_path, e)
-                })?;
+                entry
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| format!("error leyendo '{}' de '{}': {}", name, zip_path, e))?;
                 result.insert(name, bytes);
                 // Salir temprano si ya recogimos todo
                 if result.len() == needed.len() {
@@ -451,7 +918,11 @@ mod raster {
     /// El recoloreado (cuando `tint_hex` es `Some`) lo realiza `recolor_svg` a nivel
     /// de texto antes de parsear: reemplaza currentColor + fill/stroke explícitos e
     /// inyecta fill en el <svg> raíz para los paths sin fill (Material Design).
-    pub fn rasterize(svg_bytes: &[u8], tint_hex: Option<&str>, size: u32) -> Result<Vec<u8>, String> {
+    pub fn rasterize(
+        svg_bytes: &[u8],
+        tint_hex: Option<&str>,
+        size: u32,
+    ) -> Result<Vec<u8>, String> {
         // Opcionalmente recolorea el SVG a texto y trabaja sobre esos bytes
         let recolored: Vec<u8>;
         let working_bytes: &[u8] = if let Some(hex) = tint_hex {
@@ -494,12 +965,12 @@ mod raster {
     /// Escribe `<out_dir>/manifest.json` con los metadatos del set.
     pub fn write_manifest(out_dir: &Path, spec: &SetSpec) -> Result<(), String> {
         let label = match spec.id {
-            "lucide"     => "Lucide",
-            "tabler"     => "Tabler",
-            "material"   => "Material",
+            "lucide" => "Lucide",
+            "tabler" => "Tabler",
+            "material" => "Material",
             "flat-color" => "Flat Color",
-            "mono"       => "Mono",
-            other        => other,
+            "mono" => "Mono",
+            other => other,
         };
         let manifest = serde_json::json!({
             "id": spec.id,
@@ -518,9 +989,9 @@ mod raster {
 // ---------------------------------------------------------------------------
 #[cfg(feature = "gen-icons")]
 fn main() {
+    use raster::{rasterize, read_svgs_from_zip, write_manifest};
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
-    use raster::{read_svgs_from_zip, rasterize, write_manifest};
 
     const SIZE: u32 = 48;
     let specs = all_specs();
@@ -563,7 +1034,10 @@ fn main() {
         let needed: HashSet<String> = inner_paths.iter().map(|(_, p)| p.clone()).collect();
 
         // Leer todos los SVG en un único recorrido del zip (crítico para zips grandes)
-        eprintln!("Leyendo zip de '{}' (esto puede tardar para zips grandes)…", spec.id);
+        eprintln!(
+            "Leyendo zip de '{}' (esto puede tardar para zips grandes)…",
+            spec.id
+        );
         let svgs: HashMap<String, Vec<u8>> = match read_svgs_from_zip(spec.zip, &needed) {
             Ok(m) => m,
             Err(e) => {
@@ -592,10 +1066,7 @@ fn main() {
             let png_bytes = match rasterize(svg_bytes, tint_hex, SIZE) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!(
-                        "ERROR rasterizando [{}] clave='{}': {}",
-                        spec.id, key, e
-                    );
+                    eprintln!("ERROR rasterizando [{}] clave='{}': {}", spec.id, key, e);
                     fail += 1;
                     continue;
                 }
@@ -604,10 +1075,7 @@ fn main() {
             // Escribir PNG
             let png_path = out_dir.join(format!("{}.png", key));
             if let Err(e) = std::fs::write(&png_path, &png_bytes) {
-                eprintln!(
-                    "ERROR escribiendo '{}': {}",
-                    png_path.display(), e
-                );
+                eprintln!("ERROR escribiendo '{}': {}", png_path.display(), e);
                 fail += 1;
                 continue;
             }
@@ -623,10 +1091,7 @@ fn main() {
         if fail == 0 {
             eprintln!("set '{}' generado ({} íconos)", spec.id, ok);
         } else {
-            eprintln!(
-                "set '{}': {} íconos OK, {} FALLIDOS",
-                spec.id, ok, fail
-            );
+            eprintln!("set '{}': {} íconos OK, {} FALLIDOS", spec.id, ok, fail);
         }
     }
 }
@@ -639,12 +1104,7 @@ fn main() {
         specs.len()
     );
     for s in &specs {
-        eprintln!(
-            "  set={:12} zip={} entradas={}",
-            s.id,
-            s.zip,
-            s.maps.len()
-        );
+        eprintln!("  set={:12} zip={} entradas={}", s.id, s.zip, s.maps.len());
     }
 }
 
@@ -761,7 +1221,8 @@ mod tests {
         #[test]
         fn recolor_fill_atributo() {
             // SVG estilo Material: usa fill="black"
-            let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><path fill="black" d="M0 0"/></svg>"#;
+            let svg =
+                r#"<svg xmlns="http://www.w3.org/2000/svg"><path fill="black" d="M0 0"/></svg>"#;
             let result = recolor_svg(svg, "#9E9E9E");
             assert!(
                 result.contains("fill=\"#9E9E9E\""),

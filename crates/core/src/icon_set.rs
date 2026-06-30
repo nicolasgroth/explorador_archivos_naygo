@@ -31,11 +31,36 @@ impl IconSetCatalog {
     /// Tolerante: si `read_dir` falla, solo los de fábrica.
     pub fn load(dir: &Path) -> IconSetCatalog {
         let mut sets = vec![
-            IconSetInfo { id: "lucide".into(),     label: "Lucide".into(),     builtin: true, tintable: true },
-            IconSetInfo { id: "tabler".into(),      label: "Tabler".into(),     builtin: true, tintable: true },
-            IconSetInfo { id: "material".into(),    label: "Material".into(),   builtin: true, tintable: true },
-            IconSetInfo { id: "flat-color".into(),  label: "Flat Color".into(), builtin: true, tintable: false },
-            IconSetInfo { id: "mono".into(),        label: "Mono".into(),       builtin: true, tintable: true },
+            IconSetInfo {
+                id: "lucide".into(),
+                label: "Lucide".into(),
+                builtin: true,
+                tintable: true,
+            },
+            IconSetInfo {
+                id: "tabler".into(),
+                label: "Tabler".into(),
+                builtin: true,
+                tintable: true,
+            },
+            IconSetInfo {
+                id: "material".into(),
+                label: "Material".into(),
+                builtin: true,
+                tintable: true,
+            },
+            IconSetInfo {
+                id: "flat-color".into(),
+                label: "Flat Color".into(),
+                builtin: true,
+                tintable: false,
+            },
+            IconSetInfo {
+                id: "mono".into(),
+                label: "Mono".into(),
+                builtin: true,
+                tintable: true,
+            },
         ];
         // Mantener en sync con el vec! de sets de fábrica de arriba: si agregas un set
         // nuevo allá, agrégalo aquí o su carpeta se detectaría como pack suelto duplicado.
@@ -108,7 +133,13 @@ mod tests {
     fn tintable_correcto_por_set() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        let by = |id: &str| cat.available().iter().find(|s| s.id == id).unwrap().tintable;
+        let by = |id: &str| {
+            cat.available()
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .tintable
+        };
         assert!(by("lucide"));
         assert!(by("tabler"));
         assert!(by("material"));
@@ -157,6 +188,9 @@ mod tests {
         // Crear una carpeta con el mismo id que uno de los sets de fábrica.
         std::fs::create_dir_all(dir.path().join("icons").join("lucide")).unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        assert_eq!(cat.available().iter().filter(|s| s.id == "lucide").count(), 1);
+        assert_eq!(
+            cat.available().iter().filter(|s| s.id == "lucide").count(),
+            1
+        );
     }
 }

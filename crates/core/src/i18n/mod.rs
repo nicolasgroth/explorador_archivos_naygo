@@ -287,12 +287,10 @@ mod tests {
             ("ko", KO_JSON),
             ("hi", HI_JSON),
         ];
-        let es: std::collections::HashMap<String, String> =
-            serde_json::from_str(ES_JSON).unwrap();
+        let es: std::collections::HashMap<String, String> = serde_json::from_str(ES_JSON).unwrap();
         let es_keys: std::collections::BTreeSet<&String> = es.keys().collect();
         for (code, json) in langs {
-            let m: std::collections::HashMap<String, String> =
-                serde_json::from_str(json).unwrap();
+            let m: std::collections::HashMap<String, String> = serde_json::from_str(json).unwrap();
             let keys: std::collections::BTreeSet<&String> = m.keys().collect();
             assert_eq!(
                 keys, es_keys,
@@ -336,11 +334,7 @@ mod tests {
                     continue;
                 }
                 if let Some(v) = m.get(k) {
-                    assert_eq!(
-                        extract(v),
-                        ph,
-                        "placeholders distintos en la clave {k}"
-                    );
+                    assert_eq!(extract(v), ph, "placeholders distintos en la clave {k}");
                 }
             }
         }

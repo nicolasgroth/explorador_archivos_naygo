@@ -749,7 +749,10 @@ impl WorkspaceCtrl {
 
     /// Los paneles Files cuya carpeta actual está en el disco `drive_root` (el que se va a
     /// expulsar). Devuelve `(PaneId, carpeta_actual)`. Puro sobre el estado del workspace.
-    pub fn panes_on_drive(&self, drive_root: &std::path::Path) -> Vec<(PaneId, std::path::PathBuf)> {
+    pub fn panes_on_drive(
+        &self,
+        drive_root: &std::path::Path,
+    ) -> Vec<(PaneId, std::path::PathBuf)> {
         self.ws
             .panes()
             .iter()

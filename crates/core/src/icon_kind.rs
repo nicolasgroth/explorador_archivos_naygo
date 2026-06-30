@@ -103,8 +103,8 @@ impl ActionIcon {
         use ActionIcon::*;
         &[
             Back, Forward, Up, Refresh, Copy, Cut, Paste, Delete, NewFile, NewFolder, AddPane,
-            SwapPanes, ClonePath, NewWindow, Settings, Tabs, Layouts, Terminal, Eject, Panel,
-            Home, Search, ShowHidden, History, Favorites, Split,
+            SwapPanes, ClonePath, NewWindow, Settings, Tabs, Layouts, Terminal, Eject, Panel, Home,
+            Search, ShowHidden, History, Favorites, Split,
         ]
     }
 
@@ -349,7 +349,11 @@ mod tests {
         let mut names: Vec<&str> = all.iter().map(|a| a.file_name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 26, "cada acción tiene un nombre de archivo único");
+        assert_eq!(
+            names.len(),
+            26,
+            "cada acción tiene un nombre de archivo único"
+        );
         assert!(all.iter().all(|a| a.file_name().starts_with("action_")));
     }
 
@@ -358,10 +362,17 @@ mod tests {
         use ActionIcon::*;
         let nuevos = [Home, Search, ShowHidden, History, Favorites, Split];
         let names: Vec<&str> = nuevos.iter().map(|a| a.file_name()).collect();
-        assert_eq!(names, [
-            "action_home", "action_search", "action_show_hidden",
-            "action_history", "action_favorites", "action_split",
-        ]);
+        assert_eq!(
+            names,
+            [
+                "action_home",
+                "action_search",
+                "action_show_hidden",
+                "action_history",
+                "action_favorites",
+                "action_split",
+            ]
+        );
     }
 
     #[test]

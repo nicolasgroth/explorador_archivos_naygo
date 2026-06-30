@@ -584,19 +584,13 @@ mod tests {
     #[test]
     fn paths_eq_ci_ignora_capitalizacion() {
         // Misma ruta con distinta capitalización → iguales (semántica de Windows).
-        assert!(paths_eq_ci(
-            Path::new("D:\\Proj"),
-            Path::new("D:\\proj")
-        ));
+        assert!(paths_eq_ci(Path::new("D:\\Proj"), Path::new("D:\\proj")));
         assert!(paths_eq_ci(
             Path::new("D:\\Foto\\Backup"),
             Path::new("d:\\foto\\backup")
         ));
         // Rutas realmente distintas → NO iguales.
-        assert!(!paths_eq_ci(
-            Path::new("D:\\Proj"),
-            Path::new("D:\\Proj2")
-        ));
+        assert!(!paths_eq_ci(Path::new("D:\\Proj"), Path::new("D:\\Proj2")));
         // Mismo prefijo textual pero distinto número de componentes → NO iguales.
         assert!(!paths_eq_ci(
             Path::new("D:\\foto"),

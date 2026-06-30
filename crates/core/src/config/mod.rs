@@ -907,7 +907,10 @@ mod tests {
         let s = load_settings(dir.path());
         assert_eq!(s.bar_position, BarPosition::Side, "conserva lo viejo");
         assert!(!s.icon_only, "conserva lo viejo");
-        assert_eq!(s.icon_set, "lucide", "lucide es de fábrica → resolve lo conserva");
+        assert_eq!(
+            s.icon_set, "lucide",
+            "lucide es de fábrica → resolve lo conserva"
+        );
         assert!(s.show_parent_entry, "campo nuevo cae al default");
     }
 
@@ -1137,11 +1140,19 @@ mod tests {
         use crate::icon_source::IconSource;
         let dir = tempfile::tempdir().unwrap();
         let mut s = Settings::default();
-        s.icon_overrides
-            .insert("folder".into(), IconSource::Builtin { set_id: "material".into() });
+        s.icon_overrides.insert(
+            "folder".into(),
+            IconSource::Builtin {
+                set_id: "material".into(),
+            },
+        );
         save_settings(dir.path(), &s);
         let back = load_settings(dir.path());
-        assert_eq!(back.icon_overrides.get("folder"),
-            Some(&IconSource::Builtin { set_id: "material".into() }));
+        assert_eq!(
+            back.icon_overrides.get("folder"),
+            Some(&IconSource::Builtin {
+                set_id: "material".into()
+            })
+        );
     }
 }

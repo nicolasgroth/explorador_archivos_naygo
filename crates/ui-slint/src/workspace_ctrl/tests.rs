@@ -150,7 +150,10 @@ fn rows_signature_detecta_cambios_y_es_estable() {
     assert_ne!(s_sel, s_focus, "mover el foco cambia la firma");
 
     // Cambiar las COLUMNAS visibles cambia la firma (Created está oculta por defecto → mostrar).
-    c.column_toggle(id, crate::bridge::column_kind_to_int(naygo_core::columns::ColumnKind::Created));
+    c.column_toggle(
+        id,
+        crate::bridge::column_kind_to_int(naygo_core::columns::ColumnKind::Created),
+    );
     let s_cols = c.rows_signature(id, secs, now).unwrap();
     assert_ne!(s_focus, s_cols, "cambiar columnas visibles cambia la firma");
 
@@ -175,7 +178,10 @@ fn rows_signature_detecta_cambios_y_es_estable() {
         }
     }
     let s_mod = c.rows_signature(id, secs, now).unwrap();
-    assert_ne!(s_pre_mod, s_mod, "mutar el tamaño de una entry cambia la firma");
+    assert_ne!(
+        s_pre_mod, s_mod,
+        "mutar el tamaño de una entry cambia la firma"
+    );
 
     // Marcar una ruta como CORTADA cambia la firma (la fila se atenúa).
     let s_pre_cut = c.rows_signature(id, secs, now).unwrap();
@@ -625,8 +631,14 @@ fn selected_paths_of_toma_el_panel_pedido_no_el_activo() {
     c.open_in_pane(pane_b, b.path().to_path_buf());
     assert!(drain(&mut c));
     // Seleccionar el archivo en cada panel (la fila 0 de su vista).
-    c.ws.pane_mut(pane_a).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
-    c.ws.pane_mut(pane_b).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
+    c.ws.pane_mut(pane_a)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![0];
+    c.ws.pane_mut(pane_b)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![0];
     // Activo = A. Arrastrar desde B (el inactivo) debe devolver el archivo de B, no el de A.
     c.ws.set_active(pane_a);
     let desde_b = c.selected_paths_of(pane_b);
@@ -663,8 +675,8 @@ fn on_row_clicked_usa_modificadores_del_evento_no_el_estado_sticky() {
     assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
     // Simular Shift PEGADO en el estado sticky (como si un modal/drag se hubiera tragado el release).
     c.on_key("", false, true, false); // ctrl=false, shift=true → shift_down = true
-    // El clic REAL llega SIN Shift (shift=false en el parámetro). Antes del fix, on_row_clicked
-    // leía el sticky y seleccionaba por rango (4 filas). Ahora usa el parámetro → UNA sola fila.
+                                      // El clic REAL llega SIN Shift (shift=false en el parámetro). Antes del fix, on_row_clicked
+                                      // leía el sticky y seleccionaba por rango (4 filas). Ahora usa el parámetro → UNA sola fila.
     c.on_row_clicked(id, 3, false, false, now);
     assert_eq!(
         c.ws.active_files().unwrap().selected.len(),
@@ -692,7 +704,10 @@ fn op_compress_prompt_y_confirm_crean_el_zip() {
     assert!(drain(&mut c));
     let id = c.ws.active_id().unwrap();
     // Seleccionar la fila 0 (doc.txt) del panel activo.
-    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
+    c.ws.pane_mut(id)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![0];
     // Abrir el modal: el nombre por defecto debe ser "doc.zip" (un único archivo).
     c.op_compress_prompt();
     assert!(
@@ -740,20 +755,32 @@ fn sel_is_single_zip_solo_con_un_zip() {
     let pos = |c: &WorkspaceCtrl, name: &str| active_pos_of(c, name).unwrap();
     // Solo a.ZIP seleccionado → true.
     let p = pos(&c, "a.ZIP");
-    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    c.ws.pane_mut(id)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![p];
     assert!(c.sel_is_single_zip(), "un único .ZIP cuenta como zip");
     // b.txt → false.
     let p = pos(&c, "b.txt");
-    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    c.ws.pane_mut(id)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![p];
     assert!(!c.sel_is_single_zip(), "un .txt no es zip");
     // carpeta → false.
     let p = pos(&c, "carpeta");
-    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    c.ws.pane_mut(id)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![p];
     assert!(!c.sel_is_single_zip(), "una carpeta no es zip");
     // a.ZIP + b.txt (dos ítems) → false.
     let pz = pos(&c, "a.ZIP");
     let pt = pos(&c, "b.txt");
-    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![pz, pt];
+    c.ws.pane_mut(id)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .selected = vec![pz, pt];
     assert!(!c.sel_is_single_zip(), "varios ítems no es un único zip");
 }
 
@@ -1251,8 +1278,7 @@ fn watch_events_agregan_entry() {
     let id = c.active_id().unwrap();
     let nuevo = tmp.path().join("nuevo.txt");
     std::fs::write(&nuevo, b"y").unwrap();
-    let nuevas =
-        c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(nuevo.clone())]);
+    let nuevas = c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(nuevo.clone())]);
     assert_eq!(nuevas, vec![nuevo.clone()]);
     assert!(c
         .rows_of(id, 8, std::time::Instant::now())
@@ -1298,8 +1324,7 @@ fn watch_events_descarta_los_de_otra_carpeta() {
     assert!(drain(&mut c));
     let id = c.active_id().unwrap();
     // Llega un evento rezagado de A (otra carpeta): debe descartarse.
-    let nuevas =
-        c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(ajeno.clone())]);
+    let nuevas = c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(ajeno.clone())]);
     assert!(
         nuevas.is_empty(),
         "el evento de otra carpeta no produce arrivals"
@@ -1457,8 +1482,8 @@ fn carpeta_perdida_se_detecta_por_panel_y_sube_al_ancestro() {
     c.refresh_missing_cache();
     assert!(!c.pane_dir_missing(id), "al inicio la carpeta existe");
     std::fs::remove_dir_all(&sub).unwrap(); // "sacar el USB"
-    // El estado "missing" se cachea y se recalcula en eventos reales (aquí simulamos el
-    // evento de cambio de discos / tick que dispara el refresco).
+                                            // El estado "missing" se cachea y se recalcula en eventos reales (aquí simulamos el
+                                            // evento de cambio de discos / tick que dispara el refresco).
     c.refresh_missing_cache();
     assert!(
         c.pane_dir_missing(id),
@@ -1558,7 +1583,10 @@ fn doble_clic_en_rust_navega() {
 
     // Dos clics RÁPIDOS (dentro de 700 ms) SÍ navegan. Siguen la misma línea de tiempo.
     let t1 = base + Duration::from_secs(5);
-    assert!(!c.on_row_clicked(id, pos, false, false, t1), "1er clic: selecciona");
+    assert!(
+        !c.on_row_clicked(id, pos, false, false, t1),
+        "1er clic: selecciona"
+    );
     assert!(
         c.on_row_clicked(id, pos, false, false, t1 + Duration::from_millis(150)),
         "2do clic rápido: doble-clic → navega"
@@ -2152,13 +2180,24 @@ fn panes_on_drive_filtra_por_disco() {
     };
     // panes_on_drive sobre el disco del tempdir => incluye el panel inicial
     let en_disco = c.panes_on_drive(&drive_root);
-    assert_eq!(en_disco.len(), 1, "el panel inicial está en el disco del tempdir");
+    assert_eq!(
+        en_disco.len(),
+        1,
+        "el panel inicial está en el disco del tempdir"
+    );
     // panes_on_drive sobre un disco que seguro no es el del tempdir => vacío.
     // Elegir una letra distinta a la del tempdir:
-    let otra_letra = if drive_root.to_string_lossy().to_uppercase().starts_with('Z') { 'Y' } else { 'Z' };
+    let otra_letra = if drive_root.to_string_lossy().to_uppercase().starts_with('Z') {
+        'Y'
+    } else {
+        'Z'
+    };
     let otro_disco = std::path::PathBuf::from(format!("{otra_letra}:\\"));
     let fuera = c.panes_on_drive(&otro_disco);
-    assert!(fuera.is_empty(), "ningún panel está en un disco inexistente");
+    assert!(
+        fuera.is_empty(),
+        "ningún panel está en un disco inexistente"
+    );
 }
 
 #[test]

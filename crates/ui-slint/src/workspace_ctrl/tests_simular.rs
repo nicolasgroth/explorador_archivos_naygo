@@ -41,8 +41,7 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
 fn drain_ops(c: &mut WorkspaceCtrl) -> bool {
     for _ in 0..4000 {
         c.ops.pump_ops();
-        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
-        {
+        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -171,8 +170,7 @@ fn drop_con_confirmacion_off_pero_archivo_existente_pide_conflicto() {
             pidio_conflicto = true;
             break;
         }
-        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
-        {
+        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -232,8 +230,7 @@ fn drop_sobre_archivo_existente_confirmado_pide_conflicto_no_sobrescribe() {
             pidio_conflicto = true;
             break;
         }
-        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
-        {
+        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
             break; // terminó sin preguntar
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -961,8 +958,7 @@ fn conflicto_al_mover_sobrescribir() {
                 resuelto = true;
             }
         }
-        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
-        {
+        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
             termino = true;
             break;
         }
@@ -1019,8 +1015,7 @@ fn conflicto_al_mover_renombrar_con_nombre_nuevo() {
                 resuelto = true;
             }
         }
-        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some())
-        {
+        if !c.ops.active_ops.is_empty() && c.ops.active_ops.iter().all(|o| o.summary.is_some()) {
             termino = true;
             break;
         }
@@ -1083,10 +1078,19 @@ fn mark_y_pane_was_ejected() {
     let cfg = tempfile::tempdir().unwrap();
     let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     let id = c.ws.active_id().expect("hay un panel activo al arrancar");
-    assert!(!c.pane_was_ejected(id), "recién creado no está marcado como expulsado");
+    assert!(
+        !c.pane_was_ejected(id),
+        "recién creado no está marcado como expulsado"
+    );
     c.mark_pane_ejected(id);
-    assert!(c.pane_was_ejected(id), "tras marcar, pane_was_ejected debe ser true");
+    assert!(
+        c.pane_was_ejected(id),
+        "tras marcar, pane_was_ejected debe ser true"
+    );
     // navegar a una carpeta válida limpia el flag:
     c.start_listing(id, work.path().to_path_buf());
-    assert!(!c.pane_was_ejected(id), "navegar limpia el flag de expulsado");
+    assert!(
+        !c.pane_was_ejected(id),
+        "navegar limpia el flag de expulsado"
+    );
 }

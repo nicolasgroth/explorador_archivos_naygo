@@ -28,36 +28,24 @@ pub enum NamePurpose {
     /// Crear un archivo nuevo. `label` es el texto i18n YA RESUELTO (`op.new_file`) que el caller
     /// pasa porque `OpsCtrl` no tiene acceso a la configuración/idioma: se usa como título del
     /// modal y como etiqueta de la op en el panel de progreso.
-    NewFile {
-        label: String,
-    },
+    NewFile { label: String },
     /// Crear una carpeta nueva. `label` es el texto i18n YA RESUELTO (`op.new_folder`), igual que
     /// `NewFile`: título del modal + etiqueta de la op.
-    NewDir {
-        label: String,
-    },
+    NewDir { label: String },
     /// Confirmar el nombre de un archivo pegado (texto/imagen). `ext` es la extensión a
     /// concatenar (sin punto) y `bytes` el contenido ya codificado a escribir. Solo aparece si
     /// `Settings.paste_confirm` está activo; si no, el pegado escribe directo.
-    Paste {
-        ext: String,
-        bytes: Vec<u8>,
-    },
+    Paste { ext: String, bytes: Vec<u8> },
     /// Renombrar un archivo en CONFLICTO (BUG 1): el usuario eligió "Renombrar" en el modal de
     /// conflicto y se le pide el nombre nuevo (con una sugerencia "(2)" precargada). Al confirmar,
     /// el destino del modal NO es crear un archivo nuevo sino resolver el conflicto de la op
     /// `op_id` con `ConflictAction::RenameTo(nombre)`. `display` es el nombre original en conflicto
     /// (para el título "Nuevo nombre para «X»").
-    ConflictRename {
-        op_id: u64,
-        display: String,
-    },
+    ConflictRename { op_id: u64, display: String },
     /// Confirmar el nombre del `.zip` al comprimir la selección. `sources` son los ítems a
     /// empaquetar y `dir` la carpeta donde se crea el zip. Al confirmar, `name_confirm` arma la
     /// op `Compress` (asegurando la extensión `.zip`) y la lanza por el worker de zip.
-    Compress {
-        sources: Vec<PathBuf>,
-    },
+    Compress { sources: Vec<PathBuf> },
 }
 
 /// El modal de operaciones activo (uno a la vez).
@@ -668,8 +656,13 @@ impl OpsCtrl {
                             }
                         }
                     };
-                    let r =
-                        extract_zip(&zip, &dest_dir, &mut on_conflict, &mut on_progress, &token_worker);
+                    let r = extract_zip(
+                        &zip,
+                        &dest_dir,
+                        &mut on_conflict,
+                        &mut on_progress,
+                        &token_worker,
+                    );
                     if record_undo {
                         // El undo de EXTRAER trashea SOLO las rutas que la op CREÓ de cero
                         // (`created == true`): dirs/archivos nuevos y el destino "(2)" de KeepBoth.
@@ -930,9 +923,7 @@ impl OpsCtrl {
                         self.active_ops[i]
                             .zip_undo_rx
                             .take()
-                            .and_then(|rx| {
-                                rx.recv_timeout(std::time::Duration::from_secs(1)).ok()
-                            })
+                            .and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(1)).ok())
                             .unwrap_or_default()
                     } else {
                         undo::build_undo(&req, &summary).unwrap_or_default()
@@ -2138,16 +2129,14 @@ fn zip_undo_actions_from_items(
 ///   (lo hace `extract_zip` con `unique_path`) y el existente queda intacto. Es una aproximación:
 ///   `RenameTo` (nombre elegido) y `RenameExisting` (renombrar el del disco) no tienen equivalente
 ///   exacto en `ExtractConflict`; en los tres casos quedan AMBOS archivos, con el entrante renombrado.
-fn map_action_to_extract(
-    a: ConflictAction,
-) -> naygo_core::archive_ops::ExtractConflict {
+fn map_action_to_extract(a: ConflictAction) -> naygo_core::archive_ops::ExtractConflict {
     use naygo_core::archive_ops::ExtractConflict;
     match a {
         ConflictAction::Overwrite => ExtractConflict::Overwrite,
         ConflictAction::Skip | ConflictAction::SkipIdentical => ExtractConflict::Skip,
-        ConflictAction::Rename
-        | ConflictAction::RenameTo(_)
-        | ConflictAction::RenameExisting => ExtractConflict::KeepBoth,
+        ConflictAction::Rename | ConflictAction::RenameTo(_) | ConflictAction::RenameExisting => {
+            ExtractConflict::KeepBoth
+        }
     }
 }
 
@@ -2544,11 +2533,17 @@ mod tests {
         );
         // Se creó el desambiguado "proyecto (2).zip" con la fuente nueva.
         let nuevo = dir.join("proyecto (2).zip");
-        assert!(nuevo.exists(), "se creó el .zip desambiguado 'proyecto (2).zip'");
+        assert!(
+            nuevo.exists(),
+            "se creó el .zip desambiguado 'proyecto (2).zip'"
+        );
         {
             let f = std::fs::File::open(&nuevo).unwrap();
             let mut z = zip::ZipArchive::new(f).unwrap();
-            assert!(z.by_name("dato.txt").is_ok(), "el .zip nuevo trae la fuente");
+            assert!(
+                z.by_name("dato.txt").is_ok(),
+                "el .zip nuevo trae la fuente"
+            );
         }
         // El undo trashea SOLO el .zip desambiguado REAL, jamás el preexistente.
         assert_eq!(c.undo_history.len(), 1, "comprimir registra un undo");

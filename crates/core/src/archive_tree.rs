@@ -40,7 +40,12 @@ pub struct TreeNode {
 
 impl TreeNode {
     fn new_dir(name: &str) -> TreeNode {
-        TreeNode { name: name.to_string(), is_dir: true, size: 0, children: Vec::new() }
+        TreeNode {
+            name: name.to_string(),
+            is_dir: true,
+            size: 0,
+            children: Vec::new(),
+        }
     }
 }
 
@@ -51,7 +56,9 @@ pub fn build_tree(entries: &[ArchiveEntry]) -> TreeNode {
     let mut root = TreeNode::new_dir("");
     for e in entries {
         let comps: Vec<&str> = e.path.split('/').filter(|s| !s.is_empty()).collect();
-        if comps.is_empty() { continue; }
+        if comps.is_empty() {
+            continue;
+        }
         let mut cur = &mut root;
         for (i, comp) in comps.iter().enumerate() {
             let last = i + 1 == comps.len();
@@ -61,7 +68,12 @@ pub fn build_tree(entries: &[ArchiveEntry]) -> TreeNode {
                 Some(p) => p,
                 None => {
                     let node = if want_file {
-                        TreeNode { name: comp.to_string(), is_dir: false, size: e.size, children: Vec::new() }
+                        TreeNode {
+                            name: comp.to_string(),
+                            is_dir: false,
+                            size: e.size,
+                            children: Vec::new(),
+                        }
                     } else {
                         TreeNode::new_dir(comp)
                     };
@@ -91,10 +103,13 @@ pub fn build_tree(entries: &[ArchiveEntry]) -> TreeNode {
 
 fn sort_tree(node: &mut TreeNode) {
     node.children.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir)
+        b.is_dir
+            .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    for c in &mut node.children { sort_tree(c); }
+    for c in &mut node.children {
+        sort_tree(c);
+    }
 }
 
 /// Resumen de un archivo comprimido (para el encabezado).
@@ -121,8 +136,12 @@ pub fn render_archive_tree(
     out.push('\n');
     out.push_str(&format!(
         "{} {}, {} {} · {} {}\n",
-        summary.files, labels.files, summary.dirs, labels.folders,
-        format_size(summary.total_uncompressed, size_fmt), labels.uncompressed,
+        summary.files,
+        labels.files,
+        summary.dirs,
+        labels.folders,
+        format_size(summary.total_uncompressed, size_fmt),
+        labels.uncompressed,
     ));
     out.push_str("──────────────────────────────\n");
     let root = build_tree(entries);
@@ -130,7 +149,10 @@ pub fn render_archive_tree(
     if summary.truncated {
         let extra = summary.total_entries.saturating_sub(entries.len());
         if extra > 0 {
-            out.push_str(&format!("\n{}\n", labels.and_more.replace("{n}", &extra.to_string())));
+            out.push_str(&format!(
+                "\n{}\n",
+                labels.and_more.replace("{n}", &extra.to_string())
+            ));
         } else {
             // tar truncado: no conocemos el total real sin leerlo entero, así que el texto es
             // honesto (hay más, sin afirmar un número que no sabemos).
@@ -188,11 +210,31 @@ mod tests {
     fn render_incluye_encabezado_y_arbol_ascii() {
         use crate::format::SizeFormat;
         let entries = vec![
-            ArchiveEntry { path: "p/src/main.rs".into(), is_dir: false, size: 4300 },
-            ArchiveEntry { path: "p/README.md".into(), is_dir: false, size: 2100 },
+            ArchiveEntry {
+                path: "p/src/main.rs".into(),
+                is_dir: false,
+                size: 4300,
+            },
+            ArchiveEntry {
+                path: "p/README.md".into(),
+                is_dir: false,
+                size: 2100,
+            },
         ];
-        let summary = ArchiveSummary { files: 2, dirs: 2, total_uncompressed: 6400, truncated: false, total_entries: 2 };
-        let out = render_archive_tree(&entries, &summary, "demo.zip", SizeFormat::Auto, &labels_es());
+        let summary = ArchiveSummary {
+            files: 2,
+            dirs: 2,
+            total_uncompressed: 6400,
+            truncated: false,
+            total_entries: 2,
+        };
+        let out = render_archive_tree(
+            &entries,
+            &summary,
+            "demo.zip",
+            SizeFormat::Auto,
+            &labels_es(),
+        );
         assert!(out.contains("2 archivo"));
         assert!(out.contains("carpeta"));
         assert!(out.contains("├─ ") || out.contains("└─ "));
@@ -204,9 +246,25 @@ mod tests {
     #[test]
     fn render_truncado_agrega_y_n_mas() {
         use crate::format::SizeFormat;
-        let summary = ArchiveSummary { files: 1, dirs: 0, total_uncompressed: 5, truncated: true, total_entries: 600 };
-        let entries = vec![ArchiveEntry { path: "a.txt".into(), is_dir: false, size: 5 }];
-        let out = render_archive_tree(&entries, &summary, "big.zip", SizeFormat::Auto, &labels_es());
+        let summary = ArchiveSummary {
+            files: 1,
+            dirs: 0,
+            total_uncompressed: 5,
+            truncated: true,
+            total_entries: 600,
+        };
+        let entries = vec![ArchiveEntry {
+            path: "a.txt".into(),
+            is_dir: false,
+            size: 5,
+        }];
+        let out = render_archive_tree(
+            &entries,
+            &summary,
+            "big.zip",
+            SizeFormat::Auto,
+            &labels_es(),
+        );
         assert!(out.contains("599"));
         assert!(out.contains("más"));
     }
@@ -214,7 +272,13 @@ mod tests {
     #[test]
     fn render_lista_vacia_no_panica() {
         use crate::format::SizeFormat;
-        let out = render_archive_tree(&[], &ArchiveSummary::default(), "vacio.zip", SizeFormat::Auto, &labels_es());
+        let out = render_archive_tree(
+            &[],
+            &ArchiveSummary::default(),
+            "vacio.zip",
+            SizeFormat::Auto,
+            &labels_es(),
+        );
         assert!(out.contains("0 archivo"));
     }
 
@@ -227,20 +291,45 @@ mod tests {
             more_entries: "… and more entries".into(),
             and_more: "… and {n} more".into(),
         };
-        let entries = vec![ArchiveEntry { path: "a.txt".into(), is_dir: false, size: 5 }];
-        let summary = ArchiveSummary { files: 1, dirs: 0, total_uncompressed: 5, truncated: false, total_entries: 1 };
+        let entries = vec![ArchiveEntry {
+            path: "a.txt".into(),
+            is_dir: false,
+            size: 5,
+        }];
+        let summary = ArchiveSummary {
+            files: 1,
+            dirs: 0,
+            total_uncompressed: 5,
+            truncated: false,
+            total_entries: 1,
+        };
         let out = render_archive_tree(&entries, &summary, "x.zip", SizeFormat::Auto, &labels);
         assert!(out.contains("file(s)"));
         assert!(out.contains("uncompressed"));
-        assert!(!out.contains("archivo"), "no debe haber español hardcodeado");
+        assert!(
+            !out.contains("archivo"),
+            "no debe haber español hardcodeado"
+        );
     }
 
     #[test]
     fn build_tree_crea_carpetas_implicitas_y_ordena() {
         let entries = vec![
-            ArchiveEntry { path: "a/b/c.txt".into(), is_dir: false, size: 10 },
-            ArchiveEntry { path: "a/z.txt".into(), is_dir: false, size: 20 },
-            ArchiveEntry { path: "a/b/".into(), is_dir: true, size: 0 },
+            ArchiveEntry {
+                path: "a/b/c.txt".into(),
+                is_dir: false,
+                size: 10,
+            },
+            ArchiveEntry {
+                path: "a/z.txt".into(),
+                is_dir: false,
+                size: 20,
+            },
+            ArchiveEntry {
+                path: "a/b/".into(),
+                is_dir: true,
+                size: 0,
+            },
         ];
         let root = build_tree(&entries);
         assert_eq!(root.children.len(), 1);
@@ -262,8 +351,16 @@ mod tests {
         // Archivo (malformado) con "a/b/c.txt" Y "a/b" como ARCHIVO: la carpeta b con su hijo
         // c.txt no se debe corromper (el contenido no se pierde).
         let entries = vec![
-            ArchiveEntry { path: "a/b/c.txt".into(), is_dir: false, size: 10 },
-            ArchiveEntry { path: "a/b".into(), is_dir: false, size: 99 },
+            ArchiveEntry {
+                path: "a/b/c.txt".into(),
+                is_dir: false,
+                size: 10,
+            },
+            ArchiveEntry {
+                path: "a/b".into(),
+                is_dir: false,
+                size: 99,
+            },
         ];
         let root = build_tree(&entries);
         let a = &root.children[0];
@@ -280,8 +377,16 @@ mod tests {
         // debe reconvertirse a carpeta al descender para colgarle c.txt; de lo contrario
         // `render_children` (que solo recursa si is_dir) lo omitiría.
         let entries = vec![
-            ArchiveEntry { path: "a/b".into(), is_dir: false, size: 99 },
-            ArchiveEntry { path: "a/b/c.txt".into(), is_dir: false, size: 10 },
+            ArchiveEntry {
+                path: "a/b".into(),
+                is_dir: false,
+                size: 99,
+            },
+            ArchiveEntry {
+                path: "a/b/c.txt".into(),
+                is_dir: false,
+                size: 10,
+            },
         ];
         let root = build_tree(&entries);
         let a = &root.children[0];

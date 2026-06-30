@@ -2258,9 +2258,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     })
                     .collect();
                 let active_theme = c.config.settings.theme.clone();
-                let col = |tc: naygo_core::theme::ThemeColor| {
-                    slint::Color::from_rgb_u8(tc.r, tc.g, tc.b)
-                };
+                let col =
+                    |tc: naygo_core::theme::ThemeColor| slint::Color::from_rgb_u8(tc.r, tc.g, tc.b);
                 let theme_cards: Vec<ThemeCardVm> = c
                     .config
                     .themes
@@ -2303,8 +2302,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Datos para la grilla de íconos (Task 15).
                 let icon_set_id = c.config.settings.icon_set.clone();
                 let icon_overrides = c.config.settings.icon_overrides.clone();
-                let catalog =
-                    naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir);
+                let catalog = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir);
                 let icon_catalog_info: Vec<(String, String, bool)> = catalog
                     .available()
                     .iter()
@@ -2358,14 +2356,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 let rows: Vec<IconRowVm> = naygo_core::icons::all_keys()
                     .into_iter()
                     .map(|key| {
-                        let key_str =
-                            naygo_core::icon_source::key_to_string(key);
+                        let key_str = naygo_core::icon_source::key_to_string(key);
                         let overridden = icon_overrides.contains_key(&key_str);
                         let origin: SharedString = if overridden {
                             match icon_overrides.get(&key_str) {
-                                Some(naygo_core::icon_source::IconSource::Builtin {
-                                    set_id,
-                                }) => {
+                                Some(naygo_core::icon_source::IconSource::Builtin { set_id }) => {
                                     let lbl = icon_catalog_info
                                         .iter()
                                         .find(|(id, _, _)| id == set_id)
@@ -2381,8 +2376,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         } else {
                             format!("{active_label} (base)").into()
                         };
-                        let group: i32 =
-                            if key_str.starts_with("action_") { 0 } else { 1 };
+                        let group: i32 = if key_str.starts_with("action_") { 0 } else { 1 };
                         let icon_img = c.icons.get(key);
                         IconRowVm {
                             key: key_str.clone().into(),
@@ -3254,28 +3248,20 @@ fn main() -> Result<(), slint::PlatformError> {
             // Construir las opciones con borrow_mut (icons.get necesita &mut).
             let choices: Vec<IconChoiceVm> = {
                 let c = ctrl.borrow();
-                let Some(icon_key) =
-                    naygo_core::icon_source::key_from_string(key.as_str())
-                else {
+                let Some(icon_key) = naygo_core::icon_source::key_from_string(key.as_str()) else {
                     return;
                 };
                 let config_dir = c.config.config_dir.clone();
                 let tint = theme_text_rgb(&c.config.settings, &c.config.themes);
-                let catalog =
-                    naygo_core::icon_set::IconSetCatalog::load(&config_dir);
+                let catalog = naygo_core::icon_set::IconSetCatalog::load(&config_dir);
                 drop(c);
                 catalog
                     .available()
                     .iter()
                     .map(|info| {
                         let tintable = info.tintable;
-                        let icon_img = icons::render_for_set(
-                            icon_key,
-                            &info.id,
-                            tintable,
-                            tint,
-                            &config_dir,
-                        );
+                        let icon_img =
+                            icons::render_for_set(icon_key, &info.id, tintable, tint, &config_dir);
                         IconChoiceVm {
                             set_id: info.id.as_str().into(),
                             set_label: info.label.as_str().into(),
@@ -3291,8 +3277,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 build_settings_vm(&c.config)
             };
             vm.icon_picker_key = key;
-            vm.icon_picker_choices =
-                ModelRc::from(Rc::new(VecModel::from(choices)));
+            vm.icon_picker_choices = ModelRc::from(Rc::new(VecModel::from(choices)));
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_settings_vm(vm.clone());
             }
@@ -3439,12 +3424,10 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         c.config.save();
                         c.icons.set_active(active.clone());
-                        let catalog =
-                            naygo_core::icon_set::IconSetCatalog::load(&config_dir);
+                        let catalog = naygo_core::icon_set::IconSetCatalog::load(&config_dir);
                         let tintable = catalog.is_tintable(&active);
                         let overrides = c.config.settings.icon_overrides.clone();
-                        let rgb =
-                            theme_text_rgb(&c.config.settings, &c.config.themes);
+                        let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                         c.icons.set_overrides(overrides);
                         c.icons.set_tint(tintable, rgb);
                     }
@@ -3452,20 +3435,13 @@ fn main() -> Result<(), slint::PlatformError> {
                     refresh_drives();
                     refresh();
                     if let Some(ui) = ui_weak.upgrade() {
-                        let msg = ctrl
-                            .borrow()
-                            .config
-                            .t("settings.icons.import_ok")
-                            .into();
+                        let msg = ctrl.borrow().config.t("settings.icons.import_ok").into();
                         ui.invoke_show_toast(msg);
                     }
                 }
                 Err(e) => {
                     if let Some(ui) = ui_weak.upgrade() {
-                        let base = ctrl
-                            .borrow()
-                            .config
-                            .t("settings.icons.import_err");
+                        let base = ctrl.borrow().config.t("settings.icons.import_err");
                         ui.invoke_show_toast(format!("{base}: {e}").into());
                     }
                 }
@@ -3502,11 +3478,7 @@ fn main() -> Result<(), slint::PlatformError> {
             ) {
                 Ok(()) => {
                     if let Some(ui) = ui_weak.upgrade() {
-                        let msg = ctrl
-                            .borrow()
-                            .config
-                            .t("settings.icons.export_ok")
-                            .into();
+                        let msg = ctrl.borrow().config.t("settings.icons.export_ok").into();
                         ui.invoke_show_toast(msg);
                     }
                 }
@@ -4771,8 +4743,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_row_context(move |id, _pos, x, y| {
-            ctrl.borrow_mut()
-                .open_context_menu(PaneId(id as u64), x, y);
+            ctrl.borrow_mut().open_context_menu(PaneId(id as u64), x, y);
             sync_rows();
             // El menú contextual necesita que el event loop siga vivo para resaltar sus ítems al
             // pasar el mouse: rearmar el timer al abrirlo (igual criterio que con los modales).
@@ -5482,14 +5453,17 @@ fn copy_user_png(config_dir: &std::path::Path, src: &std::path::Path) -> Option<
         eprintln!("[naygo] copy_user_png: no se pudo crear el directorio: {e}");
         return None;
     }
-    let stem = src
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("icon");
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("icon");
     // Sanear: solo alfanuméricos, guiones y guiones bajos.
     let stem: String = stem
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(32)
         .collect();
     // Evitar colisiones con un contador de reintento.
