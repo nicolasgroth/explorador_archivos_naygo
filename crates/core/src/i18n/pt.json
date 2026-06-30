@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "Painel acoplado",
   "slint.cfg.ops_display_modal": "Diálogo modal",
   "slint.cfg.ops_display_always": "Sempre visível",
-  "slint.cfg.paste_image_fmt": "Formato de imagem colada",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "Ícone na bandeja do sistema",

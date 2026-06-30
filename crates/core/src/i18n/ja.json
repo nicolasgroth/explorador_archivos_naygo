@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "ドッキングパネル",
   "slint.cfg.ops_display_modal": "モーダルダイアログ",
   "slint.cfg.ops_display_always": "常に表示",
-  "slint.cfg.paste_image_fmt": "貼り付けた画像の形式",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "システムトレイのアイコン",

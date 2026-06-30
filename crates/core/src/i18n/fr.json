@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "Panneau ancré",
   "slint.cfg.ops_display_modal": "Boîte de dialogue modale",
   "slint.cfg.ops_display_always": "Toujours visible",
-  "slint.cfg.paste_image_fmt": "Format de l'image collée",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "Icône dans la zone de notification",

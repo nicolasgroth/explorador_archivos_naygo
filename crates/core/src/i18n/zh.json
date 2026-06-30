@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "停靠面板",
   "slint.cfg.ops_display_modal": "模态对话框",
   "slint.cfg.ops_display_always": "始终可见",
-  "slint.cfg.paste_image_fmt": "粘贴图像格式",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "系统托盘图标",

@@ -2852,10 +2852,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         cfg_win.on_set_paste_jpg_quality(move |v| {
-            // El VM entrega un int; lo clampamos a 0–100 antes de guardar como u8.
+            // El VM entrega un int; lo clampamos a 1–100 antes de guardar como u8
+            // (el codificador JPEG no acepta 0: eleva a 1).
             ctrl.borrow_mut()
                 .config
-                .set_paste_jpg_quality(v.clamp(0, 100) as u8);
+                .set_paste_jpg_quality(v.clamp(1, 100) as u8);
             refresh();
         });
     }

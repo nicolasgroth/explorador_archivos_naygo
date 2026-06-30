@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "Docked panel",
   "slint.cfg.ops_display_modal": "Modal dialog",
   "slint.cfg.ops_display_always": "Always visible",
-  "slint.cfg.paste_image_fmt": "Pasted image format",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "System tray icon",

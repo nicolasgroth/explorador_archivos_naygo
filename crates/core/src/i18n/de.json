@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "Angedocktes Panel",
   "slint.cfg.ops_display_modal": "Modaler Dialog",
   "slint.cfg.ops_display_always": "Immer sichtbar",
-  "slint.cfg.paste_image_fmt": "Format des eingefügten Bildes",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "Symbol im Infobereich",

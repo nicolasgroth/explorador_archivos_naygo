@@ -679,7 +679,6 @@
   "slint.cfg.ops_display_panel": "도킹된 패널",
   "slint.cfg.ops_display_modal": "모달 대화 상자",
   "slint.cfg.ops_display_always": "항상 표시",
-  "slint.cfg.paste_image_fmt": "붙여넣은 이미지 형식",
   "slint.cfg.paste_fmt_png": "PNG",
   "slint.cfg.paste_fmt_jpg": "JPG",
   "slint.cfg.tray_enabled": "시스템 트레이 아이콘",

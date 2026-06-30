@@ -444,18 +444,18 @@ export component ConfigWindow inherits Window {
                                     }
                                 }
                                 // Calidad JPG: solo aplica al formato JPG (índice 1), por eso se oculta
-                                // cuando el formato es PNG. Entero 0–100; se clampa al vuelo igual que
-                                // el límite de recientes.
+                                // cuando el formato es PNG. Entero 1–100 (el codificador eleva 0 a 1);
+                                // se clampa al vuelo igual que el límite de recientes.
                                 if root.vm.paste-image-fmt == 1: Field {
                                     label: Tr.cfg-paste-jpg-quality;
                                     LineEdit {
                                         text: root.vm.paste-jpg-quality + "";
                                         width: root.ctl-w;
-                                        placeholder-text: "0–100";
+                                        placeholder-text: "1–100";
                                         edited(t) => {
-                                            if (t.to-float() >= 0) {
-                                                self.text = max(0, min(100, Math.round(t.to-float()))) + "";
-                                                root.set-paste-jpg-quality(max(0, min(100, Math.round(t.to-float()))));
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(100, Math.round(t.to-float()))) + "";
+                                                root.set-paste-jpg-quality(max(1, min(100, Math.round(t.to-float()))));
                                             }
                                         }
                                     }

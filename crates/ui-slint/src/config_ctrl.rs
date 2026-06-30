@@ -590,9 +590,9 @@ impl ConfigCtrl {
         self.save();
     }
 
-    /// Calidad de salida JPG para imagen pegada (0–100).
+    /// Calidad de salida JPG para imagen pegada (1–100; el codificador no acepta 0).
     pub fn set_paste_jpg_quality(&mut self, quality: u8) {
-        self.settings.paste_jpg_quality = quality.clamp(0, 100);
+        self.settings.paste_jpg_quality = quality.clamp(1, 100);
         self.save();
     }
 
