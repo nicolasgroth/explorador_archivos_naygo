@@ -245,12 +245,50 @@ impl WorkspaceCtrl {
     ) -> Vec<std::path::PathBuf> {
         // Espejo runtime del setting "agrupar al final" (se lee antes del préstamo mutable).
         let group_new_at_end = self.config.settings.new_items_at_end;
+        // Carpeta que el panel muestra AHORA (se lee antes del préstamo mutable). Sirve para
+        // descartar eventos rezagados de la carpeta ANTERIOR (M-2): al navegar A→B (mismo PaneId)
+        // el watcher de A se reemplaza, pero eventos de A ya encolados pueden drenarse después de
+        // repoblar B; aplicarlos metería una fila fantasma (un archivo de A que no está en B). El
+        // filtro es defensivo y cosmético: si no podemos resolver la carpeta, no filtramos nada.
+        let current_dir = self
+            .ws
+            .pane(pane)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone());
         let Some(f) = self.ws.pane_mut(pane).and_then(|p| p.files.as_mut()) else {
             return Vec::new();
         };
+        // Quedarse solo con los eventos cuya ruta pertenece a la carpeta actual del panel. Un
+        // evento se conserva si ALGUNA de sus rutas cuelga directamente de `current_dir`; así un
+        // `Renamed` que entra o sale de la carpeta se sigue tratando (la lógica de
+        // `apply_dir_events` ya se autocorrige). Sin `current_dir` (no resoluble), se aplican todos.
+        //
+        // La comparación de carpeta padre es case-insensitive (Windows lo es) para no descartar por
+        // error un evento legítimo si el watcher reporta la ruta con otra capitalización. Como NUNCA
+        // canonicalizamos (la carpeta vigilada es la MISMA `PathBuf` que navegó el panel, y `notify`
+        // une los nombres sobre ella), en la práctica el padre del evento ya coincide con
+        // `current_dir`; este filtro solo descarta los rezagados de OTRA carpeta (M-2).
+        let belongs = |p: &std::path::Path| -> bool {
+            match (&current_dir, p.parent()) {
+                (Some(dir), Some(parent)) => paths_eq_ci(parent, dir),
+                // Sin carpeta actual resoluble, o ruta sin padre: no filtrar (conservar el evento).
+                _ => true,
+            }
+        };
+        let filtered: Vec<naygo_core::listing::DirEvent> = events
+            .iter()
+            .filter(|ev| {
+                use naygo_core::listing::DirEvent::*;
+                match ev {
+                    Created(p) | Removed(p) | Modified(p) => belongs(p),
+                    Renamed { from, to } => belongs(from) || belongs(to),
+                }
+            })
+            .cloned()
+            .collect();
         // `read_entry` debe devolver `Option<Entry>`: leemos metadata (puede fallar si la ruta
         // ya desapareció) y armamos el Entry.
-        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, events, &|p| {
+        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &filtered, &|p| {
             std::fs::metadata(p)
                 .ok()
                 .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
@@ -290,4 +328,19 @@ impl WorkspaceCtrl {
         // PaneVm). Acá no hay nada que hacer salvo no mandar el panel a HOME en silencio.
         Vec::new()
     }
+}
+
+/// ¿`a` y `b` son la MISMA ruta en un FS case-insensitive (Windows)? Compara componente a
+/// componente plegando a minúscula ASCII, así no da falsos negativos por capitalización ni por
+/// el separador. (Equivalente a `core::ops::plan::paths_eq_ci`, que es privado de ese módulo;
+/// se replica aquí para el filtro de eventos del watcher de `apply_watch_events`.)
+fn paths_eq_ci(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let ca: Vec<_> = a.components().collect();
+    let cb: Vec<_> = b.components().collect();
+    ca.len() == cb.len()
+        && ca.iter().zip(&cb).all(|(x, y)| {
+            x.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
+        })
 }

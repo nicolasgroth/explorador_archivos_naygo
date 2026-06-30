@@ -484,7 +484,11 @@ impl WorkspaceCtrl {
             let view = f.view_indices();
             for (pos, &real) in view.iter().enumerate() {
                 if let Some(e) = f.entries.get(real) {
-                    if e.name.to_lowercase().starts_with(needle.as_str()) {
+                    // `needle` ya viene en minúsculas ASCII (se arma plegando cada char con
+                    // `to_ascii_lowercase`). Comparar el prefijo del nombre en minúsculas ASCII
+                    // SIN alocar (antes `e.name.to_lowercase()` alocaba un String Unicode por
+                    // entry en cada pulsación, sobre toda la vista de la carpeta).
+                    if name_starts_with_ascii_ci(&e.name, &needle) {
                         f.select_single(pos);
                         break;
                     }
@@ -492,4 +496,20 @@ impl WorkspaceCtrl {
             }
         }
     }
+}
+
+/// ¿`name` empieza por `needle` comparando case-insensitive SOLO en ASCII, sin alocar?
+/// `needle` ya viene plegado a minúsculas ASCII (los chars no-ASCII pasan tal cual, igual
+/// que hace `char::to_ascii_lowercase`), así que basta plegar cada char de `name` del mismo
+/// modo y comparar carácter a carácter mientras dure `needle`. Coincide con el comportamiento
+/// previo para el tipeo ASCII normal (Explorer-style), pero sin construir un String por entry.
+fn name_starts_with_ascii_ci(name: &str, needle: &str) -> bool {
+    let mut nc = name.chars();
+    for need in needle.chars() {
+        match nc.next() {
+            Some(c) if c.to_ascii_lowercase() == need => {}
+            _ => return false,
+        }
+    }
+    true
 }

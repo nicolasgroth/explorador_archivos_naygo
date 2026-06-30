@@ -353,14 +353,15 @@ impl WorkspaceCtrl {
                 .map(|f| f.table.visible_columns().map(|c| c.kind).collect())
                 .unwrap_or_default();
 
-            // Clonar los items del job profundo (evita préstamos solapados con icons/ops).
-            let deep_items: Vec<(naygo_core::fs_model::Entry, u32)> = self
-                .deep_job
-                .as_ref()
-                .map(|d| d.items.clone())
-                .unwrap_or_default();
-
-            let WorkspaceCtrl { ops, icons, .. } = self;
+            // Iterar los items del job profundo POR REFERENCIA (sin clonar el Vec entero, que
+            // en streaming corre muchas veces por segundo). Igual que el camino normal de abajo,
+            // se destructura `self` en préstamos disjuntos: `deep_job`, `ops` e `icons` son campos
+            // distintos, así que sus `&` no se solapan y el borrow checker los acepta.
+            let WorkspaceCtrl {
+                deep_job, ops, icons, ..
+            } = self;
+            let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
+                deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
             return deep_items
                 .iter()
                 .filter(|(e, _)| {
