@@ -1278,6 +1278,47 @@ fn watch_events_agregan_entry() {
     );
 }
 
+/// M-2: un evento de watcher REZAGADO de OTRA carpeta (no la que muestra el panel ahora) se
+/// descarta y NO mete una fila fantasma. Reproduce el caso al navegar A→B (mismo PaneId): el
+/// watcher de A se reemplaza, pero eventos de A ya encolados pueden drenarse tras repoblar B.
+#[test]
+fn watch_events_descarta_los_de_otra_carpeta() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Carpeta B (la que el panel mostrará) y carpeta A (de donde vendrá el evento rezagado).
+    let dir_b = tmp.path().join("B");
+    let dir_a = tmp.path().join("A");
+    std::fs::create_dir(&dir_b).unwrap();
+    std::fs::create_dir(&dir_a).unwrap();
+    std::fs::write(dir_b.join("propio.txt"), b"x").unwrap();
+    // Un archivo real en A: el evento es legítimo en A, pero el panel ya está en B.
+    let ajeno = dir_a.join("ajeno.txt");
+    std::fs::write(&ajeno, b"y").unwrap();
+    // El panel arranca y se queda en B.
+    let mut c = WorkspaceCtrl::new_in(dir_b.clone(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.active_id().unwrap();
+    // Llega un evento rezagado de A (otra carpeta): debe descartarse.
+    let nuevas =
+        c.apply_watch_events(id, &[naygo_core::listing::DirEvent::Created(ajeno.clone())]);
+    assert!(
+        nuevas.is_empty(),
+        "el evento de otra carpeta no produce arrivals"
+    );
+    assert!(
+        !c.rows_of(id, 8, std::time::Instant::now())
+            .iter()
+            .any(|r| r.name == "ajeno.txt"),
+        "el archivo de la carpeta anterior NO aparece como fila fantasma"
+    );
+    // Sanity: la fila propia de B sigue ahí (el filtro no descartó de más).
+    assert!(
+        c.rows_of(id, 8, std::time::Instant::now())
+            .iter()
+            .any(|r| r.name == "propio.txt"),
+        "la fila legítima de la carpeta actual se mantiene"
+    );
+}
+
 /// 6D: el rename inline. `op_rename` marca el pedido sobre la fila enfocada; `rename_commit`
 /// renombra el archivo en disco; `rename_chain` confirma y avanza a la fila siguiente.
 #[test]
