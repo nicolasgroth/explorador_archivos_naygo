@@ -396,6 +396,76 @@ impl WorkspaceCtrl {
         });
     }
 
+    // --- Comprimir / Extraer (.zip) ---
+
+    /// Abre el modal de nombre para comprimir la selección en un `.zip` en la carpeta del panel
+    /// activo. El campo arranca con `default_zip_name` (nombre del único ítem, o "archivos.zip"
+    /// para varios). Al confirmar el modal, `name_confirm` arma la op `Compress` y la lanza.
+    /// No-op si no hay selección o no hay carpeta activa.
+    pub fn op_compress_prompt(&mut self) {
+        let sources = self.selected_paths();
+        if sources.is_empty() {
+            return;
+        }
+        let Some(dir) = self.active_dir() else {
+            return;
+        };
+        let default_name = naygo_core::archive_ops::default_zip_name(&sources);
+        self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
+            purpose: crate::ops_ctrl::NamePurpose::Compress { sources },
+            dir,
+            buf: default_name,
+        });
+    }
+
+    /// Extrae el `.zip` seleccionado (el primero de la selección) dentro de `dest` (una carpeta).
+    /// No-op si no hay selección.
+    pub fn op_extract_to(&mut self, dest: std::path::PathBuf) {
+        let Some(zip) = self.selected_paths().into_iter().next() else {
+            return;
+        };
+        let req = naygo_core::ops::OpRequest {
+            kind: naygo_core::ops::OpKind::Extract,
+            sources: vec![zip],
+            dest_dir: Some(dest),
+            conflict: naygo_core::ops::ConflictPolicy::Ask,
+        };
+        self.ensure_ops_pane();
+        // TODO Task 8: i18n de la etiqueta "Extraer".
+        self.ops.start_op(req, "Extraer".to_string(), true);
+    }
+
+    /// "Extraer aquí": crea (a través del motor) una subcarpeta con el nombre del zip sin
+    /// extensión dentro de la carpeta activa y extrae ahí. No-op si no hay selección/carpeta.
+    pub fn op_extract_here(&mut self) {
+        let Some(zip) = self.selected_paths().into_iter().next() else {
+            return;
+        };
+        let Some(dir) = self.active_dir() else {
+            return;
+        };
+        let sub = zip
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("extraido");
+        self.op_extract_to(dir.join(sub));
+    }
+
+    /// `true` si la selección del panel activo es EXACTAMENTE un archivo `.zip` (para mostrar las
+    /// entradas "Extraer aquí" / "Extraer en…" del menú contextual). Compara la extensión sin
+    /// importar mayúsculas; una carpeta o varios ítems → false.
+    pub fn sel_is_single_zip(&self) -> bool {
+        let sel = self.selected_paths();
+        if sel.len() != 1 {
+            return false;
+        }
+        let p = &sel[0];
+        p.is_file()
+            && p.extension()
+                .map(|e| e.eq_ignore_ascii_case("zip"))
+                .unwrap_or(false)
+    }
+
     /// Renombrar el ítem enfocado: abre el modal de nombre con el nombre actual.
     /// Rename inline (F2 / menú): pide a la UI abrir el editor en la celda Name de la fila
     /// enfocada del panel Files activo, con la etapa 0 del ciclo (nombre sin extensión). En vez

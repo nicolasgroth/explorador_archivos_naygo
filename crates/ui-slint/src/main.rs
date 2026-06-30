@@ -658,6 +658,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     has_native: naygo_hwnd(&ui).is_some(),
                     has_wt: c.windows_terminal_available(),
                     folder_mode: cm.folder_mode,
+                    is_single_zip: c.sel_is_single_zip(),
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -666,6 +667,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     has_native: false,
                     has_wt: false,
                     folder_mode: false,
+                    is_single_zip: false,
                 },
             };
             ui.set_ctx_menu(ctx);
@@ -5014,6 +5016,48 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_ctx_copy_names(move || {
             ctrl.borrow_mut().ctx_copy_names();
             sync_rows();
+        });
+    }
+    // Comprimir: abre el modal de nombre del .zip (su confirmación arranca la op vía
+    // `on_name_confirm`). Solo cierra el menú y abre el modal aquí.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_compress(move || {
+            ctrl.borrow_mut().op_compress_prompt();
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+            // Rearmar el timer para que el modal de nombre responda al instante (igual que
+            // el camino de borrar desde el menú).
+            start_timer();
+        });
+    }
+    // Extraer aquí: subcarpeta con el nombre del zip dentro de la carpeta actual.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_extract_here(move || {
+            ctrl.borrow_mut().op_extract_here();
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+            start_timer();
+        });
+    }
+    // Extraer en…: elegir la carpeta destino con el diálogo nativo de carpeta.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_extract_to(move || {
+            // Cerrar el menú antes de abrir el diálogo nativo (bloqueante).
+            ctrl.borrow_mut().close_context_menu();
+            sync_rows();
+            if let Some(dest) = rfd::FileDialog::new().pick_folder() {
+                ctrl.borrow_mut().op_extract_to(dest);
+                start_timer();
+            }
         });
     }
     // Abrir terminal en la carpeta: 0=PowerShell, 1=CMD, 2=Windows Terminal.

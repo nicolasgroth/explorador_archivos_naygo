@@ -43,6 +43,12 @@ pub enum NamePurpose {
         op_id: u64,
         display: String,
     },
+    /// Confirmar el nombre del `.zip` al comprimir la selección. `sources` son los ítems a
+    /// empaquetar y `dir` la carpeta donde se crea el zip. Al confirmar, `name_confirm` arma la
+    /// op `Compress` (asegurando la extensión `.zip`) y la lanza por el worker de zip.
+    Compress {
+        sources: Vec<PathBuf>,
+    },
 }
 
 /// El modal de operaciones activo (uno a la vez).
@@ -1306,6 +1312,8 @@ impl OpsCtrl {
                     NamePurpose::ConflictRename { display, .. } => {
                         format!("Nuevo nombre para «{display}»")
                     }
+                    // TODO Task 8: i18n del título del modal de comprimir.
+                    NamePurpose::Compress { .. } => "Comprimir en .zip".to_string(),
                 },
                 // Nombre original en conflicto: la UI lo usa para el título traducido
                 // "Nuevo nombre para «X»". Vacío para los demás propósitos.
@@ -1607,6 +1615,22 @@ impl OpsCtrl {
                 // Reactivar el timer: el motor reanuda y `pump_ops` debe drenar su progreso.
                 return true;
             }
+            NamePurpose::Compress { sources } => {
+                // Comprimir la selección en `dir/<buf>.zip`. La extensión `.zip` se asegura aquí
+                // (el usuario puede haberla borrado del campo). El worker de zip arranca al pasar
+                // la op por `start_op` (Task 5 ya enruta Compress/Extract).
+                let req = OpRequest {
+                    kind: OpKind::Compress {
+                        dest_name: ensure_zip_ext(&buf),
+                    },
+                    sources,
+                    dest_dir: Some(dir),
+                    conflict: ConflictPolicy::Ask,
+                };
+                // TODO Task 8: i18n de la etiqueta "Comprimir".
+                self.start_op(req, "Comprimir".to_string(), true);
+                return true;
+            }
         };
         self.start_op(req, label.to_string(), true);
         true
@@ -1843,6 +1867,17 @@ fn folder_of(p: &Path) -> String {
         .to_string()
 }
 
+/// Asegura que `name` termine en `.zip` (sin duplicar si ya la trae, sin importar mayúsculas):
+/// "foo" → "foo.zip"; "foo.zip" / "FOO.ZIP" se dejan tal cual. El nombre del zip que arma la op
+/// de comprimir pasa por aquí (el usuario puede haber borrado la extensión del campo).
+pub(crate) fn ensure_zip_ext(name: &str) -> String {
+    if name.to_ascii_lowercase().ends_with(".zip") {
+        name.to_string()
+    } else {
+        format!("{name}.zip")
+    }
+}
+
 /// Arma los textos (nombre, tamaño, fecha) + la extensión de UN lado del conflicto de archivo,
 /// listos para mostrar en la columna "Existente" o "Nuevo". El tamaño se formatea con
 /// `SizeFormat::Auto` (carpeta → "—"); la fecha con el formato por defecto en la zona local (sin
@@ -2041,6 +2076,13 @@ mod tests {
         assert!(c.is_cut(Path::new("C:/x/a.txt")));
         c.clear_cut();
         assert!(!c.is_cut(Path::new("C:/x/a.txt")));
+    }
+
+    #[test]
+    fn ensure_zip_ext_agrega_y_no_duplica() {
+        assert_eq!(super::ensure_zip_ext("foo"), "foo.zip");
+        assert_eq!(super::ensure_zip_ext("foo.zip"), "foo.zip");
+        assert_eq!(super::ensure_zip_ext("FOO.ZIP"), "FOO.ZIP");
     }
 
     #[test]

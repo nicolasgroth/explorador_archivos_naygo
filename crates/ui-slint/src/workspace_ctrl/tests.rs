@@ -641,6 +641,79 @@ fn selected_paths_of_toma_el_panel_pedido_no_el_activo() {
     assert!(desde_a[0].ends_with("en_a.txt"));
 }
 
+/// El flujo de comprimir desde el menú: `op_compress_prompt` abre el modal de nombre con el
+/// nombre por defecto, y al confirmarlo (`ops.name_confirm`) arranca la op `Compress` que, al
+/// drenarla, crea el `.zip` (con la extensión asegurada) en la carpeta activa.
+#[test]
+fn op_compress_prompt_y_confirm_crean_el_zip() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("doc.txt"), b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    // Seleccionar la fila 0 (doc.txt) del panel activo.
+    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![0];
+    // Abrir el modal: el nombre por defecto debe ser "doc.zip" (un único archivo).
+    c.op_compress_prompt();
+    assert!(
+        matches!(
+            c.ops.pending_dialog,
+            Some(crate::ops_ctrl::OpDialog::NameInput {
+                purpose: crate::ops_ctrl::NamePurpose::Compress { .. },
+                ..
+            })
+        ),
+        "se abrió el modal de nombre de comprimir"
+    );
+    // Escribir un nombre SIN extensión y confirmar: name_confirm debe agregar ".zip".
+    c.ops.name_changed("paquete".to_string());
+    assert!(c.ops.name_confirm(), "confirmar arranca la op de comprimir");
+    // Drenar la op de zip hasta que termine.
+    for _ in 0..2000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        work.path().join("paquete.zip").is_file(),
+        "se creó el .zip con la extensión asegurada"
+    );
+}
+
+/// `sel_is_single_zip` es true solo cuando la selección es exactamente un archivo `.zip`
+/// (sin importar mayúsculas); una carpeta, otro tipo, o varios ítems → false.
+#[test]
+fn sel_is_single_zip_solo_con_un_zip() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("a.ZIP"), b"x").unwrap();
+    std::fs::write(work.path().join("b.txt"), b"y").unwrap();
+    std::fs::create_dir(work.path().join("carpeta")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    let pos = |c: &WorkspaceCtrl, name: &str| active_pos_of(c, name).unwrap();
+    // Solo a.ZIP seleccionado → true.
+    let p = pos(&c, "a.ZIP");
+    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    assert!(c.sel_is_single_zip(), "un único .ZIP cuenta como zip");
+    // b.txt → false.
+    let p = pos(&c, "b.txt");
+    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    assert!(!c.sel_is_single_zip(), "un .txt no es zip");
+    // carpeta → false.
+    let p = pos(&c, "carpeta");
+    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![p];
+    assert!(!c.sel_is_single_zip(), "una carpeta no es zip");
+    // a.ZIP + b.txt (dos ítems) → false.
+    let pz = pos(&c, "a.ZIP");
+    let pt = pos(&c, "b.txt");
+    c.ws.pane_mut(id).and_then(|p| p.files.as_mut()).unwrap().selected = vec![pz, pt];
+    assert!(!c.sel_is_single_zip(), "varios ítems no es un único zip");
+}
+
 /// `pane_at` resuelve el panel Files bajo un punto de contenido (mismo hit-test que `drop_at`,
 /// para resaltar EN VIVO el panel mientras se arrastra encima). El centro de cada panel cae en
 /// ESE panel; un punto fuera de toda área devuelve `None`. Además `set_drag_over` solo reporta

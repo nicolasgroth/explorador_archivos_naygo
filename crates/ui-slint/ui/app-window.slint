@@ -630,6 +630,9 @@ export component AppWindow inherits Window {
     callback ctx-delete();
     callback ctx-copy-names();
     callback ctx-copy-path();
+    callback ctx-compress();
+    callback ctx-extract-here();
+    callback ctx-extract-to();
     callback ctx-terminal-ps();
     callback ctx-terminal-cmd();
     callback ctx-terminal-wt();
@@ -1499,6 +1502,9 @@ export component AppWindow inherits Window {
         delete() => { root.ctx-delete(); }
         copy-names() => { root.ctx-copy-names(); }
         copy-path() => { root.ctx-copy-path(); }
+        compress() => { root.ctx-compress(); }
+        extract-here() => { root.ctx-extract-here(); }
+        extract-to() => { root.ctx-extract-to(); }
         terminal-ps() => { root.ctx-terminal-ps(); }
         terminal-cmd() => { root.ctx-terminal-cmd(); }
         terminal-wt() => { root.ctx-terminal-wt(); }

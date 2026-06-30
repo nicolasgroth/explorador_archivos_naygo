@@ -206,6 +206,8 @@ export struct ContextMenuVm {
     // (copiar/cortar/renombrar/eliminar/copiar-nombre/ruta) y muestra "Abrir en Explorador" +
     // "Nueva carpeta". Pegar y terminales siguen, que aplican a la carpeta.
     folder-mode: bool,
+    // La selección es EXACTAMENTE un archivo `.zip` → mostrar "Extraer aquí" / "Extraer en…".
+    is-single-zip: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
