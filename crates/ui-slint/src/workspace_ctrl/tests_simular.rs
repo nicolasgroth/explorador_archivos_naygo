@@ -649,7 +649,7 @@ fn mover_archivo_al_otro_panel_con_f6() {
     // Seleccionar el archivo en el panel origen (clic de fila simple).
     c.ws.set_active(origin);
     let pos = active_pos_of(&c, "informe.txt").unwrap();
-    c.on_row_clicked(origin, pos, std::time::Instant::now());
+    c.on_row_clicked(origin, pos, false, false, std::time::Instant::now());
 
     // F6 = MoveToOther. Con dos paneles, el destino se resuelve directo y la op arranca.
     c.on_key(&key_char(slint::platform::Key::F6), false, false, false);
@@ -680,7 +680,7 @@ fn copiar_archivo_al_otro_panel() {
 
     c.ws.set_active(origin);
     let pos = active_pos_of(&c, "foto.txt").unwrap();
-    c.on_row_clicked(origin, pos, std::time::Instant::now());
+    c.on_row_clicked(origin, pos, false, false, std::time::Instant::now());
 
     // Copiar al otro panel (CopyToOther no trae atajo por defecto; se dispara por el método,
     // igual que el botón/menú lo cablea en main.rs). `op_to_other` devuelve false para Transfer
@@ -798,7 +798,7 @@ fn eliminar_permanente_con_shift_supr() {
 
     // Seleccionar la fila a borrar (clic simple).
     let pos = active_pos_of(&c, "basura.txt").unwrap();
-    c.on_row_clicked(id, pos, std::time::Instant::now());
+    c.on_row_clicked(id, pos, false, false, std::time::Instant::now());
 
     // Shift+Supr → DeletePermanent: abre el modal de confirmación de borrado permanente.
     c.on_key(&key_char(slint::platform::Key::Delete), false, true, false);
@@ -941,7 +941,7 @@ fn conflicto_al_mover_sobrescribir() {
 
     c.ws.set_active(origin);
     let pos = active_pos_of(&c, "dato.txt").unwrap();
-    c.on_row_clicked(origin, pos, std::time::Instant::now());
+    c.on_row_clicked(origin, pos, false, false, std::time::Instant::now());
 
     // Mover al otro panel (F6 / op_to_other(true)): arranca la op, que chocará en el destino.
     // (op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.)
@@ -999,7 +999,7 @@ fn conflicto_al_mover_renombrar_con_nombre_nuevo() {
 
     c.ws.set_active(origin);
     let pos = active_pos_of(&c, "doc.txt").unwrap();
-    c.on_row_clicked(origin, pos, std::time::Instant::now());
+    c.on_row_clicked(origin, pos, false, false, std::time::Instant::now());
     // op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.
     c.op_to_other(true);
 

@@ -1578,12 +1578,16 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         let sync_layout = sync_layout.clone();
-        ui.on_row_clicked(move |id, pos| {
+        ui.on_row_clicked(move |id, pos, ctrl_mod, shift_mod| {
             // El doble-clic se detecta en Rust (no en Slint): on_row_clicked devuelve true
-            // si este clic completó un doble-clic, en cuyo caso navegó/abrió.
+            // si este clic completó un doble-clic, en cuyo caso navegó/abrió. Los modificadores
+            // (ctrl_mod/shift_mod) vienen del PROPIO evento de clic, no del estado sticky del
+            // controlador (que podía quedar pegado tras un modal/drag que se tragó el key-release).
             let navigated = ctrl.borrow_mut().on_row_clicked(
                 PaneId(id as u64),
                 pos as usize,
+                ctrl_mod,
+                shift_mod,
                 std::time::Instant::now(),
             );
             // Cambiar el foco/navegar puede disparar un preview o cambiar el layout.

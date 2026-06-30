@@ -292,7 +292,7 @@ export component FilePanel inherits FocusScope {
     callback path-edit-commit(int, string);  // (pane-id, texto) Enter → navegar
     callback path-edit-cancel(int);          // (pane-id) Esc → salir de edición
     callback suggestion-clicked(int, string);// (pane-id, nombre) elegir un candidato
-    callback row-clicked(int, int);          // (pane-id, pos)
+    callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift) — modificadores del clic
     callback row-double-clicked(int, int);
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
@@ -760,7 +760,9 @@ export component FilePanel inherits FocusScope {
                             self.pressed-here = false;
                             root.activate(root.pane-id);
                             if (!self.start-selected) {
-                                root.row-clicked(root.pane-id, self.start-row);
+                                // Al iniciar un arrastre, seleccionar SOLO esa fila (sin Ctrl/Shift)
+                                // para arrastrar lo correcto, sin importar el estado de teclas.
+                                root.row-clicked(root.pane-id, self.start-row, false, false);
                             }
                             root.row-drag-out(root.pane-id);
                         }
@@ -792,7 +794,9 @@ export component FilePanel inherits FocusScope {
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
                             self.pressed-here = false;
                             if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
-                                root.row-clicked(root.pane-id, self.cur-row);
+                                // Modificadores REALES del clic (del propio evento, no del estado
+                                // sticky del controlador, que podía quedar pegado tras un modal/drag).
+                                root.row-clicked(root.pane-id, self.cur-row, ev.modifiers.control, ev.modifiers.shift);
                                 root.focus();
                             }
                         }
@@ -809,7 +813,7 @@ export component FilePanel inherits FocusScope {
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
                             root.activate(root.pane-id);
                             if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
-                                root.row-clicked(root.pane-id, self.cur-row);
+                                root.row-clicked(root.pane-id, self.cur-row, false, false);
                                 root.row-context(
                                     root.pane-id, self.cur-row,
                                     self.absolute-position.x + self.mouse-x,

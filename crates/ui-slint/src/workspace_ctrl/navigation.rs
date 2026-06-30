@@ -11,7 +11,18 @@ impl WorkspaceCtrl {
     /// si este clic cae en el mismo panel+fila que el anterior dentro de la ventana de
     /// tiempo, lo trata como doble-clic (navega/abre) y devuelve true. Esto no depende del
     /// `double-clicked` de Slint, que bajo el renderizador por software puede no dispararse.
-    pub fn on_row_clicked(&mut self, id: PaneId, pos: usize, now: std::time::Instant) -> bool {
+    /// `ctrl`/`shift` son los modificadores REALES del evento de clic (los provee la UI desde el
+    /// `PointerEvent`), NO el estado sticky `ctrl_down`/`shift_down` del controlador — ese podía
+    /// quedar pegado en true si un modal o el bucle modal de un arrastre se tragó el key-release,
+    /// produciendo selecciones por rango fantasma. Tomar el modificador del propio clic lo evita.
+    pub fn on_row_clicked(
+        &mut self,
+        id: PaneId,
+        pos: usize,
+        ctrl: bool,
+        shift: bool,
+        now: std::time::Instant,
+    ) -> bool {
         // Ventana amplia (700 ms): bajo render por software en una VM, el segundo `clicked`
         // puede llegar al hilo de UI con latencia; un umbral chico se pierde el doble-clic.
         const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(700);
@@ -27,7 +38,6 @@ impl WorkspaceCtrl {
         }
         self.last_click = Some((id, pos, now));
         self.ws.set_active(id);
-        let (ctrl, shift) = (self.ctrl_down, self.shift_down);
         if let Some(f) = self.ws.active_files_mut() {
             if shift {
                 f.select_range_to(pos);

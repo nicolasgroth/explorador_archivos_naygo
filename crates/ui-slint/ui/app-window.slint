@@ -454,7 +454,7 @@ export component AppWindow inherits Window {
     callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
                                       // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
-    callback row-clicked(int, int);
+    callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift)
     callback row-double-clicked(int, int);
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
@@ -1247,7 +1247,7 @@ export component AppWindow inherits Window {
                         path-edit-commit(id, t) => { root.path-edit-commit(id, t); }
                         path-edit-cancel(id) => { root.path-edit-cancel(id); }
                         suggestion-clicked(id, name) => { root.path-suggestion-clicked(id, name); }
-                        row-clicked(id, pos) => { root.row-clicked(id, pos); }
+                        row-clicked(id, pos, ctrl, shift) => { root.row-clicked(id, pos, ctrl, shift); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }

@@ -641,13 +641,14 @@ fn selected_paths_of_toma_el_panel_pedido_no_el_activo() {
     assert!(desde_a[0].ends_with("en_a.txt"));
 }
 
-/// Regresión del Shift/Ctrl "pegado" tras un arrastre: durante el bucle modal de DoDragDrop la
-/// app no recibe eventos de teclado, así que el key-release de un modificador NUNCA llega y
-/// `shift_down`/`ctrl_down` quedan en true. Eso envenena el siguiente `on_row_clicked`: con Shift
-/// pegado hace una selección por RANGO en vez de seleccionar una sola fila (lo que el usuario vio
-/// como "marcó varios" y como "el drag no movió lo correcto"). `clear_modifiers` debe limpiarlos.
+/// Regresión del Shift/Ctrl "pegado": tras un modal o el bucle de un arrastre, el key-release de
+/// un modificador puede NO llegar y `shift_down`/`ctrl_down` quedan en true. El bug que veía el
+/// usuario: al hacer clic en una fila "se marcaban varios" (selección por rango fantasma). El fix
+/// de raíz: `on_row_clicked` usa los modificadores del PROPIO evento de clic (parámetros
+/// `ctrl`/`shift`), NO el estado sticky del controlador. Así, aunque `shift_down` esté pegado, un
+/// clic real SIN Shift (shift=false) selecciona UNA sola fila.
 #[test]
-fn clear_modifiers_evita_la_seleccion_por_rango_fantasma_tras_un_drag() {
+fn on_row_clicked_usa_modificadores_del_evento_no_el_estado_sticky() {
     let cfg = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
@@ -658,26 +659,24 @@ fn clear_modifiers_evita_la_seleccion_por_rango_fantasma_tras_un_drag() {
     let id = c.ws.active_id().unwrap();
     let now = std::time::Instant::now();
     // Clic simple en la fila 0 → una sola seleccionada.
-    c.on_row_clicked(id, 0, now);
+    c.on_row_clicked(id, 0, false, false, now);
     assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
-    // Simular Shift PEGADO (como si un drag se hubiera tragado su key-release).
-    c.on_key("", false, true, false); // ctrl=false, shift=true
-    // Con Shift pegado, un clic (p.ej. el que el .slint hace al iniciar un drag) seleccionaría
-    // por RANGO: de la fila 0 a la 3 → 4 filas. Eso es el bug.
-    c.on_row_clicked(id, 3, now);
-    assert_eq!(
-        c.ws.active_files().unwrap().selected.len(),
-        4,
-        "con Shift pegado, on_row_clicked selecciona por rango (el bug que ve el usuario)"
-    );
-    // El fix: clear_modifiers (que el tick llama tras el drag) baja el Shift fantasma.
-    c.clear_modifiers();
-    // Ahora un clic vuelve a seleccionar UNA sola fila, no un rango.
-    c.on_row_clicked(id, 1, now);
+    // Simular Shift PEGADO en el estado sticky (como si un modal/drag se hubiera tragado el release).
+    c.on_key("", false, true, false); // ctrl=false, shift=true → shift_down = true
+    // El clic REAL llega SIN Shift (shift=false en el parámetro). Antes del fix, on_row_clicked
+    // leía el sticky y seleccionaba por rango (4 filas). Ahora usa el parámetro → UNA sola fila.
+    c.on_row_clicked(id, 3, false, false, now);
     assert_eq!(
         c.ws.active_files().unwrap().selected.len(),
         1,
-        "tras clear_modifiers, el clic selecciona una sola fila (Shift ya no está pegado)"
+        "el clic usa el modificador del evento (shift=false), no el sticky pegado → 1 fila, no rango"
+    );
+    // Y un clic CON Shift (parámetro shift=true) sí extiende el rango, como debe.
+    c.on_row_clicked(id, 0, false, true, now);
+    assert_eq!(
+        c.ws.active_files().unwrap().selected.len(),
+        4,
+        "clic con Shift real extiende: de la fila 3 a la 0 → 4 filas"
     );
 }
 
@@ -1512,15 +1511,15 @@ fn doble_clic_en_rust_navega() {
     // instantes incoherentes). Base + offsets crecientes.
     let base = Instant::now();
     // Dos clics LENTOS (separados > 700 ms) NO navegan: solo seleccionan.
-    assert!(!c.on_row_clicked(id, pos, base));
-    assert!(!c.on_row_clicked(id, pos, base + Duration::from_millis(900)));
+    assert!(!c.on_row_clicked(id, pos, false, false, base));
+    assert!(!c.on_row_clicked(id, pos, false, false, base + Duration::from_millis(900)));
     assert_eq!(c.path_of(id), tmp.path().display().to_string());
 
     // Dos clics RÁPIDOS (dentro de 700 ms) SÍ navegan. Siguen la misma línea de tiempo.
     let t1 = base + Duration::from_secs(5);
-    assert!(!c.on_row_clicked(id, pos, t1), "1er clic: selecciona");
+    assert!(!c.on_row_clicked(id, pos, false, false, t1), "1er clic: selecciona");
     assert!(
-        c.on_row_clicked(id, pos, t1 + Duration::from_millis(150)),
+        c.on_row_clicked(id, pos, false, false, t1 + Duration::from_millis(150)),
         "2do clic rápido: doble-clic → navega"
     );
     assert!(drain(&mut c));
