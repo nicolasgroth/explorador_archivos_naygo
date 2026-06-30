@@ -4565,7 +4565,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_name_confirm(move || {
-            let confirmed = ctrl.borrow_mut().ops.name_confirm();
+            let compress_label = ctrl.borrow().config.t("ops.kind_compress");
+            let confirmed = ctrl.borrow_mut().ops.name_confirm(&compress_label);
             if confirmed {
                 // Re-listar el panel activo tras crear/pegar: el pegado escribe el archivo
                 // directo (sin pasar por el motor de ops), y el listado debe refrescarse para
@@ -5785,6 +5786,7 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         name_value: SharedString::from(d.name_value.as_str()),
         name_valid: d.name_valid,
         name_conflict_for: SharedString::from(d.name_conflict_for.as_str()),
+        name_is_compress: d.name_is_compress,
         paste_name: SharedString::from(d.paste_name.as_str()),
         paste_is_image: d.paste_is_image,
         folder_name: SharedString::from(d.folder_name.as_str()),

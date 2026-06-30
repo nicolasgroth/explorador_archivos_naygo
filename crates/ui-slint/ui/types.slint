@@ -174,6 +174,9 @@ export struct OpDialogVm {
     // "Renombrar" un choque (BUG 1). Vacío en los demás casos; la UI lo usa para el título
     // traducido "Nuevo nombre para «X»".
     name-conflict-for: string,
+    // `true` si el modal de nombre se abrió para comprimir en .zip; la UI usa el título
+    // traducido (Tr.zipname-title) en vez de `name-title`.
+    name-is-compress: bool,
     // Pegar preview (texto/imagen):
     paste-name: string,
     paste-is-image: bool,

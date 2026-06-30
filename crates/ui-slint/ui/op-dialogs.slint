@@ -522,12 +522,13 @@ export component OpDialogs inherits Rectangle {
             if root.vm.kind == 3: VerticalLayout {
                 spacing: 12px;
                 // Si el modal es para "Renombrar" un conflicto (BUG 1), el título es i18n
-                // ("Nuevo nombre para «X»", con X = name-conflict-for); si no, usa name-title
-                // (nuevo archivo/carpeta/pegar), que ya viene formado desde el controlador.
+                // ("Nuevo nombre para «X»", con X = name-conflict-for); si es para comprimir,
+                // usa el título traducido del .zip; si no, usa name-title (nuevo archivo/
+                // carpeta/pegar), que ya viene formado desde el controlador.
                 Text {
                     text: root.vm.name-conflict-for != ""
                         ? Tr.dlg-rename-to-pre + root.vm.name-conflict-for + Tr.dlg-rename-to-suf
-                        : root.vm.name-title;
+                        : (root.vm.name-is-compress ? Tr.zipname-title : root.vm.name-title);
                     color: white;
                     wrap: word-wrap;
                 }

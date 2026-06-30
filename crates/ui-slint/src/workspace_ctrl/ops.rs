@@ -434,8 +434,8 @@ impl WorkspaceCtrl {
             conflict: naygo_core::ops::ConflictPolicy::Ask,
         };
         self.ensure_ops_pane();
-        // TODO Task 8: i18n de la etiqueta "Extraer".
-        self.ops.start_op(req, "Extraer".to_string(), true);
+        let label = self.config.t("ops.kind_extract");
+        self.ops.start_op(req, label, true);
     }
 
     /// "Extraer aquí": crea (a través del motor) una subcarpeta con el nombre del zip sin

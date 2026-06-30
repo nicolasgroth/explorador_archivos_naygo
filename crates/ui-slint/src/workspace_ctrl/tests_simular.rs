@@ -367,7 +367,7 @@ fn crear_carpeta_con_ctrl_shift_n() {
 
     // El usuario escribe el nombre y confirma (Aceptar / Enter del modal).
     c.ops.name_changed("Documentos".into());
-    c.ops.name_confirm();
+    c.ops.name_confirm("Comprimir");
     assert!(drain_ops(&mut c), "la creación de la carpeta debe terminar");
     c.refresh_active();
     assert!(drain(&mut c));
@@ -559,7 +559,7 @@ fn crear_archivo_con_ctrl_n() {
     );
 
     c.ops.name_changed("apuntes.txt".into());
-    c.ops.name_confirm();
+    c.ops.name_confirm("Comprimir");
     assert!(drain_ops(&mut c), "la creación del archivo debe terminar");
     c.refresh_active();
     assert!(drain(&mut c));

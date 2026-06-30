@@ -668,7 +668,11 @@ fn op_compress_prompt_y_confirm_crean_el_zip() {
     );
     // Escribir un nombre SIN extensión y confirmar: name_confirm debe agregar ".zip".
     c.ops.name_changed("paquete".to_string());
-    assert!(c.ops.name_confirm(), "confirmar arranca la op de comprimir");
+    let compress_label = c.config.t("ops.kind_compress");
+    assert!(
+        c.ops.name_confirm(&compress_label),
+        "confirmar arranca la op de comprimir"
+    );
     // Drenar la op de zip hasta que termine.
     for _ in 0..2000 {
         if c.ops.pump_ops() {

@@ -1356,7 +1356,8 @@ impl OpsCtrl {
                     NamePurpose::ConflictRename { display, .. } => {
                         format!("Nuevo nombre para «{display}»")
                     }
-                    // TODO Task 8: i18n del título del modal de comprimir.
+                    // El título del modal de comprimir lo pone la UI con `slint.zipname.title`
+                    // (ver `name_is_compress`); este literal es solo un respaldo sin traducir.
                     NamePurpose::Compress { .. } => "Comprimir en .zip".to_string(),
                 },
                 // Nombre original en conflicto: la UI lo usa para el título traducido
@@ -1365,6 +1366,8 @@ impl OpsCtrl {
                     NamePurpose::ConflictRename { display, .. } => display.clone(),
                     _ => String::new(),
                 },
+                // La UI usa el título traducido del .zip cuando el modal es para comprimir.
+                name_is_compress: matches!(purpose, NamePurpose::Compress { .. }),
                 name_value: buf.clone(),
                 name_valid: naygo_core::ops::names::is_valid_name(buf),
                 ..Default::default()
@@ -1632,7 +1635,11 @@ impl OpsCtrl {
 
     /// Confirma el modal de nombre: crea archivo/carpeta, pega, o resuelve un conflicto con el
     /// nombre elegido (BUG 1). Devuelve true si arrancó/empujó una op (para reactivar el timer).
-    pub fn name_confirm(&mut self) -> bool {
+    ///
+    /// `compress_label` es la etiqueta i18n ya resuelta (`ops.kind_compress`) que el panel de
+    /// progreso muestra para la op de comprimir; la pasa el llamador porque `OpsCtrl` no tiene
+    /// acceso a la configuración/idioma.
+    pub fn name_confirm(&mut self, compress_label: &str) -> bool {
         let Some(OpDialog::NameInput { purpose, dir, buf }) = self.pending_dialog.take() else {
             return false;
         };
@@ -1671,8 +1678,7 @@ impl OpsCtrl {
                     dest_dir: Some(dir),
                     conflict: ConflictPolicy::Ask,
                 };
-                // TODO Task 8: i18n de la etiqueta "Comprimir".
-                self.start_op(req, "Comprimir".to_string(), true);
+                self.start_op(req, compress_label.to_string(), true);
                 return true;
             }
         };
@@ -1985,6 +1991,9 @@ pub struct OpDialogVmData {
     /// un choque (BUG 1). Vacío en los demás casos (nuevo archivo/carpeta/pegar). La UI lo usa para
     /// armar el título traducido "Nuevo nombre para «X»".
     pub name_conflict_for: String,
+    /// `true` cuando el modal de nombre se abrió para comprimir en .zip. La UI usa el título
+    /// traducido (`slint.zipname.title`) en vez de `name_title` (que solo es un respaldo).
+    pub name_is_compress: bool,
     pub name_value: String,
     pub name_valid: bool,
     pub paste_name: String,
@@ -2351,7 +2360,7 @@ mod tests {
         });
         // El usuario edita el nombre y confirma.
         c.name_changed("mi_nota".into());
-        assert!(c.name_confirm(), "el confirm escribe el archivo");
+        assert!(c.name_confirm("Comprimir"), "el confirm escribe el archivo");
         let dest = tmp.path().join("mi_nota.txt");
         assert!(
             dest.exists(),
@@ -3058,7 +3067,7 @@ mod tests {
         c.begin_conflict_rename(42);
         // El usuario edita el nombre sugerido.
         c.name_changed("elegido.txt".to_string());
-        let started = c.name_confirm();
+        let started = c.name_confirm("Comprimir");
         assert!(started, "name_confirm devuelve true (la op se reanuda)");
         let got = rx.try_recv().expect("el motor recibe la decisión");
         assert_eq!(

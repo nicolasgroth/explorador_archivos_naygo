@@ -187,6 +187,9 @@ where
     tr.set_ctx_explorer(c.t("slint.ctx.explorer").into());
     tr.set_ctx_new_folder(c.t("slint.ctx.new_folder").into());
     tr.set_ctx_more_windows(c.t("slint.ctx.more_windows").into());
+    tr.set_ctx_compress(c.t("slint.ctx.compress").into());
+    tr.set_ctx_extract_here(c.t("slint.ctx.extract_here").into());
+    tr.set_ctx_extract_to(c.t("slint.ctx.extract_to").into());
     tr.set_missing_title(c.t("slint.missing.title").into());
     tr.set_missing_body(c.t("slint.missing.body").into());
     tr.set_missing_retry(c.t("slint.missing.retry").into());
@@ -210,6 +213,7 @@ where
     tr.set_newfolder_hint(c.t("slint.newfolder.hint").into());
     tr.set_newfolder_create(c.t("slint.newfolder.create").into());
     tr.set_newfolder_cancel(c.t("slint.newfolder.cancel").into());
+    tr.set_zipname_title(c.t("slint.zipname.title").into());
     // Ayuda (F1).
     tr.set_help_title(c.t("slint.help.title").into());
     tr.set_help_intro(c.t("slint.help.intro").into());
