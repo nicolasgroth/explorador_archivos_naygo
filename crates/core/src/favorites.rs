@@ -1,5 +1,6 @@
 // Naygo — favoritos: carpetas ancladas por el usuario (puro, persistente en JSON).
-// Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
 
 //! Modelo PURO de las carpetas favoritas, ahora como un ÁRBOL de grupos anidados.
 //! Cada nodo es o bien una carpeta favorita (`FavNode::Favorite`) o un grupo con
@@ -46,7 +47,10 @@ pub enum FavNode {
     /// Hoja: una carpeta anclada.
     Favorite { path: PathBuf, label: String },
     /// Rama: un grupo con nombre y sus hijos (favoritos u otros grupos).
-    Group { name: String, children: Vec<FavNode> },
+    Group {
+        name: String,
+        children: Vec<FavNode>,
+    },
 }
 
 /// Identificador de un nodo del árbol para operaciones de movimiento.
@@ -199,7 +203,10 @@ impl Favorites {
     /// del panel de favoritos sobre una fila de grupo (borra el grupo completo de una vez).
     pub fn remove_group(&mut self, id: &GroupId) {
         // Solo borrar si efectivamente apunta a un grupo (no a una hoja).
-        if matches!(node_at_mut(&mut self.roots, id), Some(FavNode::Group { .. })) {
+        if matches!(
+            node_at_mut(&mut self.roots, id),
+            Some(FavNode::Group { .. })
+        ) {
             extract_group(&mut self.roots, id);
         }
     }
@@ -434,12 +441,12 @@ mod tests {
         f.move_node(&NodeId::favorite(&p("D:/dentro")), Some(&g));
         // Borrar el grupo elimina su hoja interna, pero deja intacto el favorito de la raíz.
         f.remove_group(&g);
-        assert!(!f.contains(&p("D:/dentro")), "la hoja del grupo se va con él");
+        assert!(
+            !f.contains(&p("D:/dentro")),
+            "la hoja del grupo se va con él"
+        );
         assert!(f.contains(&p("D:/fuera")), "el favorito de la raíz queda");
-        assert!(!f
-            .roots()
-            .iter()
-            .any(|n| matches!(n, FavNode::Group { .. })));
+        assert!(!f.roots().iter().any(|n| matches!(n, FavNode::Group { .. })));
         // Borrar un id que no es grupo (un favorito) es no-op seguro.
         f.remove_group(&vec![0]);
         assert!(f.contains(&p("D:/fuera")));
@@ -460,7 +467,10 @@ mod tests {
     fn migra_formato_plano_viejo() {
         let viejo = r#"{"items":[{"path":"D:/x","label":"x"}]}"#;
         let f = Favorites::from_json(viejo);
-        assert!(f.contains(&p("D:/x")), "el favorito viejo debe migrar al árbol");
+        assert!(
+            f.contains(&p("D:/x")),
+            "el favorito viejo debe migrar al árbol"
+        );
     }
 
     #[test]
