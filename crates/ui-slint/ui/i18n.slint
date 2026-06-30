@@ -481,11 +481,18 @@ export global Tr {
     in property <string> cfg-change: "Cambiar";
     in property <string> cfg-reset: "Reset";
     in property <string> cfg-reset-all: "Restaurar todo";
-    in property <string> cfg-export-hint: "Exportá tu idioma, tema o configuración como un .zip, o importá un pack.";
+    in property <string> cfg-export-hint: "Exporta o importa por tópico: idioma, temas, íconos o configuración. Cada archivo usa su propia extensión.";
     in property <string> cfg-export-lang: "Exportar idioma";
     in property <string> cfg-export-theme: "Exportar tema";
     in property <string> cfg-export-config: "Exportar config";
-    in property <string> cfg-import: "Importar pack…";
+    in property <string> cfg-import-lang: "Importar idioma";
+    in property <string> cfg-import-theme: "Importar tema";
+    in property <string> cfg-import-config: "Importar config";
+    // Títulos de tópico de la pestaña Importar/Exportar.
+    in property <string> cfg-ie-lang: "Idioma";
+    in property <string> cfg-ie-themes: "Temas";
+    in property <string> cfg-ie-icons: "Íconos";
+    in property <string> cfg-ie-config: "Configuración";
     in property <string> cfg-config-dir: "Configuración:";
     in property <string> cfg-version: "Versión:";
 
@@ -536,10 +543,14 @@ export global Tr {
     // Atajos (cat 4).
     in property <string> cfg-tip-shortcuts: "Haz clic en «Cambiar» y presiona la nueva combinación. «Reset» vuelve al atajo de fábrica.";
     // Import / Export (cat 5).
-    in property <string> cfg-tip-export-lang: "Exporta el idioma activo como un .zip para compartirlo o editarlo.";
-    in property <string> cfg-tip-export-theme: "Exporta el tema activo como un .zip para compartirlo o editarlo.";
-    in property <string> cfg-tip-export-config: "Exporta toda tu configuración como un .zip para respaldarla o moverla a otro equipo.";
-    in property <string> cfg-tip-import: "Importa un pack (.zip) con un idioma, tema o configuración exportados.";
+    in property <string> cfg-tip-export-lang: "Exporta el idioma activo como un archivo .naygolang para compartirlo o editarlo.";
+    in property <string> cfg-tip-export-theme: "Exporta el tema activo como un archivo .naygotheme para compartirlo o editarlo.";
+    in property <string> cfg-tip-export-config: "Exporta toda tu configuración como un archivo .naygoconf para respaldarla o moverla a otro equipo.";
+    in property <string> cfg-tip-import-lang: "Importa un idioma desde un archivo .naygolang.";
+    in property <string> cfg-tip-import-theme: "Importa un tema desde un archivo .naygotheme.";
+    in property <string> cfg-tip-import-config: "Importa una configuración desde un archivo .naygoconf.";
+    in property <string> cfg-tip-export-icons: "Exporta el set de íconos activo como un archivo .naygoset para compartirlo.";
+    in property <string> cfg-tip-import-icons: "Importa un set de íconos desde un archivo .naygoset.";
     // Avanzado (cat 6).
     in property <string> cfg-tip-ops-display: "Dónde se muestra el progreso de las operaciones: en un panel acoplado, un diálogo modal o siempre visible.";
     in property <string> cfg-tip-paste-image-fmt: "PNG: sin pérdida, ideal para capturas. JPG: con pérdida, archivos más chicos, mejor para fotos.";

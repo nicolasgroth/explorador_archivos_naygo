@@ -446,11 +446,15 @@ export component ConfigWindow inherits Window {
     callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
     callback shortcut-reset(string);     // reset de una acción
     callback shortcuts-reset-all();
-    // Import/Export:
+    // Import/Export (por tópico). Cada export genera un .zip con la extensión propia del tópico
+    // (.naygolang / .naygotheme / .naygoconf); cada import filtra esa extensión en el selector.
+    // El de íconos reusa los callbacks import-icon-set/export-icon-set de la pestaña Íconos.
     callback export-language();
     callback export-theme();
     callback export-config();
-    callback import-pack();
+    callback import-language();
+    callback import-theme();
+    callback import-config();
     // Íconos (cat 9): selector de ícono por objeto, overrides y sets personalizados.
     callback open-icon-picker(string);          // key → abre el picker (Task 14)
     callback close-icon-picker();               // cierra el picker (Task 14)
@@ -1236,9 +1240,17 @@ export component ConfigWindow inherits Window {
                             }
 
                             // === Import / Export (cat 5) ===
+                            // === Importar / Exportar (cat 5) ===
+                            // Organizado por TÓPICO: cada bloque tiene un título en negrita y debajo
+                            // sus dos botones (Exportar / Importar), cada uno con su tooltip (?).
+                            // Las extensiones por tópico son: .naygolang / .naygotheme / .naygoset /
+                            // .naygoconf (todas son un .zip por dentro; el backend valida el contenido).
                             if root.cat == 5: VerticalLayout {
-                                spacing: 8px;
+                                spacing: 6px;
                                 Text { text: Tr.cfg-export-hint; color: Theme.text-dim; wrap: word-wrap; }
+
+                                // -- Idioma --
+                                Text { text: Tr.cfg-ie-lang; color: Theme.text-dim; font-weight: 700; }
                                 HorizontalLayout {
                                     spacing: 8px;
                                     alignment: start;
@@ -1249,20 +1261,63 @@ export component ConfigWindow inherits Window {
                                     }
                                     HorizontalLayout {
                                         spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-lang; clicked => { root.import-language(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-lang; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Temas --
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-themes; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
                                         CfgBtn { label: Tr.cfg-export-theme; clicked => { root.export-theme(); } }
                                         HelpIcon { tip: Tr.cfg-tip-export-theme; y: (parent.height - self.height) / 2; }
                                     }
                                     HorizontalLayout {
                                         spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-theme; clicked => { root.import-theme(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-theme; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Íconos -- (reusa los callbacks de la pestaña Íconos)
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-icons; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.icons-export; clicked => { root.export-icon-set(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-icons; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.icons-import; clicked => { root.import-icon-set(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-icons; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Configuración --
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-config; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
                                         CfgBtn { label: Tr.cfg-export-config; clicked => { root.export-config(); } }
                                         HelpIcon { tip: Tr.cfg-tip-export-config; y: (parent.height - self.height) / 2; }
                                     }
-                                }
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-                                    CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
-                                    HelpIcon { tip: Tr.cfg-tip-import; y: (parent.height - self.height) / 2; }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-config; clicked => { root.import-config(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-config; y: (parent.height - self.height) / 2; }
+                                    }
                                 }
                             }
 

@@ -3573,9 +3573,10 @@ fn main() -> Result<(), slint::PlatformError> {
         cfg_win.on_export_language(move || {
             let c = ctrl.borrow();
             let code = c.config.settings.language.as_str().to_string();
+            // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygolang.
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Pack Naygo (.zip)", &["zip"])
-                .set_file_name(format!("naygo-idioma-{code}.zip"))
+                .add_filter("Idioma Naygo", &["naygolang"])
+                .set_file_name(format!("{code}.naygolang"))
                 .save_file()
             {
                 report(
@@ -3591,9 +3592,10 @@ fn main() -> Result<(), slint::PlatformError> {
         cfg_win.on_export_theme(move || {
             let c = ctrl.borrow();
             let id = c.config.settings.theme.as_str().to_string();
+            // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygotheme.
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Pack Naygo (.zip)", &["zip"])
-                .set_file_name(format!("naygo-tema-{id}.zip"))
+                .add_filter("Tema Naygo", &["naygotheme"])
+                .set_file_name(format!("{id}.naygotheme"))
                 .save_file()
             {
                 report(
@@ -3608,13 +3610,33 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         cfg_win.on_export_config(move || {
             let c = ctrl.borrow();
+            // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygoconf.
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Pack Naygo (.zip)", &["zip"])
-                .set_file_name("naygo-config.zip")
+                .add_filter("Configuración Naygo", &["naygoconf"])
+                .set_file_name("naygo.naygoconf")
                 .save_file()
             {
                 report(&ui_weak, packs::export_config(&c.config.config_dir, &path));
             }
+        });
+    }
+    // Import por tópico. Cada handler filtra SU extensión en el selector (.naygolang /
+    // .naygotheme / .naygoconf), pero el backend `import_zip` detecta el tipo por el CONTENIDO
+    // del zip: si el usuario fuerza otro archivo, manda el contenido (es la autoridad). La
+    // recarga del catálogo se hace según el `ImportKind` que devuelve, igual para los tres.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_import_language(move || {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Idioma Naygo", &["naygolang"])
+                .pick_file()
+            else {
+                return;
+            };
+            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
         });
     }
     {
@@ -3622,50 +3644,29 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
         let cfg_weak = cfg_win.as_weak();
-        cfg_win.on_import_pack(move || {
+        cfg_win.on_import_theme(move || {
             let Some(path) = rfd::FileDialog::new()
-                .add_filter("Pack Naygo (.zip)", &["zip"])
+                .add_filter("Tema Naygo", &["naygotheme"])
                 .pick_file()
             else {
                 return;
             };
-            // Importar y, según el tipo, recargar el catálogo correspondiente.
-            let config_dir = ctrl.borrow().config.config_dir.clone();
-            match packs::import_zip(&config_dir, &path) {
-                Ok(kind) => {
-                    {
-                        let mut cb = ctrl.borrow_mut();
-                        let lang = cb.config.settings.language.clone();
-                        let theme = cb.config.settings.theme.clone();
-                        match kind {
-                            packs::ImportKind::Lang(_) => {
-                                cb.config.i18n = naygo_core::i18n::I18n::load(&config_dir, &lang);
-                            }
-                            packs::ImportKind::Theme(_) => {
-                                cb.config.themes =
-                                    naygo_core::theme::ThemeCatalog::load(&config_dir, &theme);
-                            }
-                            packs::ImportKind::Config => {
-                                let fresh = config_ctrl::ConfigCtrl::new(config_dir.clone());
-                                cb.config = fresh;
-                            }
-                        }
-                    }
-                    // Reaplicar textos y colores en AMBAS ventanas por si cambió el catálogo.
-                    let c = ctrl.borrow();
-                    if let Some(ui) = ui_weak.upgrade() {
-                        i18n_keys::apply(&ui, &c.config);
-                        theme_apply::apply(&ui, c.config.active_theme());
-                    }
-                    if let Some(cfg) = cfg_weak.upgrade() {
-                        i18n_keys::apply(&cfg, &c.config);
-                        theme_apply::apply(&cfg, c.config.active_theme());
-                    }
-                    drop(c);
-                    refresh();
-                }
-                Err(e) => report(&ui_weak, Err::<(), String>(e)),
-            }
+            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_import_config(move || {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Configuración Naygo", &["naygoconf"])
+                .pick_file()
+            else {
+                return;
+            };
+            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
         });
     }
     // Avanzado: factory reset. Restablece TODOS los ajustes y reaplica idioma/tema (cambian).
@@ -5525,6 +5526,55 @@ fn report<T>(ui: &slint::Weak<AppWindow>, r: Result<T, String>) {
                 danger: false,
             });
         }
+    }
+}
+
+/// Importa un archivo de pack (idioma/tema/config — cualquier extensión .naygo*, todas son un
+/// .zip por dentro) y recarga el catálogo según el tipo que detecte el backend por su CONTENIDO.
+/// Lógica común a los tres handlers de import por tópico: el filtro de extensión solo guía el
+/// selector; `packs::import_zip` es la autoridad sobre qué se importó realmente.
+fn import_topic(
+    ctrl: &Rc<RefCell<WorkspaceCtrl>>,
+    ui_weak: &slint::Weak<AppWindow>,
+    cfg_weak: &slint::Weak<ConfigWindow>,
+    refresh: &Rc<dyn Fn()>,
+    path: &std::path::Path,
+) {
+    let config_dir = ctrl.borrow().config.config_dir.clone();
+    match packs::import_zip(&config_dir, path) {
+        Ok(kind) => {
+            {
+                let mut cb = ctrl.borrow_mut();
+                let lang = cb.config.settings.language.clone();
+                let theme = cb.config.settings.theme.clone();
+                match kind {
+                    packs::ImportKind::Lang(_) => {
+                        cb.config.i18n = naygo_core::i18n::I18n::load(&config_dir, &lang);
+                    }
+                    packs::ImportKind::Theme(_) => {
+                        cb.config.themes =
+                            naygo_core::theme::ThemeCatalog::load(&config_dir, &theme);
+                    }
+                    packs::ImportKind::Config => {
+                        let fresh = config_ctrl::ConfigCtrl::new(config_dir.clone());
+                        cb.config = fresh;
+                    }
+                }
+            }
+            // Reaplicar textos y colores en AMBAS ventanas por si cambió el catálogo.
+            let c = ctrl.borrow();
+            if let Some(ui) = ui_weak.upgrade() {
+                i18n_keys::apply(&ui, &c.config);
+                theme_apply::apply(&ui, c.config.active_theme());
+            }
+            if let Some(cfg) = cfg_weak.upgrade() {
+                i18n_keys::apply(&cfg, &c.config);
+                theme_apply::apply(&cfg, c.config.active_theme());
+            }
+            drop(c);
+            refresh();
+        }
+        Err(e) => report(ui_weak, Err::<(), String>(e)),
     }
 }
 

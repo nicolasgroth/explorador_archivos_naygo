@@ -223,6 +223,26 @@ mod tests {
     }
 
     #[test]
+    fn import_detecta_por_contenido_no_por_extension() {
+        // El export por tópico usa extensiones propias (.naygolang/.naygotheme/.naygoconf), pero
+        // el contenido sigue siendo un .zip y `import_zip` decide por el CONTENIDO, no por la
+        // extensión. Un .naygolang (zip de idioma renombrado) debe detectarse como Lang.
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("lang")).unwrap();
+        std::fs::write(src.path().join("lang/xx.json"), r#"{"app.loading":"…"}"#).unwrap();
+        // Exportar con extensión de tópico (.naygolang) en vez de .zip.
+        let pack = src.path().join("xx.naygolang");
+        export_lang(src.path(), "xx", &pack).unwrap();
+        assert!(pack.exists());
+
+        // Importar el .naygolang: el backend ignora la extensión y detecta Lang por el contenido.
+        let kind = import_zip(dst.path(), &pack).unwrap();
+        assert_eq!(kind, ImportKind::Lang("xx".to_string()));
+        assert!(dst.path().join("lang/xx.json").exists());
+    }
+
+    #[test]
     fn export_tema_inexistente_falla() {
         let dir = tempfile::tempdir().unwrap();
         let zip_path = dir.path().join("t.zip");

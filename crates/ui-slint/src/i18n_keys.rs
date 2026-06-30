@@ -465,7 +465,14 @@ where
     tr.set_cfg_export_lang(c.t("slint.cfg.export_lang").into());
     tr.set_cfg_export_theme(c.t("slint.cfg.export_theme").into());
     tr.set_cfg_export_config(c.t("slint.cfg.export_config").into());
-    tr.set_cfg_import(c.t("slint.cfg.import").into());
+    tr.set_cfg_import_lang(c.t("slint.cfg.import_lang").into());
+    tr.set_cfg_import_theme(c.t("slint.cfg.import_theme").into());
+    tr.set_cfg_import_config(c.t("slint.cfg.import_config").into());
+    // Títulos de tópico de la pestaña Importar/Exportar.
+    tr.set_cfg_ie_lang(c.t("slint.cfg.ie_lang").into());
+    tr.set_cfg_ie_themes(c.t("slint.cfg.ie_themes").into());
+    tr.set_cfg_ie_icons(c.t("slint.cfg.ie_icons").into());
+    tr.set_cfg_ie_config(c.t("slint.cfg.ie_config").into());
     tr.set_cfg_config_dir(c.t("settings.config_dir").into());
     tr.set_cfg_version(c.t("settings.version").into());
     // Pestaña "Íconos" en la ventana de configuración.
@@ -509,7 +516,11 @@ where
     tr.set_cfg_tip_export_lang(c.t("slint.cfg.tip.export_lang").into());
     tr.set_cfg_tip_export_theme(c.t("slint.cfg.tip.export_theme").into());
     tr.set_cfg_tip_export_config(c.t("slint.cfg.tip.export_config").into());
-    tr.set_cfg_tip_import(c.t("slint.cfg.tip.import").into());
+    tr.set_cfg_tip_import_lang(c.t("slint.cfg.tip.import_lang").into());
+    tr.set_cfg_tip_import_theme(c.t("slint.cfg.tip.import_theme").into());
+    tr.set_cfg_tip_import_config(c.t("slint.cfg.tip.import_config").into());
+    tr.set_cfg_tip_export_icons(c.t("slint.cfg.tip.export_icons").into());
+    tr.set_cfg_tip_import_icons(c.t("slint.cfg.tip.import_icons").into());
     tr.set_cfg_tip_ops_display(c.t("slint.cfg.tip.ops_display").into());
     tr.set_cfg_tip_paste_image_fmt(c.t("slint.cfg.tip.paste_image_fmt").into());
     tr.set_cfg_tip_low_power(c.t("slint.cfg.tip.low_power").into());
