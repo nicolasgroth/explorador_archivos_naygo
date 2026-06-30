@@ -123,17 +123,103 @@ component CfgIconBtn inherits Rectangle {
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
-// Una fila etiqueta + control (layout consistente).
+// Estado del tooltip de ayuda de la ventana de Configuración. Un `global` (vive una vez por
+// árbol de componentes, y ConfigWindow es su propio árbol) evita tener que enhebrar un callback
+// `hover-tip` por cada uno de los ~40 Field. El `HelpIcon` escribe aquí al pasar el mouse; el
+// overlay del root de ConfigWindow lee estas tres propiedades y pinta el globo. Mismo patrón
+// conceptual que `hovered-tip`/`hovered-tip-x/y` de app-window.slint, pero centralizado.
+global CfgTip {
+    in-out property <string> text: "";   // texto del tip activo (vacío = ninguno)
+    in-out property <length> x: 0;        // X en coords de ventana (centro del ícono)
+    in-out property <length> y: 0;        // Y en coords de ventana (borde inferior del ícono)
+}
+
+// Ícono "?" de ayuda: un círculo con un signo de interrogación, dibujado con Path (no con un
+// glifo de fuente: bajo render por software un carácter puede faltar y salir invisible, misma
+// razón que CloseIcon/SaveIcon). Sutil (color text-dim) y se resalta en hover. Al pasar el mouse
+// publica su `tip` y posición en el global CfgTip; al salir, lo limpia.
+component HelpIcon inherits Rectangle {
+    in property <string> tip;
+    width: 16px;
+    height: 16px;
+    // Círculo + "?" dibujados a mano. El color sigue el hover para dar feedback.
+    property <color> ink: touch.has-hover ? Theme.accent : Theme.text-dim;
+    Path {
+        width: 14px;
+        height: 14px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.ink;
+        stroke-width: 1.2px;
+        fill: transparent;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        // Círculo aproximado por segmentos (sin ArcTo, igual que RestoreIcon).
+        MoveTo { x: 10; y: 1.5; }
+        LineTo { x: 14; y: 3; }
+        LineTo { x: 17; y: 6; }
+        LineTo { x: 18.5; y: 10; }
+        LineTo { x: 17; y: 14; }
+        LineTo { x: 14; y: 17; }
+        LineTo { x: 10; y: 18.5; }
+        LineTo { x: 6; y: 17; }
+        LineTo { x: 3; y: 14; }
+        LineTo { x: 1.5; y: 10; }
+        LineTo { x: 3; y: 6; }
+        LineTo { x: 6; y: 3; }
+        Close { }
+    }
+    // El signo "?" como glifo de texto centrado (un Text simple se ve nítido y no depende de Path
+    // para una curva fina). Si la fuente base no tuviera "?" igual es ASCII universal, sin riesgo.
+    Text {
+        text: "?";
+        color: root.ink;
+        font-size: 11px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 0; y: -0.5px;
+        width: 100%; height: 100%;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        // Publica/limpia el tip en el global con la posición ABSOLUTA del ícono (coords de
+        // ventana), para que el overlay del root lo ancle justo debajo. +x para centrar bajo el
+        // ícono, +height para que el globo aparezca bajo su borde inferior.
+        changed has-hover => {
+            CfgTip.text = self.has-hover ? root.tip : "";
+            CfgTip.x = root.absolute-position.x + root.width / 2;
+            CfgTip.y = root.absolute-position.y + root.height;
+        }
+    }
+}
+
+// Una fila etiqueta + control (layout consistente). Si `tip` no está vacío, muestra un ícono
+// "?" de ayuda a la derecha de la etiqueta que, al pasar el mouse, despliega un globo con la
+// explicación de la opción (vía el global CfgTip + el overlay del root).
 component Field inherits HorizontalLayout {
     in property <string> label;
+    in property <string> tip: "";
     height: 30px;
     spacing: 8px;
-    Text {
-        text: root.label;
-        color: Theme.text;
-        vertical-alignment: center;
+    // Etiqueta + (opcional) ícono de ayuda, juntos a la izquierda. El conjunto estira para empujar
+    // el control a la derecha; el ícono queda pegado al texto de la etiqueta.
+    HorizontalLayout {
         horizontal-stretch: 1;
-        overflow: elide;
+        spacing: 5px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            vertical-alignment: center;
+            // No estira: así el "?" queda junto al texto, no al final de la fila.
+            overflow: elide;
+        }
+        if root.tip != "": HelpIcon {
+            tip: root.tip;
+            y: (parent.height - self.height) / 2;
+        }
+        // Empuja el control (el @children) hacia la derecha.
+        Rectangle { horizontal-stretch: 1; }
     }
     @children
 }
@@ -459,14 +545,17 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-show-parent;
+                                    tip: Tr.cfg-tip-show-parent;
                                     Switch { checked: root.vm.show-parent; toggled => { root.set-show-parent(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-icon-only;
+                                    tip: Tr.cfg-tip-icon-only;
                                     Switch { checked: root.vm.icon-only; toggled => { root.set-icon-only(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-bar-position;
+                                    tip: Tr.cfg-tip-bar-position;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
@@ -476,16 +565,19 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-size-no-subdirs;
+                                    tip: Tr.cfg-tip-size-no-subdirs;
                                     Switch { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-autostart;
+                                    tip: Tr.cfg-tip-autostart;
                                     Switch { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
                                 }
                                 // Plantilla de tabla por defecto (C4): usar la tabla del panel
                                 // activo como predeterminada para paneles nuevos.
                                 Field {
                                     label: Tr.cfg-default-table;
+                                    tip: Tr.cfg-tip-default-table;
                                     HorizontalLayout {
                                         spacing: 6px;
                                         Text {
@@ -506,6 +598,7 @@ export component ConfigWindow inherits Window {
                                 // se cambia en caliente). Usa el mismo modelo/callback que antes.
                                 Field {
                                     label: Tr.cfg-language;
+                                    tip: Tr.cfg-tip-language;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: root.vm.languages;
@@ -527,6 +620,7 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-ops-mode;
+                                    tip: Tr.cfg-tip-ops-mode;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-ops-queue, Tr.cfg-ops-parallel];
@@ -536,14 +630,17 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-confirm-trash;
+                                    tip: Tr.cfg-tip-confirm-trash;
                                     Switch { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-confirm-drop;
+                                    tip: Tr.cfg-tip-confirm-drop;
                                     Switch { checked: root.vm.confirm-drop-between-panes; toggled => { root.set-confirm-drop-between-panes(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-show-op-summary;
+                                    tip: Tr.cfg-tip-show-op-summary;
                                     Switch { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
                                 }
                             }
@@ -553,10 +650,12 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-paste-confirm;
+                                    tip: Tr.cfg-tip-paste-confirm;
                                     Switch { checked: root.vm.paste-confirm; toggled => { root.set-paste-confirm(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-paste-name;
+                                    tip: Tr.cfg-tip-paste-name;
                                     LineEdit {
                                         text: root.vm.paste-text-name;
                                         width: 220px;
@@ -565,6 +664,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-paste-ext;
+                                    tip: Tr.cfg-tip-paste-ext;
                                     LineEdit {
                                         text: root.vm.paste-text-ext;
                                         width: 100px;
@@ -580,7 +680,12 @@ export component ConfigWindow inherits Window {
                                 // el ancho disponible (no más una grilla fija de 3 que se encimaba). Cada
                                 // tarjeta se posiciona por índice (fila/columna calculadas). Un clic aplica
                                 // el tema en caliente; la activa lleva borde de acento + ★.
-                                Text { text: Tr.cfg-theme; color: Theme.text-dim; font-size: 12px; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.cfg-theme; color: Theme.text-dim; font-size: 12px; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-theme; }
+                                }
                                 gallery := Rectangle {
                                     // Geometría de las tarjetas (en una sola fuente para alto/ancho).
                                     property <length> gap: 8px;
@@ -889,7 +994,12 @@ export component ConfigWindow inherits Window {
                                 // Galería de sets de íconos: misma estructura que la galería de temas.
                                 // Las tarjetas se posicionan por fila/columna calculadas; un clic aplica
                                 // el set en caliente y el botón "Personalizar" lo activa Y salta a Íconos.
-                                Text { text: Tr.cfg-icon-set; color: Theme.text-dim; font-size: 12px; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.cfg-icon-set; color: Theme.text-dim; font-size: 12px; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-set; }
+                                }
                                 icon-gallery := Rectangle {
                                     property <length> gap: 8px;
                                     property <length> card-w: 160px;
@@ -964,6 +1074,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-date-format;
+                                    tip: Tr.cfg-tip-date-format;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
@@ -973,6 +1084,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-size-format;
+                                    tip: Tr.cfg-tip-size-format;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
@@ -982,6 +1094,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-row-density;
+                                    tip: Tr.cfg-tip-row-density;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-density-compact, Tr.cfg-density-comfortable];
@@ -996,12 +1109,14 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
                                 HorizontalLayout {
                                     height: 28px;
+                                    spacing: 5px;
                                     Text {
                                         text: root.capturing != "" ? Tr.cfg-capturing : Tr.cfg-shortcuts-hint;
                                         color: root.capturing != "" ? Theme.highlight : Theme.text-dim;
                                         vertical-alignment: center;
-                                        horizontal-stretch: 1;
                                     }
+                                    HelpIcon { tip: Tr.cfg-tip-shortcuts; y: (parent.height - self.height) / 2; }
+                                    Rectangle { horizontal-stretch: 1; }
                                     CfgBtn { label: Tr.cfg-reset-all; clicked => { root.shortcuts-reset-all(); } }
                                 }
                                 // Encabezado de columnas: alinea con las celdas de ancho fijo de
@@ -1089,11 +1204,29 @@ export component ConfigWindow inherits Window {
                                 Text { text: Tr.cfg-export-hint; color: Theme.text-dim; wrap: word-wrap; }
                                 HorizontalLayout {
                                     spacing: 8px;
-                                    CfgBtn { label: Tr.cfg-export-lang; clicked => { root.export-language(); } }
-                                    CfgBtn { label: Tr.cfg-export-theme; clicked => { root.export-theme(); } }
-                                    CfgBtn { label: Tr.cfg-export-config; clicked => { root.export-config(); } }
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-lang; clicked => { root.export-language(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-lang; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-theme; clicked => { root.export-theme(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-theme; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-config; clicked => { root.export-config(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-config; y: (parent.height - self.height) / 2; }
+                                    }
                                 }
-                                CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    CfgBtn { label: Tr.cfg-import; clicked => { root.import-pack(); } }
+                                    HelpIcon { tip: Tr.cfg-tip-import; y: (parent.height - self.height) / 2; }
+                                }
                             }
 
                             // === Avanzado (cat 6) ===
@@ -1101,6 +1234,7 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
                                 Field {
                                     label: Tr.cfg-ops-display;
+                                    tip: Tr.cfg-tip-ops-display;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-ops-display-panel, Tr.cfg-ops-display-modal, Tr.cfg-ops-display-always];
@@ -1110,6 +1244,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-paste-image-fmt;
+                                    tip: Tr.cfg-tip-paste-image-fmt;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
@@ -1119,6 +1254,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-low-power;
+                                    tip: Tr.cfg-tip-low-power;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [Tr.cfg-low-power-auto, Tr.cfg-low-power-always, Tr.cfg-low-power-never];
@@ -1128,19 +1264,23 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-new-items-at-end;
+                                    tip: Tr.cfg-tip-new-items-at-end;
                                     Switch { checked: root.vm.new-items-at-end; toggled => { root.set-new-items-at-end(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-tray-enabled;
+                                    tip: Tr.cfg-tip-tray-enabled;
                                     Switch { checked: root.vm.tray-enabled; toggled => { root.set-tray-enabled(self.checked); } }
                                 }
                                 Field {
                                     label: Tr.cfg-close-to-tray;
+                                    tip: Tr.cfg-tip-close-to-tray;
                                     Switch { checked: root.vm.close-to-tray; toggled => { root.set-close-to-tray(self.checked); } }
                                 }
                                 // Historial de carpetas recientes: límite configurable (1–100).
                                 Field {
                                     label: Tr.cfg-recent-limit;
+                                    tip: Tr.cfg-tip-recent-limit;
                                     LineEdit {
                                         text: root.recent-limit + "";
                                         width: root.ctl-w;
@@ -1167,6 +1307,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-footer-enabled;
+                                    tip: Tr.cfg-tip-footer-enabled;
                                     Switch {
                                         checked: root.footer-enabled;
                                         toggled => { root.set-footer-enabled(self.checked); }
@@ -1174,6 +1315,7 @@ export component ConfigWindow inherits Window {
                                 }
                                 Field {
                                     label: Tr.cfg-footer-template;
+                                    tip: Tr.cfg-tip-footer-template;
                                     ThemeCombo {
                                         width: root.ctl-w;
                                         model: [
@@ -1191,10 +1333,15 @@ export component ConfigWindow inherits Window {
                                 // Muestra el campo de tokens + la lista de tokens disponibles.
                                 if root.footer-preset-index == 4: VerticalLayout {
                                     spacing: 4px;
-                                    LineEdit {
-                                        text: root.footer-custom-template;
-                                        placeholder-text: "{sel}/{total} · {marked}";
-                                        edited(t) => { root.set-footer-custom-template(t); }
+                                    HorizontalLayout {
+                                        spacing: 5px;
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: root.footer-custom-template;
+                                            placeholder-text: "{sel}/{total} · {marked}";
+                                            edited(t) => { root.set-footer-custom-template(t); }
+                                        }
+                                        HelpIcon { tip: Tr.cfg-tip-footer-custom; y: (parent.height - self.height) / 2; }
                                     }
                                     Text {
                                         text: Tr.cfg-footer-tokens;
@@ -1227,6 +1374,7 @@ export component ConfigWindow inherits Window {
                                 Rectangle { height: 8px; }
                                 Field {
                                     label: Tr.cfg-home-dir;
+                                    tip: Tr.cfg-tip-home-dir;
                                     HorizontalLayout {
                                         spacing: 6px;
                                         LineEdit {
@@ -1252,7 +1400,7 @@ export component ConfigWindow inherits Window {
                                 Rectangle { height: 8px; }
                                 HorizontalLayout {
                                     alignment: start;
-                                    spacing: 8px;
+                                    spacing: 5px;
                                     CfgBtn {
                                         label: root.reset-armed ? Tr.cfg-factory-reset-confirm : Tr.cfg-factory-reset;
                                         danger: root.reset-armed;
@@ -1265,6 +1413,7 @@ export component ConfigWindow inherits Window {
                                             }
                                         }
                                     }
+                                    HelpIcon { tip: Tr.cfg-tip-factory-reset; y: (parent.height - self.height) / 2; }
                                 }
                             }
 
@@ -1274,12 +1423,17 @@ export component ConfigWindow inherits Window {
                                 // Auto-resaltado de código: ARRIBA de la tabla de reglas.
                                 Field {
                                     label: Tr.cfg-auto-highlight;
+                                    tip: Tr.cfg-tip-auto-highlight;
                                     Switch {
                                         checked: root.auto-highlight-code;
                                         toggled => { root.set-auto-highlight-code(self.checked); }
                                     }
                                 }
-                                Text { text: Tr.cfg-preview-hint; color: Theme.text-dim; wrap: word-wrap; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    Text { text: Tr.cfg-preview-hint; color: Theme.text-dim; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                                    HelpIcon { tip: Tr.cfg-tip-preview-table; y: (parent.height - self.height) / 2; }
+                                }
                                 // Encabezado de la tabla.
                                 HorizontalLayout {
                                     height: 22px;
@@ -1506,10 +1660,11 @@ export component ConfigWindow inherits Window {
                                 spacing: 6px;
 
                                 // -- Set base: galería de tarjetas (misma que Apariencia) --
-                                Text {
-                                    text: Tr.icons-section-base;
-                                    color: Theme.text-dim;
-                                    font-weight: 700;
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-base; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-set-base; }
                                 }
                                 // Galería de sets en la pestaña Íconos: igual que en Apariencia pero
                                 // sin botón "Personalizar" (ya estamos aquí). Un clic aplica el set en
@@ -1562,10 +1717,11 @@ export component ConfigWindow inherits Window {
 
                                 // -- Íconos por objeto --
                                 Rectangle { height: 8px; }
-                                Text {
-                                    text: Tr.icons-section-objects;
-                                    color: Theme.text-dim;
-                                    font-weight: 700;
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-objects; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-objects; }
                                 }
                                 // Lista de filas de íconos. Alto fijo para que scrollee. Sin header
                                 // de columnas: las filas son autoexplicativas (ícono + nombre +
@@ -1629,10 +1785,11 @@ export component ConfigWindow inherits Window {
 
                                 // -- Set personalizado --
                                 Rectangle { height: 8px; }
-                                Text {
-                                    text: Tr.icons-section-custom;
-                                    color: Theme.text-dim;
-                                    font-weight: 700;
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-custom; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-custom; }
                                 }
                                 HorizontalLayout {
                                     spacing: 8px;
@@ -1847,6 +2004,43 @@ export component ConfigWindow inherits Window {
                 x: 0; width: parent.width;
             }
         }
+
+    // --- Tooltip de ayuda de las opciones (overlay) ---
+    // Globo flotante al nivel del root de ConfigWindow: se pinta DESPUÉS de todo el contenido
+    // (último hijo), así queda por encima del scroll y de los demás overlays. Aparece junto al
+    // ícono "?" que lo disparó: centrado en su X (CfgTip.x) y bajo su borde inferior (CfgTip.y).
+    // Si no cabe abajo (ícono cerca del borde inferior de la ventana), se voltea ARRIBA. Soporta
+    // varias líneas: ancho máximo ~280px con word-wrap. Mismo patrón que el tooltip de app-window.
+    if CfgTip.text != "": Rectangle {
+        // Alto aprox. del ícono disparador (para el cálculo del volteo).
+        property <length> src-h: 18px;
+        // ¿El globo se saldría por abajo? Entonces va ARRIBA del ícono.
+        property <bool> flip-up: CfgTip.y + 4px + self.height > root.height;
+        // Centrar bajo el ícono, sin salirse por los lados (clamp a 4px de cada borde).
+        x: min(max(CfgTip.x - self.width / 2, 4px), max(4px, root.width - self.width - 4px));
+        y: self.flip-up
+            ? max(4px, CfgTip.y - self.src-h - 4px - self.height)
+            : CfgTip.y + 4px;
+        // El globo se dimensiona al contenido. Un VerticalLayout con padding mide el Text (cuyo
+        // ancho está topado a 264px → envuelve en varias líneas) y el Rectangle adopta ese tamaño.
+        background: Theme.panel-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 5px;
+        VerticalLayout {
+            padding: 7px;
+            Text {
+                text: CfgTip.text;
+                color: Theme.text;
+                font-size: 11px;
+                wrap: word-wrap;
+                // Tope de ancho: el Text no pasa de 264px y envuelve; su preferred-width (corto)
+                // achica el globo para tips de una línea, y su preferred-height (alto) lo agranda
+                // para tips largos. Sin width fija → sin ciclo de layout.
+                max-width: 264px;
+            }
+        }
+    }
 
     // Cuenta un clic del logo; 5 seguidos (con <2s entre clics) disparan el egg.
     function register-egg-click() {

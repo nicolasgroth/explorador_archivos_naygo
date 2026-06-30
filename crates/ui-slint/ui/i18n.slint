@@ -505,6 +505,60 @@ export global Tr {
     in property <string> icons-group-actions: "Acciones de la barra";
     in property <string> icons-group-files: "Tipos de archivo";
     in property <string> icons-personalize: "Personalizar";
+
+    // --- Tooltips de ayuda (?) de las opciones de Configuración ---
+    // Cada clave describe qué hace una opción y sus condiciones/sintaxis. El ícono "?" de la fila
+    // las muestra al pasar el mouse. ES y EN son textos reales; los 8 restantes copian el inglés.
+    // General (cat 0).
+    in property <string> cfg-tip-language: "Idioma de la interfaz. Se aplica al instante.";
+    in property <string> cfg-tip-show-parent: "Muestra una fila «..» al inicio de cada panel para subir a la carpeta superior con un clic.";
+    in property <string> cfg-tip-icon-only: "Muestra los botones de la barra solo con su ícono, sin texto, para ahorrar espacio.";
+    in property <string> cfg-tip-bar-position: "Ubica la barra de herramientas arriba (horizontal) o al costado (vertical).";
+    in property <string> cfg-tip-size-no-subdirs: "Al calcular el tamaño de una carpeta, no recorre sus subcarpetas (más rápido, pero el total es parcial).";
+    in property <string> cfg-tip-autostart: "Inicia Naygo automáticamente al encender el equipo (entra a sesión de Windows).";
+    in property <string> cfg-tip-default-table: "Usa las columnas del panel activo como predeterminadas para los paneles nuevos.";
+    // Operaciones (cat 1).
+    in property <string> cfg-tip-ops-mode: "En cola ejecuta una operación a la vez; En paralelo permite varias simultáneas.";
+    in property <string> cfg-tip-confirm-trash: "Pide confirmación antes de enviar archivos a la papelera.";
+    in property <string> cfg-tip-confirm-drop: "Pregunta qué hacer (copiar/mover) al arrastrar archivos entre paneles.";
+    in property <string> cfg-tip-show-op-summary: "Muestra un resumen al terminar una operación de archivos (cuántos, errores).";
+    // Pegado (cat 2).
+    in property <string> cfg-tip-paste-confirm: "Pide confirmar el nombre antes de crear el archivo al pegar texto o una imagen.";
+    in property <string> cfg-tip-paste-name: "Plantilla del nombre para texto pegado. {fecha} se reemplaza por la fecha y hora actuales. Es el único token disponible.";
+    in property <string> cfg-tip-paste-ext: "Extensión del archivo creado al pegar texto (por ejemplo: txt, md).";
+    // Apariencia (cat 3).
+    in property <string> cfg-tip-theme: "Elige el tema de colores. Se aplica en caliente. «Personalizar» abre el editor para crear el tuyo.";
+    in property <string> cfg-tip-icon-set: "Elige el set de íconos. Se aplica en caliente. «Personalizar» salta a la pestaña Íconos.";
+    in property <string> cfg-tip-date-format: "Formato con que se muestran las fechas de los archivos en los paneles.";
+    in property <string> cfg-tip-size-format: "Unidad para mostrar los tamaños. Automático elige la más legible según el tamaño.";
+    in property <string> cfg-tip-row-density: "Alto de las filas de los paneles. Compacta muestra más archivos a la vez.";
+    // Atajos (cat 4).
+    in property <string> cfg-tip-shortcuts: "Haz clic en «Cambiar» y presiona la nueva combinación. «Reset» vuelve al atajo de fábrica.";
+    // Import / Export (cat 5).
+    in property <string> cfg-tip-export-lang: "Exporta el idioma activo como un .zip para compartirlo o editarlo.";
+    in property <string> cfg-tip-export-theme: "Exporta el tema activo como un .zip para compartirlo o editarlo.";
+    in property <string> cfg-tip-export-config: "Exporta toda tu configuración como un .zip para respaldarla o moverla a otro equipo.";
+    in property <string> cfg-tip-import: "Importa un pack (.zip) con un idioma, tema o configuración exportados.";
+    // Avanzado (cat 6).
+    in property <string> cfg-tip-ops-display: "Dónde se muestra el progreso de las operaciones: en un panel acoplado, un diálogo modal o siempre visible.";
+    in property <string> cfg-tip-paste-image-fmt: "PNG: sin pérdida, ideal para capturas. JPG: con pérdida, archivos más chicos, mejor para fotos.";
+    in property <string> cfg-tip-low-power: "Reduce el uso de CPU en equipos sin tarjeta gráfica dedicada. Automático lo decide según el equipo.";
+    in property <string> cfg-tip-new-items-at-end: "Los archivos creados durante la sesión aparecen al final del listado en vez de reordenarse.";
+    in property <string> cfg-tip-tray-enabled: "Muestra un ícono de Naygo en la bandeja del sistema (junto al reloj).";
+    in property <string> cfg-tip-close-to-tray: "Al cerrar la ventana, Naygo se minimiza a la bandeja en vez de salir. Requiere el ícono de bandeja.";
+    in property <string> cfg-tip-recent-limit: "Cuántas carpetas visitadas guarda el historial. Acepta de 1 a 100.";
+    in property <string> cfg-tip-footer-enabled: "Muestra una línea de información al pie de cada panel (selección, totales, espacio en disco).";
+    in property <string> cfg-tip-footer-template: "Qué información muestra el pie. Elige una plantilla lista o «Personalizada…» para escribir la tuya con tokens.";
+    in property <string> cfg-tip-footer-custom: "Plantilla del pie. Tokens disponibles: {sel} {total} {marked} {free} {disk_total} {pct} {items} {files} {dirs}. Se reemplazan por los datos del panel.";
+    in property <string> cfg-tip-home-dir: "Carpeta que se abre al iniciar Naygo. Vacío = tu carpeta personal.";
+    in property <string> cfg-tip-factory-reset: "Vuelve TODA la configuración a los valores de fábrica. No se puede deshacer.";
+    // Previsualización (cat 7).
+    in property <string> cfg-tip-auto-highlight: "Resalta automáticamente la sintaxis del código en la vista previa, según la extensión.";
+    in property <string> cfg-tip-preview-table: "Qué extensiones se previsualizan y con qué modo de vista. «Modo de vista» permite tratar una extensión propia como otro tipo (por ejemplo, .sif como código XML).";
+    // Íconos (cat 9).
+    in property <string> cfg-tip-icon-set-base: "El set de íconos base de la app. Un clic lo aplica en caliente a todos los objetos.";
+    in property <string> cfg-tip-icon-objects: "Cambia el ícono de un objeto concreto. «Cambiar» elige otro set o un PNG propio solo para ese objeto.";
+    in property <string> cfg-tip-icon-custom: "Importa o exporta un set de íconos completo (.naygoset), o restablece todos los íconos al set base.";
 }
 
 // Utilidades de texto que Slint no expone como builtin. `contains` lo respalda Rust (ver
