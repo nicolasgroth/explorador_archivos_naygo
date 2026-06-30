@@ -110,20 +110,20 @@ pub fn compress_zip(
         token.wait_if_paused();
         if disk.is_dir() {
             let dir_name = format!("{}/", internal.trim_end_matches('/'));
-            if zipw.add_directory(dir_name, opts).is_err() {
+            if let Err(e) = zipw.add_directory(dir_name, opts) {
                 items.push(ArchiveOpItem {
                     path: disk.clone(),
-                    outcome: ArchiveOutcome::Failed("add_directory".into()),
+                    outcome: ArchiveOutcome::Failed(e.to_string()),
                 });
             }
             continue;
         }
         match std::fs::File::open(disk) {
             Ok(mut f) => {
-                if zipw.start_file(internal.clone(), opts).is_err() {
+                if let Err(e) = zipw.start_file(internal.clone(), opts) {
                     items.push(ArchiveOpItem {
                         path: disk.clone(),
-                        outcome: ArchiveOutcome::Failed("start_file".into()),
+                        outcome: ArchiveOutcome::Failed(e.to_string()),
                     });
                     continue;
                 }
@@ -172,11 +172,17 @@ pub fn compress_zip(
 /// Expande `path` a entradas (disk, internal). `base` es la carpeta padre del source de nivel
 /// superior; la ruta interna en el zip es `path` relativa a `base` (con `/` como separador).
 fn collect_entries(path: &Path, base: &Path, out: &mut Vec<(PathBuf, String)>) {
+    // Ruta interna en el zip = `path` relativa a `base`. Si `strip_prefix` falla (p. ej. un
+    // source que es la raíz de un disco "C:\", sin parent → base ""), usamos el nombre del
+    // archivo: nunca dejamos una ruta ABSOLUTA dentro del zip (quedaría malformado).
     let internal = path
         .strip_prefix(base)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
     if path.is_dir() {
         out.push((path.to_path_buf(), internal));
         if let Ok(rd) = std::fs::read_dir(path) {
@@ -259,5 +265,27 @@ mod tests {
         let r = compress_zip(&[src], &zip_path, &mut noop_progress(), &token);
         assert!(matches!(r, Err(ArchiveError::Cancelled)));
         assert!(!zip_path.exists(), "el .zip parcial se borra al cancelar");
+    }
+
+    #[test]
+    fn compress_cancelado_a_media_copia_borra_el_parcial() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("grande.bin");
+        std::fs::write(&src, vec![7u8; 4 * 1024 * 1024]).unwrap(); // 4 MB > 64KB
+        let zip_path = dir.path().join("c.zip");
+        let token = CancellationToken::new();
+        // Cancelar tras un instante, desde otro hilo, para pegarle a media copia.
+        let t2 = token.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            t2.cancel();
+        });
+        let r = compress_zip(&[src], &zip_path, &mut noop_progress(), &token);
+        h.join().unwrap();
+        // Puede alcanzar a terminar antes de cancelar (archivo chico para el disco); si canceló,
+        // el parcial NO debe quedar. Aceptamos ambos finales pero sin .zip a medias.
+        if matches!(r, Err(ArchiveError::Cancelled)) {
+            assert!(!zip_path.exists(), "cancelado a media copia: parcial borrado");
+        }
     }
 }
