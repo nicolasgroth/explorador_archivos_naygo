@@ -740,7 +740,7 @@
   "slint.cfg.sc_combo": "Scorciatoia",
   "slint.cfg.change": "Cambia",
   "slint.cfg.reset": "Reset",
-  "slint.cfg.export_hint": "Export or import by topic: language, themes, icons or settings. Each file uses its own extension.",
+  "slint.cfg.export_hint": "Esporta o importa per argomento: lingua, temi, icone o configurazione. Ogni file usa la propria estensione.",
   "slint.cfg.export_lang": "Esporta lingua",
   "slint.cfg.export_theme": "Esporta tema",
   "slint.cfg.export_config": "Esporta config",

@@ -3613,7 +3613,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygoconf.
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Configuración Naygo", &["naygoconf"])
-                .set_file_name("naygo.naygoconf")
+                .set_file_name("config.naygoconf")
                 .save_file()
             {
                 report(&ui_weak, packs::export_config(&c.config.config_dir, &path));

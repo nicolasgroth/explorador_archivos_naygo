@@ -740,7 +740,7 @@
   "slint.cfg.sc_combo": "Tastenkürzel",
   "slint.cfg.change": "Ändern",
   "slint.cfg.reset": "Zurücksetzen",
-  "slint.cfg.export_hint": "Export or import by topic: language, themes, icons or settings. Each file uses its own extension.",
+  "slint.cfg.export_hint": "Exportiere oder importiere nach Thema: Sprache, Designs, Symbole oder Einstellungen. Jede Datei nutzt ihre eigene Erweiterung.",
   "slint.cfg.export_lang": "Sprache exportieren",
   "slint.cfg.export_theme": "Design exportieren",
   "slint.cfg.export_config": "Konfiguration exportieren",
