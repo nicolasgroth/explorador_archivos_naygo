@@ -26,13 +26,17 @@ import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
 import { PaletteItemVm } from "types.slint";
 import { HistoryItemVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
-import { Tr } from "i18n.slint";
+import { Tr, TextUtil } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { Splash } from "splash.slint";
 // Reexportar los globals para que Slint genere su binding accesible desde Rust
 // (i18n_keys / theme_apply). Splash se reexporta para tener su componente en Rust.
 export { Tr }
 export { Theme }
+// TextUtil expone a Rust el `contains` que respalda el buscador de opciones de la config. Se
+// reexporta desde el archivo de entrada (igual que Tr/Theme) para que `include_modules!` genere su
+// tipo en Rust y i18n_keys.rs pueda ligar su callback.
+export { TextUtil }
 export { Splash }
 // La ventana de config es ahora una ventana nativa propia; se reexporta para que `include_modules!`
 // genere su tipo en Rust (su wiring vive en main.rs contra esa instancia).

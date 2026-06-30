@@ -106,10 +106,15 @@ impl WorkspaceCtrl {
         let total = f.view_indices().len();
         let sel = f.selected.len();
         let dir = f.current_dir.display();
+        let elementos = self
+            .config
+            .t("status.elements")
+            .replace("{n}", &total.to_string());
         let base = if sel > 0 {
-            format!("{dir}   —   {total} elementos, {sel} seleccionados")
+            let sel_suffix = self.config.t("status.selected_suffix");
+            format!("{dir}   —   {elementos}, {sel} {sel_suffix}")
         } else {
-            format!("{dir}   —   {total} elementos")
+            format!("{dir}   —   {elementos}")
         };
         // Si hay un cálculo de tamaño (F3) en curso/terminado, anexarlo a la derecha.
         match self.size_status() {
@@ -135,12 +140,14 @@ impl WorkspaceCtrl {
                         .unwrap_or_else(|| f.current_dir.display().to_string())
                 })
                 .unwrap_or_default(),
-            PanePurpose::Tree => "Árbol".to_string(),
-            PanePurpose::Inspector => "Propiedades".to_string(),
-            PanePurpose::History => "Historial".to_string(),
-            PanePurpose::Favorites => "Favoritos".to_string(),
-            PanePurpose::Preview => "Vista previa".to_string(),
-            PanePurpose::Operations => "Operaciones".to_string(),
+            // Rótulos traducidos (antes eran literales en español → la pestaña del panel salía en
+            // español aunque la app estuviera en otro idioma). Las claves ya existen en los 10 idiomas.
+            PanePurpose::Tree => self.config.t("pane.tree.title"),
+            PanePurpose::Inspector => self.config.t("pane.inspector.title"),
+            PanePurpose::History => self.config.t("pane.history.title"),
+            PanePurpose::Favorites => self.config.t("pane.favorites.title"),
+            PanePurpose::Preview => self.config.t("pane.preview.title"),
+            PanePurpose::Operations => self.config.t("ops.menu_label"),
         }
     }
 
@@ -518,9 +525,13 @@ impl WorkspaceCtrl {
             return;
         };
         let req = naygo_core::ops::transfer(move_files, sources, dest_dir);
-        let label = if move_files { "Mover" } else { "Copiar" };
+        let label = if move_files {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         self.ensure_ops_pane();
-        self.ops.start_op(req, label.to_string(), true);
+        self.ops.start_op(req, label, true);
     }
 
     /// Copiar/mover la selección al OTRO panel (F-keys estilo Commander). Resuelve el destino

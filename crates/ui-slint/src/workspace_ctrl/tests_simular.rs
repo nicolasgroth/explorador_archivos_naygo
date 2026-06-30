@@ -358,7 +358,7 @@ fn crear_carpeta_con_ctrl_shift_n() {
         matches!(
             c.ops.pending_dialog,
             Some(crate::ops_ctrl::OpDialog::NameInput {
-                purpose: crate::ops_ctrl::NamePurpose::NewDir,
+                purpose: crate::ops_ctrl::NamePurpose::NewDir { .. },
                 ..
             })
         ),
@@ -551,7 +551,7 @@ fn crear_archivo_con_ctrl_n() {
         matches!(
             c.ops.pending_dialog,
             Some(crate::ops_ctrl::OpDialog::NameInput {
-                purpose: crate::ops_ctrl::NamePurpose::NewFile,
+                purpose: crate::ops_ctrl::NamePurpose::NewFile { .. },
                 ..
             })
         ),

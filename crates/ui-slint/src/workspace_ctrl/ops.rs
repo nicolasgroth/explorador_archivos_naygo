@@ -110,10 +110,14 @@ impl WorkspaceCtrl {
                 if paths.is_empty() {
                     return false;
                 }
-                let label = if cut { "Mover" } else { "Copiar" };
+                let label = if cut {
+                    self.config.t("ops.file_kind_move")
+                } else {
+                    self.config.t("ops.file_kind_copy")
+                };
                 let req = naygo_core::ops::transfer(cut, paths, dir);
                 self.ensure_ops_pane();
-                self.ops.start_op(req, label.to_string(), true);
+                self.ops.start_op(req, label, true);
                 self.ops.clear_cut();
                 true
             }
@@ -184,7 +188,11 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
-        let label = if move_ { "Mover" } else { "Copiar" };
+        let label = if move_ {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         // Diagnóstico: este es el camino de FALLBACK (el drop no se pudo enrutar por el punto y
         // cayó al panel activo). Si aquí el destino coincide con el origen, el resultado es un
         // no-op silencioso — clave para diagnosticar drops "que no hacen nada".
@@ -196,7 +204,7 @@ impl WorkspaceCtrl {
         ));
         let req = naygo_core::ops::transfer(move_, sources, dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label.to_string(), true);
+        self.ops.start_op(req, label, true);
         true
     }
 
@@ -278,7 +286,11 @@ impl WorkspaceCtrl {
         let same = same_drive(&paths[0], &dest_dir);
         let is_move =
             move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
-        let label = if is_move { "Mover" } else { "Copiar" };
+        let label = if is_move {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         // CONFIRMAR AL SOLTAR (decisión de Nicolás): NO ejecutamos la op aquí. Guardamos el drop ya
         // validado en `pending_drop` y devolvemos true; la UI abre un modal "¿Copiar/Mover N a
         // «destino»?" y, al confirmar, llama a `confirm_pending_drop` que arranca la op de verdad.
@@ -334,7 +346,11 @@ impl WorkspaceCtrl {
         let Some(pd) = self.pending_drop.take() else {
             return false;
         };
-        let label = if pd.is_move { "Mover" } else { "Copiar" };
+        let label = if pd.is_move {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         crate::logging::breadcrumb(&format!(
             "confirm_pending_drop: {} {} ítem(s) → {}",
             label,
@@ -351,7 +367,7 @@ impl WorkspaceCtrl {
         }
         let req = naygo_core::ops::transfer(pd.is_move, pd.paths, pd.dest_dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label.to_string(), true);
+        self.ops.start_op(req, label, true);
         true
     }
 
@@ -384,10 +400,16 @@ impl WorkspaceCtrl {
         let Some(dir) = self.active_dir() else {
             return;
         };
+        // El título del modal y la etiqueta de la op se traducen aquí (el caller tiene `config`);
+        // `OpsCtrl` los recibe ya resueltos porque no conoce el idioma.
         let purpose = if is_dir {
-            crate::ops_ctrl::NamePurpose::NewDir
+            crate::ops_ctrl::NamePurpose::NewDir {
+                label: self.config.t("op.new_folder"),
+            }
         } else {
-            crate::ops_ctrl::NamePurpose::NewFile
+            crate::ops_ctrl::NamePurpose::NewFile {
+                label: self.config.t("op.new_file"),
+            }
         };
         self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
             purpose,
@@ -523,7 +545,8 @@ impl WorkspaceCtrl {
         crate::logging::breadcrumb("renombrar");
         let source = e.path.clone();
         let req = naygo_core::ops::rename(source, new_name.to_string());
-        self.ops.start_op(req, "Renombrar".to_string(), true);
+        let label = self.config.t("op.rename");
+        self.ops.start_op(req, label, true);
         true
     }
 
@@ -568,8 +591,9 @@ impl WorkspaceCtrl {
         }
         let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
         self.ops.undo_history[idx].undone = true;
+        let label = self.config.t("undo.button");
         for req in reqs {
-            self.ops.start_op(req, "Deshacer".to_string(), false);
+            self.ops.start_op(req, label.clone(), false);
         }
         true
     }
@@ -587,8 +611,9 @@ impl WorkspaceCtrl {
         };
         let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
         self.ops.undo_history[idx].undone = true;
+        let label = self.config.t("undo.button");
         for req in reqs {
-            self.ops.start_op(req, "Deshacer".to_string(), false);
+            self.ops.start_op(req, label.clone(), false);
         }
         true
     }

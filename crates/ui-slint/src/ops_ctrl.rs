@@ -25,8 +25,17 @@ use std::sync::mpsc::{Receiver, Sender};
 /// archivo en conflicto.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamePurpose {
-    NewFile,
-    NewDir,
+    /// Crear un archivo nuevo. `label` es el texto i18n YA RESUELTO (`op.new_file`) que el caller
+    /// pasa porque `OpsCtrl` no tiene acceso a la configuración/idioma: se usa como título del
+    /// modal y como etiqueta de la op en el panel de progreso.
+    NewFile {
+        label: String,
+    },
+    /// Crear una carpeta nueva. `label` es el texto i18n YA RESUELTO (`op.new_folder`), igual que
+    /// `NewFile`: título del modal + etiqueta de la op.
+    NewDir {
+        label: String,
+    },
     /// Confirmar el nombre de un archivo pegado (texto/imagen). `ext` es la extensión a
     /// concatenar (sin punto) y `bytes` el contenido ya codificado a escribir. Solo aparece si
     /// `Settings.paste_confirm` está activo; si no, el pegado escribe directo.
@@ -1358,8 +1367,10 @@ impl OpsCtrl {
             Some(OpDialog::NameInput { purpose, buf, .. }) => OpDialogVmData {
                 kind: 3,
                 name_title: match purpose {
-                    NamePurpose::NewFile => "Nuevo archivo".to_string(),
-                    NamePurpose::NewDir => "Nueva carpeta".to_string(),
+                    // El título lo trae el caller ya traducido (`op.new_file`/`op.new_folder`),
+                    // porque `OpsCtrl` no tiene acceso a la configuración/idioma. La UI lo muestra
+                    // tal cual (ver `op-dialogs.slint`: usa `name-title` para nuevo archivo/carpeta).
+                    NamePurpose::NewFile { label } | NamePurpose::NewDir { label } => label.clone(),
                     NamePurpose::Paste { ext, .. } => format!("Pegar como nombre.{ext}"),
                     // El título lo arma la UI (i18n) a partir de `name_conflict_for`; aquí solo
                     // dejamos un texto de respaldo por si se mostrara sin traducir.
@@ -1659,8 +1670,9 @@ impl OpsCtrl {
             return false;
         }
         let (req, label) = match purpose {
-            NamePurpose::NewFile => (naygo_core::ops::create(dir, buf, false), "Nuevo archivo"),
-            NamePurpose::NewDir => (naygo_core::ops::create(dir, buf, true), "Nueva carpeta"),
+            // `label` ya viene traducido desde el caller (`op.new_file`/`op.new_folder`).
+            NamePurpose::NewFile { label } => (naygo_core::ops::create(dir, buf, false), label),
+            NamePurpose::NewDir { label } => (naygo_core::ops::create(dir, buf, true), label),
             NamePurpose::Paste { ext, bytes } => {
                 // El pegado escribe el archivo directo (escritura chica y local), igual que el
                 // camino sin confirmación. No pasa por el engine de ops.
@@ -1699,7 +1711,7 @@ impl OpsCtrl {
                 return true;
             }
         };
-        self.start_op(req, label.to_string(), true);
+        self.start_op(req, label, true);
         true
     }
 

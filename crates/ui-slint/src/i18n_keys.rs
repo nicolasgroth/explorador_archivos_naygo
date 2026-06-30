@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::config_ctrl::ConfigCtrl;
-use crate::Tr;
+use crate::{TextUtil, Tr};
 use slint::{ComponentHandle, Global};
 
 /// Aplica todos los textos del idioma activo al global `Tr` de la ventana `ui`.
@@ -16,8 +16,15 @@ pub fn apply<'a, W>(ui: &'a W, c: &ConfigCtrl)
 where
     W: ComponentHandle,
     Tr<'a>: Global<'a, W>,
+    TextUtil<'a>: Global<'a, W>,
 {
     use naygo_core::keymap::Action;
+    // Respaldo del `contains` que Slint no expone: el buscador de opciones de la config lo usa para
+    // un match de subcadena case-insensitive (los strings llegan ya en minúsculas desde Slint). Se
+    // (re)liga en cada apply; basta con un contains plano de `&str`.
+    ui.global::<TextUtil>().on_contains(|haystack, needle| {
+        haystack.as_str().contains(needle.as_str())
+    });
     let tr = ui.global::<Tr>();
     // Tooltip de un botón de la toolbar CON atajo: concatena el texto base i18n con el atajo REAL
     // configurado en el keymap (formato legible, p. ej. "Atrás (Alt+←)"). Si el usuario cambió el
@@ -318,9 +325,9 @@ where
     tr.set_cfg_cat_shortcuts(c.t("slint.cfg.cat_shortcuts").into());
     tr.set_cfg_cat_import(c.t("slint.cfg.cat_import").into());
     tr.set_cfg_cat_about(c.t("slint.cfg.cat_about").into());
-    tr.set_cfg_cat_language(c.t("slint.cfg.cat_language").into());
     tr.set_cfg_cat_advanced(c.t("slint.cfg.cat_advanced").into());
     tr.set_cfg_cat_preview(c.t("slint.cfg.cat_preview").into());
+    tr.set_cfg_search(c.t("slint.cfg.search").into());
     tr.set_cfg_preview_hint(c.t("slint.cfg.preview_hint").into());
     tr.set_cfg_preview_ext(c.t("slint.cfg.preview_ext").into());
     tr.set_cfg_preview_on(c.t("slint.cfg.preview_on").into());
@@ -478,4 +485,46 @@ where
     tr.set_icons_group_actions(c.t("settings.icons.group_actions").into());
     tr.set_icons_group_files(c.t("settings.icons.group_files").into());
     tr.set_icons_personalize(c.t("settings.icons.personalize").into());
+    // Tooltips de ayuda (?) de las opciones de Configuración. Una clave por opción documentada.
+    tr.set_cfg_tip_language(c.t("slint.cfg.tip.language").into());
+    tr.set_cfg_tip_show_parent(c.t("slint.cfg.tip.show_parent").into());
+    tr.set_cfg_tip_icon_only(c.t("slint.cfg.tip.icon_only").into());
+    tr.set_cfg_tip_bar_position(c.t("slint.cfg.tip.bar_position").into());
+    tr.set_cfg_tip_size_no_subdirs(c.t("slint.cfg.tip.size_no_subdirs").into());
+    tr.set_cfg_tip_autostart(c.t("slint.cfg.tip.autostart").into());
+    tr.set_cfg_tip_default_table(c.t("slint.cfg.tip.default_table").into());
+    tr.set_cfg_tip_ops_mode(c.t("slint.cfg.tip.ops_mode").into());
+    tr.set_cfg_tip_confirm_trash(c.t("slint.cfg.tip.confirm_trash").into());
+    tr.set_cfg_tip_confirm_drop(c.t("slint.cfg.tip.confirm_drop").into());
+    tr.set_cfg_tip_show_op_summary(c.t("slint.cfg.tip.show_op_summary").into());
+    tr.set_cfg_tip_paste_confirm(c.t("slint.cfg.tip.paste_confirm").into());
+    tr.set_cfg_tip_paste_name(c.t("slint.cfg.tip.paste_name").into());
+    tr.set_cfg_tip_paste_ext(c.t("slint.cfg.tip.paste_ext").into());
+    tr.set_cfg_tip_theme(c.t("slint.cfg.tip.theme").into());
+    tr.set_cfg_tip_icon_set(c.t("slint.cfg.tip.icon_set").into());
+    tr.set_cfg_tip_date_format(c.t("slint.cfg.tip.date_format").into());
+    tr.set_cfg_tip_size_format(c.t("slint.cfg.tip.size_format").into());
+    tr.set_cfg_tip_row_density(c.t("slint.cfg.tip.row_density").into());
+    tr.set_cfg_tip_shortcuts(c.t("slint.cfg.tip.shortcuts").into());
+    tr.set_cfg_tip_export_lang(c.t("slint.cfg.tip.export_lang").into());
+    tr.set_cfg_tip_export_theme(c.t("slint.cfg.tip.export_theme").into());
+    tr.set_cfg_tip_export_config(c.t("slint.cfg.tip.export_config").into());
+    tr.set_cfg_tip_import(c.t("slint.cfg.tip.import").into());
+    tr.set_cfg_tip_ops_display(c.t("slint.cfg.tip.ops_display").into());
+    tr.set_cfg_tip_paste_image_fmt(c.t("slint.cfg.tip.paste_image_fmt").into());
+    tr.set_cfg_tip_low_power(c.t("slint.cfg.tip.low_power").into());
+    tr.set_cfg_tip_new_items_at_end(c.t("slint.cfg.tip.new_items_at_end").into());
+    tr.set_cfg_tip_tray_enabled(c.t("slint.cfg.tip.tray_enabled").into());
+    tr.set_cfg_tip_close_to_tray(c.t("slint.cfg.tip.close_to_tray").into());
+    tr.set_cfg_tip_recent_limit(c.t("slint.cfg.tip.recent_limit").into());
+    tr.set_cfg_tip_footer_enabled(c.t("slint.cfg.tip.footer_enabled").into());
+    tr.set_cfg_tip_footer_template(c.t("slint.cfg.tip.footer_template").into());
+    tr.set_cfg_tip_footer_custom(c.t("slint.cfg.tip.footer_custom").into());
+    tr.set_cfg_tip_home_dir(c.t("slint.cfg.tip.home_dir").into());
+    tr.set_cfg_tip_factory_reset(c.t("slint.cfg.tip.factory_reset").into());
+    tr.set_cfg_tip_auto_highlight(c.t("slint.cfg.tip.auto_highlight").into());
+    tr.set_cfg_tip_preview_table(c.t("slint.cfg.tip.preview_table").into());
+    tr.set_cfg_tip_icon_set_base(c.t("slint.cfg.tip.icon_set_base").into());
+    tr.set_cfg_tip_icon_objects(c.t("slint.cfg.tip.icon_objects").into());
+    tr.set_cfg_tip_icon_custom(c.t("slint.cfg.tip.icon_custom").into());
 }
