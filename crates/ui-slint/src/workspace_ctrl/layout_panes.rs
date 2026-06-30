@@ -135,12 +135,14 @@ impl WorkspaceCtrl {
                         .unwrap_or_else(|| f.current_dir.display().to_string())
                 })
                 .unwrap_or_default(),
-            PanePurpose::Tree => "Árbol".to_string(),
-            PanePurpose::Inspector => "Propiedades".to_string(),
-            PanePurpose::History => "Historial".to_string(),
-            PanePurpose::Favorites => "Favoritos".to_string(),
-            PanePurpose::Preview => "Vista previa".to_string(),
-            PanePurpose::Operations => "Operaciones".to_string(),
+            // Rótulos traducidos (antes eran literales en español → la pestaña del panel salía en
+            // español aunque la app estuviera en otro idioma). Las claves ya existen en los 10 idiomas.
+            PanePurpose::Tree => self.config.t("pane.tree.title"),
+            PanePurpose::Inspector => self.config.t("pane.inspector.title"),
+            PanePurpose::History => self.config.t("pane.history.title"),
+            PanePurpose::Favorites => self.config.t("pane.favorites.title"),
+            PanePurpose::Preview => self.config.t("pane.preview.title"),
+            PanePurpose::Operations => self.config.t("ops.menu_label"),
         }
     }
 

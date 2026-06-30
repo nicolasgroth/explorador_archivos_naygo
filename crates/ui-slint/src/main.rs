@@ -2914,6 +2914,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
+        let sync_layout = sync_layout.clone();
         let ui_weak = ui.as_weak();
         let cfg_weak = cfg_win.as_weak();
         cfg_win.on_set_language(move |code| {
@@ -2933,6 +2934,10 @@ fn main() -> Result<(), slint::PlatformError> {
             ctrl.borrow_mut().preview.set_archive_labels(labels);
             ctrl.borrow_mut().preview.set_preview_msgs(msgs);
             refresh();
+            // Reconstruir las pestañas de los paneles: sus rótulos (Árbol/Operaciones/Vista
+            // previa/…) los calcula `pane_label` en Rust, no son claves Tr, así que `refresh()`
+            // (que solo toca el VM de Config) no los actualiza. `sync_layout` los re-rotula.
+            sync_layout();
         });
     }
     // Cambio de tema en caliente: persiste + re-vuelca los colores a Theme. Se aplica a AMBAS
