@@ -2840,6 +2840,25 @@ fn main() -> Result<(), slint::PlatformError> {
             refresh();
         });
     }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_paste_image_name(move |v| {
+            ctrl.borrow_mut().config.set_paste_image_name(v.to_string());
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_paste_jpg_quality(move |v| {
+            // El VM entrega un int; lo clampamos a 0–100 antes de guardar como u8.
+            ctrl.borrow_mut()
+                .config
+                .set_paste_jpg_quality(v.clamp(0, 100) as u8);
+            refresh();
+        });
+    }
     // Límite de carpetas recientes (Avanzado): persiste + trunca la lista al nuevo tope.
     {
         let ctrl = ctrl.clone();
@@ -5591,6 +5610,8 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
             naygo_core::clipboard::ImageFmt::Png => 0,
             naygo_core::clipboard::ImageFmt::Jpg => 1,
         },
+        paste_image_name: s.paste_image_name.clone().into(),
+        paste_jpg_quality: s.paste_jpg_quality as i32,
         tray_enabled: s.tray_enabled,
         close_to_tray: s.close_to_tray,
         new_items_at_end: s.new_items_at_end,

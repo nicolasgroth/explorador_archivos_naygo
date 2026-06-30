@@ -197,6 +197,8 @@ export component ConfigWindow inherits Window {
     // Avanzado:
     callback set-ops-display(int);
     callback set-paste-image-fmt(int);
+    callback set-paste-image-name(string);
+    callback set-paste-jpg-quality(int);
     callback set-low-power-mode(int);
     callback set-new-items-at-end(bool);
     callback set-tray-enabled(bool);
@@ -421,6 +423,41 @@ export component ConfigWindow inherits Window {
                                         text: root.vm.paste-text-ext;
                                         width: 100px;
                                         edited => { root.set-paste-text-ext(self.text); }
+                                    }
+                                }
+                                // --- Imagen pegada ---
+                                Field {
+                                    label: Tr.cfg-paste-image-name;
+                                    LineEdit {
+                                        text: root.vm.paste-image-name;
+                                        width: 220px;
+                                        edited => { root.set-paste-image-name(self.text); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-image-fmt;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
+                                        current-index: root.vm.paste-image-fmt;
+                                        selected => { root.set-paste-image-fmt(self.current-index); }
+                                    }
+                                }
+                                // Calidad JPG: solo aplica al formato JPG (índice 1), por eso se oculta
+                                // cuando el formato es PNG. Entero 0–100; se clampa al vuelo igual que
+                                // el límite de recientes.
+                                if root.vm.paste-image-fmt == 1: Field {
+                                    label: Tr.cfg-paste-jpg-quality;
+                                    LineEdit {
+                                        text: root.vm.paste-jpg-quality + "";
+                                        width: root.ctl-w;
+                                        placeholder-text: "0–100";
+                                        edited(t) => {
+                                            if (t.to-float() >= 0) {
+                                                self.text = max(0, min(100, Math.round(t.to-float()))) + "";
+                                                root.set-paste-jpg-quality(max(0, min(100, Math.round(t.to-float()))));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -932,15 +969,6 @@ export component ConfigWindow inherits Window {
                                         model: [Tr.cfg-ops-display-panel, Tr.cfg-ops-display-modal, Tr.cfg-ops-display-always];
                                         current-index: root.vm.ops-display;
                                         selected => { root.set-ops-display(self.current-index); }
-                                    }
-                                }
-                                Field {
-                                    label: Tr.cfg-paste-image-fmt;
-                                    ThemeCombo {
-                                        width: root.ctl-w;
-                                        model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
-                                        current-index: root.vm.paste-image-fmt;
-                                        selected => { root.set-paste-image-fmt(self.current-index); }
                                     }
                                 }
                                 Field {

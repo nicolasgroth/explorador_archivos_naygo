@@ -584,6 +584,18 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Plantilla de nombre para imagen pegada.
+    pub fn set_paste_image_name(&mut self, name: String) {
+        self.settings.paste_image_name = name;
+        self.save();
+    }
+
+    /// Calidad de salida JPG para imagen pegada (0–100).
+    pub fn set_paste_jpg_quality(&mut self, quality: u8) {
+        self.settings.paste_jpg_quality = quality.clamp(0, 100);
+        self.save();
+    }
+
     /// Mostrar el ícono de Naygo en la bandeja del sistema.
     pub fn set_tray_enabled(&mut self, v: bool) {
         self.settings.tray_enabled = v;

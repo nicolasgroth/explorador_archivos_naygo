@@ -339,7 +339,9 @@ where
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
     tr.set_cfg_ops_display_always(c.t("slint.cfg.ops_display_always").into());
-    tr.set_cfg_paste_image_fmt(c.t("slint.cfg.paste_image_fmt").into());
+    tr.set_cfg_paste_image_fmt(c.t("settings.paste.image_fmt").into());
+    tr.set_cfg_paste_image_name(c.t("settings.paste.image_name").into());
+    tr.set_cfg_paste_jpg_quality(c.t("settings.paste.jpg_quality").into());
     tr.set_cfg_paste_fmt_png(c.t("slint.cfg.paste_fmt_png").into());
     tr.set_cfg_paste_fmt_jpg(c.t("slint.cfg.paste_fmt_jpg").into());
     tr.set_cfg_tray_enabled(c.t("slint.cfg.tray_enabled").into());
