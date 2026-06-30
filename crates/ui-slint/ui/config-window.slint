@@ -2103,24 +2103,28 @@ export component ConfigWindow inherits Window {
         y: self.flip-up
             ? max(4px, CfgTip.y - self.src-h - 4px - self.height)
             : CfgTip.y + 4px;
-        // El globo se dimensiona al contenido. Un VerticalLayout con padding mide el Text (cuyo
-        // ancho está topado a 264px → envuelve en varias líneas) y el Rectangle adopta ese tamaño.
+        // CLAVE del fix: el Rectangle es hijo directo del root (una Window sin layout) → por defecto
+        // se estira a TODO el ancho de la ventana (el bug: el globo ocupaba la ventana entera). Lo
+        // ligamos al ancho preferido del texto (mismo patrón que el tooltip de app-window). El Text
+        // tiene `max-width: 278px`, así su preferred-width es el ancho natural del tip topado a 278:
+        // un tip corto → globo angosto; uno largo → se topa a 278 y envuelve en varias líneas (el
+        // preferred-height crece). El `+16` es el padding lateral del globo.
+        width: htip.preferred-width + 16px;
+        height: htip.preferred-height + 14px;
         background: Theme.panel-bg;
         border-color: Theme.selection-bg;
         border-width: 1px;
         border-radius: 5px;
-        VerticalLayout {
-            padding: 7px;
-            Text {
-                text: CfgTip.text;
-                color: Theme.text;
-                font-size: 11px;
-                wrap: word-wrap;
-                // Tope de ancho: el Text no pasa de 264px y envuelve; su preferred-width (corto)
-                // achica el globo para tips de una línea, y su preferred-height (alto) lo agranda
-                // para tips largos. Sin width fija → sin ciclo de layout.
-                max-width: 264px;
-            }
+        htip := Text {
+            x: 8px;
+            y: 7px;
+            text: CfgTip.text;
+            color: Theme.text;
+            font-size: 11px;
+            // `max-width` (tope estático, sin ciclo) hace que el preferred-width no pase de 278 y el
+            // texto envuelva ahí. El Rectangle adopta ese ancho.
+            max-width: 278px;
+            wrap: word-wrap;
         }
     }
 
