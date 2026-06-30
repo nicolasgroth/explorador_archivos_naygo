@@ -69,11 +69,15 @@ en workers async que se comunican por canales. `core` no conoce egui ni Windows.
 ## Convenciones de código
 
 - Nombres en inglés en el código. Comentarios y commits pueden ser en español.
-- Cada archivo lleva header:
+- Cada archivo lleva header (formato profesional con email del autor + SPDX):
   ```
-  // Explorador de archivos — <descripción breve del archivo>
-  // Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+  // Naygo — <descripción breve del archivo>
+  // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+  // SPDX-License-Identifier: MIT
   ```
+  El tag `SPDX-License-Identifier` es el estándar de la industria (lo leen
+  escáneres de licencias como `reuse`/`cargo-license`). Para archivos `.slint`
+  el comentario también empieza con `//`.
 - Privilegiar legibilidad sobre brevedad. Un tercero debe poder leer y mantener.
 - Modular: una responsabilidad por módulo. Si un archivo crece demasiado, split.
 - Async para todo I/O. El hilo de UI no bloquea.
@@ -102,3 +106,13 @@ comandos (Ctrl+P), animaciones de íconos, personalización fina de toolbar.
 - Si no sabes algo o necesitas verificar, dilo. No inventes.
 - Trabajamos feature por feature. No saltes adelante sin que yo confirme.
 - Al terminar cada feature, sugiere el siguiente paso y espera mi visto bueno.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
