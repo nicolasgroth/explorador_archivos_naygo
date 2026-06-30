@@ -53,18 +53,40 @@ fn cmp_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
 }
 
 /// Comparación por extensión del path, case-insensitive. Sin extensión = vacío.
-/// Usa folding ASCII (`to_ascii_lowercase`) a propósito: las extensiones reales
-/// son ASCII y así se evita el costo Unicode de `to_lowercase` (a diferencia de
-/// `cmp_name`, que sí maneja nombres Unicode).
+/// Usa folding ASCII a propósito: las extensiones reales son ASCII y así se evita
+/// el costo Unicode de `to_lowercase` (a diferencia de `cmp_name`, que sí maneja
+/// nombres Unicode). Compara byte a byte sin alocar Strings intermedios: la
+/// extensión ya es un `&str` prestado del path, y `cmp_ascii_ci` la recorre en
+/// minúsculas sobre la marcha (antes `to_ascii_lowercase` alocaba un `String` por
+/// entry, lo que en carpetas grandes domina el ordenamiento).
 fn cmp_extension(a: &Entry, b: &Entry) -> std::cmp::Ordering {
-    let ext = |e: &Entry| {
-        e.path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-    };
-    ext(a).cmp(&ext(b))
+    fn ext(e: &Entry) -> &str {
+        e.path.extension().and_then(|s| s.to_str()).unwrap_or("")
+    }
+    cmp_ascii_ci(ext(a), ext(b))
+}
+
+/// Compara dos `&str` en orden lexicográfico ASCII case-insensitive, sin alocar.
+/// Empareja byte a byte plegando solo los ASCII a minúscula (los no-ASCII se
+/// comparan tal cual, igual que haría `to_ascii_lowercase`). El resultado coincide
+/// con `a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase())` para el dominio real
+/// de extensiones (ASCII), pero sin la alocación.
+fn cmp_ascii_ci(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut ba = a.bytes();
+    let mut bb = b.bytes();
+    loop {
+        match (ba.next(), bb.next()) {
+            (Some(x), Some(y)) => {
+                let ord = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (None, None) => return std::cmp::Ordering::Equal,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +193,24 @@ mod tests {
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["b.TXT", "a.zip"]); // txt < zip regardless of case
+    }
+
+    #[test]
+    fn cmp_ascii_ci_replica_to_ascii_lowercase() {
+        // `cmp_ascii_ci` (sin alocar) debe dar EXACTAMENTE el mismo orden que la versión
+        // anterior basada en `to_ascii_lowercase().cmp()`. Cubrimos prefijo/longitud, mezcla
+        // de mayúsculas, igualdad y vacíos.
+        let casos = ["", "a", "A", "txt", "TXT", "Txt", "zip", "z", "tx", "txta"];
+        for x in casos {
+            for y in casos {
+                let esperado = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+                assert_eq!(
+                    cmp_ascii_ci(x, y),
+                    esperado,
+                    "cmp_ascii_ci({x:?}, {y:?}) debe igualar a to_ascii_lowercase().cmp()"
+                );
+            }
+        }
     }
 
     #[test]
