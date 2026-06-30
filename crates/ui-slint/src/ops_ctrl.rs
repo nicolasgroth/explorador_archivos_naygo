@@ -10,11 +10,11 @@
 use naygo_core::cancel::CancellationToken;
 use naygo_core::ops::engine;
 use naygo_core::ops::journal::{self, JournalWriter, OpJournal};
-use naygo_core::ops::undo::{self, UndoEntry};
+use naygo_core::ops::undo::{self, UndoAction, UndoEntry};
 use naygo_core::ops::{
     apply_folder_decision, folder_conflicts, ConflictAction, ConflictDecision, ConflictPolicy,
-    ConflictPrompt, FolderConflict, FolderDecision, OpKind, OpMsg, OpPlan, OpProgress, OpRequest,
-    OpSummary, PlanMsg,
+    ConflictPrompt, FolderConflict, FolderDecision, OpItem, OpKind, OpMsg, OpOutcome, OpPlan,
+    OpProgress, OpRequest, OpSummary, PlanMsg,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -282,6 +282,21 @@ impl OpsCtrl {
             return;
         }
 
+        // Comprimir/extraer: worker propio de zip (no pasa por plan/exec_step). Reusa el panel,
+        // el canal de progreso, el id de op y la cancelación, igual que el resto.
+        //
+        // Modo cola: a diferencia de Copy/Move, una op de zip NO recorre un árbol con
+        // `read_dir`/`metadata` en una fase de planificación previa que congelaría la UI; toda su
+        // tarea (escaneo + compresión/extracción) corre dentro de su propio hilo. Por eso NO viola
+        // la invariante "un solo escaneo pesado a la vez" de la cola y se arranca directo, incluso
+        // si hay otra op trabajando. (Si en el futuro se quisiera serializar también el zip, habría
+        // que encolarlo como Copy/Move.)
+        if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
+            let id = self.alloc_op_id();
+            self.spawn_zip_op(id, req, label, record_undo);
+            return;
+        }
+
         // Copy/Move: planificar en segundo plano (puede recorrer un árbol enorme).
         if matches!(req.kind, OpKind::Copy | OpKind::Move) {
             // Modo cola: si ya hay otra op trabajando (escaneando o copiando), encolar el request
@@ -483,6 +498,100 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+        });
+    }
+
+    /// Lanza el worker de comprimir/extraer. Reusa el MISMO canal/panel/cancelación que las ops
+    /// normales: crea una `ActiveOp` con `rx` vivo (como `spawn_op`), de modo que `pump_ops` drene
+    /// su progreso y la cancelación por id funcione igual que para Copy/Move. La diferencia con
+    /// `spawn_op` es que NO hay plan ni motor (`engine::spawn`): el trabajo (escaneo + compresión/
+    /// extracción) corre dentro del hilo del worker, que habla por el mismo `OpMsg` channel.
+    ///
+    /// `record_undo`: si es `true`, el request se conserva en `ActiveOp::request`; al recibir
+    /// `Done` en `pump_ops` se construye un `UndoEntry` con un `TrashCreated` por cada item Done
+    /// (las rutas CREADAS por el zip: el .zip al comprimir, los archivos extraídos al extraer).
+    fn spawn_zip_op(&mut self, id: u64, req: OpRequest, label: String, record_undo: bool) {
+        use naygo_core::archive_ops::{compress_zip, extract_zip, ExtractConflict};
+        let token = CancellationToken::new();
+        let (tx, rx) = std::sync::mpsc::channel::<OpMsg>();
+        // Canal de conflicto sin uso real (el worker de zip no emite `OpMsg::Conflict` en este
+        // corte: resuelve el conflicto de extracción con Overwrite por defecto). Se crea igual para
+        // poblar el campo `conflict_tx` que `ActiveOp` exige. (Task 7 conectará el diálogo.)
+        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+
+        // Datos que el worker necesita (clonados antes de mover el closure al hilo).
+        let token_worker = token.clone();
+        let dest_dir = req.dest_dir.clone().unwrap_or_default();
+        let kind = req.kind.clone();
+        let sources = req.sources.clone();
+
+        // REGISTRAR la op en curso EXACTAMENTE como `spawn_op`: misma `ActiveOp` con `rx` vivo,
+        // `started: true`, sin journal (el zip no se retoma) y con el `request` guardado solo si se
+        // registra undo (para que `pump_ops` arme el `TrashCreated` al terminar). El resto de campos
+        // copian los valores neutros de `spawn_op` (sin fase Planning, sin cola, sin conflicto).
+        self.active_ops.push(ActiveOp {
+            id,
+            rx: Some(rx),
+            conflict_tx,
+            token,
+            label,
+            progress: None,
+            summary: None,
+            started: true,
+            pending: None,
+            journal_id: None,
+            request: record_undo.then_some(req),
+            awaiting_conflict: None,
+            awaiting_folders: None,
+            resume_skipped: 0,
+            started_at: None,
+            last_sample: None,
+            peak_speed: 0,
+            plan_rx: None,
+            plan_kind: OpKind::Copy,
+            plan_record_undo: false,
+            scan_files: 0,
+            scan_bytes: 0,
+            pending_req: None,
+        });
+
+        std::thread::spawn(move || {
+            // El progreso del zip es por BYTES (no archivos): se manda como `OpProgress` con los
+            // contadores de archivos en 0; el panel pinta la barra por el porcentaje de bytes.
+            let mut on_progress = |done: u64, total: u64| {
+                let _ = tx.send(OpMsg::Progress(OpProgress {
+                    bytes_done: done,
+                    bytes_total: total,
+                    files_done: 0,
+                    files_total: 0,
+                    current: PathBuf::new(),
+                }));
+            };
+            let result = match &kind {
+                OpKind::Compress { dest_name } => {
+                    let dest_zip = dest_dir.join(dest_name);
+                    compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker)
+                }
+                OpKind::Extract => {
+                    let zip = sources.first().cloned().unwrap_or_default();
+                    // Conflicto al extraer: primer corte = Overwrite por defecto (Task 7 conecta el
+                    // diálogo de conflicto de extracción al panel).
+                    let mut on_conflict = |_p: &Path| ExtractConflict::Overwrite;
+                    extract_zip(&zip, &dest_dir, &mut on_conflict, &mut on_progress, &token_worker)
+                }
+                _ => unreachable!("spawn_zip_op solo recibe Compress/Extract"),
+            };
+            match result {
+                Ok(items) => {
+                    let _ = tx.send(OpMsg::Done(zip_summary(items)));
+                }
+                Err(naygo_core::archive_ops::ArchiveError::Cancelled) => {
+                    let _ = tx.send(OpMsg::Cancelled(zip_summary(Vec::new())));
+                }
+                Err(e) => {
+                    let _ = tx.send(OpMsg::Failed(e.to_string()));
+                }
+            }
         });
     }
 
@@ -700,21 +809,29 @@ impl OpsCtrl {
                 // 3). Las ops terminadas están topeadas a 20 (HISTORY_CAP), así que el costo de
                 // retener el request es despreciable.
                 if let Some(req) = self.active_ops[i].request.clone() {
-                    if let Some(actions) = undo::build_undo(&req, &summary) {
-                        if !actions.is_empty() {
-                            let id = self.next_undo_id;
-                            self.next_undo_id += 1;
-                            self.undo_history.push(UndoEntry {
-                                id,
-                                label: self.active_ops[i].label.clone(),
-                                when_epoch_secs: now_epoch_secs(),
-                                actions,
-                                undone: false,
-                            });
-                            // Tope de 100 entradas (descartar las más viejas).
-                            if self.undo_history.len() > 100 {
-                                self.undo_history.remove(0);
-                            }
+                    // El deshacer de comprimir/extraer NO lo arma `build_undo` (devuelve None para
+                    // Compress/Extract): el motor de ops no procesó esta op, así que el inverso se
+                    // construye aquí desde el summary del worker de zip. Son rutas CREADAS (el .zip al
+                    // comprimir, los archivos/carpetas extraídos al extraer) → a PAPELERA, igual que
+                    // deshacer una copia. Para el resto de ops, sigue el camino normal de `build_undo`.
+                    let actions = if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
+                        zip_undo_actions(&summary)
+                    } else {
+                        undo::build_undo(&req, &summary).unwrap_or_default()
+                    };
+                    if !actions.is_empty() {
+                        let id = self.next_undo_id;
+                        self.next_undo_id += 1;
+                        self.undo_history.push(UndoEntry {
+                            id,
+                            label: self.active_ops[i].label.clone(),
+                            when_epoch_secs: now_epoch_secs(),
+                            actions,
+                            undone: false,
+                        });
+                        // Tope de 100 entradas (descartar las más viejas).
+                        if self.undo_history.len() > 100 {
+                            self.undo_history.remove(0);
                         }
                     }
                 }
@@ -1797,6 +1914,48 @@ pub struct OpRowData {
     pub has_file_list: bool,
     /// Cuántos archivos se concretaron (Done). Lo usa la UI para el texto "Ver N archivos".
     pub files_done_count: i32,
+}
+
+/// Convierte el resultado del worker de zip (`ArchiveOpItem` por entrada) en un `OpSummary` para
+/// que el panel de operaciones lo muestre con el MISMO formato que copiar/mover ("N hechos / M con
+/// error"). Cada `ArchiveOpItem { path, outcome }` se mapea a un `OpItem { dest: path, outcome,
+/// src: None }`: `src` es `None` porque las rutas del zip son CREADAS (no movidas de un origen). Los
+/// totales de bytes/tiempo se dejan en 0: el progreso por bytes ya se mostró en vivo; el summary
+/// solo necesita el desglose por archivo.
+fn zip_summary(items: Vec<naygo_core::archive_ops::ArchiveOpItem>) -> OpSummary {
+    use naygo_core::archive_ops::ArchiveOutcome;
+    OpSummary {
+        items: items
+            .into_iter()
+            .map(|it| OpItem {
+                dest: it.path,
+                outcome: match it.outcome {
+                    ArchiveOutcome::Done => OpOutcome::Done,
+                    ArchiveOutcome::Skipped => OpOutcome::Skipped,
+                    ArchiveOutcome::Failed(s) => OpOutcome::Failed(s),
+                },
+                src: None,
+            })
+            .collect(),
+        bytes_done: 0,
+        elapsed_secs: 0.0,
+    }
+}
+
+/// Construye el inverso (deshacer) de una op de comprimir/extraer desde su `OpSummary`: cada ítem
+/// que se concretó (`Done`) es una ruta CREADA por el zip (el .zip al comprimir, los archivos/
+/// carpetas extraídos al extraer) que se manda a PAPELERA. No usa `undo::build_undo` (que devuelve
+/// None para Compress/Extract): el motor de ops no procesó esta op, así que el inverso se arma aquí.
+/// Los saltados/fallidos no generan acción (no se creó nada que deshacer).
+fn zip_undo_actions(summary: &OpSummary) -> Vec<UndoAction> {
+    summary
+        .items
+        .iter()
+        .filter(|it| matches!(it.outcome, OpOutcome::Done))
+        .map(|it| UndoAction::TrashCreated {
+            path: it.dest.clone(),
+        })
+        .collect()
 }
 
 /// Segundos desde la época Unix (para el timestamp del UndoEntry).
