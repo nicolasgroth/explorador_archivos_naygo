@@ -14,9 +14,19 @@ use zip::write::SimpleFileOptions;
 /// Resultado de UNA entrada procesada (para el resumen y el deshacer).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveOpItem {
-    /// Ruta REAL escrita: el `.zip` (comprimir) o el archivo/carpeta extraído (extraer).
+    /// Ruta de la entrada procesada. Al COMPRIMIR es el ORIGEN que se metió al .zip (NO el .zip:
+    /// el .zip es la única ruta creada, pero su undo se arma aparte desde el destino). Al EXTRAER
+    /// es el archivo/carpeta de destino escrito.
     pub path: PathBuf,
     pub outcome: ArchiveOutcome,
+    /// `true` solo si la operación CREÓ esta ruta de cero (no existía antes). Es la única base
+    /// segura para deshacer: trashear al deshacer SOLO lo que la op trajo a la existencia, nunca
+    /// algo preexistente del usuario. Para comprimir, los `path` son los ORÍGENES (que ya existían):
+    /// `created` es `false` en todos (el undo de comprimir trashea el .zip, no los items — ver
+    /// `compress_zip`). Para extraer: `true` solo en dirs que NO existían, archivos nuevos y la
+    /// ruta con sufijo "(2)" de KeepBoth; `false` en dirs/archivos preexistentes (Overwrite incluido)
+    /// y en lo Saltado/Fallido.
+    pub created: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +124,10 @@ pub fn compress_zip(
                 items.push(ArchiveOpItem {
                     path: disk.clone(),
                     outcome: ArchiveOutcome::Failed(e.to_string()),
+                    // El `path` es un ORIGEN preexistente: comprimir NUNCA lo crea (la única ruta
+                    // creada es el .zip). `created: false` siempre, para no trashear orígenes al
+                    // deshacer.
+                    created: false,
                 });
             }
             continue;
@@ -124,6 +138,7 @@ pub fn compress_zip(
                     items.push(ArchiveOpItem {
                         path: disk.clone(),
                         outcome: ArchiveOutcome::Failed(e.to_string()),
+                        created: false,
                     });
                     continue;
                 }
@@ -159,11 +174,13 @@ pub fn compress_zip(
                     } else {
                         ArchiveOutcome::Done
                     },
+                    created: false,
                 });
             }
             Err(e) => items.push(ArchiveOpItem {
                 path: disk.clone(),
                 outcome: ArchiveOutcome::Failed(e.to_string()),
+                created: false,
             }),
         }
     }
@@ -230,6 +247,7 @@ pub fn extract_zip(
                 items.push(ArchiveOpItem {
                     path: PathBuf::new(),
                     outcome: ArchiveOutcome::Failed(e.to_string()),
+                    created: false, // no se creó nada (no se pudo ni leer la entrada)
                 });
                 continue;
             }
@@ -239,6 +257,7 @@ pub fn extract_zip(
             items.push(ArchiveOpItem {
                 path: PathBuf::from(entry.name()),
                 outcome: ArchiveOutcome::Skipped,
+                created: false, // entrada hostil rechazada: nada en disco
             });
             continue;
         };
@@ -251,14 +270,20 @@ pub fn extract_zip(
             items.push(ArchiveOpItem {
                 path: target,
                 outcome: ArchiveOutcome::Skipped,
+                created: false, // zip-slip bloqueado: nada se escribió
             });
             continue;
         }
         if entry.is_dir() {
+            // CRÍTICO para el undo (BUG 2): solo es una ruta CREADA por la op si la carpeta NO
+            // existía antes. Si el usuario ya tenía esta carpeta (posiblemente poblada), `created`
+            // queda en `false` para que deshacer NUNCA la mande a la papelera con su contenido.
+            let existed = target.exists();
             let _ = std::fs::create_dir_all(&target);
             items.push(ArchiveOpItem {
                 path: target,
                 outcome: ArchiveOutcome::Done,
+                created: !existed,
             });
             continue;
         }
@@ -266,19 +291,30 @@ pub fn extract_zip(
             let _ = std::fs::create_dir_all(parent);
         }
         let mut final_target = target.clone();
+        // ¿La ruta destino del archivo CREADA por esta op es nueva? Arranca asumiendo que el
+        // archivo no existía (extracción limpia → ruta nueva → trasheable al deshacer). El conflicto
+        // la baja a `false` si vamos a PISAR un archivo preexistente (Overwrite): ese archivo ya
+        // existía, así que deshacer NO debe trashearlo (su versión original se perdió al sobrescribir
+        // — la sobrescritura no es deshacible de forma segura). KeepBoth escribe en una ruta "(2)"
+        // que SÍ es nueva, así que vuelve a `true`.
+        let mut created = true;
         if final_target.exists() {
             match on_conflict(&final_target) {
                 ExtractConflict::Skip => {
                     items.push(ArchiveOpItem {
                         path: final_target,
                         outcome: ArchiveOutcome::Skipped,
+                        created: false, // no se pisó nada: el preexistente quedó intacto
                     });
                     continue;
                 }
                 ExtractConflict::Cancel => return Err(ArchiveError::Cancelled),
-                ExtractConflict::Overwrite => {}
+                // Overwrite: el archivo YA existía. No es una ruta creada por la op → no trasheable.
+                ExtractConflict::Overwrite => created = false,
                 ExtractConflict::KeepBoth => {
+                    // La ruta con sufijo "(2)" es nueva (creada por la op) → trasheable.
                     final_target = unique_path(&final_target);
+                    created = true;
                 }
             }
         }
@@ -315,11 +351,15 @@ pub fn extract_zip(
                         Some(m) => ArchiveOutcome::Failed(m),
                         None => ArchiveOutcome::Done,
                     },
+                    // `created` solo importa para los Done (el undo solo trashea Done); un Overwrite
+                    // sobre preexistente lo dejó en `false` para no trashear lo que ya existía.
+                    created,
                 });
             }
             Err(e) => items.push(ArchiveOpItem {
                 path: final_target,
                 outcome: ArchiveOutcome::Failed(e.to_string()),
+                created: false, // no se pudo crear el archivo: nada en disco que deshacer
             }),
         }
     }
@@ -577,6 +617,174 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i.outcome, ArchiveOutcome::Failed(_))),
             "la entrada corrupta debe quedar Failed: {items:?}"
+        );
+    }
+
+    // --- Regresión: el flag `created` para el undo seguro (no perder datos) ---
+
+    #[test]
+    fn compress_items_apuntan_a_origenes_y_nunca_son_created() {
+        // BUG 1 (pérdida de datos): comprimir reportaba cada ORIGEN como item Done; si el undo
+        // trasheara esos items, borraría los archivos del usuario y dejaría el .zip. La defensa es
+        // doble: (a) los `path` son los orígenes (no el .zip), (b) `created` es SIEMPRE false, así
+        // que `zip_undo_actions` no trashea ninguno (el undo de comprimir apunta al .zip aparte).
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("hola.txt");
+        std::fs::write(&src, b"contenido").unwrap();
+        let zip_path = dir.path().join("out.zip");
+        let token = CancellationToken::new();
+        let items = compress_zip(&[src.clone()], &zip_path, &mut noop_progress(), &token).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path, src, "el item apunta al ORIGEN, no al .zip");
+        assert_ne!(items[0].path, zip_path, "el .zip NO aparece como item");
+        assert!(
+            !items.iter().any(|i| i.created),
+            "NINGÚN item de comprimir es 'created' (no trashear orígenes al deshacer)"
+        );
+    }
+
+    #[test]
+    fn extract_dir_preexistente_no_es_created() {
+        // BUG 2 (pérdida de datos): extraer un zip que trae una entrada de carpeta cuyo nombre el
+        // usuario YA tenía (poblada). Esa carpeta NO la creó la op → created=false, para que
+        // deshacer no la mande a la papelera con el contenido previo del usuario.
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("sub/", b""), ("sub/nuevo.txt", b"x")]);
+        let dest = dir.path().join("d");
+        // El usuario ya tenía `d/sub/` con un archivo propio.
+        std::fs::create_dir_all(dest.join("sub")).unwrap();
+        std::fs::write(dest.join("sub/previo.txt"), b"mio").unwrap();
+        let token = CancellationToken::new();
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .unwrap();
+        // La entrada de carpeta `sub/` apunta a la carpeta preexistente: created=false.
+        let sub_item = items
+            .iter()
+            .find(|i| i.path == dest.join("sub"))
+            .expect("debe haber un item para la carpeta sub/");
+        assert_eq!(sub_item.outcome, ArchiveOutcome::Done);
+        assert!(
+            !sub_item.created,
+            "carpeta preexistente NO es created (no trashear el contenido del usuario)"
+        );
+        // El archivo previo del usuario sigue intacto.
+        assert_eq!(std::fs::read(dest.join("sub/previo.txt")).unwrap(), b"mio");
+    }
+
+    #[test]
+    fn extract_dir_nuevo_si_es_created() {
+        // Una carpeta que NO existía antes SÍ la creó la op → created=true (trasheable al deshacer).
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("nueva/", b""), ("nueva/a.txt", b"x")]);
+        let dest = dir.path().join("d"); // d/ no tiene "nueva/" todavía
+        let token = CancellationToken::new();
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .unwrap();
+        let nueva = items
+            .iter()
+            .find(|i| i.path == dest.join("nueva"))
+            .expect("debe haber un item para la carpeta nueva/");
+        assert!(nueva.created, "carpeta nueva creada por la op → created=true");
+        // El archivo dentro también es nuevo.
+        let archivo = items
+            .iter()
+            .find(|i| i.path == dest.join("nueva/a.txt"))
+            .unwrap();
+        assert!(archivo.created, "archivo nuevo → created=true");
+    }
+
+    #[test]
+    fn extract_archivo_nuevo_si_es_created() {
+        // Un archivo extraído en una ruta que no existía → created=true (trasheable).
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        let token = CancellationToken::new();
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .unwrap();
+        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        assert_eq!(item.outcome, ArchiveOutcome::Done);
+        assert!(item.created, "archivo nuevo → created=true");
+    }
+
+    #[test]
+    fn extract_overwrite_de_preexistente_no_es_created() {
+        // BUG 2 (parte archivo): Overwrite sobre un archivo que el usuario YA tenía. Ese archivo
+        // existía antes; deshacer NO debe trashearlo (su versión original ya se perdió al pisar).
+        // created=false lo deja fuera del undo.
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
+        let token = CancellationToken::new();
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .unwrap();
+        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        assert_eq!(item.outcome, ArchiveOutcome::Done, "se sobrescribió (Done)");
+        assert!(
+            !item.created,
+            "Overwrite de preexistente NO es created (no trashear lo que ya existía)"
+        );
+    }
+
+    #[test]
+    fn extract_keepboth_ruta_con_sufijo_es_created() {
+        // KeepBoth ante un preexistente: escribe en "dato (2).txt", una ruta NUEVA creada por la op
+        // → created=true (trasheable). El preexistente "dato.txt" no aparece como item creado.
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
+        let token = CancellationToken::new();
+        let mut keep = |_p: &Path| ExtractConflict::KeepBoth;
+        let items =
+            extract_zip(&zip_path, &dest, &mut keep, &mut noop_progress(), &token).unwrap();
+        // El item es la ruta con sufijo y es created=true.
+        let item = items
+            .iter()
+            .find(|i| i.path == dest.join("dato (2).txt"))
+            .expect("KeepBoth escribe en la ruta con sufijo");
+        assert!(item.created, "la ruta '(2)' es nueva → created=true");
+        // El preexistente intacto y NO aparece como ruta creada.
+        assert_eq!(std::fs::read(dest.join("dato.txt")).unwrap(), b"viejo");
+        assert!(!items.iter().any(|i| i.path == dest.join("dato.txt") && i.created));
+    }
+
+    #[test]
+    fn extract_skip_no_es_created() {
+        // Skip ante un preexistente: no se escribe nada → created=false (no trashear el del usuario).
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
+        let token = CancellationToken::new();
+        let mut skip = |_p: &Path| ExtractConflict::Skip;
+        let items = extract_zip(&zip_path, &dest, &mut skip, &mut noop_progress(), &token).unwrap();
+        let item = items.iter().find(|i| i.path == dest.join("dato.txt")).unwrap();
+        assert_eq!(item.outcome, ArchiveOutcome::Skipped);
+        assert!(!item.created, "Skip no crea nada → created=false");
+    }
+
+    #[test]
+    fn extract_zip_slip_no_es_created() {
+        // Una entrada zip-slip rechazada nunca toca el disco → created=false.
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "evil.zip", &[("../escape.txt", b"pwn")]);
+        let dest = dir.path().join("destino");
+        let token = CancellationToken::new();
+        let items =
+            extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token)
+                .unwrap();
+        assert!(
+            !items.iter().any(|i| i.created),
+            "una entrada rechazada por zip-slip no es created"
         );
     }
 }

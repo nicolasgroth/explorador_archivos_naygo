@@ -160,6 +160,14 @@ pub struct ActiveOp {
     /// registra undo. Cuando le toca el turno, `pump_ops` lanza su `spawn_plan` (entra en fase
     /// "Calculando…") en vez de spawnear el motor directo. `None` en ops ya planificadas.
     pub pending_req: Option<(OpRequest, bool)>,
+    /// Canal de UNA muestra para el deshacer de comprimir/extraer (`spawn_zip_op`). El undo de un
+    /// zip NO lo arma `build_undo` (el motor de ops no procesó la op): el worker, que tiene los
+    /// `ArchiveOpItem` con el flag `created`, calcula las `UndoAction` SEGURAS (trashear solo lo
+    /// que la op creó: el .zip al comprimir; al extraer, solo rutas nuevas — nunca preexistentes
+    /// del usuario) y las manda por aquí. `pump_ops` lo drena al recibir `Done`. `None` en ops que
+    /// no son de zip. Es un canal aparte del de progreso porque `OpMsg` (de core) no transporta el
+    /// inverso; mantenerlo separado evita tocar el enum compartido.
+    pub zip_undo_rx: Option<Receiver<Vec<UndoAction>>>,
 }
 
 impl ActiveOp {
@@ -374,6 +382,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: None,
         });
     }
 
@@ -412,6 +421,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: None,
         });
     }
 
@@ -444,6 +454,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: Some((req, record_undo)),
+            zip_undo_rx: None,
         });
     }
 
@@ -498,6 +509,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: None,
         });
     }
 
@@ -507,9 +519,10 @@ impl OpsCtrl {
     /// `spawn_op` es que NO hay plan ni motor (`engine::spawn`): el trabajo (escaneo + compresión/
     /// extracción) corre dentro del hilo del worker, que habla por el mismo `OpMsg` channel.
     ///
-    /// `record_undo`: si es `true`, el request se conserva en `ActiveOp::request`; al recibir
-    /// `Done` en `pump_ops` se construye un `UndoEntry` con un `TrashCreated` por cada item Done
-    /// (las rutas CREADAS por el zip: el .zip al comprimir, los archivos extraídos al extraer).
+    /// `record_undo`: si es `true`, el worker calcula las `UndoAction` SEGURAS (ver `zip_undo_rx`)
+    /// y las manda por un canal aparte; `pump_ops` las recoge al recibir `Done` y arma el
+    /// `UndoEntry`. El deshacer trashea SOLO lo que la op CREÓ: el .zip al comprimir; al extraer,
+    /// solo las rutas nuevas (nunca archivos/carpetas preexistentes del usuario).
     fn spawn_zip_op(&mut self, id: u64, req: OpRequest, label: String, record_undo: bool) {
         use naygo_core::archive_ops::{compress_zip, extract_zip, ExtractConflict};
         let token = CancellationToken::new();
@@ -518,6 +531,10 @@ impl OpsCtrl {
         // corte: resuelve el conflicto de extracción con Overwrite por defecto). Se crea igual para
         // poblar el campo `conflict_tx` que `ActiveOp` exige. (Task 7 conectará el diálogo.)
         let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        // Canal de UNA muestra para el inverso (deshacer) del zip: el worker lo calcula desde los
+        // `ArchiveOpItem` (que traen `created`) y lo manda; `pump_ops` lo drena al `Done`. Solo se
+        // engancha si `record_undo` (si no, ni se ofrece deshacer).
+        let (undo_tx, undo_rx) = std::sync::mpsc::channel::<Vec<UndoAction>>();
 
         // Datos que el worker necesita (clonados antes de mover el closure al hilo).
         let token_worker = token.clone();
@@ -527,7 +544,8 @@ impl OpsCtrl {
 
         // REGISTRAR la op en curso EXACTAMENTE como `spawn_op`: misma `ActiveOp` con `rx` vivo,
         // `started: true`, sin journal (el zip no se retoma) y con el `request` guardado solo si se
-        // registra undo (para que `pump_ops` arme el `TrashCreated` al terminar). El resto de campos
+        // registra undo (el popup "Archivos de la operación" usa el request para el contexto). El
+        // inverso del deshacer NO sale del request: llega por `zip_undo_rx`. El resto de campos
         // copian los valores neutros de `spawn_op` (sin fase Planning, sin cola, sin conflicto).
         self.active_ops.push(ActiveOp {
             id,
@@ -540,7 +558,7 @@ impl OpsCtrl {
             started: true,
             pending: None,
             journal_id: None,
-            request: record_undo.then_some(req),
+            request: record_undo.then(|| req.clone()),
             awaiting_conflict: None,
             awaiting_folders: None,
             resume_skipped: 0,
@@ -553,6 +571,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: record_undo.then_some(undo_rx),
         });
 
         std::thread::spawn(move || {
@@ -570,14 +589,38 @@ impl OpsCtrl {
             let result = match &kind {
                 OpKind::Compress { dest_name } => {
                     let dest_zip = dest_dir.join(dest_name);
-                    compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker)
+                    let r = compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker);
+                    if record_undo {
+                        // El undo de COMPRIMIR trashea SOLO el .zip CREADO (la única ruta nueva), y
+                        // solo si la op terminó OK (`Ok`): los `path` de los items son los ORÍGENES
+                        // y NO deben tocarse jamás (BUG 1). Si falló/canceló, sin inverso.
+                        let acts = match &r {
+                            Ok(_) => vec![UndoAction::TrashCreated { path: dest_zip }],
+                            Err(_) => Vec::new(),
+                        };
+                        let _ = undo_tx.send(acts);
+                    }
+                    r
                 }
                 OpKind::Extract => {
                     let zip = sources.first().cloned().unwrap_or_default();
                     // Conflicto al extraer: primer corte = Overwrite por defecto (Task 7 conecta el
                     // diálogo de conflicto de extracción al panel).
                     let mut on_conflict = |_p: &Path| ExtractConflict::Overwrite;
-                    extract_zip(&zip, &dest_dir, &mut on_conflict, &mut on_progress, &token_worker)
+                    let r =
+                        extract_zip(&zip, &dest_dir, &mut on_conflict, &mut on_progress, &token_worker);
+                    if record_undo {
+                        // El undo de EXTRAER trashea SOLO las rutas que la op CREÓ de cero
+                        // (`created == true`): dirs/archivos nuevos y el destino "(2)" de KeepBoth.
+                        // NUNCA toca preexistentes del usuario — dir poblado o archivo sobrescrito
+                        // (BUG 2). Se construye desde los items, que traen el flag `created`.
+                        let acts = match &r {
+                            Ok(items) => zip_undo_actions_from_items(items),
+                            Err(_) => Vec::new(),
+                        };
+                        let _ = undo_tx.send(acts);
+                    }
+                    r
                 }
                 _ => unreachable!("spawn_zip_op solo recibe Compress/Extract"),
             };
@@ -810,12 +853,18 @@ impl OpsCtrl {
                 // retener el request es despreciable.
                 if let Some(req) = self.active_ops[i].request.clone() {
                     // El deshacer de comprimir/extraer NO lo arma `build_undo` (devuelve None para
-                    // Compress/Extract): el motor de ops no procesó esta op, así que el inverso se
-                    // construye aquí desde el summary del worker de zip. Son rutas CREADAS (el .zip al
-                    // comprimir, los archivos/carpetas extraídos al extraer) → a PAPELERA, igual que
-                    // deshacer una copia. Para el resto de ops, sigue el camino normal de `build_undo`.
+                    // Compress/Extract): el motor de ops no procesó esta op. El inverso lo calculó el
+                    // WORKER (que tiene los `ArchiveOpItem` con el flag `created`) y lo mandó por
+                    // `zip_undo_rx`: trashea SOLO lo que la op CREÓ (el .zip al comprimir; al extraer,
+                    // solo rutas nuevas, NUNCA preexistentes del usuario). Esto evita los dos bugs de
+                    // pérdida de datos (trashear orígenes al comprimir; trashear carpetas/archivos
+                    // preexistentes al extraer). Para el resto de ops, el camino normal de `build_undo`.
                     let actions = if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
-                        zip_undo_actions(&summary)
+                        self.active_ops[i]
+                            .zip_undo_rx
+                            .take()
+                            .and_then(|rx| rx.recv().ok())
+                            .unwrap_or_default()
                     } else {
                         undo::build_undo(&req, &summary).unwrap_or_default()
                     };
@@ -1684,6 +1733,7 @@ impl OpsCtrl {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: None,
         });
         self.drop_resume_item(id);
         true
@@ -1942,18 +1992,22 @@ fn zip_summary(items: Vec<naygo_core::archive_ops::ArchiveOpItem>) -> OpSummary 
     }
 }
 
-/// Construye el inverso (deshacer) de una op de comprimir/extraer desde su `OpSummary`: cada ítem
-/// que se concretó (`Done`) es una ruta CREADA por el zip (el .zip al comprimir, los archivos/
-/// carpetas extraídos al extraer) que se manda a PAPELERA. No usa `undo::build_undo` (que devuelve
-/// None para Compress/Extract): el motor de ops no procesó esta op, así que el inverso se arma aquí.
-/// Los saltados/fallidos no generan acción (no se creó nada que deshacer).
-fn zip_undo_actions(summary: &OpSummary) -> Vec<UndoAction> {
-    summary
-        .items
+/// Construye el inverso (deshacer) de una EXTRACCIÓN desde los `ArchiveOpItem` crudos del worker.
+/// CRÍTICO para no perder datos: trashea SOLO las rutas que la op CREÓ de cero (`created == true`)
+/// — dirs/archivos nuevos y el destino "(2)" de KeepBoth — y NUNCA las preexistentes del usuario
+/// (un dir poblado que ya estaba, o un archivo sobrescrito por Overwrite, tienen `created == false`).
+/// Se trabaja sobre los items crudos (no sobre el `OpSummary`) porque el flag `created` solo vive en
+/// `ArchiveOpItem`; el `OpSummary` ya lo perdió. El undo de COMPRIMIR no usa esto: es una sola acción
+/// con el .zip, armada aparte en `spawn_zip_op`.
+fn zip_undo_actions_from_items(
+    items: &[naygo_core::archive_ops::ArchiveOpItem],
+) -> Vec<UndoAction> {
+    use naygo_core::archive_ops::ArchiveOutcome;
+    items
         .iter()
-        .filter(|it| matches!(it.outcome, OpOutcome::Done))
+        .filter(|it| it.created && matches!(it.outcome, ArchiveOutcome::Done))
         .map(|it| UndoAction::TrashCreated {
-            path: it.dest.clone(),
+            path: it.path.clone(),
         })
         .collect()
 }
@@ -2185,6 +2239,151 @@ mod tests {
         drain(&mut c);
         assert_eq!(c.undo_history.len(), 1, "la copia registra un undo");
         assert!(!c.undo_history[0].label.is_empty());
+    }
+
+    // --- Regresión: undo de zip SEGURO (no perder datos) ---
+
+    use naygo_core::archive_ops::{ArchiveOpItem, ArchiveOutcome};
+
+    fn zip_item(path: &str, outcome: ArchiveOutcome, created: bool) -> ArchiveOpItem {
+        ArchiveOpItem {
+            path: PathBuf::from(path),
+            outcome,
+            created,
+        }
+    }
+
+    #[test]
+    fn zip_undo_actions_from_items_solo_trashea_created_done() {
+        // Solo los items created==true Y Done generan un TrashCreated. Un dir preexistente
+        // (created=false), un overwrite de preexistente (created=false), un saltado y un fallido NO
+        // deben aparecer: trashearlos borraría datos del usuario.
+        let items = vec![
+            zip_item("D:/d/nuevo.txt", ArchiveOutcome::Done, true), // nuevo → sí
+            zip_item("D:/d/sub", ArchiveOutcome::Done, false),      // dir preexistente → no
+            zip_item("D:/d/pisado.txt", ArchiveOutcome::Done, false), // overwrite → no
+            zip_item("D:/d/saltado.txt", ArchiveOutcome::Skipped, false), // skip → no
+            zip_item("D:/d/fallo.txt", ArchiveOutcome::Failed("x".into()), false), // fail → no
+            zip_item("D:/d/keepboth (2).txt", ArchiveOutcome::Done, true), // "(2)" nuevo → sí
+        ];
+        let acts = zip_undo_actions_from_items(&items);
+        assert_eq!(
+            acts,
+            vec![
+                UndoAction::TrashCreated {
+                    path: PathBuf::from("D:/d/nuevo.txt")
+                },
+                UndoAction::TrashCreated {
+                    path: PathBuf::from("D:/d/keepboth (2).txt")
+                },
+            ],
+            "solo las rutas nuevas creadas por la op se trashean"
+        );
+    }
+
+    #[test]
+    fn zip_undo_actions_from_items_vacio_si_nada_created() {
+        // Una extracción que solo tocó preexistentes (dir poblado + overwrite) NO debe deshacer nada.
+        let items = vec![
+            zip_item("D:/d/sub", ArchiveOutcome::Done, false),
+            zip_item("D:/d/pisado.txt", ArchiveOutcome::Done, false),
+        ];
+        assert!(zip_undo_actions_from_items(&items).is_empty());
+    }
+
+    #[test]
+    fn comprimir_undo_apunta_solo_al_zip_no_a_los_origenes() {
+        // BUG 1 end-to-end: comprimir dos archivos del usuario. El undo registrado debe ser UNA sola
+        // acción: trashear el .zip CREADO. JAMÁS los orígenes (que deben quedar intactos).
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        std::fs::write(&a, b"aaa").unwrap();
+        std::fs::write(&b, b"bbb").unwrap();
+        let dest_dir = tmp.path().to_path_buf();
+        let zip_path = dest_dir.join("paquete.zip");
+        let req = OpRequest {
+            kind: OpKind::Compress {
+                dest_name: "paquete.zip".into(),
+            },
+            sources: vec![a.clone(), b.clone()],
+            dest_dir: Some(dest_dir),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(req, "Comprimir".into(), true);
+        drain(&mut c);
+        assert!(zip_path.exists(), "el .zip se creó");
+        assert_eq!(c.undo_history.len(), 1, "comprimir registra un undo");
+        assert_eq!(
+            c.undo_history[0].actions,
+            vec![UndoAction::TrashCreated {
+                path: zip_path.clone()
+            }],
+            "el undo de comprimir trashea SOLO el .zip, nunca los orígenes"
+        );
+        // Los orígenes NO aparecen en ninguna acción de undo.
+        for act in &c.undo_history[0].actions {
+            if let UndoAction::TrashCreated { path } = act {
+                assert_ne!(path, &a, "el origen a.txt jamás debe trashearse");
+                assert_ne!(path, &b, "el origen b.txt jamás debe trashearse");
+            }
+        }
+    }
+
+    #[test]
+    fn extraer_undo_no_toca_carpeta_preexistente_del_usuario() {
+        // BUG 2 end-to-end: extraer un zip que trae una entrada de carpeta `sub/` dentro de un
+        // destino donde el usuario YA tenía `sub/` poblada. El undo NO debe incluir esa carpeta
+        // (trashearla borraría el contenido previo del usuario). Solo el archivo NUEVO del zip.
+        let tmp = tempfile::tempdir().unwrap();
+        // Construir el zip de prueba con una entrada de dir y un archivo nuevo dentro.
+        let zip_path = tmp.path().join("in.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            z.add_directory("sub/", opts).unwrap();
+            z.start_file("sub/nuevo.txt", opts).unwrap();
+            std::io::Write::write_all(&mut z, b"x").unwrap();
+            z.finish().unwrap();
+        }
+        let dest = tmp.path().join("destino");
+        // El usuario ya tenía destino/sub/ con un archivo propio.
+        std::fs::create_dir_all(dest.join("sub")).unwrap();
+        std::fs::write(dest.join("sub/previo.txt"), b"mio").unwrap();
+
+        let req = OpRequest {
+            kind: OpKind::Extract,
+            sources: vec![zip_path],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.start_op(req, "Extraer".into(), true);
+        drain(&mut c);
+
+        // El undo NO debe contener la carpeta preexistente sub/.
+        let trashed: Vec<&PathBuf> = c
+            .undo_history
+            .iter()
+            .flat_map(|e| &e.actions)
+            .map(|a| match a {
+                UndoAction::TrashCreated { path } => path,
+                UndoAction::MoveBack { now, .. } => now,
+            })
+            .collect();
+        assert!(
+            !trashed.iter().any(|p| *p == &dest.join("sub")),
+            "la carpeta preexistente del usuario NO debe estar en el undo: {trashed:?}"
+        );
+        // El archivo nuevo SÍ es trasheable.
+        assert!(
+            trashed.iter().any(|p| *p == &dest.join("sub/nuevo.txt")),
+            "el archivo nuevo extraído sí debe estar en el undo"
+        );
+        // Y el archivo previo del usuario sigue intacto en disco.
+        assert_eq!(std::fs::read(dest.join("sub/previo.txt")).unwrap(), b"mio");
     }
 
     #[test]
@@ -2507,6 +2706,7 @@ mod tests {
             scan_files: 0,
             scan_bytes: 0,
             pending_req: None,
+            zip_undo_rx: None,
         }
     }
 
