@@ -110,10 +110,14 @@ impl WorkspaceCtrl {
                 if paths.is_empty() {
                     return false;
                 }
-                let label = if cut { "Mover" } else { "Copiar" };
+                let label = if cut {
+                    self.config.t("ops.file_kind_move")
+                } else {
+                    self.config.t("ops.file_kind_copy")
+                };
                 let req = naygo_core::ops::transfer(cut, paths, dir);
                 self.ensure_ops_pane();
-                self.ops.start_op(req, label.to_string(), true);
+                self.ops.start_op(req, label, true);
                 self.ops.clear_cut();
                 true
             }
@@ -184,7 +188,11 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
-        let label = if move_ { "Mover" } else { "Copiar" };
+        let label = if move_ {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         // Diagnóstico: este es el camino de FALLBACK (el drop no se pudo enrutar por el punto y
         // cayó al panel activo). Si aquí el destino coincide con el origen, el resultado es un
         // no-op silencioso — clave para diagnosticar drops "que no hacen nada".
@@ -196,7 +204,7 @@ impl WorkspaceCtrl {
         ));
         let req = naygo_core::ops::transfer(move_, sources, dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label.to_string(), true);
+        self.ops.start_op(req, label, true);
         true
     }
 
@@ -278,7 +286,11 @@ impl WorkspaceCtrl {
         let same = same_drive(&paths[0], &dest_dir);
         let is_move =
             move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
-        let label = if is_move { "Mover" } else { "Copiar" };
+        let label = if is_move {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         // CONFIRMAR AL SOLTAR (decisión de Nicolás): NO ejecutamos la op aquí. Guardamos el drop ya
         // validado en `pending_drop` y devolvemos true; la UI abre un modal "¿Copiar/Mover N a
         // «destino»?" y, al confirmar, llama a `confirm_pending_drop` que arranca la op de verdad.
@@ -334,7 +346,11 @@ impl WorkspaceCtrl {
         let Some(pd) = self.pending_drop.take() else {
             return false;
         };
-        let label = if pd.is_move { "Mover" } else { "Copiar" };
+        let label = if pd.is_move {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
         crate::logging::breadcrumb(&format!(
             "confirm_pending_drop: {} {} ítem(s) → {}",
             label,
@@ -351,7 +367,7 @@ impl WorkspaceCtrl {
         }
         let req = naygo_core::ops::transfer(pd.is_move, pd.paths, pd.dest_dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label.to_string(), true);
+        self.ops.start_op(req, label, true);
         true
     }
 

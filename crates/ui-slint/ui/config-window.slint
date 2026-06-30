@@ -302,7 +302,7 @@ export component ConfigWindow inherits Window {
     in property <[ThemeCardVm]> theme-cards;
     in property <string> config-dir;
     in property <string> app-version;
-    // Categoría seleccionada (0..6). in-out para que Rust pueda saltar a la pestaña Íconos desde
+    // Categoría seleccionada (0..9). in-out para que Rust pueda saltar a la pestaña Íconos desde
     // el handler de personalize-icon-set.
     in-out property <int> cat: 3; // arranca en Apariencia (lo más visible)
     // Acción cuyo atajo se está capturando (vacío = ninguna).
@@ -311,7 +311,7 @@ export component ConfigWindow inherits Window {
     // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
     property <length> ctl-w: 240px;
     // Orden VISUAL del sidebar (label, cat). `cat` es el índice interno del bloque `if root.cat == N`
-    // y NO cambia: solo reordenamos las entradas y mapeamos cada una a su cat interno. Así los 11
+    // y NO cambia: solo reordenamos las entradas y mapeamos cada una a su cat interno. Así los 10
     // bloques de contenido quedan intactos (frágiles de reindexar). El orden de abajo agrupa por
     // afinidad temática. "Idioma" (cat 10) ya no aparece: su selector vive ahora en General (cat 0).
     property <[{label: string, cat: int}]> nav-items: [
