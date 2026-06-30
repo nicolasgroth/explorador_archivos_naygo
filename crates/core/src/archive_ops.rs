@@ -366,6 +366,24 @@ pub fn extract_zip(
     Ok(items)
 }
 
+/// Nombre de `.zip` LIBRE (que no pisa un archivo existente) dentro de `dir`. Si `dir/name` no
+/// existe, devuelve `name` tal cual; si existe, desambigua con el primer sufijo "(N)" libre:
+/// "proyecto.zip" ocupado → "proyecto (2).zip" → "proyecto (3).zip"…
+///
+/// CRÍTICO (pérdida de datos): al COMPRIMIR, el `.zip` se crea con `File::create`, que TRUNCA un
+/// archivo del mismo nombre sin avisar y sin pasar por la papelera. El controlador desambigua el
+/// nombre con este helper ANTES de armar la op, de modo que `compress_zip` nunca pise un `.zip`
+/// preexistente del usuario. Devuelve solo el NOMBRE (no la ruta) porque la op de comprimir lleva
+/// `dest_name` + `dest_dir` por separado; así el `dest_name` desambiguado fluye al worker y al undo
+/// (el `TrashCreated` del deshacer apunta al `.zip` realmente creado, no al nombre original).
+pub fn unique_zip_name(dir: &Path, name: &str) -> String {
+    let unique = unique_path(&dir.join(name));
+    unique
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string())
+}
+
 /// Devuelve una variante de `path` que no existe: "a.txt" → "a (2).txt" → "a (3).txt"…
 fn unique_path(path: &Path) -> PathBuf {
     if !path.exists() {
@@ -409,6 +427,58 @@ mod tests {
 
     fn noop_progress() -> impl FnMut(u64, u64) {
         |_done, _total| {}
+    }
+
+    #[test]
+    fn unique_zip_name_no_existe_devuelve_tal_cual() {
+        let dir = tempfile::tempdir().unwrap();
+        // No hay "foo.zip" en `dir`: el nombre se devuelve sin tocar.
+        assert_eq!(unique_zip_name(dir.path(), "foo.zip"), "foo.zip");
+    }
+
+    #[test]
+    fn unique_zip_name_existe_desambigua_con_sufijo() {
+        let dir = tempfile::tempdir().unwrap();
+        // Ya existe "foo.zip": debe saltar a "foo (2).zip".
+        std::fs::write(dir.path().join("foo.zip"), b"viejo").unwrap();
+        assert_eq!(unique_zip_name(dir.path(), "foo.zip"), "foo (2).zip");
+        // Con "foo.zip" Y "foo (2).zip" ocupados, sube a "foo (3).zip".
+        std::fs::write(dir.path().join("foo (2).zip"), b"viejo2").unwrap();
+        assert_eq!(unique_zip_name(dir.path(), "foo.zip"), "foo (3).zip");
+    }
+
+    #[test]
+    fn compress_no_pisa_un_zip_existente_desambiguando() {
+        // Pérdida de datos: comprimir con un `dest_name` que YA existe NO debe truncar el .zip
+        // preexistente. El flujo desambigua el nombre con `unique_zip_name` ANTES de comprimir,
+        // así `compress_zip` escribe en "foo (2).zip" y el "foo.zip" original queda intacto.
+        let dir = tempfile::tempdir().unwrap();
+        // El usuario ya tiene un "foo.zip" propio (de una compresión anterior).
+        let preexistente = dir.path().join("foo.zip");
+        std::fs::write(&preexistente, b"contenido-original-irreemplazable").unwrap();
+        // Fuente nueva a comprimir.
+        let src = dir.path().join("nuevo.txt");
+        std::fs::write(&src, b"datos nuevos").unwrap();
+
+        // El controlador desambigua el nombre destino ANTES de comprimir.
+        let dest_name = unique_zip_name(dir.path(), "foo.zip");
+        assert_eq!(dest_name, "foo (2).zip");
+        let dest_zip = dir.path().join(&dest_name);
+
+        let token = CancellationToken::new();
+        compress_zip(&[src], &dest_zip, &mut noop_progress(), &token).unwrap();
+
+        // El "foo.zip" original NO fue tocado (mismo contenido byte a byte).
+        assert_eq!(
+            std::fs::read(&preexistente).unwrap(),
+            b"contenido-original-irreemplazable",
+            "el .zip preexistente NO debe ser pisado"
+        );
+        // El nuevo "foo (2).zip" existe y trae la fuente comprimida.
+        assert!(dest_zip.exists(), "se creó el .zip desambiguado");
+        let f = std::fs::File::open(&dest_zip).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        assert!(z.by_name("nuevo.txt").is_ok(), "el .zip nuevo trae la fuente");
     }
 
     #[test]

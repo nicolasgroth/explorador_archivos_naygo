@@ -536,7 +536,9 @@ impl OpsCtrl {
         // Canal de conflicto REAL para la extracción: el worker emite `OpMsg::Conflict` al chocar un
         // archivo y se BLOQUEA en `conflict_rx` esperando la decisión del usuario; `pump_ops` la
         // enruta de vuelta por `conflict_tx` (vía `resolve_conflict`). Para comprimir, el canal no se
-        // usa (no hay conflictos al crear el .zip), pero se crea igual para poblar `ActiveOp`.
+        // usa: el `dest_name` ya viene DESAMBIGUADO desde `name_confirm` (`unique_zip_name`), así que
+        // crear el `.zip` nunca pisa un archivo preexistente y no hay conflicto que preguntar. Se crea
+        // igual para poblar `ActiveOp`.
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
         // Canal de UNA muestra para el inverso (deshacer) del zip: el worker lo calcula desde los
         // `ArchiveOpItem` (que traen `created`) y lo manda; `pump_ops` lo drena al `Done`. Solo se
@@ -910,10 +912,18 @@ impl OpsCtrl {
                     // pérdida de datos (trashear orígenes al comprimir; trashear carpetas/archivos
                     // preexistentes al extraer). Para el resto de ops, el camino normal de `build_undo`.
                     let actions = if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
+                        // El worker SIEMPRE manda el inverso por `undo_tx` ANTES del terminal
+                        // (`Done`/`Cancelled`) — ver `spawn_zip_op`. Como aquí ya leímos ese terminal,
+                        // el inverso está esperando en el canal y `recv` retorna al instante. Aun así
+                        // usamos `recv_timeout` (no `recv` a secas): un `recv` bloqueante en el hilo de
+                        // UI es frágil ante un cambio futuro de ese orden (colgaría la app). Con
+                        // timeout, en el peor caso perdemos el deshacer de ESA op pero la UI sigue viva.
                         self.active_ops[i]
                             .zip_undo_rx
                             .take()
-                            .and_then(|rx| rx.recv().ok())
+                            .and_then(|rx| {
+                                rx.recv_timeout(std::time::Duration::from_secs(1)).ok()
+                            })
                             .unwrap_or_default()
                     } else {
                         undo::build_undo(&req, &summary).unwrap_or_default()
@@ -1668,12 +1678,19 @@ impl OpsCtrl {
             }
             NamePurpose::Compress { sources } => {
                 // Comprimir la selección en `dir/<buf>.zip`. La extensión `.zip` se asegura aquí
-                // (el usuario puede haberla borrado del campo). El worker de zip arranca al pasar
-                // la op por `start_op` (Task 5 ya enruta Compress/Extract).
+                // (el usuario puede haberla borrado del campo).
+                //
+                // PÉRDIDA DE DATOS: `compress_zip` crea el `.zip` con `File::create`, que TRUNCA un
+                // archivo del mismo nombre sin avisar ni mandarlo a la papelera. Por eso el nombre se
+                // DESAMBIGUA aquí ANTES de armar la op: si `dir/<nombre>.zip` ya existe (p. ej. una
+                // compresión anterior de la misma carpeta), se usa el primer "(N)" libre ("proyecto
+                // (2).zip") y el `.zip` original del usuario queda INTACTO. Sin modal extra, mismo
+                // criterio que KeepBoth al extraer. El `dest_name` ya único fluye al worker y al undo
+                // (su `TrashCreated` apunta al `.zip` realmente creado, no al nombre pedido).
+                let dest_name =
+                    naygo_core::archive_ops::unique_zip_name(&dir, &ensure_zip_ext(&buf));
                 let req = OpRequest {
-                    kind: OpKind::Compress {
-                        dest_name: ensure_zip_ext(&buf),
-                    },
+                    kind: OpKind::Compress { dest_name },
                     sources,
                     dest_dir: Some(dir),
                     conflict: ConflictPolicy::Ask,
@@ -2474,6 +2491,66 @@ mod tests {
             if let UndoAction::TrashCreated { path } = act {
                 assert_ne!(path, &a, "el origen a.txt jamás debe trashearse");
                 assert_ne!(path, &b, "el origen b.txt jamás debe trashearse");
+            }
+        }
+    }
+
+    #[test]
+    fn comprimir_no_pisa_zip_existente_desambigua_y_undo_apunta_al_real() {
+        // PÉRDIDA DE DATOS end-to-end (flujo del modal): el usuario comprime una carpeta cuyo
+        // `proyecto.zip` por defecto YA existe (de una compresión anterior). El flujo debe
+        // desambiguar a `proyecto (2).zip`, dejar el `proyecto.zip` original INTACTO, y registrar el
+        // undo apuntando al `.zip` REALMENTE creado (el desambiguado), no al nombre original.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        // El usuario ya tiene "proyecto.zip" con contenido propio irrecuperable.
+        let preexistente = dir.join("proyecto.zip");
+        std::fs::write(&preexistente, b"contenido-original-del-usuario").unwrap();
+        // Fuentes nuevas a comprimir.
+        let src = dir.join("dato.txt");
+        std::fs::write(&src, b"datos nuevos").unwrap();
+
+        let mut c = OpsCtrl::new(dir.clone());
+        // Abrir el modal de comprimir con el nombre por defecto "proyecto.zip" (como lo haría
+        // `op_compress_prompt`).
+        c.pending_dialog = Some(OpDialog::NameInput {
+            purpose: NamePurpose::Compress {
+                sources: vec![src.clone()],
+            },
+            dir: dir.clone(),
+            buf: "proyecto.zip".into(),
+        });
+        // El usuario confirma sin cambiar el nombre.
+        assert!(c.name_confirm("Comprimir"), "la op de comprimir arranca");
+        drain(&mut c);
+
+        // El "proyecto.zip" original NO fue pisado (mismo contenido).
+        assert_eq!(
+            std::fs::read(&preexistente).unwrap(),
+            b"contenido-original-del-usuario",
+            "el .zip preexistente del usuario NO debe ser pisado"
+        );
+        // Se creó el desambiguado "proyecto (2).zip" con la fuente nueva.
+        let nuevo = dir.join("proyecto (2).zip");
+        assert!(nuevo.exists(), "se creó el .zip desambiguado 'proyecto (2).zip'");
+        {
+            let f = std::fs::File::open(&nuevo).unwrap();
+            let mut z = zip::ZipArchive::new(f).unwrap();
+            assert!(z.by_name("dato.txt").is_ok(), "el .zip nuevo trae la fuente");
+        }
+        // El undo trashea SOLO el .zip desambiguado REAL, jamás el preexistente.
+        assert_eq!(c.undo_history.len(), 1, "comprimir registra un undo");
+        assert_eq!(
+            c.undo_history[0].actions,
+            vec![UndoAction::TrashCreated { path: nuevo }],
+            "el undo apunta al .zip REALMENTE creado (desambiguado), no al nombre original"
+        );
+        for act in &c.undo_history[0].actions {
+            if let UndoAction::TrashCreated { path } = act {
+                assert_ne!(
+                    path, &preexistente,
+                    "el undo JAMÁS debe trashear el .zip preexistente del usuario"
+                );
             }
         }
     }
