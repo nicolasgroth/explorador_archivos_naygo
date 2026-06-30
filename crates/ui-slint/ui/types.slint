@@ -208,6 +208,10 @@ export struct ContextMenuVm {
     folder-mode: bool,
     // La selección es EXACTAMENTE un archivo `.zip` → mostrar "Extraer aquí" / "Extraer en…".
     is-single-zip: bool,
+    // Hay al menos un ítem seleccionado → mostrar "Comprimir en .zip…". (En modo archivo el menú
+    // solo se abre con selección, pero hacerlo explícito evita mostrar el ítem si esa invariante
+    // cambia.)
+    has-selection: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.

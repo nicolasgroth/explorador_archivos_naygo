@@ -88,7 +88,7 @@ export component ContextMenu inherits Rectangle {
             // Comprimir/Extraer (.zip). "Comprimir en .zip…" siempre que haya selección; las
             // dos de extraer solo si la selección es exactamente un archivo .zip.
             // TODO Task 8: i18n (Tr.ctx-compress / Tr.ctx-extract-here / Tr.ctx-extract-to).
-            if !root.vm.folder-mode: MenuRow { label: "Comprimir en .zip…"; clicked => { root.compress(); } }
+            if !root.vm.folder-mode && root.vm.has-selection: MenuRow { label: "Comprimir en .zip…"; clicked => { root.compress(); } }
             if !root.vm.folder-mode && root.vm.is-single-zip: MenuRow { label: "Extraer aquí"; clicked => { root.extract-here(); } }
             if !root.vm.folder-mode && root.vm.is-single-zip: MenuRow { label: "Extraer en…"; clicked => { root.extract-to(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }

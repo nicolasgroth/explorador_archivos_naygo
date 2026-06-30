@@ -411,6 +411,9 @@ impl WorkspaceCtrl {
             return;
         };
         let default_name = naygo_core::archive_ops::default_zip_name(&sources);
+        // Asegurar el panel de ops ANTES de mostrar el modal (igual que op_delete/op_extract_to):
+        // así, al confirmar el nombre, el panel de progreso ya está visible. Consistencia de UX.
+        self.ensure_ops_pane();
         self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
             purpose: crate::ops_ctrl::NamePurpose::Compress { sources },
             dir,

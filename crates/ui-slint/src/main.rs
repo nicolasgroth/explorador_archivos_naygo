@@ -659,6 +659,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     has_wt: c.windows_terminal_available(),
                     folder_mode: cm.folder_mode,
                     is_single_zip: c.sel_is_single_zip(),
+                    has_selection: !c.selected_paths().is_empty(),
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -668,6 +669,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     has_wt: false,
                     folder_mode: false,
                     is_single_zip: false,
+                    has_selection: false,
                 },
             };
             ui.set_ctx_menu(ctx);
