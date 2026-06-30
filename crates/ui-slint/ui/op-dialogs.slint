@@ -68,6 +68,7 @@ component DlgBtn inherits Rectangle {
                 : Theme.text-dim;
             horizontal-alignment: center;
             vertical-alignment: center;
+            overflow: elide;
         }
         // Atajo: solo si se definió. Pequeño, atenuado, entre paréntesis.
         if root.shortcut != "": Text {

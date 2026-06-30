@@ -280,6 +280,8 @@ component MenuItem inherits Rectangle {
         color: Theme.text;
         vertical-alignment: center;
         x: 8px;
+        width: parent.width - 16px;
+        overflow: elide;
     }
     mi-touch := TouchArea {
         clicked => { root.clicked(); }
