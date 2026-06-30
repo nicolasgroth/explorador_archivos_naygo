@@ -281,8 +281,8 @@ impl WorkspaceCtrl {
             return;
         }
         let req = naygo_core::ops::batch_rename(sources, new_names);
-        self.ops
-            .start_op(req, "Renombrar por lotes".to_string(), true);
+        let label = self.config.t("op.batch_rename");
+        self.ops.start_op(req, label, true);
         self.batch = None;
     }
 

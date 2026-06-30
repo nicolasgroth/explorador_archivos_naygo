@@ -154,11 +154,12 @@ impl WorkspaceCtrl {
             None => return,
         };
         let specs = naygo_core::ops::parse_new_folders(&text);
+        let label = self.config.t("op.new_folder");
         let mut created_any = false;
         for spec in specs {
             if let naygo_core::ops::FolderSpec::Valid(rel) = spec {
                 let req = naygo_core::ops::create(dir.clone(), rel, true);
-                self.ops.start_op(req, "Nueva carpeta".to_string(), true);
+                self.ops.start_op(req, label.clone(), true);
                 created_any = true;
             }
         }

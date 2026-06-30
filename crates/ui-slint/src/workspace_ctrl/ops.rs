@@ -384,10 +384,16 @@ impl WorkspaceCtrl {
         let Some(dir) = self.active_dir() else {
             return;
         };
+        // El título del modal y la etiqueta de la op se traducen aquí (el caller tiene `config`);
+        // `OpsCtrl` los recibe ya resueltos porque no conoce el idioma.
         let purpose = if is_dir {
-            crate::ops_ctrl::NamePurpose::NewDir
+            crate::ops_ctrl::NamePurpose::NewDir {
+                label: self.config.t("op.new_folder"),
+            }
         } else {
-            crate::ops_ctrl::NamePurpose::NewFile
+            crate::ops_ctrl::NamePurpose::NewFile {
+                label: self.config.t("op.new_file"),
+            }
         };
         self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::NameInput {
             purpose,
@@ -523,7 +529,8 @@ impl WorkspaceCtrl {
         crate::logging::breadcrumb("renombrar");
         let source = e.path.clone();
         let req = naygo_core::ops::rename(source, new_name.to_string());
-        self.ops.start_op(req, "Renombrar".to_string(), true);
+        let label = self.config.t("op.rename");
+        self.ops.start_op(req, label, true);
         true
     }
 
@@ -568,8 +575,9 @@ impl WorkspaceCtrl {
         }
         let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
         self.ops.undo_history[idx].undone = true;
+        let label = self.config.t("undo.button");
         for req in reqs {
-            self.ops.start_op(req, "Deshacer".to_string(), false);
+            self.ops.start_op(req, label.clone(), false);
         }
         true
     }
@@ -587,8 +595,9 @@ impl WorkspaceCtrl {
         };
         let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
         self.ops.undo_history[idx].undone = true;
+        let label = self.config.t("undo.button");
         for req in reqs {
-            self.ops.start_op(req, "Deshacer".to_string(), false);
+            self.ops.start_op(req, label.clone(), false);
         }
         true
     }
