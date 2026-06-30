@@ -533,10 +533,11 @@ impl OpsCtrl {
         use naygo_core::archive_ops::{compress_zip, extract_zip, ExtractConflict};
         let token = CancellationToken::new();
         let (tx, rx) = std::sync::mpsc::channel::<OpMsg>();
-        // Canal de conflicto sin uso real (el worker de zip no emite `OpMsg::Conflict` en este
-        // corte: resuelve el conflicto de extracción con Overwrite por defecto). Se crea igual para
-        // poblar el campo `conflict_tx` que `ActiveOp` exige. (Task 7 conectará el diálogo.)
-        let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
+        // Canal de conflicto REAL para la extracción: el worker emite `OpMsg::Conflict` al chocar un
+        // archivo y se BLOQUEA en `conflict_rx` esperando la decisión del usuario; `pump_ops` la
+        // enruta de vuelta por `conflict_tx` (vía `resolve_conflict`). Para comprimir, el canal no se
+        // usa (no hay conflictos al crear el .zip), pero se crea igual para poblar `ActiveOp`.
+        let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
         // Canal de UNA muestra para el inverso (deshacer) del zip: el worker lo calcula desde los
         // `ArchiveOpItem` (que traen `created`) y lo manda; `pump_ops` lo drena al `Done`. Solo se
         // engancha si `record_undo` (si no, ni se ofrece deshacer).
@@ -581,10 +582,16 @@ impl OpsCtrl {
         });
 
         std::thread::spawn(move || {
+            // `tx` (Sender<OpMsg>) es Clone. Se clona para cada clausura `FnMut` porque ambas lo
+            // capturan: `on_progress` por su clon y `on_conflict` por el suyo (una `&mut dyn FnMut`
+            // no podría co-capturar el mismo `tx` por valor). El `tx` original queda libre para los
+            // mensajes terminales (`Done`/`Cancelled`/`Failed`) al final del worker.
+            let tx_progress = tx.clone();
+            let tx_conflict = tx.clone();
             // El progreso del zip es por BYTES (no archivos): se manda como `OpProgress` con los
             // contadores de archivos en 0; el panel pinta la barra por el porcentaje de bytes.
             let mut on_progress = |done: u64, total: u64| {
-                let _ = tx.send(OpMsg::Progress(OpProgress {
+                let _ = tx_progress.send(OpMsg::Progress(OpProgress {
                     bytes_done: done,
                     bytes_total: total,
                     files_done: 0,
@@ -610,9 +617,46 @@ impl OpsCtrl {
                 }
                 OpKind::Extract => {
                     let zip = sources.first().cloned().unwrap_or_default();
-                    // Conflicto al extraer: primer corte = Overwrite por defecto (Task 7 conecta el
-                    // diálogo de conflicto de extracción al panel).
-                    let mut on_conflict = |_p: &Path| ExtractConflict::Overwrite;
+                    // Conflicto al extraer: el worker se PARA, emite el prompt lado-a-lado y ESPERA la
+                    // decisión del usuario (mismo molde que el motor de copiar en `engine.rs`).
+                    //
+                    // `extract_zip` llama `on_conflict(&target)` con UNA sola ruta (el archivo destino
+                    // que ya existe). El prompt necesita dos lados: se usa la MISMA ruta para ambos
+                    // (existing = incoming = el archivo en conflicto). La UI lo muestra lado a lado: el
+                    // "existente" es el del disco; el "entrante" es el que se va a escribir en ese mismo
+                    // destino. Es la mejor aproximación disponible con la firma de `extract_zip`.
+                    //
+                    // Memoria de "aplicar a todos": si el usuario marca `apply_all`, se memoriza la
+                    // acción mapeada en `sticky` y los conflictos siguientes la reaplican sin volver a
+                    // preguntar (mejor UX). Sin `apply_all`, cada conflicto re-pregunta.
+                    let mut sticky: Option<ExtractConflict> = None;
+                    let mut on_conflict = |target: &Path| -> ExtractConflict {
+                        if let Some(s) = sticky {
+                            return s;
+                        }
+                        let _ = tx_conflict.send(OpMsg::Conflict(ConflictPrompt::from_paths(
+                            target.to_path_buf(),
+                            target.to_path_buf(),
+                        )));
+                        loop {
+                            if token_worker.is_cancelled() {
+                                return ExtractConflict::Cancel;
+                            }
+                            match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                                Ok(d) => {
+                                    let mapped = map_action_to_extract(d.action);
+                                    if d.apply_all {
+                                        sticky = Some(mapped);
+                                    }
+                                    return mapped;
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                    return ExtractConflict::Skip;
+                                }
+                            }
+                        }
+                    };
                     let r =
                         extract_zip(&zip, &dest_dir, &mut on_conflict, &mut on_progress, &token_worker);
                     if record_undo {
@@ -2047,6 +2091,28 @@ fn zip_undo_actions_from_items(
         .collect()
 }
 
+/// Mapea la acción que eligió el usuario en el diálogo de conflicto (genérico de copiar/mover) a la
+/// variante de `ExtractConflict` que entiende `extract_zip`. El diálogo ofrece más acciones que las
+/// que la extracción soporta, así que se colapsan:
+/// - `Overwrite` → sobrescribe el archivo del destino.
+/// - `Skip` / `SkipIdentical` → no extrae ese archivo (deja el del disco).
+/// - `Rename` / `RenameTo` / `RenameExisting` → `KeepBoth`: el ENTRANTE se extrae con sufijo "(2)"
+///   (lo hace `extract_zip` con `unique_path`) y el existente queda intacto. Es una aproximación:
+///   `RenameTo` (nombre elegido) y `RenameExisting` (renombrar el del disco) no tienen equivalente
+///   exacto en `ExtractConflict`; en los tres casos quedan AMBOS archivos, con el entrante renombrado.
+fn map_action_to_extract(
+    a: ConflictAction,
+) -> naygo_core::archive_ops::ExtractConflict {
+    use naygo_core::archive_ops::ExtractConflict;
+    match a {
+        ConflictAction::Overwrite => ExtractConflict::Overwrite,
+        ConflictAction::Skip | ConflictAction::SkipIdentical => ExtractConflict::Skip,
+        ConflictAction::Rename
+        | ConflictAction::RenameTo(_)
+        | ConflictAction::RenameExisting => ExtractConflict::KeepBoth,
+    }
+}
+
 /// Segundos desde la época Unix (para el timestamp del UndoEntry).
 fn now_epoch_secs() -> u64 {
     std::time::SystemTime::now()
@@ -2076,6 +2142,36 @@ mod tests {
         assert!(c.is_cut(Path::new("C:/x/a.txt")));
         c.clear_cut();
         assert!(!c.is_cut(Path::new("C:/x/a.txt")));
+    }
+
+    #[test]
+    fn map_action_to_extract_colapsa_las_acciones() {
+        use naygo_core::archive_ops::ExtractConflict;
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::Overwrite),
+            ExtractConflict::Overwrite
+        );
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::Skip),
+            ExtractConflict::Skip
+        );
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::SkipIdentical),
+            ExtractConflict::Skip
+        );
+        // Las tres variantes de renombrar colapsan en KeepBoth (el entrante sale con sufijo "(2)").
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::Rename),
+            ExtractConflict::KeepBoth
+        );
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::RenameTo("x".into())),
+            ExtractConflict::KeepBoth
+        );
+        assert_eq!(
+            super::map_action_to_extract(ConflictAction::RenameExisting),
+            ExtractConflict::KeepBoth
+        );
     }
 
     #[test]
