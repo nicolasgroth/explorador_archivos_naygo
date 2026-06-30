@@ -488,7 +488,7 @@ mod tests {
         std::fs::write(&src, b"contenido").unwrap();
         let zip_path = dir.path().join("out.zip");
         let token = CancellationToken::new();
-        let items = compress_zip(&[src.clone()], &zip_path, &mut noop_progress(), &token).unwrap();
+        let items = compress_zip(std::slice::from_ref(&src), &zip_path, &mut noop_progress(), &token).unwrap();
         assert!(zip_path.exists());
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].outcome, ArchiveOutcome::Done);
@@ -506,7 +506,7 @@ mod tests {
         std::fs::write(root.join("src/main.rs"), b"fn main(){}").unwrap();
         let zip_path = dir.path().join("p.zip");
         let token = CancellationToken::new();
-        compress_zip(&[root.clone()], &zip_path, &mut noop_progress(), &token).unwrap();
+        compress_zip(std::slice::from_ref(&root), &zip_path, &mut noop_progress(), &token).unwrap();
         let f = std::fs::File::open(&zip_path).unwrap();
         let mut z = zip::ZipArchive::new(f).unwrap();
         let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
@@ -703,7 +703,7 @@ mod tests {
         std::fs::write(&src, b"contenido").unwrap();
         let zip_path = dir.path().join("out.zip");
         let token = CancellationToken::new();
-        let items = compress_zip(&[src.clone()], &zip_path, &mut noop_progress(), &token).unwrap();
+        let items = compress_zip(std::slice::from_ref(&src), &zip_path, &mut noop_progress(), &token).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].path, src, "el item apunta al ORIGEN, no al .zip");
         assert_ne!(items[0].path, zip_path, "el .zip NO aparece como item");
