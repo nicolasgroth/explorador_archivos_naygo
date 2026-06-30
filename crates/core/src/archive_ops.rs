@@ -197,6 +197,151 @@ fn collect_entries(path: &Path, base: &Path, out: &mut Vec<(PathBuf, String)>) {
     }
 }
 
+/// Extrae `zip` dentro de `dest_dir`. Zip-slip: entradas con `..`/absolutas o que escapen de
+/// `dest_dir` se RECHAZAN (Skipped). Progreso por bytes (total = suma de tamaños descomprimidos).
+/// Conflicto (destino existe) → `on_conflict`. Cancelar → aborta; lo extraído PERMANECE.
+pub fn extract_zip(
+    zip: &Path,
+    dest_dir: &Path,
+    on_conflict: &mut dyn FnMut(&Path) -> ExtractConflict,
+    on_progress: &mut dyn FnMut(u64, u64),
+    token: &CancellationToken,
+) -> Result<Vec<ArchiveOpItem>, ArchiveError> {
+    let file = std::fs::File::open(zip)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| ArchiveError::Zip(e.to_string()))?;
+    let total: u64 = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|e| e.size()))
+        .sum();
+    std::fs::create_dir_all(dest_dir)?;
+    let dest_canon = std::fs::canonicalize(dest_dir).unwrap_or_else(|_| dest_dir.to_path_buf());
+
+    let mut done: u64 = 0;
+    let mut items: Vec<ArchiveOpItem> = Vec::new();
+    for i in 0..archive.len() {
+        if token.is_cancelled() {
+            return Err(ArchiveError::Cancelled);
+        }
+        token.wait_if_paused();
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(e) => {
+                items.push(ArchiveOpItem {
+                    path: PathBuf::new(),
+                    outcome: ArchiveOutcome::Failed(e.to_string()),
+                });
+                continue;
+            }
+        };
+        // `enclosed_name` ya neutraliza `..` y rutas absolutas; si es None, es una entrada hostil.
+        let Some(rel) = entry.enclosed_name() else {
+            items.push(ArchiveOpItem {
+                path: PathBuf::from(entry.name()),
+                outcome: ArchiveOutcome::Skipped,
+            });
+            continue;
+        };
+        let target = dest_dir.join(&rel);
+        let within = target.starts_with(dest_dir)
+            || std::fs::canonicalize(target.parent().unwrap_or(dest_dir))
+                .map(|p| p.starts_with(&dest_canon))
+                .unwrap_or(false);
+        if !within {
+            items.push(ArchiveOpItem {
+                path: target,
+                outcome: ArchiveOutcome::Skipped,
+            });
+            continue;
+        }
+        if entry.is_dir() {
+            let _ = std::fs::create_dir_all(&target);
+            items.push(ArchiveOpItem {
+                path: target,
+                outcome: ArchiveOutcome::Done,
+            });
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut final_target = target.clone();
+        if final_target.exists() {
+            match on_conflict(&final_target) {
+                ExtractConflict::Skip => {
+                    items.push(ArchiveOpItem {
+                        path: final_target,
+                        outcome: ArchiveOutcome::Skipped,
+                    });
+                    continue;
+                }
+                ExtractConflict::Cancel => return Err(ArchiveError::Cancelled),
+                ExtractConflict::Overwrite => {}
+                ExtractConflict::KeepBoth => {
+                    final_target = unique_path(&final_target);
+                }
+            }
+        }
+        match std::fs::File::create(&final_target) {
+            Ok(mut out) => {
+                let mut buf = [0u8; 64 * 1024];
+                let mut failed = false;
+                loop {
+                    if token.is_cancelled() {
+                        return Err(ArchiveError::Cancelled);
+                    }
+                    let n = match entry.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => {
+                            failed = true;
+                            break;
+                        }
+                    };
+                    if out.write_all(&buf[..n]).is_err() {
+                        failed = true;
+                        break;
+                    }
+                    done += n as u64;
+                    on_progress(done, total);
+                }
+                items.push(ArchiveOpItem {
+                    path: final_target,
+                    outcome: if failed {
+                        ArchiveOutcome::Failed("write".into())
+                    } else {
+                        ArchiveOutcome::Done
+                    },
+                });
+            }
+            Err(e) => items.push(ArchiveOpItem {
+                path: final_target,
+                outcome: ArchiveOutcome::Failed(e.to_string()),
+            }),
+        }
+    }
+    Ok(items)
+}
+
+/// Devuelve una variante de `path` que no existe: "a.txt" → "a (2).txt" → "a (3).txt"…
+fn unique_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("archivo");
+    let ext = path.extension().and_then(|s| s.to_str());
+    for n in 2..10_000 {
+        let name = match ext {
+            Some(e) => format!("{stem} ({n}).{e}"),
+            None => format!("{stem} ({n})"),
+        };
+        let cand = parent.join(name);
+        if !cand.exists() {
+            return cand;
+        }
+    }
+    path.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +432,90 @@ mod tests {
         if matches!(r, Err(ArchiveError::Cancelled)) {
             assert!(!zip_path.exists(), "cancelado a media copia: parcial borrado");
         }
+    }
+
+    fn always_overwrite() -> impl FnMut(&Path) -> ExtractConflict {
+        |_p| ExtractConflict::Overwrite
+    }
+
+    /// Crea un .zip de prueba con las entradas dadas (nombre interno → contenido). dir-entries
+    /// terminan en '/'. Devuelve la ruta del zip.
+    fn make_zip(dir: &Path, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
+        let zip_path = dir.join(name);
+        let f = std::fs::File::create(&zip_path).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        let opts = zip::write::SimpleFileOptions::default();
+        for (n, data) in entries {
+            if n.ends_with('/') {
+                z.add_directory(*n, opts).unwrap();
+            } else {
+                z.start_file(*n, opts).unwrap();
+                z.write_all(data).unwrap();
+            }
+        }
+        z.finish().unwrap();
+        zip_path
+    }
+
+    #[test]
+    fn extract_round_trip_restaura_los_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "in.zip", &[("a/b.txt", b"hola"), ("a/", b"")]);
+        let dest = dir.path().join("salida");
+        let token = CancellationToken::new();
+        let items = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token).unwrap();
+        assert!(items.iter().any(|i| i.outcome == ArchiveOutcome::Done));
+        assert_eq!(std::fs::read(dest.join("a/b.txt")).unwrap(), b"hola");
+    }
+
+    #[test]
+    fn extract_rechaza_zip_slip() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "evil.zip", &[("../escape.txt", b"pwn"), ("ok.txt", b"bien")]);
+        let dest = dir.path().join("destino");
+        let token = CancellationToken::new();
+        let items = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token).unwrap();
+        assert_eq!(std::fs::read(dest.join("ok.txt")).unwrap(), b"bien");
+        assert!(!dir.path().join("escape.txt").exists(), "zip-slip bloqueado: nada fuera del destino");
+        assert!(items.iter().any(|i| i.outcome == ArchiveOutcome::Skipped));
+    }
+
+    #[test]
+    fn extract_conflicto_skip_no_pisa() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
+        let token = CancellationToken::new();
+        let mut skip = |_p: &Path| ExtractConflict::Skip;
+        extract_zip(&zip_path, &dest, &mut skip, &mut noop_progress(), &token).unwrap();
+        assert_eq!(std::fs::read(dest.join("dato.txt")).unwrap(), b"viejo", "Skip no pisa el existente");
+    }
+
+    #[test]
+    fn extract_conflicto_keepboth_renombra() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("dato.txt", b"nuevo")]);
+        let dest = dir.path().join("d");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("dato.txt"), b"viejo").unwrap();
+        let token = CancellationToken::new();
+        let mut keep = |_p: &Path| ExtractConflict::KeepBoth;
+        extract_zip(&zip_path, &dest, &mut keep, &mut noop_progress(), &token).unwrap();
+        // El existente se conserva y el nuevo va con sufijo.
+        assert_eq!(std::fs::read(dest.join("dato.txt")).unwrap(), b"viejo");
+        assert_eq!(std::fs::read(dest.join("dato (2).txt")).unwrap(), b"nuevo");
+    }
+
+    #[test]
+    fn extract_cancelado_deja_lo_ya_extraido() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = make_zip(dir.path(), "z.zip", &[("uno.txt", b"a")]);
+        let dest = dir.path().join("d");
+        let token = CancellationToken::new();
+        token.cancel();
+        let r = extract_zip(&zip_path, &dest, &mut always_overwrite(), &mut noop_progress(), &token);
+        assert!(matches!(r, Err(ArchiveError::Cancelled)));
     }
 }
