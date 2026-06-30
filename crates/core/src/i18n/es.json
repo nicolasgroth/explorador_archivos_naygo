@@ -829,6 +829,8 @@
   "preview.err.svg_bad": "SVG inválido",
   "preview.err.rasterize": "No se pudo rasterizar",
   "preview.err.pdf_big": "PDF muy grande",
+  "preview.pdf.pages": "PDF de {n} página(s)",
+  "preview.pdf.no_text": "(No se pudo extraer el texto: puede ser un PDF escaneado, protegido o con solo imágenes.)",
   "slint.cfg.tip.language": "Idioma de la interfaz. Se aplica al instante.",
   "slint.cfg.tip.show_parent": "Muestra una fila «..» al inicio de cada panel para subir a la carpeta superior con un clic.",
   "slint.cfg.tip.icon_only": "Muestra los botones de la barra solo con su ícono, sin texto, para ahorrar espacio.",

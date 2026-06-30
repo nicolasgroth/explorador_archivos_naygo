@@ -829,6 +829,8 @@
   "preview.err.svg_bad": "SVG 无效",
   "preview.err.rasterize": "无法栅格化",
   "preview.err.pdf_big": "PDF 过大",
+  "preview.pdf.pages": "PDF with {n} page(s)",
+  "preview.pdf.no_text": "(Could not extract text: this may be a scanned, protected or image-only PDF.)",
   "slint.cfg.tip.language": "Interface language. Applied instantly.",
   "slint.cfg.tip.show_parent": "Shows a «..» row at the top of each pane to go up to the parent folder with one click.",
   "slint.cfg.tip.icon_only": "Shows toolbar buttons with their icon only, no text, to save space.",

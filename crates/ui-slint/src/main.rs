@@ -5456,6 +5456,8 @@ fn preview_msgs_from_config(
         svg_bad: cfg.t("preview.err.svg_bad"),
         rasterize: cfg.t("preview.err.rasterize"),
         pdf_big: cfg.t("preview.err.pdf_big"),
+        pdf_pages: cfg.t("preview.pdf.pages"),
+        pdf_no_text: cfg.t("preview.pdf.no_text"),
     }
 }
 

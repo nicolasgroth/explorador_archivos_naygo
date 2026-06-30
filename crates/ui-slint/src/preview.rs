@@ -72,6 +72,12 @@ pub struct PreviewMessages {
     pub svg_bad: String,
     pub rasterize: String,
     pub pdf_big: String,
+    /// Encabezado del preview de PDF: frase con el placeholder `{n}` (nº de páginas), SIN
+    /// puntuación final. El código añade `.` (cuando no se pudo extraer texto) o `:` (cuando
+    /// sí) más los saltos, así una sola frase traducible cubre las dos variantes.
+    pub pdf_pages: String,
+    /// Aviso cuando no se pudo extraer texto de un PDF (escaneado/protegido/solo imágenes).
+    pub pdf_no_text: String,
 }
 
 impl Default for PreviewMessages {
@@ -87,6 +93,8 @@ impl Default for PreviewMessages {
             svg_bad: "SVG inválido".into(),
             rasterize: "No se pudo rasterizar".into(),
             pdf_big: "PDF muy grande".into(),
+            pdf_pages: "PDF de {n} página(s)".into(),
+            pdf_no_text: "(No se pudo extraer el texto: puede ser un PDF escaneado, protegido o con solo imágenes.)".into(),
         }
     }
 }
@@ -596,23 +604,26 @@ fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
     let pages = lopdf::Document::load(path)
         .ok()
         .map(|d| d.get_pages().len());
+    // Frase traducida con el nº de páginas (placeholder `{n}`). El código añade la puntuación
+    // final (`.` sin texto, `:` con texto) y los saltos; así una sola clave i18n cubre ambas.
+    let pages_phrase = |n: usize| msgs.pdf_pages.replace("{n}", &n.to_string());
     // Texto vía pdf-extract (puede fallar en PDFs escaneados/protegidos → se avisa).
     let text = match pdf_extract::extract_text(path) {
         Ok(t) => t,
         Err(_) => {
             let head = match pages {
-                Some(n) => format!("PDF de {n} página(s).\n\n"),
+                Some(n) => format!("{}.\n\n", pages_phrase(n)),
                 None => String::new(),
             };
             return Payload::Text {
-                text: format!("{head}(No se pudo extraer el texto: puede ser un PDF escaneado, protegido o con solo imágenes.)"),
+                text: format!("{head}{}", msgs.pdf_no_text),
                 truncated: false,
                 highlighted: None,
             };
         }
     };
     let header = match pages {
-        Some(n) => format!("PDF de {n} página(s):\n\n"),
+        Some(n) => format!("{}:\n\n", pages_phrase(n)),
         None => "PDF:\n\n".to_string(),
     };
     let trimmed = text.trim();

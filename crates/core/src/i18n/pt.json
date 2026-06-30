@@ -829,6 +829,8 @@
   "preview.err.svg_bad": "SVG inválido",
   "preview.err.rasterize": "Não foi possível rasterizar",
   "preview.err.pdf_big": "PDF muito grande",
+  "preview.pdf.pages": "PDF com {n} página(s)",
+  "preview.pdf.no_text": "(Não foi possível extrair o texto: pode ser um PDF digitalizado, protegido ou apenas com imagens.)",
   "slint.cfg.tip.language": "Interface language. Applied instantly.",
   "slint.cfg.tip.show_parent": "Shows a «..» row at the top of each pane to go up to the parent folder with one click.",
   "slint.cfg.tip.icon_only": "Shows toolbar buttons with their icon only, no text, to save space.",
