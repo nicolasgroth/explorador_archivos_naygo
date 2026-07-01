@@ -245,29 +245,47 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // Hotkey global (mostrar/ocultar Naygo desde cualquier app). El registro se mantiene vivo en
     // este slot durante toda la ejecución (drop = se libera). `hotkey_id` guarda el id para
-    // reconocer sus eventos en el tick. (El re-registro en caliente al cambiar la config llega en
-    // la task siguiente; por ahora solo registro inicial.)
+    // reconocer sus eventos en el tick.
     let global_hotkey_slot: Rc<RefCell<Option<naygo_platform::global_hotkey::GlobalHotkey>>> =
         Rc::new(RefCell::new(None));
     let hotkey_id: Rc<std::cell::Cell<Option<u32>>> = Rc::new(std::cell::Cell::new(None));
 
-    #[cfg(windows)]
-    {
-        let s = ctrl.borrow().config.settings.clone();
-        if s.global_hotkey_enabled {
-            match naygo_platform::global_hotkey::register(&s.global_hotkey) {
-                Ok(h) => {
-                    hotkey_id.set(Some(h.id()));
-                    *global_hotkey_slot.borrow_mut() = Some(h);
-                    logging::log_line("hotkey global registrado");
-                }
-                Err(e) => {
-                    // Al arrancar, un fallo NO muestra modal (para no molestar cada arranque):
-                    // se loguea y el hotkey queda inactivo. El usuario podrá recapturar en Config.
-                    logging::log_line(&format!("no se pudo registrar el hotkey global: {e}"));
+    // (Re)arma el hotkey global según la config actual. Suelta el registro anterior, y si está
+    // activo re-registra. Devuelve Err si el SO lo rechaza (el llamador decide si avisar). Se usa
+    // tanto en el registro inicial como desde los handlers de Config (toggle + recaptura).
+    let rearm_hotkey = {
+        let ctrl = ctrl.clone();
+        let slot = global_hotkey_slot.clone();
+        let id_cell = hotkey_id.clone();
+        Rc::new(move || -> Result<(), String> {
+            *slot.borrow_mut() = None; // soltar el registro anterior primero
+            id_cell.set(None);
+            let s = ctrl.borrow().config.settings.clone();
+            if !s.global_hotkey_enabled {
+                return Ok(());
+            }
+            #[cfg(windows)]
+            {
+                match naygo_platform::global_hotkey::register(&s.global_hotkey) {
+                    Ok(h) => {
+                        id_cell.set(Some(h.id()));
+                        *slot.borrow_mut() = Some(h);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
                 }
             }
-        }
+            #[cfg(not(windows))]
+            {
+                Ok(())
+            }
+        })
+    };
+    // Registro inicial (un fallo solo se loguea, sin modal: no queremos molestar cada arranque).
+    if let Err(e) = rearm_hotkey() {
+        logging::log_line(&format!("no se pudo registrar el hotkey global: {e}"));
+    } else if hotkey_id.get().is_some() {
+        logging::log_line("hotkey global registrado");
     }
 
     // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
@@ -2889,6 +2907,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));
+    // Sentinel que distingue la captura del hotkey GLOBAL (no ligado a una `Action` del keymap) de
+    // la captura de un atajo normal. La UI (config-window.slint) reusa el MISMO mecanismo de
+    // captura (root.capturing + FocusScope + capture-key) para ambos casos: cuando el usuario
+    // pulsa "Cambiar" en el control del hotkey global, `shortcut-capture` llega con esta clave en
+    // vez de una `action-key` real; `on_capture_key` la reconoce y arma un `Chord` para
+    // `set_global_hotkey` en lugar de `rebind`.
+    const GLOBAL_HOTKEY_CAPTURE_KEY: &str = "__global_hotkey__";
+    let capturing_global_hotkey: Rc<std::cell::Cell<bool>> = Rc::new(std::cell::Cell::new(false));
 
     // Toggles/combos/text que solo persisten (no requieren refrescar la vista de paneles).
     // Todos los handlers se registran ahora en la ventana de configuración (`cfg_win`), no en la
@@ -2940,6 +2966,31 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_set_new_items_at_end, bool, set_new_items_at_end);
     cfg_setter!(on_set_tray_enabled, bool, set_tray_enabled);
     cfg_setter!(on_set_close_to_tray, bool, set_close_to_tray);
+    // Hotkey global: activar/desactivar re-arma el registro real en caliente. Si el SO rechaza la
+    // combinación al activar (p. ej. ya está tomada por otra app), revertimos el flag a apagado
+    // (no queremos dejar "activado" en la UI sin que surta efecto) y avisamos con un toast, igual
+    // que el resto de los avisos de Config (import/export de packs).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let rearm = rearm_hotkey.clone();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_set_global_hotkey_enabled(move |on| {
+            ctrl.borrow_mut().config.set_global_hotkey_enabled(on);
+            if on {
+                if let Err(e) = rearm() {
+                    ctrl.borrow_mut().config.set_global_hotkey_enabled(false);
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let tmpl = ctrl.borrow().config.t("slint.cfg.global_hotkey_rejected");
+                        ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                    }
+                }
+            } else {
+                let _ = rearm(); // apagar = soltar el registro; no puede fallar
+            }
+            refresh();
+        });
+    }
     cfg_setter!(on_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -3615,19 +3666,64 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
-    // Editor de atajos: capturar la acción a reasignar.
+    // Editor de atajos: capturar la acción a reasignar (o el hotkey global, ver sentinel arriba).
     {
         let capturing = capturing_action.clone();
+        let capturing_hotkey = capturing_global_hotkey.clone();
         cfg_win.on_shortcut_capture(move |key| {
-            *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
+            if key == GLOBAL_HOTKEY_CAPTURE_KEY {
+                capturing_hotkey.set(true);
+                *capturing.borrow_mut() = None;
+            } else {
+                capturing_hotkey.set(false);
+                *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
+            }
         });
     }
-    // Captura de la combinación: si hay acción en captura y el chord es válido, reasigna.
+    // Captura de la combinación: si hay acción en captura y el chord es válido, reasigna. Si en
+    // cambio se estaba capturando el HOTKEY GLOBAL, arma el Chord y lo valida/persiste vía
+    // `set_global_hotkey`, re-arma el registro en caliente, y si el SO lo rechaza (o el chord no
+    // tiene modificador) avisa con un toast y NO toca el hotkey anterior (sigue vigente).
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let capturing = capturing_action.clone();
+        let capturing_hotkey = capturing_global_hotkey.clone();
+        let rearm = rearm_hotkey.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_capture_key(move |text, c, s, a| {
+            if capturing_hotkey.take() {
+                // Esc cancela la captura sin reasignar (la UI ya salió del modo captura).
+                if text == keys::escape_char().to_string() {
+                    return;
+                }
+                let Some(chord) = keys::chord_from(&text, c, s, a) else {
+                    return;
+                };
+                let set_result = ctrl.borrow_mut().config.set_global_hotkey(chord);
+                match set_result {
+                    Ok(()) => {
+                        if let Err(e) = rearm() {
+                            // El SO rechazó la combinación nueva: el chord ya quedó persistido por
+                            // `set_global_hotkey`, pero el registro real falló. Avisamos; el
+                            // usuario puede recapturar otra combinación o desactivar el hotkey.
+                            if let Some(ui) = ui_weak.upgrade() {
+                                let tmpl =
+                                    ctrl.borrow().config.t("slint.cfg.global_hotkey_rejected");
+                                ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                            }
+                        }
+                        refresh();
+                    }
+                    Err(e) => {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let tmpl = ctrl.borrow().config.t("slint.cfg.global_hotkey_invalid");
+                            ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                        }
+                    }
+                }
+                return;
+            }
             let action = match capturing.borrow_mut().take() {
                 Some(act) => act,
                 None => return,
@@ -5819,6 +5915,8 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         paste_jpg_quality: s.paste_jpg_quality as i32,
         tray_enabled: s.tray_enabled,
         close_to_tray: s.close_to_tray,
+        global_hotkey_enabled: s.global_hotkey_enabled,
+        global_hotkey_text: config_ctrl::ConfigCtrl::chord_to_text(&s.global_hotkey).into(),
         new_items_at_end: s.new_items_at_end,
         low_power_mode: match s.low_power_mode {
             naygo_core::config::LowPowerMode::Auto => 0,

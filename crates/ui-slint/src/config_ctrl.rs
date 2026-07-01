@@ -632,6 +632,25 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Activa/desactiva el hotkey global y persiste. El (re)registro real lo hace la UI (main),
+    /// que tiene el `GlobalHotkey` vivo; aquí solo se persiste el flag.
+    pub fn set_global_hotkey_enabled(&mut self, on: bool) {
+        self.settings.global_hotkey_enabled = on;
+        self.save();
+    }
+
+    /// Cambia la combinación del hotkey global y persiste. Valida ≥1 modificador (un hotkey
+    /// global de una sola tecla es inaceptable). Devuelve Err si es inválida; el re-registro y el
+    /// aviso de rechazo del SO los maneja la UI.
+    pub fn set_global_hotkey(&mut self, chord: Chord) -> Result<(), String> {
+        if !(chord.ctrl || chord.alt || chord.shift) {
+            return Err("el atajo global necesita al menos un modificador (Ctrl/Alt/Shift)".into());
+        }
+        self.settings.global_hotkey = chord;
+        self.save();
+        Ok(())
+    }
+
     /// Agrupar los archivos recién aparecidos al final del listado (en vez de insertarlos
     /// ya ordenados).
     pub fn set_new_items_at_end(&mut self, v: bool) {
@@ -973,6 +992,42 @@ mod tests {
         assert!(c2.settings.new_items_at_end);
         assert!(!c2.settings.tray_enabled);
         assert!(c2.settings.close_to_tray);
+    }
+
+    #[test]
+    fn global_hotkey_setters_persisten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        {
+            let mut c = ConfigCtrl::new(dir.clone());
+            assert!(c.settings.global_hotkey_enabled, "activado de fábrica");
+            c.set_global_hotkey_enabled(false);
+            let chord = Chord::ctrl_alt(KeyCode::Char('w'));
+            assert!(c.set_global_hotkey(chord).is_ok());
+            assert_eq!(c.settings.global_hotkey, chord);
+        }
+        let c2 = ConfigCtrl::new(dir);
+        assert!(!c2.settings.global_hotkey_enabled);
+        assert_eq!(
+            c2.settings.global_hotkey,
+            Chord::ctrl_alt(KeyCode::Char('w'))
+        );
+    }
+
+    #[test]
+    fn global_hotkey_rechaza_sin_modificador() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        let before = c.settings.global_hotkey;
+        let err = c.set_global_hotkey(Chord::plain(KeyCode::Char('q')));
+        assert!(
+            err.is_err(),
+            "una sola tecla sin modificador debe rechazarse"
+        );
+        assert_eq!(
+            c.settings.global_hotkey, before,
+            "no debe mutar en el rechazo"
+        );
     }
 
     #[test]
