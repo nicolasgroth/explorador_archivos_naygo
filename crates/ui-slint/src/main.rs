@@ -1594,11 +1594,17 @@ fn main() -> Result<(), slint::PlatformError> {
                             // centrar en el monitor principal conservando el tamaño guardado.
                             let (mx, my, mw, mh) =
                                 mons.first().copied().unwrap_or((0, 0, 1920, 1080));
-                            let x = mx + ((mw as i32 - g.width as i32) / 2).max(0);
-                            let y = my + ((mh as i32 - g.height as i32) / 2).max(0);
+                            // Clamp del tamaño restaurado a algo sano: un settings.json corrupto
+                            // puede traer width/height 0 o u32::MAX; sin clamp la resta de centrado
+                            // haría overflow y podría quedar una ventana 0x0 o gigante. Mínimo
+                            // 200px, máximo el tamaño del monitor.
+                            let cw = (g.width).clamp(200, mw.max(200));
+                            let ch = (g.height).clamp(200, mh.max(200));
+                            let x = mx + ((mw as i32 - cw as i32) / 2).max(0);
+                            let y = my + ((mh as i32 - ch as i32) / 2).max(0);
                             naygo_platform::window_geometry::Placement {
-                                width: g.width,
-                                height: g.height,
+                                width: cw,
+                                height: ch,
                                 x,
                                 y,
                                 maximized: g.maximized,

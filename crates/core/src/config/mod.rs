@@ -123,12 +123,22 @@ impl WindowGeometry {
     /// `MIN_VISIBLE` px de la ventana caen dentro de algún monitor, así una ventana en un
     /// monitor desconectado o fuera de pantalla se detecta como no visible. Puro y testeable.
     pub fn is_visible_on(&self, monitors: &[(i32, i32, u32, u32)]) -> bool {
-        const MIN_VISIBLE: i32 = 64;
-        let (wx, wy, ww, wh) = (self.x, self.y, self.width as i32, self.height as i32);
+        const MIN_VISIBLE: i64 = 64;
+        // Toda la aritmética en i64: un settings.json corrupto puede traer coords/tamaños
+        // extremos (x=i32::MAX, width=u32::MAX) y las sumas i32 harían overflow (panic en
+        // debug, wrap en release). Esta función existe justo para sanear entrada hostil, así
+        // que no puede caer ella misma.
+        let (wx, wy, ww, wh) = (
+            self.x as i64,
+            self.y as i64,
+            self.width as i64,
+            self.height as i64,
+        );
         monitors.iter().any(|&(mx, my, mw, mh)| {
+            let (mx, my, mw, mh) = (mx as i64, my as i64, mw as i64, mh as i64);
             // Ancho/alto del solape entre el rect de la ventana y el del monitor.
-            let ox = (wx + ww).min(mx + mw as i32) - wx.max(mx);
-            let oy = (wy + wh).min(my + mh as i32) - wy.max(my);
+            let ox = (wx + ww).min(mx + mw) - wx.max(mx);
+            let oy = (wy + wh).min(my + mh) - wy.max(my);
             ox >= MIN_VISIBLE && oy >= MIN_VISIBLE
         })
     }
@@ -1251,6 +1261,44 @@ mod tests {
         );
         let secundario = (1920i32, 0i32, 1920u32, 1080u32);
         assert!(g2.is_visible_on(&[primario, secundario]));
+    }
+
+    #[test]
+    fn window_geometry_coords_extremas_no_paniquean() {
+        // Un settings.json corrupto/adversarial puede traer coords y tamaños extremos. La
+        // validación de visibilidad NO debe hacer overflow (panic en debug, wrap en release):
+        // es justo la función que existe para sanear esa entrada.
+        let primario = (0i32, 0i32, 1920u32, 1080u32);
+        // La garantía es NO PANICAR (ni overflow en debug ni wrap en release) con cualquier
+        // combinación de extremos; el booleano concreto es secundario. Con las sumas en i32 esto
+        // reventaba; con i64 no.
+        let extremos = [
+            (i32::MAX, i32::MAX, u32::MAX, u32::MAX),
+            (i32::MIN, i32::MIN, u32::MAX, u32::MAX),
+            (i32::MAX, i32::MIN, 0, 0),
+            (0, 0, u32::MAX, u32::MAX),
+        ];
+        for (x, y, width, height) in extremos {
+            let g = WindowGeometry {
+                width,
+                height,
+                x,
+                y,
+                maximized: false,
+            };
+            // Solo debe devolver un bool sin panic. Una ventana lejana (i32::MAX) no es visible;
+            // una que cubre todo el plano (x=0,width=MAX) sí.
+            let _ = g.is_visible_on(&[primario]);
+        }
+        // Caso concreto: una ventana muy lejos a la derecha no es visible en el monitor primario.
+        let lejos = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: i32::MAX - 1000,
+            y: 0,
+            maximized: false,
+        };
+        assert!(!lejos.is_visible_on(&[primario]));
     }
 
     #[test]
