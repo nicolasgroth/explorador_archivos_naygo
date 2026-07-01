@@ -1555,11 +1555,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let start_timer = start_timer.clone();
         let apply_device_change = apply_device_change.clone();
         let ui_weak_wake = ui.as_weak();
+        let ctrl_wake = ctrl.clone();
         let logged_first_wake = std::rc::Rc::new(std::cell::Cell::new(false));
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
-            // Se loguea una sola vez. Barato y no depende de símbolos de depuración.
+            // Se loguea una sola vez. Barato y no depende de símbolos de depuración. Aprovechamos
+            // la misma guarda de una-sola-vez para restaurar la geometría guardada: recién aquí
+            // el HWND existe de verdad (antes de entrar al loop, Slint/winit puede no tenerlo).
             if !logged_first_wake.replace(true) {
                 if let Some(ui) = ui_weak_wake.upgrade() {
                     let size = ui.window().size();
@@ -1568,6 +1571,41 @@ fn main() -> Result<(), slint::PlatformError> {
                         "arranque: primer wake (ventana {}x{} @{:.2})",
                         size.width, size.height, scale
                     ));
+                }
+                // Restaurar la geometría guardada (una sola vez, en el primer wake, cuando el
+                // HWND ya existe). Si el rect guardado no cae en ningún monitor conectado
+                // (monitor desconectado, coords viejas), centramos en el principal conservando
+                // el tamaño guardado en vez de descartarlo.
+                #[cfg(windows)]
+                if let Some(ui) = ui_weak_wake.upgrade() {
+                    let saved = ctrl_wake.borrow().config.settings.window;
+                    if let (Some(g), Some(hwnd)) = (saved, naygo_hwnd(&ui)) {
+                        let mons = naygo_platform::window_geometry::monitors();
+                        let placement = if g.is_visible_on(&mons) {
+                            naygo_platform::window_geometry::Placement {
+                                width: g.width,
+                                height: g.height,
+                                x: g.x,
+                                y: g.y,
+                                maximized: g.maximized,
+                            }
+                        } else {
+                            // Fuera de pantalla (monitor desconectado / coords inválidas):
+                            // centrar en el monitor principal conservando el tamaño guardado.
+                            let (mx, my, mw, mh) =
+                                mons.first().copied().unwrap_or((0, 0, 1920, 1080));
+                            let x = mx + ((mw as i32 - g.width as i32) / 2).max(0);
+                            let y = my + ((mh as i32 - g.height as i32) / 2).max(0);
+                            naygo_platform::window_geometry::Placement {
+                                width: g.width,
+                                height: g.height,
+                                x,
+                                y,
+                                maximized: g.maximized,
+                            }
+                        };
+                        naygo_platform::window_geometry::set(hwnd, placement);
+                    }
                 }
             }
             apply_device_change();
@@ -5379,7 +5417,28 @@ fn main() -> Result<(), slint::PlatformError> {
     // esté activo, en cuyo caso se oculta a la bandeja y la app sigue viva a propósito.
     {
         let ctrl = ctrl.clone();
+        let ui_weak_close = ui.as_weak();
         ui.window().on_close_requested(move || {
+            // Capturar y persistir la geometría ANTES de save_session/salir. Va en su propio
+            // scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que siguen.
+            #[cfg(windows)]
+            {
+                if let Some(ui) = ui_weak_close.upgrade() {
+                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                        if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
+                            let mut c = ctrl.borrow_mut();
+                            c.config.settings.window = Some(naygo_core::config::WindowGeometry {
+                                width: p.width,
+                                height: p.height,
+                                x: p.x,
+                                y: p.y,
+                                maximized: p.maximized,
+                            });
+                            c.config.save();
+                        }
+                    }
+                }
+            }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
             if tray::should_quit_on_close(close_to_tray, tray_active) {
