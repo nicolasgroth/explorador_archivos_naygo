@@ -12,8 +12,11 @@ use crate::workspace::template::TemplateStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Versión del formato de los archivos de config; permite migrar/descartar.
-const CONFIG_VERSION: u32 = 2;
+/// Versión del formato de los archivos de config; permite migrar/descartar. Público para que
+/// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
+/// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
+/// UI hardcodeaba `version: 1` y, al subir esta constante, la sesión dejaba de restaurarse.
+pub const CONFIG_VERSION: u32 = 2;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -36,7 +36,10 @@ impl WorkspaceCtrl {
     /// panel activo, estado de cada panel Files y el tipo de cada panel.
     pub fn session_persist(&self) -> naygo_core::config::WorkspacePersist {
         naygo_core::config::WorkspacePersist {
-            version: 1,
+            // Estampar la versión de config VIGENTE (no un `1` hardcodeado): el loader
+            // (`load_workspace_flagged`) descarta un workspace.json cuya versión no coincida con
+            // `CONFIG_VERSION`, así que hardcodear la versión rompía la restauración al subirla.
+            version: naygo_core::config::CONFIG_VERSION,
             layout: self.ws.layout.clone(),
             active: self.ws.active_id(),
             files: self
