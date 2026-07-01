@@ -2306,12 +2306,14 @@ mod tests {
         // Dos copias grandes en paralelo → cancel_all_ops cancela AMBAS de un golpe; ninguna deja
         // su carpeta destino completa (se aborta a mitad). PUNTO 2.
         let tmp = tempfile::tempdir().unwrap();
-        // Dos orígenes con varios archivos para que la copia no termine instantánea.
+        // Dos orígenes con SUFICIENTES archivos para que ninguna copia pueda completarse antes
+        // de la cancelación. Con 50 archivos chicos este test era FLAKY en CI: una copia
+        // alcanzaba a terminar durante la espera fija y cancel_all reportaba 1 en vez de 2.
         let mk_src = |name: &str| {
             let dir = tmp.path().join(name);
             std::fs::create_dir(&dir).unwrap();
-            for i in 0..50 {
-                std::fs::write(dir.join(format!("f{i}.bin")), vec![0u8; 4096]).unwrap();
+            for i in 0..400 {
+                std::fs::write(dir.join(format!("f{i}.bin")), vec![0u8; 16 * 1024]).unwrap();
             }
             dir
         };
@@ -2333,11 +2335,21 @@ mod tests {
             true,
         );
         assert_eq!(c.active_ops.len(), 2, "dos ops activas");
-        // Dejar que arranquen (salgan de Planning y empiecen a copiar/escanear).
-        for _ in 0..50 {
+        // Esperar por CONDICIÓN (no tiempo fijo) a que ambas salgan de Planning y empiecen a
+        // copiar, y cancelar INMEDIATAMENTE después: minimiza la ventana en la que una copia
+        // podría completarse antes del cancel (la causa de la flakiness original en CI).
+        for _ in 0..5000 {
             c.pump_ops();
+            if c.active_ops.len() == 2 && c.active_ops.iter().all(|o| !o.is_planning()) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        assert_eq!(
+            c.active_ops.len(),
+            2,
+            "ambas ops siguen activas al salir de Planning"
+        );
         // Cancelar TODO: debe reportar 2 (ambas activas).
         let cancelled = c.cancel_all_ops();
         assert_eq!(cancelled, 2, "se cancelaron las dos ops");
