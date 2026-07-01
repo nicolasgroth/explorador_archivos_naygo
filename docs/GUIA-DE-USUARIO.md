@@ -24,6 +24,29 @@ La ventana se divide en:
 El **panel activo** lleva un borde de color de acento. Casi todo (teclado,
 operaciones) actúa sobre el panel activo.
 
+**Tamaño y posición:** Naygo recuerda el tamaño, la posición y el estado
+maximizado de la ventana entre sesiones, así la próxima vez arranca tal como
+la dejaste. Si el monitor donde estaba la ventana ya no está conectado (por
+ejemplo, cambiaste de notebook a monitor externo), Naygo la abre en una
+posición visible en vez de dejarla fuera de pantalla.
+
+**Cerrar a la bandeja:** por defecto, el botón **X** de la ventana no cierra
+Naygo: lo esconde en la **bandeja del sistema** (junto al reloj), de modo que
+la próxima vez que lo abras sea instantáneo. Para salir de verdad, haz **clic
+derecho** en el ícono de la bandeja y elige **Salir**. Este comportamiento se
+puede desactivar en *Configuración → Avanzado → "Cerrar a la bandeja (no
+salir)"*, y en ese caso la X vuelve a cerrar la aplicación como cualquier
+programa.
+
+**Atajo global (Ctrl+Alt+Q):** funciona **desde cualquier aplicación**, no
+solo con Naygo en primer plano: muestra la ventana y la trae al frente; si
+Naygo ya está al frente, la esconde (esconder requiere que el ícono de
+bandeja esté activo). La combinación se puede cambiar o desactivar en
+*Configuración → Avanzado*. La tecla Windows no se puede usar (la reserva el
+sistema); si al capturar una combinación nueva Windows la rechaza —por
+ejemplo porque otra aplicación ya la tiene tomada—, Naygo te avisa y conserva
+la combinación anterior.
+
 ---
 
 ## 2. Paneles
@@ -37,17 +60,23 @@ Cada panel puede ser de un **tipo**:
 | **Propiedades** | Datos del ítem enfocado (nombre, tipo, tamaño, fechas). |
 | **Historial de acciones** | Operaciones hechas, con botón de deshacer. |
 | **Favoritos** | Carpetas ancladas + recientes. |
-| **Vista previa** | Vista liviana del archivo enfocado: texto, imagen, o la lista de contenido de un `.zip`. |
+| **Vista previa** | Vista liviana del archivo enfocado: texto, imagen, …o el contenido de un comprimido (`.zip`, `.tar`, `.tar.gz`) como árbol con totales. |
 | **Operaciones** | Copias y movimientos en curso, en cola y recién terminados (ver §5). Aparece solo al iniciar una operación. |
 
 **Dividir y reorganizar:**
 
 - El botón **＋** divide el panel activo (elige dirección: derecha/abajo/izq/arriba).
+  Dividir varias veces en la misma dirección crea una fila pareja de paneles (no cajas
+  anidadas), así los divisores se comportan de forma predecible.
 - El botón **Panel ▾** agrega un panel especial (árbol, propiedades, etc.).
 - **Arrastra la barra de título** de un panel sobre otro para reacomodar (los bordes
   dividen; el centro apila como pestaña).
 - **Arrastra las barras divisorias** para redimensionar: mientras arrastras verás una
-  barra-fantasma de acento que marca dónde quedará el borde; al soltar se aplica.
+  barra-fantasma de acento que marca dónde quedará el borde; al soltar se aplica. Mover
+  una barra solo redimensiona sus **dos paneles vecinos**: el resto de los paneles no se
+  mueve. Al cambiar el tamaño de la ventana, todos escalan proporcionalmente.
+- **Doble clic en una barra divisoria** reparte el espacio **50/50** entre sus dos
+  paneles vecinos.
 - **Swap / Clonar / Tabs** (toolbar): intercambiar carpetas de dos paneles, abrir la
   carpeta actual en otro panel, o apilar el panel como pestaña sobre otro.
 
@@ -231,6 +260,16 @@ panel a otro. Dentro del **mismo disco** la operación **mueve**; hacia **otro d
 **fuerza mover**. (Arrastrar archivos **fuera** de Naygo, al Explorador de Windows,
 sigue funcionando como antes.)
 
+**Comprimir y extraer (.zip):** con uno o más archivos o carpetas seleccionados, el menú
+contextual ofrece **«Comprimir en .zip»** (pide el nombre del archivo; si ya existe un
+`.zip` con ese nombre, Naygo nunca lo pisa: desambigua agregando «(2)»). Con un `.zip`
+seleccionado, el menú ofrece **«Extraer aquí»**. Ambas operaciones corren en **segundo
+plano** con progreso y **cancelación** desde el panel de Operaciones (cancelar una
+compresión en curso borra el archivo `.zip` parcial). Si al extraer algún archivo choca
+con uno existente, se abre el mismo **diálogo de conflicto lado a lado** que usan copiar
+y mover. Las dos operaciones se pueden **deshacer** de forma segura: a la papelera va
+solo lo que la operación creó, nunca algo que ya existía antes.
+
 **Cuando algo ya existe en el destino:**
 
 - **Un archivo** que choca abre el aviso *"Ya existe «…»"* con **Saltar**, **Renombrar**,
@@ -305,9 +344,13 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
 **✕**. Secciones:
 
 - **General**: fila "..", botones solo-ícono, posición de la barra, tamaño sin
-  subcarpetas, iniciar con Windows.
+  subcarpetas, iniciar con Windows, iniciar minimizado en la bandeja (requiere "iniciar
+  con Windows" y el ícono de bandeja activos), e **Idioma** en su propia sección: **diez
+  idiomas** de fábrica, cada uno mostrado con su nombre nativo en el selector.
 - **Operaciones**: cola vs. paralelo, confirmar papelera, resumen al terminar.
-- **Pegado**: confirmar nombre al pegar, plantilla/extensión del texto pegado.
+- **Pegado**: todo lo del portapapeles en un solo lugar — confirmar nombre al pegar,
+  plantilla/extensión del texto pegado, nombre del archivo de imagen pegada, **formato
+  de imagen (PNG/JPG)** y **calidad JPG** (escala 1–100).
 - **Previsualización**: interruptor **"Resaltar código automáticamente"** (resaltado de
   sintaxis por colores para extensiones de código conocidas; ver §2) y **reglas por
   extensión** para forzar un modo de vista a una extensión concreta (estas reglas
@@ -315,16 +358,24 @@ por la esquina inferior derecha (el contenido se adapta al tamaño) y se cierra 
 - **Apariencia**: el **tema** se elige en una galería de tarjetas (cada una muestra
   sus colores; la activa lleva borde de acento y ★). Vienen **cinco temas de fábrica**
   (Dark Blue, Windows XP, Verde sobre azul, High Contrast y Neón Retro) y puedes crear
-  los tuyos con el **editor de temas** (ver abajo). También: idioma, set de íconos,
-  formato de fecha y tamaño, densidad de fila. Todo se aplica en caliente.
+  los tuyos con el **editor de temas** (ver abajo). El **set de íconos** también se
+  elige en una galería de tarjetas, con un botón **Personalizar** que salta a la
+  pestaña Íconos. También: formato de fecha y tamaño, densidad de fila. Todo se aplica
+  en caliente.
+- **Íconos**: grilla con **todos los objetos** con ícono (carpetas, discos, acciones de
+  la barra…); cada uno se puede cambiar por el de otro set instalado o por un **PNG
+  propio**. Un set personalizado se comparte como pack `.naygoset`.
 - **Atajos**: editor de atajos por acción (cambiar / restablecer / restablecer todo),
   con detección de conflictos.
-- **Importar/Exportar**: packs `.zip` de idioma, tema o configuración.
+- **Importar/Exportar**: idioma, temas, íconos y configuración se exportan e importan
+  **por separado**, cada uno con su propia extensión (`.naygolang`, `.naygotheme`,
+  `.naygoset`, `.naygoconf`).
 - **Avanzado**: **Carpeta de inicio (Home)** (destino del botón Inicio / Alt+Inicio;
   vacío = tu carpeta personal), **Pie de panel** (ver abajo), progreso de operaciones
-  (panel/modal/siempre), formato de imagen pegada, modo de bajo consumo, archivos
-  nuevos al final, historial de carpetas a recordar (1–100), bandeja del sistema,
-  cerrar-a-bandeja, y **Restablecer todo** (en dos pasos).
+  (panel/modal/siempre), modo de bajo consumo, archivos nuevos al final, historial de
+  carpetas a recordar (1–100), **bandeja del sistema**, **cerrar a la bandeja (no
+  salir)**, **atajo global** para mostrar/ocultar Naygo (ver §1), y **Restablecer
+  todo** (en dos pasos).
 - **Acerca de**: autoría, licencia, stack, enlace al repo (y un pequeño easter egg).
 
 **Pie de panel (en Avanzado):** controla la barra de información al pie de cada panel
@@ -384,6 +435,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Ctrl+L, F4 | Editar la ruta |
 | Ctrl+Z | Deshacer |
 | Ctrl+1..9 | Ir al favorito N |
+| Ctrl+Alt+Q (global) | Mostrar u ocultar Naygo desde cualquier aplicación (se configura en Avanzado, no en Atajos) |
 
 ---
 
@@ -392,7 +444,8 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 Naygo guarda su configuración junto al ejecutable (modo portable). Puedes agregar:
 
 - **Idiomas**: suelta un `.json` de traducción en la carpeta `lang/`; aparece en el
-  selector. ES y EN vienen de base. Guía paso a paso: [`AGREGAR-IDIOMA.md`](AGREGAR-IDIOMA.md).
+  selector. **Diez idiomas** vienen de fábrica (es, en, pt, fr, de, it, zh, ja, ko, hi).
+  Guía paso a paso: [`AGREGAR-IDIOMA.md`](AGREGAR-IDIOMA.md).
 
 **Lanzar desde un acceso directo o terminal:** `naygo.exe "D:\carpeta"` abre Naygo en esa
 carpeta; además acepta `--theme <id>` y `--layout <nombre>` (solo para esa sesión) y
@@ -400,7 +453,9 @@ carpeta; además acepta `--theme <id>` y `--layout <nombre>` (solo para esa sesi
 - **Temas**: *color sets* intercambiables en caliente.
 - **Sets de íconos**: empaquetados o propios.
 
-Se importan/exportan como packs `.zip` desde *Configuración → Importar/Exportar*.
+Cada tópico se importa y exporta **por separado** desde *Configuración →
+Importar/Exportar*, con su propia extensión: idioma (`.naygolang`), temas
+(`.naygotheme`), íconos (`.naygoset`) y configuración (`.naygoconf`).
 
 ---
 

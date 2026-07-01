@@ -7,6 +7,100 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Añadido
+- Comprimir y descomprimir `.zip`: con archivos o carpetas seleccionados, el menú contextual
+  ofrece **«Comprimir en .zip»** (pide el nombre del archivo); con un `.zip` seleccionado,
+  **«Extraer aquí»**. Ambas operaciones corren en segundo plano con progreso y cancelación en
+  el panel de Operaciones (cancelar una compresión borra el archivo parcial), los conflictos
+  al extraer usan el diálogo de conflicto lado a lado, y las dos se pueden **deshacer** de
+  forma segura: a la papelera va solo lo que la operación creó, nunca algo preexistente.
+  Comprimir jamás pisa un `.zip` que ya exista: desambigua el nombre con «(2)».
+- Ocho idiomas nuevos, además de español e inglés: **portugués, francés, alemán, italiano,
+  chino, japonés, coreano e hindi** (los cuatro últimos marcados como experimentales). El
+  selector de *Configuración → General* muestra cada idioma con su nombre nativo.
+- **Íconos personalizables**: cinco sets de fábrica (Lucide, Mono, Tabler, Material y Flat
+  Color) que se eligen en una galería de tarjetas en *Configuración → Apariencia*, y una
+  pestaña **Íconos** con la grilla de objetos para cambiar el ícono de cualquier objeto
+  (carpetas, discos, acciones de la barra…) por el de otro set o por un **PNG propio**. Los
+  sets monocromos se tiñen con el color del tema, la barra de herramientas se actualiza en
+  caliente, y un set personalizado se comparte como pack `.naygoset`.
+- **Importar/Exportar por tópicos**: Idioma, Temas, Íconos y Configuración se exportan e
+  importan por separado desde *Configuración → Importar/Exportar*, con extensiones propias
+  (`.naygolang`, `.naygotheme`, `.naygoset`, `.naygoconf`).
+- La **vista previa de comprimidos** muestra el contenido como un **árbol** con carpetas,
+  archivos, tamaños y totales; ahora también para `.tar` y `.tar.gz`, además de `.zip`. Si el
+  archivo está dañado, muestra lo que se pudo leer y lo indica («… y más entradas»).
+- **Expulsar una unidad USB con paneles abiertos**: el aviso de expulsión indica cuántos
+  paneles tienen carpetas de ese disco, Naygo suelta sus vigilancias antes de expulsar y los
+  paneles afectados quedan con el aviso «disco expulsado». Si Windows no puede expulsar la
+  unidad, el error se informa con claridad.
+- Configuración: **iconos de ayuda (?)** con explicación en todas las opciones, y un
+  **buscador** que filtra las pestañas por nombre.
+- **Divisores de paneles inteligentes**: mover una barra divisoria redimensiona solo sus
+  **dos paneles vecinos** (el resto no se mueve), y al cambiar el tamaño de la ventana todos
+  los paneles escalan proporcionalmente. Dividir un panel en la misma dirección crea una fila
+  pareja (ya no anida cajas dentro de cajas). **Doble clic en una barra divisoria** reparte el
+  espacio **50/50** entre sus dos vecinos.
+- La ventana **recuerda su tamaño, posición y estado maximizado** entre sesiones. Si el
+  monitor donde estaba ya no está conectado, vuelve a una posición visible.
+- **Cerrar a la bandeja por defecto**: la **X** ahora esconde Naygo en la bandeja del sistema
+  en vez de salir (la próxima apertura es instantánea). Para salir de verdad: clic derecho en
+  el ícono de la bandeja → **Salir**. Se puede volver al comportamiento clásico desactivando
+  *Configuración → Avanzado → «Cerrar a la bandeja (no salir)»*.
+- **Iniciar minimizado en la bandeja**: si Naygo inicia con Windows, puede arrancar directo
+  en la bandeja sin mostrar la ventana (*Configuración → General*; requiere «Iniciar con
+  Windows» y el ícono de bandeja). El instalador usa el nuevo argumento `--tray`.
+- **Atajo global Ctrl+Alt+Q** (configurable en *Configuración → Avanzado*, activado de
+  fábrica): muestra Naygo y lo trae al frente **desde cualquier aplicación**; si ya está al
+  frente, lo esconde (esconder requiere el ícono de bandeja). La tecla Windows no se puede
+  usar en la combinación (la reserva el sistema); si Windows rechaza una combinación —por
+  ejemplo porque otra aplicación ya la usa—, Naygo avisa y **conserva la anterior**.
+- Instalador: el asistente está en **siete idiomas** (inglés, español, alemán, francés,
+  italiano, portugués y japonés) y agrega un paso para elegir el **idioma inicial de Naygo**
+  entre los diez disponibles, preseleccionado según el idioma de Windows. Nueva casilla
+  opcional «**Iniciar Naygo al arrancar Windows**».
+
+### Cambiado
+- Configuración reorganizada: pestañas agrupadas por afinidad (General, Apariencia, Íconos,
+  Previsualización, Operaciones, Pegado, Atajos, Avanzado, Importar/Exportar, Acerca de) y el
+  **idioma** ahora vive en **General**, con sección propia.
+- La pestaña **Pegado** concentra todo lo del portapapeles: nombre del archivo de imagen
+  pegada, **formato (PNG/JPG)** —que antes estaba en Avanzado— y **calidad JPG** (escala
+  1–100 consistente en toda la aplicación).
+- El set de íconos por defecto pasa a ser **Lucide**; las configuraciones existentes se
+  migran automáticamente al set equivalente.
+- Español neutral en toda la interfaz (se eliminaron los voseos).
+- Menos consumo con carpetas grandes: las filas del panel no se reconstruyen si nada cambió,
+  la selección y los íconos se resuelven sin copias por fila, y el tipeo rápido, la vista
+  profunda y los ordenamientos trabajan sin reservar memoria en cada pulsación.
+
+### Corregido
+- Al **actualizar desde una versión anterior ya no se pierde la sesión guardada**
+  (disposición de paneles y carpetas abiertas): el cambio interno de versión de la
+  configuración descartaba la disposición al primer arranque tras actualizar.
+- Blindaje contra archivos de configuración corruptos: una geometría de ventana con
+  coordenadas inválidas o una disposición de paneles degenerada ya no afectan el arranque
+  (se descartan y se usa el valor por defecto).
+- Los modificadores **Shift/Ctrl ya no quedan «pegados»** tras un arrastre: cada clic usa los
+  modificadores reales del momento (era la raíz de selecciones que se extendían solas).
+- El **menú contextual** actúa sobre el panel donde hiciste clic derecho (antes las acciones
+  podían caer en otro panel).
+- **Arrastrar archivos** toma como origen el panel donde empezó el gesto, no el panel activo.
+- **Deshacer un movimiento** devuelve cada archivo a su carpeta de origen correcta.
+- Cerrar una pestaña o un panel **cancela sus listados en curso** (antes seguían trabajando
+  de fondo), y los nombres terminados en espacio o punto se manejan bien.
+- Traducciones: el panel de operaciones, las pestañas de panel (que además se re-rotulan al
+  cambiar de idioma), la barra de estado, los encabezados de la vista previa de PDF y los
+  textos de exportación ya siguen el idioma elegido (quedaban fijos en español o inglés).
+- La vista previa muestra los archivos **desde el inicio** y respeta las **reglas por
+  extensión** definidas por el usuario también para extensiones que Naygo no conoce.
+- Los rótulos largos de menús y de los botones del diálogo de conflicto se recortan con «…»
+  en vez de desbordar, y los botones de los diálogos **crecen con el texto** (las
+  traducciones largas ya no se cortan).
+- El tooltip de ayuda de Configuración se ajusta a su texto (ocupaba toda la ventana).
+- Las guardas que impiden borrar un origen al copiar o mover comparan las rutas sin
+  distinguir mayúsculas/minúsculas (más seguro en Windows).
+
 ## [0.2.0] — 2026-06-27
 ### Añadido
 - Diálogo de conflicto de archivo estilo Directory Opus: cuando una copia o movimiento va a pisar un

@@ -1,16 +1,20 @@
 # Naygo
 
 Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Commander**
-(inspirado en Directory Opus). Paneles dinámicos, navegación por teclado, multi-idioma
-y temas personalizables.
+(inspirado en Directory Opus). Paneles dinámicos, navegación por teclado, diez idiomas
+incluidos, temas y sets de íconos personalizables.
 
 > **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
-> redimensionado en vivo, árbol de carpetas, columnas estilo planilla (orden + filtros),
-> renombrado en línea y por lotes, plantillas de disposición (Layouts), búsqueda recursiva,
-> previsualización (imágenes, SVG, PDF, texto/código y contenido de ZIP), barra de unidades
-> con espacio libre/usado y expulsión segura de USB, drag & drop (interno y con el sistema),
-> abrir una terminal en la carpeta, configuración completa (incluido Acerca de + Avanzado),
-> bandeja del sistema, iniciar con Windows y navegación por teclado.
+> redimensionado en vivo (mover un divisor solo afecta a sus dos vecinos; doble clic =
+> 50/50), árbol de carpetas, columnas estilo planilla (orden + filtros), renombrado en
+> línea y por lotes, plantillas de disposición (Layouts), búsqueda recursiva,
+> previsualización (imágenes, SVG, PDF, texto/código y contenido de .zip/.tar/.tar.gz
+> como árbol), comprimir y extraer .zip, barra de unidades con espacio libre/usado y
+> expulsión segura de USB, drag & drop (interno y con el sistema), abrir una terminal en
+> la carpeta, configuración completa (incluido Acerca de + Avanzado), diez idiomas, sets
+> de íconos personalizables, bandeja del sistema (la X esconde a la bandeja), atajo
+> global Ctrl+Alt+Q para mostrar/ocultar, iniciar con Windows (opcionalmente minimizado)
+> y navegación por teclado. La ventana recuerda su tamaño y posición.
 >
 > **Guía de uso:** [`docs/GUIA-DE-USUARIO.md`](docs/GUIA-DE-USUARIO.md) (o **F1** en la app).
 > **Novedades por versión:** [`CHANGELOG.md`](CHANGELOG.md) (y la sección "Acerca de" muestra
@@ -22,8 +26,9 @@ y temas personalizables.
   miles de archivos o discos de red lentos (listado por streaming incremental).
 - **Estilo Commander.** Paneles dinámicos acoplables, dos (o más) carpetas a la vez, atajos
   de teclado para todo.
-- **Personalizable.** Multi-idioma (español e inglés de base, fácil agregar más) y temas con
-  *color sets* intercambiables en caliente.
+- **Personalizable.** Diez idiomas incluidos (es, en, pt, fr, de, it, zh, ja, ko, hi;
+  agregar otro = soltar un archivo), temas con *color sets* intercambiables en caliente y
+  sets de íconos configurables objeto por objeto.
 - **Cancelable.** Cualquier operación larga (copiar, mover, listar, calcular tamaño) se puede
   detener al instante.
 - **Liviano y robusto.** Bajo consumo, y nunca se cae porque un disco de red se desconecte.
@@ -35,6 +40,8 @@ y temas personalizables.
 - Árbol de carpetas con expansión incremental y revelado hasta la carpeta activa.
 - Columnas estilo planilla: ordenar, filtrar por tipo de columna y reordenar arrastrando.
 - Operaciones entre paneles (copiar, mover, eliminar) con cola opcional, progreso y cancelación.
+- Comprimir la selección en un `.zip` y extraer un `.zip` desde el menú contextual, en
+  segundo plano, con progreso, cancelación y deshacer seguro.
 - Renombrado en línea, en cadena y por lotes.
 - Búsqueda recursiva por nombre en la carpeta y sus subcarpetas.
 - Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código y el
@@ -44,6 +51,12 @@ y temas personalizables.
   unidades USB y expulsión segura.
 - Integración con Windows: menú contextual del shell, "Abrir con", detección de cambios y de
   dispositivos, drag & drop, bandeja del sistema y arranque opcional con el sistema.
+- Sets de íconos: cinco de fábrica (Lucide, Mono, Tabler, Material, Flat Color), cambio de
+  ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
+- Atajo global **Ctrl+Alt+Q** (configurable) que muestra u oculta Naygo desde cualquier
+  aplicación.
+- La **X** esconde a la bandeja del sistema (salir de verdad: menú de la bandeja); la
+  ventana recuerda tamaño, posición y maximizado entre sesiones.
 - Configuración completa: apariencia, atajos, previsualización, plantilla de tabla, opciones
   avanzadas y sección "Acerca de".
 
@@ -61,8 +74,11 @@ de pago.
 
 - **Portable**: descarga `Naygo-<versión>-portable.zip`, descomprímelo y ejecuta `naygo.exe`.
   No instala nada.
-- **Instalador**: ejecuta `Naygo-<versión>-setup.exe` y sigue el asistente. Si ya tienes una
-  versión instalada, el instalador la actualiza sin perder tu configuración.
+- **Instalador**: ejecuta `Naygo-<versión>-setup.exe` y sigue el asistente (disponible en
+  siete idiomas; incluye un paso para elegir el idioma inicial de Naygo entre los diez
+  disponibles, preseleccionado según el idioma de Windows, y una casilla opcional "Iniciar
+  Naygo al arrancar Windows"). Si ya tienes una versión instalada, el instalador la
+  actualiza sin perder tu configuración.
 
 La primera vez, Windows SmartScreen puede advertir "editor desconocido" (el `.exe` no está
 firmado): haz clic en **"Más información" → "Ejecutar de todos modos"**.
@@ -92,6 +108,9 @@ naygo.exe [<carpeta>] [--theme <id>] [--layout <nombre>] [--help] [--version]
   los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `macos`, `solarized-dark`).
 - `--layout <nombre>`: aplica una plantilla de disposición de paneles (de las del menú Layouts,
   incluidas las tuyas).
+- `--tray`: arranca minimizado en la bandeja (sin mostrar la ventana). Es el argumento que
+  usa la entrada "Iniciar con Windows" cuando está activo "Iniciar minimizado en la
+  bandeja"; si la bandeja está desactivada, se ignora sin efecto.
 - `--help`, `--version`: muestran un cuadro con la ayuda o la versión.
 
 Los valores que no existan se ignoran (la app abre igual y deja un aviso).
