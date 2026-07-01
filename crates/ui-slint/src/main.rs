@@ -3700,13 +3700,19 @@ fn main() -> Result<(), slint::PlatformError> {
                 let Some(chord) = keys::chord_from(&text, c, s, a) else {
                     return;
                 };
+                // Guardar la combinación ANTERIOR: si el SO rechaza la nueva al re-armar, se
+                // restaura (best-effort) para no dejar al usuario con un hotkey "activado pero sin
+                // funcionar" mostrando una combinación muerta. Coherente con la ruta del toggle,
+                // que también revierte a un estado limpio.
+                let prev_chord = ctrl.borrow().config.settings.global_hotkey;
                 let set_result = ctrl.borrow_mut().config.set_global_hotkey(chord);
                 match set_result {
                     Ok(()) => {
                         if let Err(e) = rearm() {
-                            // El SO rechazó la combinación nueva: el chord ya quedó persistido por
-                            // `set_global_hotkey`, pero el registro real falló. Avisamos; el
-                            // usuario puede recapturar otra combinación o desactivar el hotkey.
+                            // El SO rechazó la combinación nueva: revertir a la anterior y re-armar
+                            // (que funcionaba), de modo que el usuario conserva su hotkey vigente.
+                            let _ = ctrl.borrow_mut().config.set_global_hotkey(prev_chord);
+                            let _ = rearm();
                             if let Some(ui) = ui_weak.upgrade() {
                                 let tmpl =
                                     ctrl.borrow().config.t("slint.cfg.global_hotkey_rejected");
