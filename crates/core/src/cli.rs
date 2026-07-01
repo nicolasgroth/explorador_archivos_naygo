@@ -45,12 +45,16 @@ pub struct CliArgs {
     pub layout: Option<String>,
     pub help: bool,
     pub version: bool,
+    /// Arrancar minimizado en la bandeja (sin mostrar la ventana). Lo escribe la entrada
+    /// Run del registro cuando `autostart_minimized` está activo.
+    pub tray: bool,
 }
 
 /// Parsea los argumentos (SIN el ejecutable). `is_dir` valida la carpeta posicional (inyectable
-/// para test puro). Reglas: `--help`/`--version` ponen su flag; `--theme <v>`/`--layout <v>`
-/// consumen el siguiente token como valor (si no hay, se ignoran); el primer token que no sea
-/// flag ni valor-de-flag es la carpeta posicional. Flags desconocidos se ignoran. Nunca panic.
+/// para test puro). Reglas: `--help`/`--version`/`--tray` ponen su flag; `--theme <v>`/
+/// `--layout <v>` consumen el siguiente token como valor (si no hay, se ignoran); el primer
+/// token que no sea flag ni valor-de-flag es la carpeta posicional. Flags desconocidos se
+/// ignoran. Nunca panic.
 pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
     let mut out = CliArgs::default();
     let mut i = 0;
@@ -59,6 +63,7 @@ pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
         match arg {
             "--help" | "-h" => out.help = true,
             "--version" | "-v" => out.version = true,
+            "--tray" => out.tray = true,
             "--theme" => {
                 if let Some(v) = args.get(i + 1) {
                     out.theme = Some(v.clone());
@@ -211,6 +216,15 @@ mod tests {
     fn parse_flag_desconocido_se_ignora() {
         let a = parse_args(&[s("--zzz"), s("D:\\dir")], |_| true);
         assert_eq!(a.dir, Some(PathBuf::from("D:\\dir")));
+    }
+
+    #[test]
+    fn parse_flag_tray() {
+        let a = parse_args(&[s("--tray")], |_| true);
+        assert!(a.tray, "--tray activa el arranque minimizado");
+        assert!(!parse_args(&[s("D:\\dir")], |_| true).tray);
+        let b = parse_args(&[s("--tray"), s("D:\\dir")], |_| true);
+        assert!(b.tray && b.dir == Some(PathBuf::from("D:\\dir")));
     }
 
     #[test]

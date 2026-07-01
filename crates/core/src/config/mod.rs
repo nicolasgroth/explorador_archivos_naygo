@@ -231,6 +231,10 @@ pub struct Settings {
     /// Iniciar Naygo con Windows (entrada Run del registro). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub autostart: bool,
+    /// Al iniciar con Windows (autostart), arrancar minimizado en la bandeja (sin mostrar la
+    /// ventana). Solo tiene efecto si `autostart` está activo. Default true (caso pedido).
+    #[serde(default = "default_autostart_minimized")]
+    pub autostart_minimized: bool,
     /// Formato de las columnas de fecha (Modificado/Creado). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub date_format: crate::format::DateFormat,
@@ -371,6 +375,11 @@ fn default_close_to_tray() -> bool {
     true
 }
 
+/// Default de `autostart_minimized`: true.
+fn default_autostart_minimized() -> bool {
+    true
+}
+
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
 fn default_icon_set() -> String {
     "lucide".to_string()
@@ -501,6 +510,7 @@ impl Default for Settings {
             tray_enabled: true,
             close_to_tray: true,
             autostart: false,
+            autostart_minimized: true,
             date_format: crate::format::DateFormat::IsoMinute,
             size_format: crate::format::SizeFormat::Auto,
             row_density: RowDensity::Compact,
@@ -784,6 +794,7 @@ mod tests {
             tray_enabled: false,
             close_to_tray: true,
             autostart: false,
+            autostart_minimized: false,
             date_format: crate::format::DateFormat::DmyMinute,
             size_format: crate::format::SizeFormat::Kb,
             row_density: RowDensity::Comfortable,
