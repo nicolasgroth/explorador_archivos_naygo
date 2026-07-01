@@ -5345,6 +5345,30 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_layout();
         });
     }
+    // DOBLE-CLIC en un divisor: repartir 50/50 sus dos paneles vecinos.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let area_of = area_of.clone();
+        ui.on_split_reset(move |index| {
+            let area = area_of();
+            {
+                let mut c = ctrl.borrow_mut();
+                // Copiar (path, divider) del handle ANTES de mutar: `handles` toma prestado
+                // `c` y no puede vivir cuando se llama `set_divider` (patrón de la Fase 1).
+                let target = {
+                    let handles = c.split_handles(area);
+                    handles
+                        .get(index as usize)
+                        .map(|h| (h.path.clone(), h.divider))
+                };
+                if let Some((path, divider)) = target {
+                    c.set_divider(&path, divider, 0.5);
+                }
+            }
+            sync_layout();
+        });
+    }
     {
         let sync_layout = sync_layout.clone();
         ui.on_content_resized(move || sync_layout());

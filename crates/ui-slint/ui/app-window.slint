@@ -522,6 +522,9 @@ export component AppWindow inherits Window {
     // la barra-fantasma (un único Rectangle por escalares) sí repinta al instante.
     callback split-drag(int, length, length);
     callback split-commit(int, length, length);
+    // Doble-clic en un divisor: repartir 50/50 sus dos paneles vecinos. El int es el índice
+    // del handle (mismo que split-drag/commit).
+    callback split-reset(int);
     // Barra-fantasma del splitter en curso (rect en coords de contenido; w/h 0 = oculta).
     in property <length> splitpreview-x;
     in property <length> splitpreview-y;
@@ -1379,6 +1382,10 @@ export component AppWindow inherits Window {
                         if (ev.kind == PointerEventKind.cancel) {
                             root.split-commit(s.index, parent.x + self.mouse-x, parent.y + self.mouse-y);
                         }
+                    }
+                    // Doble-clic: igualar 50/50 los dos paneles vecinos de este divisor.
+                    double-clicked => {
+                        root.split-reset(s.index);
                     }
                 }
             }
