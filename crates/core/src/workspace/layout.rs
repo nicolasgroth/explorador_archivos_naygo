@@ -662,7 +662,20 @@ fn handles(node: &DockNode, area: Rect, path: &mut Vec<SplitStep>, out: &mut Vec
     }
 }
 
-/// Busca la hoja `leaf` y la reemplaza por un split [leaf | new_id] con la orientación dada.
+/// Busca la hoja `leaf` y la divide con la orientación `dir`, aplanando cuando es posible.
+///
+/// - Si `leaf` es hijo directo de ESTE `Split` y el `dir` de ese split coincide con `dir`
+///   pedido, inserta `Leaf(new_id)` como hermano adyacente (justo después de `leaf`) EN ESE
+///   MISMO split: `[.., leaf, new, ..]`, partiendo en dos el peso que tenía `leaf` (así los
+///   demás hijos conservan su tamaño exacto). No se crea un sub-split.
+/// - Si el `dir` difiere, o `leaf` no es hijo directo de un split (está más anidado, o es la
+///   raíz sola, o dentro de un grupo `Tabs`), se comporta como antes: la hoja (o el grupo
+///   entero, si `leaf` es miembro de un `Tabs`) se reemplaza por un sub-split de 2 hijos con
+///   pesos [1,1].
+///
+/// La detección "¿este split tiene a `leaf` como hijo directo y su dir coincide?" se hace en
+/// CADA nivel de la recursión, así un leaf anidado dentro de un split interno del mismo dir
+/// también se aplana ahí (y no en la raíz).
 fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
     match node {
         DockNode::Leaf(id) if *id == leaf => {
@@ -674,7 +687,7 @@ fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
         }
         DockNode::Leaf(_) => {}
         // Si `leaf` es uno de los miembros del grupo, el grupo entero se divide: el grupo
-        // queda en el primer lado y el panel nuevo en el segundo.
+        // queda en el primer lado y el panel nuevo en el segundo. No aplanar tabs.
         DockNode::Tabs { members, .. } if members.contains(&leaf) => {
             let group = node.clone();
             *node = DockNode::Split {
@@ -684,7 +697,25 @@ fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
             };
         }
         DockNode::Tabs { .. } => {}
-        DockNode::Split { children, .. } => {
+        DockNode::Split {
+            dir: split_dir,
+            children,
+            weights,
+        } => {
+            // ¿`leaf` es hijo directo de ESTE split, con el mismo dir pedido? Si sí, aplana
+            // aquí mismo en vez de descender.
+            if *split_dir == dir {
+                if let Some(idx) = children
+                    .iter()
+                    .position(|c| matches!(c, DockNode::Leaf(id) if *id == leaf))
+                {
+                    let half = weights[idx] / 2.0;
+                    weights[idx] = half;
+                    children.insert(idx + 1, DockNode::Leaf(new_id));
+                    weights.insert(idx + 1, half);
+                    return;
+                }
+            }
             for c in children.iter_mut() {
                 split_in(c, leaf, dir, new_id);
             }
@@ -1110,6 +1141,226 @@ mod tests {
             assert_eq!(weights.len(), 2);
         } else {
             panic!("raíz debe ser split");
+        }
+    }
+
+    #[test]
+    fn split_leaf_aplana_en_fila_del_mismo_dir() {
+        // Split[Horizontal, Leaf(1), Leaf(2)] con pesos iguales; dividir Leaf(2) en el MISMO
+        // eje (Horizontal) debe insertar Leaf(3) como hermano plano, no anidar un sub-split.
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
+            }),
+        };
+        l.split_leaf(PaneId(2), SplitDir::Horizontal, PaneId(3));
+
+        let (dir, children, weights) = match &l.root {
+            Some(DockNode::Split {
+                dir,
+                children,
+                weights,
+            }) => (*dir, children, weights),
+            other => panic!("raíz debe seguir siendo un split plano: {other:?}"),
+        };
+        assert_eq!(dir, SplitDir::Horizontal);
+        assert_eq!(
+            children.as_slice(),
+            [
+                DockNode::Leaf(PaneId(1)),
+                DockNode::Leaf(PaneId(2)),
+                DockNode::Leaf(PaneId(3)),
+            ],
+            "3 hijos PLANOS, sin sub-split anidado"
+        );
+        assert_eq!(weights.len(), 3);
+        // Leaf(1) conserva su peso original (1.0); Leaf(2) y Leaf(3) se reparten el 1.0 que
+        // tenía Leaf(2) (0.5 cada uno).
+        assert!(
+            (weights[0] - 1.0).abs() < 0.001,
+            "peso de 1 intacto: {weights:?}"
+        );
+        assert!(
+            (weights[1] - 0.5).abs() < 0.001,
+            "peso de 2 a la mitad: {weights:?}"
+        );
+        assert!(
+            (weights[2] - 0.5).abs() < 0.001,
+            "peso de 3 la otra mitad: {weights:?}"
+        );
+
+        // pane_rects sobre un área conocida: el panel 1 conserva su ancho anterior (a nivel de
+        // PESOS es EXACTO — ver los `assert` de `weights` arriba — pero en PÍXELES hay un
+        // corrimiento de hasta un `SPLIT_BAR` porque `child_rects` descuenta `SPLIT_BAR*(N-1)`
+        // del área usable y N pasó de 2 a 3 hijos: ese es el costo fijo de la barra nueva entre
+        // 2 y 3, no un efecto "elástico" sobre 1) y 2+3 juntos ocupan lo que ocupaba 2.
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let antes = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
+            }),
+        }
+        .pane_rects(area);
+        let w1_antes = antes.iter().find(|(id, _)| *id == PaneId(1)).unwrap().1.w;
+        let w2_antes = antes.iter().find(|(id, _)| *id == PaneId(2)).unwrap().1.w;
+
+        let despues = l.pane_rects(area);
+        let w1 = despues.iter().find(|(id, _)| *id == PaneId(1)).unwrap().1.w;
+        let w2 = despues.iter().find(|(id, _)| *id == PaneId(2)).unwrap().1.w;
+        let w3 = despues.iter().find(|(id, _)| *id == PaneId(3)).unwrap().1.w;
+
+        assert!(
+            (w1 - w1_antes).abs() < SPLIT_BAR + 0.5,
+            "panel 1 conserva su ancho anterior (± el costo fijo de la barra nueva): {w1} vs {w1_antes}"
+        );
+        // 2 y 3 juntos (más la nueva barra entre ambos, que antes no existía) ocupan lo que
+        // ocupaba 2: comparamos contra w2_antes con una tolerancia que cubre la barra extra.
+        assert!(
+            (w2 + w3 - w2_antes).abs() < SPLIT_BAR + 1.0,
+            "2+3 juntos ocupan ~lo que ocupaba 2: {w2}+{w3} vs {w2_antes}"
+        );
+    }
+
+    #[test]
+    fn split_leaf_perpendicular_anida() {
+        // Mismo layout base, pero dividiendo en el eje PERPENDICULAR (Vertical): debe anidar
+        // un sub-split, no aplanar.
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
+            }),
+        };
+        l.split_leaf(PaneId(2), SplitDir::Vertical, PaneId(3));
+
+        match &l.root {
+            Some(DockNode::Split {
+                dir,
+                children,
+                weights,
+            }) => {
+                assert_eq!(
+                    *dir,
+                    SplitDir::Horizontal,
+                    "el split externo no cambia de eje"
+                );
+                assert_eq!(children.len(), 2, "el split externo sigue con 2 hijos");
+                assert_eq!(children[0], DockNode::Leaf(PaneId(1)));
+                assert!(
+                    (weights[0] - 1.0).abs() < 0.001,
+                    "peso externo de 1 intacto"
+                );
+                match &children[1] {
+                    DockNode::Split {
+                        dir: inner_dir,
+                        children: inner_children,
+                        weights: inner_weights,
+                    } => {
+                        assert_eq!(*inner_dir, SplitDir::Vertical);
+                        assert_eq!(
+                            inner_children.as_slice(),
+                            [DockNode::Leaf(PaneId(2)), DockNode::Leaf(PaneId(3))]
+                        );
+                        assert_eq!(inner_weights.len(), 2);
+                    }
+                    other => {
+                        panic!("Leaf(2) debe reemplazarse por un sub-split anidado: {other:?}")
+                    }
+                }
+            }
+            other => panic!("raíz debe seguir siendo split: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn split_leaf_root_unico_crea_split() {
+        // Caso 1 explícito: root = Leaf único → split de 2 con pesos [1,1].
+        let mut l = SerializableDockLayout::single(PaneId(1));
+        l.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(2));
+        assert_eq!(
+            l.root,
+            Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
+            })
+        );
+    }
+
+    #[test]
+    fn split_leaf_en_split_anidado_aplana_ahi() {
+        // Split{ Vertical, [Leaf(1), Split{ Horizontal, [Leaf(2), Leaf(3)] }] }: dividir
+        // Leaf(3) en Horizontal debe aplanar el split INTERNO (mismo dir), no la raíz.
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Vertical,
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Split {
+                        dir: SplitDir::Horizontal,
+                        children: vec![DockNode::Leaf(PaneId(2)), DockNode::Leaf(PaneId(3))],
+                        weights: vec![1.0, 1.0],
+                    },
+                ],
+                weights: vec![0.4, 0.6],
+            }),
+        };
+        l.split_leaf(PaneId(3), SplitDir::Horizontal, PaneId(4));
+
+        match &l.root {
+            Some(DockNode::Split {
+                dir,
+                children,
+                weights,
+            }) => {
+                assert_eq!(*dir, SplitDir::Vertical, "el split externo no cambia");
+                assert_eq!(children.len(), 2, "el split externo sigue con 2 hijos");
+                assert_eq!(children[0], DockNode::Leaf(PaneId(1)));
+                assert!(
+                    (weights[0] - 0.4).abs() < 0.001 && (weights[1] - 0.6).abs() < 0.001,
+                    "pesos del split externo NO cambian: {weights:?}"
+                );
+                match &children[1] {
+                    DockNode::Split {
+                        dir: inner_dir,
+                        children: inner_children,
+                        weights: inner_weights,
+                    } => {
+                        assert_eq!(*inner_dir, SplitDir::Horizontal);
+                        assert_eq!(
+                            inner_children.as_slice(),
+                            [
+                                DockNode::Leaf(PaneId(2)),
+                                DockNode::Leaf(PaneId(3)),
+                                DockNode::Leaf(PaneId(4)),
+                            ],
+                            "el split interno horizontal pasa a 3 hijos PLANOS"
+                        );
+                        assert_eq!(inner_weights.len(), 3);
+                        assert!((inner_weights[0] - 1.0).abs() < 0.001, "peso de 2 intacto");
+                        assert!(
+                            (inner_weights[1] - 0.5).abs() < 0.001,
+                            "peso de 3 a la mitad"
+                        );
+                        assert!(
+                            (inner_weights[2] - 0.5).abs() < 0.001,
+                            "peso de 4 la otra mitad"
+                        );
+                    }
+                    other => panic!("el hijo 1 debe seguir siendo el split interno: {other:?}"),
+                }
+            }
+            other => panic!("raíz debe seguir siendo split: {other:?}"),
         }
     }
 
