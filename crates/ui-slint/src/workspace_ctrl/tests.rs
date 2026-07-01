@@ -2222,9 +2222,8 @@ fn release_pane_watcher_quita_el_watcher() {
 
 /// Mover el divisor 0 de un split de 3 paneles en fila solo reparte peso entre sus DOS
 /// vecinos (paneles 0 y 1); el 3er panel (no vecino de ese divisor) conserva su ancho.
-/// `add_pane_split()` anida splits de a 2 (no arma una fila N-aria plana), así que para
-/// probar el caso de un split con 2+ divisores armamos el árbol a mano con 3 paneles
-/// Files reales (mismo patrón que usa el test equivalente en core:
+/// Armamos el árbol a mano con 3 paneles Files reales en una fila plana para probar un
+/// split con 2+ divisores de forma directa (mismo patrón que el test equivalente en core:
 /// `set_divider_solo_afecta_a_los_dos_vecinos` en `crates/core/src/workspace/layout.rs`).
 #[test]
 fn solo_vecinos_resto_fijo() {
