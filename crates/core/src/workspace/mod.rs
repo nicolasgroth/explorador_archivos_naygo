@@ -321,6 +321,17 @@ impl Workspace {
             order: &mut Vec<PaneId>,
         ) -> LayoutShape {
             debug_assert_eq!(children.len(), weights.len());
+            // Guard defensivo: un `DockNode::Split` con 0 hijos viola su invariante documentada
+            // (`children.len() >= 2`) y no debería poder construirse — la deserialización en
+            // `layout.rs` (`dock_from_wire`) ya lo previene aguas arriba, rechazando los splits
+            // degenerados al cargar `workspace.json`. Este guard es defensa en profundidad: si
+            // pese a todo llegara un split vacío (p. ej. construido a mano por código futuro),
+            // indexar `children[0]`/`weights[0]` sin este chequeo paniquearía en release. No hay
+            // una `LayoutShape` "vacía"; la más neutra es una hoja al índice 0, igual que el
+            // layout vacío en `to_template` (ver más abajo).
+            if children.is_empty() {
+                return LayoutShape::Leaf(0);
+            }
             if children.len() == 1 {
                 return node_to_shape(&children[0], order);
             }
@@ -614,5 +625,43 @@ mod tests {
         let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
         assert_eq!(w2.panes().len(), w.panes().len());
         assert_eq!(w2.layout.pane_ids().len(), w.layout.pane_ids().len());
+    }
+
+    #[test]
+    fn to_template_split_3_hijos_roundtrip() {
+        // Un Split N-ario de 3 hijos (fila de 3 paneles) ejercita `split_children_to_shape`
+        // con children.len() > 2, que se pliega en una cadena binaria anidada a la derecha.
+        let mut w = Workspace::new();
+        let a = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        let b = w.add_pane(PanePurpose::Files, PathBuf::from("C:/b"));
+        let c = w.add_pane(PanePurpose::Files, PathBuf::from("C:/c"));
+        w.layout = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(a), DockNode::Leaf(b), DockNode::Leaf(c)],
+                weights: vec![1.0, 1.0, 1.0],
+            }),
+        };
+        w.set_active(a);
+
+        let captured = w.to_template("Fila de 3");
+        let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
+
+        // Los 3 paneles Files sobreviven, en el mismo orden que el árbol original.
+        assert_eq!(w2.panes().len(), 3);
+        assert_eq!(w2.layout.pane_ids().len(), 3);
+        let dirs: Vec<_> = w2
+            .panes()
+            .iter()
+            .filter_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
+            .collect();
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("C:/a"),
+                PathBuf::from("C:/b"),
+                PathBuf::from("C:/c"),
+            ]
+        );
     }
 }

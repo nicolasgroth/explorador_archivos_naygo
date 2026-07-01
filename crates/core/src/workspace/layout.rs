@@ -67,37 +67,86 @@ enum DockNodeWire {
     },
 }
 
-impl From<DockNodeWire> for DockNode {
-    fn from(w: DockNodeWire) -> Self {
-        match w {
-            DockNodeWire::Leaf(id) => DockNode::Leaf(id),
-            DockNodeWire::Tabs { members, active } => DockNode::Tabs { members, active },
-            DockNodeWire::Split {
-                dir,
-                children,
-                weights,
-                fraction,
-                first,
-                second,
-            } => {
-                if let (Some(f), Some(s)) = (first, second) {
-                    let frac = fraction.unwrap_or(0.5).clamp(0.05, 0.95);
-                    return DockNode::Split {
-                        dir,
-                        children: vec![(*f).into(), (*s).into()],
-                        weights: vec![frac, 1.0 - frac],
-                    };
+/// Colapsa un split recién deserializado a su forma canónica: 1 hijo → ese hijo; ≥2 → Split.
+/// Solo se llama con `children` no vacío (el caso de 0 hijos se resuelve antes, en
+/// `dock_from_wire`, porque un split sin contenido no puede representarse como `DockNode`).
+fn make_split(dir: SplitDir, mut children: Vec<DockNode>, mut weights: Vec<f32>) -> DockNode {
+    // Defensa: pesos de largo distinto (p. ej. `workspace.json` editado a mano) → uniformes.
+    if weights.len() != children.len() {
+        weights = vec![1.0; children.len()];
+    }
+    if children.len() == 1 {
+        return children.pop().unwrap();
+    }
+    DockNode::Split {
+        dir,
+        children,
+        weights,
+    }
+}
+
+/// Convierte el formato de cable a `DockNode`, colapsando/descartando los casos degenerados
+/// en vez de producir un `Split` que viole la invariante `children.len() >= 2`:
+/// - `Tabs` sin miembros → `None` (un grupo de pestañas vacío no representa nada).
+/// - `Split` binario viejo (`first`/`second`): convierte cada lado presente; si un lado falta
+///   o es a su vez degenerado, el otro sobrevive como hijo único (no se pierde el panel); si
+///   ambos faltan, `None`.
+/// - `Split` N-ario: convierte cada hijo, descarta los `None` (y su peso correspondiente); si
+///   no queda ninguno, `None`.
+///
+/// Devuelve `None` cuando el nodo no puede representar ningún panel; el `Deserialize` de
+/// `DockNode` traduce ese caso a un error (no puede devolver `Option` al no ser fallible).
+fn dock_from_wire(w: DockNodeWire) -> Option<DockNode> {
+    match w {
+        DockNodeWire::Leaf(id) => Some(DockNode::Leaf(id)),
+        DockNodeWire::Tabs { members, active } => {
+            if members.is_empty() {
+                None
+            } else {
+                Some(DockNode::Tabs { members, active })
+            }
+        }
+        DockNodeWire::Split {
+            dir,
+            children,
+            weights,
+            fraction,
+            first,
+            second,
+        } => {
+            if first.is_some() || second.is_some() {
+                // Formato binario viejo: recoge el/los lado(s) presentes y convertibles.
+                // Si solo hay uno (el otro faltaba o era degenerado), sobrevive como hijo
+                // único en vez de descartarse en silencio (FIX I-2).
+                let f = first.and_then(|b| dock_from_wire(*b));
+                let s = second.and_then(|b| dock_from_wire(*b));
+                return match (f, s) {
+                    (Some(f), Some(s)) => {
+                        let frac = fraction.unwrap_or(0.5).clamp(0.05, 0.95);
+                        Some(make_split(dir, vec![f, s], vec![frac, 1.0 - frac]))
+                    }
+                    (Some(only), None) | (None, Some(only)) => Some(only),
+                    (None, None) => None,
+                };
+            }
+            // Formato N-ario: convierte cada hijo, descarta los degenerados y su peso.
+            let mut kept: Vec<DockNode> = Vec::new();
+            let mut kw: Vec<f32> = Vec::new();
+            let weights_or_default = if weights.len() == children.len() {
+                weights
+            } else {
+                vec![1.0; children.len()]
+            };
+            for (c, w) in children.into_iter().zip(weights_or_default) {
+                if let Some(c) = dock_from_wire(c) {
+                    kept.push(c);
+                    kw.push(w);
                 }
-                let children: Vec<DockNode> = children.into_iter().map(Into::into).collect();
-                let mut weights = weights;
-                if weights.len() != children.len() {
-                    weights = vec![1.0; children.len()];
-                }
-                DockNode::Split {
-                    dir,
-                    children,
-                    weights,
-                }
+            }
+            if kept.is_empty() {
+                None
+            } else {
+                Some(make_split(dir, kept, kw))
             }
         }
     }
@@ -105,7 +154,8 @@ impl From<DockNodeWire> for DockNode {
 
 impl<'de> serde::Deserialize<'de> for DockNode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        DockNodeWire::deserialize(d).map(Into::into)
+        let wire = DockNodeWire::deserialize(d)?;
+        dock_from_wire(wire).ok_or_else(|| serde::de::Error::custom("split degenerado sin hijos"))
     }
 }
 
@@ -1315,5 +1365,102 @@ mod tests {
         } else {
             panic!("debe migrar a Split N-ario");
         }
+    }
+
+    // --- Blindaje contra splits degenerados (I-1/I-2) ---------------------------------
+
+    #[test]
+    fn deser_split_vacio_es_error_o_none() {
+        // Un Split sin `children` ni `first`/`second`: no puede representar ningún panel.
+        // Debe fallar la deserialización (no producir un Split degenerado ni paniquear).
+        let corrupto = r#"{"root":{"Split":{"dir":"Horizontal"}}}"#;
+        let r = serde_json::from_str::<SerializableDockLayout>(corrupto);
+        assert!(r.is_err(), "un split sin hijos debe rechazarse: {r:?}");
+    }
+
+    #[test]
+    fn deser_split_un_hijo_colapsa() {
+        let json =
+            r#"{"root":{"Split":{"dir":"Horizontal","children":[{"Leaf":1}],"weights":[1.0]}}}"#;
+        let l: SerializableDockLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(l.root, Some(DockNode::Leaf(PaneId(1))));
+    }
+
+    #[test]
+    fn migra_binario_solo_first_conserva_el_lado() {
+        // `second` ausente (p. ej. archivo truncado): el lado presente no debe perderse.
+        let json = r#"{"root":{"Split":{"dir":"Horizontal","fraction":0.3,"first":{"Leaf":7}}}}"#;
+        let l: SerializableDockLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(l.root, Some(DockNode::Leaf(PaneId(7))));
+    }
+
+    #[test]
+    fn migra_binario_anidado() {
+        // Split viejo cuyo `second` es a su vez un split viejo: debe migrar a N-ario anidado.
+        let json = r#"{"root":{"Split":{"dir":"Horizontal","fraction":0.5,"first":{"Leaf":1},
+            "second":{"Split":{"dir":"Vertical","fraction":0.5,"first":{"Leaf":2},"second":{"Leaf":3}}}}}}"#;
+        let l: SerializableDockLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(l.pane_ids(), vec![PaneId(1), PaneId(2), PaneId(3)]);
+        match &l.root {
+            Some(DockNode::Split {
+                dir,
+                children,
+                weights,
+            }) => {
+                assert_eq!(*dir, SplitDir::Horizontal);
+                assert_eq!(children.len(), 2);
+                assert!((weights[0] - 0.5).abs() < 0.001);
+                assert!((weights[1] - 0.5).abs() < 0.001);
+                assert_eq!(children[0], DockNode::Leaf(PaneId(1)));
+                match &children[1] {
+                    DockNode::Split {
+                        dir,
+                        children,
+                        weights,
+                    } => {
+                        assert_eq!(*dir, SplitDir::Vertical);
+                        assert_eq!(
+                            children.as_slice(),
+                            [DockNode::Leaf(PaneId(2)), DockNode::Leaf(PaneId(3))]
+                        );
+                        assert!((weights[0] - 0.5).abs() < 0.001);
+                        assert!((weights[1] - 0.5).abs() < 0.001);
+                    }
+                    other => panic!("el segundo hijo debe ser un split anidado: {other:?}"),
+                }
+            }
+            other => panic!("la raíz debe ser un split: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deser_weights_largo_distinto_se_repara() {
+        // 1 peso para 2 hijos: debe deserializar OK con pesos uniformes en vez de paniquear.
+        let json = r#"{"root":{"Split":{"dir":"Horizontal","children":[{"Leaf":1},{"Leaf":2}],"weights":[5.0]}}}"#;
+        let l: SerializableDockLayout = serde_json::from_str(json).unwrap();
+        if let Some(DockNode::Split {
+            children, weights, ..
+        }) = &l.root
+        {
+            assert_eq!(children.len(), 2);
+            assert_eq!(weights.len(), 2);
+            assert!((weights[0] - weights[1]).abs() < 0.001, "pesos uniformes");
+        } else {
+            panic!("la raíz debe ser un split");
+        }
+        let rects = l.pane_rects(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        });
+        let r1 = rects.iter().find(|(id, _)| *id == PaneId(1)).unwrap().1;
+        let r2 = rects.iter().find(|(id, _)| *id == PaneId(2)).unwrap().1;
+        assert!(
+            (r1.w - r2.w).abs() < 2.0,
+            "se reparte ~50/50: {} vs {}",
+            r1.w,
+            r2.w
+        );
     }
 }
