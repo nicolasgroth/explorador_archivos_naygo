@@ -521,12 +521,18 @@ impl ConfigCtrl {
 
     /// Al iniciar con Windows, arrancar minimizado en la bandeja. Si autostart ya está activo,
     /// reescribe la entrada Run con/sin --tray para que el cambio surta efecto de inmediato.
+    /// El flag SIEMPRE se persiste; la reescritura del registro es best-effort (si falla por
+    /// permisos, se loguea y el sufijo --tray se corrige en el próximo toggle de autostart).
     pub fn set_autostart_minimized(&mut self, v: bool) {
         self.settings.autostart_minimized = v;
         self.save();
         if self.settings.autostart {
             let args: &[&str] = if v { &["--tray"] } else { &[] };
-            let _ = naygo_platform::autostart::set_enabled(true, args);
+            if let Err(e) = naygo_platform::autostart::set_enabled(true, args) {
+                crate::logging::log_line(&format!(
+                    "no se pudo reescribir la entrada Run con --tray: {e}"
+                ));
+            }
         }
     }
 
