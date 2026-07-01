@@ -959,6 +959,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .enumerate()
                     .map(|(i, h)| SplitVm {
                         index: i as i32,
+                        divider: h.divider as i32,
                         x: h.rect.x,
                         y: h.rect.y,
                         w: h.rect.w,
@@ -996,6 +997,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .enumerate()
                     .map(|(i, h)| SplitVm {
                         index: i as i32,
+                        divider: h.divider as i32,
                         x: h.rect.x,
                         y: h.rect.y,
                         w: h.rect.w,
@@ -5304,7 +5306,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let c = ctrl.borrow();
             let handles = c.split_handles(area);
             if let Some(h) = handles.get(index as usize) {
-                if let Some((_f, bar)) = c.fraction_at(&h.path.clone(), area, px, py) {
+                if let Some((_f, bar)) = c.divider_at(&h.path.clone(), h.divider, area, px, py) {
                     ui.set_splitpreview_x(bar.x);
                     ui.set_splitpreview_y(bar.y);
                     ui.set_splitpreview_w(bar.w);
@@ -5323,11 +5325,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let area = area_of();
             {
                 let mut c = ctrl.borrow_mut();
-                let handles = c.split_handles(area);
-                if let Some(h) = handles.get(index as usize) {
-                    let path = h.path.clone();
-                    if let Some((f, _bar)) = c.fraction_at(&path, area, px, py) {
-                        c.set_fraction(&path, f);
+                let target = {
+                    let handles = c.split_handles(area);
+                    handles
+                        .get(index as usize)
+                        .map(|h| (h.path.clone(), h.divider))
+                };
+                if let Some((path, divider)) = target {
+                    if let Some((f, _bar)) = c.divider_at(&path, divider, area, px, py) {
+                        c.set_divider(&path, divider, f);
                     }
                 }
             }

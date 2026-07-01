@@ -55,20 +55,21 @@ impl WorkspaceCtrl {
         self.ws.layout.split_handles(area)
     }
 
-    /// Ajusta la fracción de un split (drag de splitter).
-    pub fn set_fraction(&mut self, path: &[SplitStep], fraction: f32) {
-        self.ws.layout.set_fraction(path, fraction);
+    /// Mueve un divisor de un split (drag de splitter): transfiere peso solo entre sus vecinos.
+    pub fn set_divider(&mut self, path: &[SplitStep], divider: usize, frac_local: f32) {
+        self.ws.layout.set_divider(path, divider, frac_local);
     }
 
-    /// Fracción + rect de la barra-fantasma para un split dado el puntero (vista previa del drag).
-    pub fn fraction_at(
+    /// Fracción local + rect de la barra-fantasma para un divisor dado el puntero (vista previa).
+    pub fn divider_at(
         &self,
         path: &[SplitStep],
+        divider: usize,
         area: Rect,
         px: f32,
         py: f32,
     ) -> Option<(f32, Rect)> {
-        self.ws.layout.fraction_at(path, area, px, py)
+        self.ws.layout.divider_at(path, divider, area, px, py)
     }
 
     /// Navega el panel `id` a `dir` (clic en un breadcrumb / commit del editor). Reusa la
