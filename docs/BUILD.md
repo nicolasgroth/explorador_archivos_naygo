@@ -6,7 +6,7 @@
   <https://rustup.rs>. El proyecto usa CRT estático (`.cargo/config.toml`), por lo que
   el `.exe` resultante corre en equipos limpios sin el "Visual C++ Redistributable".
 - **Inno Setup** (opcional, solo para generar el instalador): descargar de
-  <https://jrsoftware.org/isdl.php>. Tras instalar, asegurate de que `ISCC.exe` esté
+  <https://jrsoftware.org/isdl.php>. Tras instalar, asegúrate de que `ISCC.exe` esté
   en el `PATH` (o ejecuta el script desde la consola "Inno Setup" / agrega su carpeta,
   típicamente `C:\Program Files (x86)\Inno Setup 6`, al `PATH`).
 
@@ -31,7 +31,8 @@ Qué hace, en orden:
 1. Lee la versión del `Cargo.toml` raíz (fuente única de verdad).
 2. `cargo build --release` → `target\release\naygo.exe` (con ícono, metadatos de
    autoría y CRT estático).
-3. Genera `dist\Naygo-<versión>-portable.zip` (`naygo.exe` + `LICENSE` + `LEEME.txt`).
+3. Genera `dist\Naygo-<versión>-portable.zip` (`naygo.exe` + `LICENSE` + `LEEME.txt` +
+   `THIRD-PARTY-NOTICES.md`).
 4. Genera las imágenes del asistente del instalador (`installer\wizard-*.bmp`) desde
    `assets\icons\logo_naygo.png`.
 5. Si `ISCC.exe` está disponible, genera `dist\Naygo-<versión>-setup.exe`. Si no,
@@ -53,5 +54,5 @@ Qué hace, en orden:
 - **Error al generar las BMP del asistente**: el script usa `System.Drawing` de .NET;
   en Windows 10/11 normal está disponible. En ediciones recortadas (Server Core),
   genera las BMP a mano y vuelve a correr.
-- **Falla `cargo build`**: confirmá el toolchain MSVC (`rustup default
+- **Falla `cargo build`**: confirma el toolchain MSVC (`rustup default
   stable-x86_64-pc-windows-msvc`).

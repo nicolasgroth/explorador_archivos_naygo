@@ -1,12 +1,12 @@
 # Agregar un idioma a Naygo
 
-Naygo viene con **español (es)** e **inglés (en)** incluidos en el ejecutable. Agregar
-cualquier otro idioma **no requiere recompilar ni tocar código**: basta con dejar un archivo
-de traducción junto al programa.
+Naygo incluye **diez idiomas** en el ejecutable (es, en, pt, fr, de, it, zh, ja, ko, hi).
+Agregar cualquier otro idioma **no requiere recompilar ni tocar código**: basta con dejar un
+archivo de traducción junto al programa.
 
 ## Cómo funciona
 
-- Los idiomas español e inglés están embebidos en `naygo.exe` (siempre disponibles).
+- Los diez idiomas de fábrica están embebidos en `naygo.exe` (siempre disponibles).
 - Al arrancar, Naygo busca además archivos `lang/<código>.json` en su carpeta de
   configuración (modo portable: junto al `.exe`). Cada uno se carga como un idioma más y
   aparece automáticamente en el selector de **Configuración → Idioma**.
@@ -45,7 +45,8 @@ de traducción junto al programa.
 
 - No hace falta traducir el 100% de las claves para probar: lo que falte se mostrará en
   español. Puedes ir completando el archivo y recargando.
-- Para compartir un idioma con otros usuarios, basta con pasarles el `lang/<código>.json`.
-- Si quieres que un idioma venga **incluido de fábrica** en el ejecutable (como es/en),
-  eso sí requiere agregarlo al código (`crates/core/src/i18n/mod.rs`) y recompilar; pero
-  para uso normal, el archivo suelto en `lang/` es suficiente.
+- Para compartir un idioma con otros usuarios, basta con pasarles el `lang/<código>.json`,
+  o exportarlo como pack **`.naygolang`** desde *Configuración → Importar/Exportar*.
+- Si quieres que un idioma venga **incluido de fábrica** en el ejecutable (como los diez
+  de fábrica), eso sí requiere agregarlo al código (`crates/core/src/i18n/mod.rs`) y
+  recompilar; pero para uso normal, el archivo suelto en `lang/` es suficiente.

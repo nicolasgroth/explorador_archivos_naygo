@@ -5,7 +5,8 @@ Naygo se distribuye de dos formas, generadas por `scripts\build-release.ps1`
 
 ## Portable (ZIP)
 
-`Naygo-<versión>-portable.zip` contiene `naygo.exe`, `LICENSE` y `LEEME.txt`.
+`Naygo-<versión>-portable.zip` contiene `naygo.exe`, `LICENSE`, `LEEME.txt` y
+`THIRD-PARTY-NOTICES.md`.
 Descomprimir y ejecutar — no instala nada. **La configuración se guarda junto al
 `.exe`** (modo portable): si mueves el ejecutable, lleva también los archivos de config que
 crea a su lado. Ideal para probar rápido en una VM o llevar en un pendrive.
@@ -22,14 +23,28 @@ crea a su lado. Ideal para probar rápido en una VM o llevar en un pendrive.
   hacerlo predeterminado (no toca Win+E ni reemplaza el Explorador).
 - **"Abrir en Naygo" (opcional)**: agrega una entrada al menú contextual (clic derecho)
   de carpetas y del fondo de carpeta, que abre esa carpeta en Naygo.
+- **Idioma del asistente**: el instalador está disponible en **siete idiomas** (inglés,
+  español, alemán, francés, italiano, portugués y japonés) y detecta el idioma del
+  sistema para preseleccionarlo.
+- **Idioma inicial de Naygo**: un paso adicional para elegir con qué idioma arranca
+  Naygo entre los **diez disponibles**, preseleccionado según el idioma de Windows.
+  Solo aplica en instalaciones **nuevas**: si ya existe un `settings.json` (una
+  actualización), no se toca.
+- **"Iniciar Naygo al arrancar Windows" (opcional)**: casilla que crea la entrada Run
+  del usuario para que Naygo arranque con Windows (con el argumento `--tray`, minimizado
+  en la bandeja).
 - **Ejecutar al terminar**: opción en la última página.
 
 ### Qué escribe en el sistema
 
-- Archivos: el `.exe`, `LICENSE` y `README.md` en la carpeta de instalación.
+- Archivos: el `.exe`, `LICENSE`, `README.md` y `THIRD-PARTY-NOTICES.md` en la carpeta
+  de instalación.
 - Accesos directos: menú Inicio (y Escritorio si se eligió).
 - Registro (solo si marcaste las opciones): claves bajo `Software\Classes` (en HKCU
-  para "para mí", HKLM para "para todos") para "Abrir con" y el menú contextual.
+  para "para mí", HKLM para "para todos") para "Abrir con" y el menú contextual; y la
+  clave **Run** de `HKCU` (solo si marcaste "Iniciar Naygo al arrancar Windows").
+- Un `settings.json` inicial con el idioma elegido en el paso de idioma (solo se crea
+  si no existía uno previo).
 
 
 ### Desinstalar
