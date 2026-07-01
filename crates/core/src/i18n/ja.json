@@ -864,7 +864,7 @@
   "slint.cfg.tip.low_power": "Reduces CPU usage on machines without a dedicated graphics card. Automatic decides based on the machine.",
   "slint.cfg.tip.new_items_at_end": "Files created during the session appear at the end of the list instead of being re-sorted.",
   "slint.cfg.tip.tray_enabled": "Shows a Naygo icon in the system tray (next to the clock).",
-  "slint.cfg.tip.close_to_tray": "When closing the window, Naygo minimizes to the tray instead of quitting. Requires the tray icon.",
+  "slint.cfg.tip.close_to_tray": "ウィンドウを閉じるとき、Naygoは終了せずにトレイに格納されます。トレイアイコンが必要です。",
   "slint.cfg.tip.recent_limit": "How many visited folders the history keeps. Accepts 1 to 100.",
   "slint.cfg.tip.footer_enabled": "Shows an info line at the bottom of each pane (selection, totals, disk space).",
   "slint.cfg.tip.footer_template": "What the footer shows. Pick a ready-made template or «Custom…» to write your own with tokens.",
