@@ -3,9 +3,9 @@ resolver = "2"
 members = ["crates/core", "crates/platform", "crates/proto-slint", "crates/ui-slint"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-authors = ["Nicolás Groth <ngroth@gmail.com>"]
+authors = ["NicolÃ¡s Groth <ngroth@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/nicolasgroth/explorador_archivos_naygo"
 
@@ -17,9 +17,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 windows = "0.62"
 
-# Perfil de release optimizado para distribución: binario chico, sin símbolos,
-# pensado para correr en máquinas con pocos recursos. La velocidad es la prioridad
-# del proyecto, así que opt-level="s" (tamaño sin sacrificar tanto rendimiento como
+# Perfil de release optimizado para distribuciÃ³n: binario chico, sin sÃ­mbolos,
+# pensado para correr en mÃ¡quinas con pocos recursos. La velocidad es la prioridad
+# del proyecto, asÃ­ que opt-level="s" (tamaÃ±o sin sacrificar tanto rendimiento como
 # "z") y panic=unwind (default) para poder recuperar de un panic en un worker sin
 # que la app caiga; el panic handler igual loguea.
 [profile.release]
@@ -28,15 +28,15 @@ lto = true
 codegen-units = 1
 strip = true
 
-# Perfil de DIAGNÓSTICO: igual que release (mismo código/optimización) pero CON símbolos de
-# depuración y sin strip, para que el backtrace del panic handler muestre nombres de función
-# reales (en release salían como `<unknown>`). Build: `cargo build --profile diag -p naygo-ui-slint`.
-# El .exe queda en target/diag/. NO es el binario de distribución; solo para cazar caídas.
+# Perfil de DIAGNÃ“STICO: igual que release (mismo cÃ³digo/optimizaciÃ³n) pero CON sÃ­mbolos de
+# depuraciÃ³n y sin strip, para que el backtrace del panic handler muestre nombres de funciÃ³n
+# reales (en release salÃ­an como `<unknown>`). Build: `cargo build --profile diag -p naygo-ui-slint`.
+# El .exe queda en target/diag/. NO es el binario de distribuciÃ³n; solo para cazar caÃ­das.
 [profile.diag]
 inherits = "release"
 debug = true
 strip = false
-# Sin LTO ni codegen-units=1: el diagnóstico no necesita el binario más chico/rápido, y así
-# compila en ~2 min en vez de ~20. El panic se reproduce igual; los símbolos son lo que importa.
+# Sin LTO ni codegen-units=1: el diagnÃ³stico no necesita el binario mÃ¡s chico/rÃ¡pido, y asÃ­
+# compila en ~2 min en vez de ~20. El panic se reproduce igual; los sÃ­mbolos son lo que importa.
 lto = false
 codegen-units = 16
