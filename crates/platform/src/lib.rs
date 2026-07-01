@@ -22,6 +22,7 @@ pub mod open;
 pub mod time;
 pub mod trash;
 pub mod window;
+pub mod window_geometry;
 
 pub fn hello() -> &'static str {
     "naygo-platform"

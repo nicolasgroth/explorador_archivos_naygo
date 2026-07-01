@@ -444,6 +444,7 @@ export struct SettingsVm {
     show-op-summary: bool,
     size-no-subdirs: bool,
     autostart: bool,
+    autostart-minimized: bool,
     paste-confirm: bool,
     paste-text-name: string,
     paste-text-ext: string,
@@ -501,6 +502,7 @@ export struct ShortcutRowVm {
 // Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
 export struct SplitVm {
     index: int,
+    divider: int,
     x: length,
     y: length,
     w: length,

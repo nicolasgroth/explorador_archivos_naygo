@@ -14,6 +14,8 @@ use naygo_core::fs_model::{EntryKind, SortKey};
 use naygo_core::keymap::Action;
 use naygo_core::recent_dirs::RecentDirs;
 use naygo_core::tree::DirTree;
+#[cfg(test)]
+use naygo_core::workspace::layout::DockNode;
 use naygo_core::workspace::layout::{
     Rect, SerializableDockLayout, SplitDir, SplitHandle, SplitStep,
 };

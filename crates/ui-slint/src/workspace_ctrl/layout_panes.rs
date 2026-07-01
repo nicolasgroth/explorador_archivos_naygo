@@ -55,20 +55,21 @@ impl WorkspaceCtrl {
         self.ws.layout.split_handles(area)
     }
 
-    /// Ajusta la fracción de un split (drag de splitter).
-    pub fn set_fraction(&mut self, path: &[SplitStep], fraction: f32) {
-        self.ws.layout.set_fraction(path, fraction);
+    /// Mueve un divisor de un split (drag de splitter): transfiere peso solo entre sus vecinos.
+    pub fn set_divider(&mut self, path: &[SplitStep], divider: usize, frac_local: f32) {
+        self.ws.layout.set_divider(path, divider, frac_local);
     }
 
-    /// Fracción + rect de la barra-fantasma para un split dado el puntero (vista previa del drag).
-    pub fn fraction_at(
+    /// Fracción local + rect de la barra-fantasma para un divisor dado el puntero (vista previa).
+    pub fn divider_at(
         &self,
         path: &[SplitStep],
+        divider: usize,
         area: Rect,
         px: f32,
         py: f32,
     ) -> Option<(f32, Rect)> {
-        self.ws.layout.fraction_at(path, area, px, py)
+        self.ws.layout.divider_at(path, divider, area, px, py)
     }
 
     /// Navega el panel `id` a `dir` (clic en un breadcrumb / commit del editor). Reusa la
@@ -644,10 +645,11 @@ impl WorkspaceCtrl {
                 // Sacar el arrastrado de su lugar y dividir el destino con él.
                 self.ws.layout.remove_leaf(dragged);
                 self.ws.layout.split_leaf(target, dir, dragged);
-                // Para Left/Top el arrastrado debe quedar PRIMERO: split_leaf lo pone
-                // segundo, así que para esos casos intercambiamos las fracciones via swap
-                // del orden (el split nuevo arranca 50/50, simétrico, así que basta con
-                // dejar al arrastrado del lado correcto: reordenamos si es Left/Top).
+                // `split_leaf` deja el arrastrado JUSTO DESPUÉS del destino (sea insertándolo
+                // como hermano en la misma fila/columna del mismo eje, o creando un sub-split).
+                // En ambos casos el par destino/arrastrado queda con pesos iguales (simétrico),
+                // así que para Left/Top —donde el arrastrado debe ir PRIMERO— basta intercambiar
+                // sus posiciones (swap intercambia hijos y pesos a la par).
                 if matches!(zone, DropZone::Left | DropZone::Top) {
                     self.ws.layout.swap_split_children(target, dragged);
                 }

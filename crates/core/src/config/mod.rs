@@ -12,8 +12,11 @@ use crate::workspace::template::TemplateStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Versión del formato de los archivos de config; permite migrar/descartar.
-const CONFIG_VERSION: u32 = 1;
+/// Versión del formato de los archivos de config; permite migrar/descartar. Público para que
+/// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
+/// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
+/// UI hardcodeaba `version: 1` y, al subir esta constante, la sesión dejaba de restaurarse.
+pub const CONFIG_VERSION: u32 = 2;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +107,46 @@ pub enum HighlightDuration {
     UntilRefresh,
 }
 
+/// Geometría persistida de la ventana principal, para restaurarla entre sesiones.
+/// Coordenadas en px físicos (las que da/consume el SO). `maximized` recuerda el estado;
+/// `width/height/x/y` guardan SIEMPRE el rect "restaurado" (des-maximizado), para volver a
+/// un tamaño sensato al des-maximizar.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    /// ¿El rect de la ventana intersecta de forma USABLE alguno de los monitores dados?
+    /// `monitors` son rects (x,y,w,h) en las mismas coords físicas. "Usable" = al menos
+    /// `MIN_VISIBLE` px de la ventana caen dentro de algún monitor, así una ventana en un
+    /// monitor desconectado o fuera de pantalla se detecta como no visible. Puro y testeable.
+    pub fn is_visible_on(&self, monitors: &[(i32, i32, u32, u32)]) -> bool {
+        const MIN_VISIBLE: i64 = 64;
+        // Toda la aritmética en i64: un settings.json corrupto puede traer coords/tamaños
+        // extremos (x=i32::MAX, width=u32::MAX) y las sumas i32 harían overflow (panic en
+        // debug, wrap en release). Esta función existe justo para sanear entrada hostil, así
+        // que no puede caer ella misma.
+        let (wx, wy, ww, wh) = (
+            self.x as i64,
+            self.y as i64,
+            self.width as i64,
+            self.height as i64,
+        );
+        monitors.iter().any(|&(mx, my, mw, mh)| {
+            let (mx, my, mw, mh) = (mx as i64, my as i64, mw as i64, mh as i64);
+            // Ancho/alto del solape entre el rect de la ventana y el del monitor.
+            let ox = (wx + ww).min(mx + mw) - wx.max(mx);
+            let oy = (wy + wh).min(my + mh) - wy.max(my);
+            ox >= MIN_VISIBLE && oy >= MIN_VISIBLE
+        })
+    }
+}
+
 /// Ajustes de la app (settings.json).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -184,13 +227,17 @@ pub struct Settings {
     /// pedido de Nicolás (acceso rápido). `#[serde(default)]` retro-compat.
     #[serde(default = "default_tray_enabled")]
     pub tray_enabled: bool,
-    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir. Opt-in (default
-    /// `false`): residente = memoria ocupada, que sea decisión del usuario.
-    #[serde(default)]
+    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir. Default `true`
+    /// (pedido de Nicolás): la X esconde a la bandeja en vez de salir.
+    #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     /// Iniciar Naygo con Windows (entrada Run del registro). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub autostart: bool,
+    /// Al iniciar con Windows (autostart), arrancar minimizado en la bandeja (sin mostrar la
+    /// ventana). Solo tiene efecto si `autostart` está activo. Default true (caso pedido).
+    #[serde(default = "default_autostart_minimized")]
+    pub autostart_minimized: bool,
     /// Formato de las columnas de fecha (Modificado/Creado). `#[serde(default)]` retro-compat.
     #[serde(default)]
     pub date_format: crate::format::DateFormat,
@@ -267,6 +314,10 @@ pub struct Settings {
     /// es independiente y SIEMPRE aparece, esté esto en `true` o `false`.
     #[serde(default = "default_confirm_drop_between_panes")]
     pub confirm_drop_between_panes: bool,
+    /// Geometría de la ventana principal (tamaño/posición/maximizado) para restaurar al
+    /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
+    #[serde(default)]
+    pub window: Option<WindowGeometry>,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -319,6 +370,16 @@ fn default_cache_max_dirs() -> usize {
 
 /// Default de `tray_enabled` para `#[serde(default)]`.
 fn default_tray_enabled() -> bool {
+    true
+}
+
+/// Default de `close_to_tray`: true (la X esconde a la bandeja en vez de salir).
+fn default_close_to_tray() -> bool {
+    true
+}
+
+/// Default de `autostart_minimized`: true.
+fn default_autostart_minimized() -> bool {
     true
 }
 
@@ -450,8 +511,9 @@ impl Default for Settings {
             new_items_at_end: false,
             size_no_subdirs: false,
             tray_enabled: true,
-            close_to_tray: false,
+            close_to_tray: true,
             autostart: false,
+            autostart_minimized: true,
             date_format: crate::format::DateFormat::IsoMinute,
             size_format: crate::format::SizeFormat::Auto,
             row_density: RowDensity::Compact,
@@ -471,6 +533,7 @@ impl Default for Settings {
             show_system: true,
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
+            window: None,
         }
     }
 }
@@ -555,6 +618,30 @@ pub fn load_settings(dir: &Path) -> Settings {
 pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
     let (read, recovered) = read_json_recovering::<Settings>(&dir.join("settings.json"));
     let settings = match read {
+        Some(mut s) if s.version == 1 => {
+            // Migración v1 → v2: forzar close_to_tray=true una vez (la X esconde a bandeja por
+            // defecto). Se hace explícita para que instalaciones existentes adopten el nuevo
+            // comportamiento sin que el usuario toque nada.
+            s.close_to_tray = true;
+            s.version = CONFIG_VERSION;
+            // Mismas normalizaciones que el brazo de la versión actual (ver abajo): migra el
+            // formato viejo y luego coacciona contra el catálogo: un id de pack suelto que ya
+            // no existe en disco (carpeta borrada) cae a "lucide" en vez de quedar como
+            // selección colgada con la toolbar rota.
+            let normalized = normalize_icon_set_id(&s.icon_set);
+            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
+            // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
+            // hay reglas explícitas (settings anterior al lote 3). Si tras eso siguen
+            // vacías (settings raro), caer a las reglas por defecto.
+            if !s.preview_text_exts_legacy.is_empty() && s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::rules_from_csv(&s.preview_text_exts_legacy);
+            }
+            if s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::default_preview_rules();
+            }
+            s.preview_text_exts_legacy.clear();
+            s
+        }
         Some(mut s) if s.version == CONFIG_VERSION => {
             // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
             // suelto que ya no existe en disco (carpeta borrada) cae a "lucide" en vez de
@@ -608,9 +695,16 @@ pub fn load_workspace(dir: &Path) -> Option<WorkspacePersist> {
 pub fn load_workspace_flagged(dir: &Path) -> (Option<WorkspacePersist>, bool) {
     let (read, recovered) = read_json_recovering::<WorkspacePersist>(&dir.join("workspace.json"));
     let ws = match read {
-        Some(w) if w.version == CONFIG_VERSION => Some(w),
+        // Se acepta cualquier versión HASTA la actual (`<=`), no solo la exacta: el struct
+        // `WorkspacePersist` no ha cambiado de forma incompatible entre versiones y el layout
+        // en formato viejo (binario `fraction/first/second`) se migra solo al deserializar
+        // (`DockNodeWire`). Exigir igualdad estricta hacía que subir `CONFIG_VERSION` (p. ej.
+        // por una migración de settings.json) descartara el workspace.json del usuario y le
+        // borrara su disposición de paneles al actualizar. Una versión FUTURA (mayor que la
+        // que entiende este binario) sí se ignora, porque podría traer campos que no sabemos leer.
+        Some(w) if w.version <= CONFIG_VERSION => Some(w),
         Some(_) => {
-            tracing::warn!("workspace.json de versión incompatible; ignorando");
+            tracing::warn!("workspace.json de versión más nueva que la soportada; ignorando");
             None
         }
         None => None,
@@ -710,6 +804,7 @@ mod tests {
             tray_enabled: false,
             close_to_tray: true,
             autostart: false,
+            autostart_minimized: false,
             date_format: crate::format::DateFormat::DmyMinute,
             size_format: crate::format::SizeFormat::Kb,
             row_density: RowDensity::Comfortable,
@@ -745,6 +840,13 @@ mod tests {
             show_system: false,
             hide_dotfiles: true,
             confirm_drop_between_panes: false,
+            window: Some(WindowGeometry {
+                width: 1280,
+                height: 800,
+                x: 50,
+                y: 60,
+                maximized: true,
+            }),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -1000,6 +1102,34 @@ mod tests {
     }
 
     #[test]
+    fn workspace_de_version_vieja_se_acepta() {
+        // Un workspace.json escrito por un binario anterior (version 1) NO debe descartarse al
+        // subir CONFIG_VERSION: el usuario perdería su disposición de paneles al actualizar.
+        // El formato es compatible y el layout viejo se migra al deserializar.
+        let dir = tempfile::tempdir().unwrap();
+        let viejo = r#"{"version":1,"layout":{"root":{"Leaf":5}},"active":5,"files":[],"purposes":[[5,"Files"]]}"#;
+        std::fs::write(dir.path().join("workspace.json"), viejo).unwrap();
+        let loaded = load_workspace(dir.path()).expect("un workspace v1 debe seguir cargando");
+        assert_eq!(loaded.layout.pane_ids(), vec![crate::workspace::PaneId(5)]);
+    }
+
+    #[test]
+    fn workspace_de_version_futura_se_ignora() {
+        // Una versión MÁS NUEVA que la que entiende este binario sí se ignora (podría traer
+        // campos no soportados). Se cae al layout por defecto, sin romper.
+        let dir = tempfile::tempdir().unwrap();
+        let futuro = format!(
+            r#"{{"version":{},"layout":{{"root":{{"Leaf":5}}}},"active":5,"files":[],"purposes":[[5,"Files"]]}}"#,
+            CONFIG_VERSION + 1
+        );
+        std::fs::write(dir.path().join("workspace.json"), futuro).unwrap();
+        assert!(
+            load_workspace(dir.path()).is_none(),
+            "versión futura → ignorada"
+        );
+    }
+
+    #[test]
     fn keymap_ausente_es_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let km = load_keymap(dir.path());
@@ -1154,5 +1284,112 @@ mod tests {
                 set_id: "material".into()
             })
         );
+    }
+
+    #[test]
+    fn window_geometry_visibilidad_multimonitor() {
+        let primario = (0i32, 0i32, 1920u32, 1080u32);
+        let g = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: 100,
+            y: 100,
+            maximized: false,
+        };
+        assert!(g.is_visible_on(&[primario]));
+        let g2 = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: 3000,
+            y: 100,
+            maximized: false,
+        };
+        assert!(
+            !g2.is_visible_on(&[primario]),
+            "fuera de todo monitor → no visible"
+        );
+        let secundario = (1920i32, 0i32, 1920u32, 1080u32);
+        assert!(g2.is_visible_on(&[primario, secundario]));
+    }
+
+    #[test]
+    fn window_geometry_coords_extremas_no_paniquean() {
+        // Un settings.json corrupto/adversarial puede traer coords y tamaños extremos. La
+        // validación de visibilidad NO debe hacer overflow (panic en debug, wrap en release):
+        // es justo la función que existe para sanear esa entrada.
+        let primario = (0i32, 0i32, 1920u32, 1080u32);
+        // La garantía es NO PANICAR (ni overflow en debug ni wrap en release) con cualquier
+        // combinación de extremos; el booleano concreto es secundario. Con las sumas en i32 esto
+        // reventaba; con i64 no.
+        let extremos = [
+            (i32::MAX, i32::MAX, u32::MAX, u32::MAX),
+            (i32::MIN, i32::MIN, u32::MAX, u32::MAX),
+            (i32::MAX, i32::MIN, 0, 0),
+            (0, 0, u32::MAX, u32::MAX),
+        ];
+        for (x, y, width, height) in extremos {
+            let g = WindowGeometry {
+                width,
+                height,
+                x,
+                y,
+                maximized: false,
+            };
+            // Solo debe devolver un bool sin panic. Una ventana lejana (i32::MAX) no es visible;
+            // una que cubre todo el plano (x=0,width=MAX) sí.
+            let _ = g.is_visible_on(&[primario]);
+        }
+        // Caso concreto: una ventana muy lejos a la derecha no es visible en el monitor primario.
+        let lejos = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: i32::MAX - 1000,
+            y: 0,
+            maximized: false,
+        };
+        assert!(!lejos.is_visible_on(&[primario]));
+    }
+
+    #[test]
+    fn settings_default_no_tiene_ventana_guardada() {
+        assert!(Settings::default().window.is_none());
+    }
+
+    #[test]
+    fn settings_viejo_sin_window_deserializa_a_none() {
+        // Un settings.json previo (sin el campo `window`) debe conservar el resto y
+        // caer a `None` en `window` gracias a #[serde(default)].
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.window.is_none());
+    }
+
+    #[test]
+    fn migracion_v1_a_v2_fuerza_close_to_tray() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Settings {
+            version: 1,
+            close_to_tray: false,
+            ..Settings::default()
+        };
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::to_string_pretty(&s).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.version, CONFIG_VERSION,
+            "se migra a la versión nueva"
+        );
+        assert!(
+            loaded.close_to_tray,
+            "la migración fuerza close_to_tray=true una vez"
+        );
+    }
+
+    #[test]
+    fn default_close_to_tray_es_true() {
+        assert!(Settings::default().close_to_tray);
     }
 }

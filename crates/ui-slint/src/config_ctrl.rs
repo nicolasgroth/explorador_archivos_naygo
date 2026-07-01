@@ -504,11 +504,35 @@ impl ConfigCtrl {
     }
 
     /// Iniciar Naygo con Windows: escribe/borra la entrada Run del registro y persiste el
-    /// ajuste. Si el registro falla (permiso), no cambia el ajuste (queda como estaba).
+    /// ajuste. Si el registro falla (permiso), no cambia el ajuste (queda como estaba). Cuando
+    /// `autostart_minimized` está activo, la entrada Run incluye `--tray` para que el proceso
+    /// arranque directo a la bandeja (ver `set_autostart_minimized` y main.rs).
     pub fn set_autostart(&mut self, on: bool) {
-        if naygo_platform::autostart::set_enabled(on).is_ok() {
+        let args: &[&str] = if self.settings.autostart_minimized {
+            &["--tray"]
+        } else {
+            &[]
+        };
+        if naygo_platform::autostart::set_enabled(on, args).is_ok() {
             self.settings.autostart = on;
             self.save();
+        }
+    }
+
+    /// Al iniciar con Windows, arrancar minimizado en la bandeja. Si autostart ya está activo,
+    /// reescribe la entrada Run con/sin --tray para que el cambio surta efecto de inmediato.
+    /// El flag SIEMPRE se persiste; la reescritura del registro es best-effort (si falla por
+    /// permisos, se loguea y el sufijo --tray se corrige en el próximo toggle de autostart).
+    pub fn set_autostart_minimized(&mut self, v: bool) {
+        self.settings.autostart_minimized = v;
+        self.save();
+        if self.settings.autostart {
+            let args: &[&str] = if v { &["--tray"] } else { &[] };
+            if let Err(e) = naygo_platform::autostart::set_enabled(true, args) {
+                crate::logging::log_line(&format!(
+                    "no se pudo reescribir la entrada Run con --tray: {e}"
+                ));
+            }
         }
     }
 

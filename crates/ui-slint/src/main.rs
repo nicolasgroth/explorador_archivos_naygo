@@ -230,6 +230,18 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // El registro (HKCU\...\Run) es la fuente de verdad de `autostart`, no settings.json: el
+    // instalador puede crear la entrada Run sin pasar por la UI (o el usuario puede borrarla a
+    // mano). Sincronizamos el ajuste guardado contra el registro real al arrancar.
+    #[cfg(windows)]
+    {
+        let reg_on = naygo_platform::autostart::is_enabled();
+        let mut c = ctrl.borrow_mut();
+        if c.config.settings.autostart != reg_on {
+            c.config.settings.autostart = reg_on;
+            c.config.save();
+        }
+    }
     // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
     // abierta (la arma `build_palette_commands` al abrir) y, en paralelo, el índice del COMANDO
     // que cada FILA visible ejecuta (lo llena `palette_items_from_matches`). El callback
@@ -959,6 +971,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .enumerate()
                     .map(|(i, h)| SplitVm {
                         index: i as i32,
+                        divider: h.divider as i32,
                         x: h.rect.x,
                         y: h.rect.y,
                         w: h.rect.w,
@@ -996,6 +1009,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .enumerate()
                     .map(|(i, h)| SplitVm {
                         index: i as i32,
+                        divider: h.divider as i32,
                         x: h.rect.x,
                         y: h.rect.y,
                         w: h.rect.w,
@@ -1553,11 +1567,19 @@ fn main() -> Result<(), slint::PlatformError> {
         let start_timer = start_timer.clone();
         let apply_device_change = apply_device_change.clone();
         let ui_weak_wake = ui.as_weak();
+        let ctrl_wake = ctrl.clone();
         let logged_first_wake = std::rc::Rc::new(std::cell::Cell::new(false));
+        // Arranque minimizado (autostart --tray): solo si vinimos de la entrada Run con --tray
+        // Y el usuario quiere arrancar en bandeja Y el tray está activo. Si no hubiera tray, NO
+        // escondemos la ventana (se perdería el único punto de acceso a la app).
+        let start_in_tray =
+            cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
-            // Se loguea una sola vez. Barato y no depende de símbolos de depuración.
+            // Se loguea una sola vez. Barato y no depende de símbolos de depuración. Aprovechamos
+            // la misma guarda de una-sola-vez para restaurar la geometría guardada: recién aquí
+            // el HWND existe de verdad (antes de entrar al loop, Slint/winit puede no tenerlo).
             if !logged_first_wake.replace(true) {
                 if let Some(ui) = ui_weak_wake.upgrade() {
                     let size = ui.window().size();
@@ -1566,6 +1588,60 @@ fn main() -> Result<(), slint::PlatformError> {
                         "arranque: primer wake (ventana {}x{} @{:.2})",
                         size.width, size.height, scale
                     ));
+                }
+                // Restaurar la geometría guardada (una sola vez, en el primer wake, cuando el
+                // HWND ya existe). Si el rect guardado no cae en ningún monitor conectado
+                // (monitor desconectado, coords viejas), centramos en el principal conservando
+                // el tamaño guardado en vez de descartarlo.
+                #[cfg(windows)]
+                if let Some(ui) = ui_weak_wake.upgrade() {
+                    let saved = ctrl_wake.borrow().config.settings.window;
+                    if let (Some(g), Some(hwnd)) = (saved, naygo_hwnd(&ui)) {
+                        let mons = naygo_platform::window_geometry::monitors();
+                        let placement = if g.is_visible_on(&mons) {
+                            naygo_platform::window_geometry::Placement {
+                                width: g.width,
+                                height: g.height,
+                                x: g.x,
+                                y: g.y,
+                                maximized: g.maximized,
+                            }
+                        } else {
+                            // Fuera de pantalla (monitor desconectado / coords inválidas):
+                            // centrar en el monitor principal conservando el tamaño guardado.
+                            let (mx, my, mw, mh) =
+                                mons.first().copied().unwrap_or((0, 0, 1920, 1080));
+                            // Clamp del tamaño restaurado a algo sano: un settings.json corrupto
+                            // puede traer width/height 0 o u32::MAX; sin clamp la resta de centrado
+                            // haría overflow y podría quedar una ventana 0x0 o gigante. Mínimo
+                            // 200px, máximo el tamaño del monitor.
+                            let cw = (g.width).clamp(200, mw.max(200));
+                            let ch = (g.height).clamp(200, mh.max(200));
+                            let x = mx + ((mw as i32 - cw as i32) / 2).max(0);
+                            let y = my + ((mh as i32 - ch as i32) / 2).max(0);
+                            naygo_platform::window_geometry::Placement {
+                                width: cw,
+                                height: ch,
+                                x,
+                                y,
+                                maximized: g.maximized,
+                            }
+                        };
+                        naygo_platform::window_geometry::set(hwnd, placement);
+                    }
+                }
+                // Arranque minimizado: si venimos de autostart con --tray y el usuario quiere
+                // arrancar en bandeja, minimizamos la ventana en el primer wake (el proceso sigue
+                // vivo por el ícono de tray; el clic en el ícono la restaura, ya cableado). Se usa
+                // `set_minimized` y NO `window().hide()`: `hide()` decrementa el contador interno
+                // de ventanas visibles de Slint y, si esta es la única ventana visible en ese
+                // momento, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en
+                // bandeja. `set_minimized` solo cambia el estado de la ventana (equivalente a
+                // minimizar a la barra de tareas) y no toca ese contador.
+                if start_in_tray {
+                    if let Some(ui) = ui_weak_wake.upgrade() {
+                        ui.window().set_minimized(true);
+                    }
                 }
             }
             apply_device_change();
@@ -2807,6 +2883,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_set_bar_position, i32, set_bar_position);
     cfg_setter!(on_set_size_no_subdirs, bool, set_size_no_subdirs);
     cfg_setter!(on_set_autostart, bool, set_autostart);
+    cfg_setter!(on_set_autostart_minimized, bool, set_autostart_minimized);
     cfg_setter!(on_set_date_format, i32, set_date_format);
     cfg_setter!(on_set_size_format, i32, set_size_format);
     cfg_setter!(on_set_row_density, i32, set_row_density);
@@ -5304,7 +5381,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let c = ctrl.borrow();
             let handles = c.split_handles(area);
             if let Some(h) = handles.get(index as usize) {
-                if let Some((_f, bar)) = c.fraction_at(&h.path.clone(), area, px, py) {
+                if let Some((_f, bar)) = c.divider_at(&h.path.clone(), h.divider, area, px, py) {
                     ui.set_splitpreview_x(bar.x);
                     ui.set_splitpreview_y(bar.y);
                     ui.set_splitpreview_w(bar.w);
@@ -5323,11 +5400,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let area = area_of();
             {
                 let mut c = ctrl.borrow_mut();
-                let handles = c.split_handles(area);
-                if let Some(h) = handles.get(index as usize) {
-                    let path = h.path.clone();
-                    if let Some((f, _bar)) = c.fraction_at(&path, area, px, py) {
-                        c.set_fraction(&path, f);
+                let target = {
+                    let handles = c.split_handles(area);
+                    handles
+                        .get(index as usize)
+                        .map(|h| (h.path.clone(), h.divider))
+                };
+                if let Some((path, divider)) = target {
+                    if let Some((f, _bar)) = c.divider_at(&path, divider, area, px, py) {
+                        c.set_divider(&path, divider, f);
                     }
                 }
             }
@@ -5335,6 +5416,30 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_splitpreview_w(0.0);
                 ui.set_splitpreview_h(0.0);
+            }
+            sync_layout();
+        });
+    }
+    // DOBLE-CLIC en un divisor: repartir 50/50 sus dos paneles vecinos.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let area_of = area_of.clone();
+        ui.on_split_reset(move |index| {
+            let area = area_of();
+            {
+                let mut c = ctrl.borrow_mut();
+                // Copiar (path, divider) del handle ANTES de mutar: `handles` toma prestado
+                // `c` y no puede vivir cuando se llama `set_divider` (patrón de la Fase 1).
+                let target = {
+                    let handles = c.split_handles(area);
+                    handles
+                        .get(index as usize)
+                        .map(|h| (h.path.clone(), h.divider))
+                };
+                if let Some((path, divider)) = target {
+                    c.set_divider(&path, divider, 0.5);
+                }
             }
             sync_layout();
         });
@@ -5349,7 +5454,28 @@ fn main() -> Result<(), slint::PlatformError> {
     // esté activo, en cuyo caso se oculta a la bandeja y la app sigue viva a propósito.
     {
         let ctrl = ctrl.clone();
+        let ui_weak_close = ui.as_weak();
         ui.window().on_close_requested(move || {
+            // Capturar y persistir la geometría ANTES de save_session/salir. Va en su propio
+            // scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que siguen.
+            #[cfg(windows)]
+            {
+                if let Some(ui) = ui_weak_close.upgrade() {
+                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                        if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
+                            let mut c = ctrl.borrow_mut();
+                            c.config.settings.window = Some(naygo_core::config::WindowGeometry {
+                                width: p.width,
+                                height: p.height,
+                                x: p.x,
+                                y: p.y,
+                                maximized: p.maximized,
+                            });
+                            c.config.save();
+                        }
+                    }
+                }
+            }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
             if tray::should_quit_on_close(close_to_tray, tray_active) {
@@ -5616,6 +5742,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         show_op_summary: s.show_op_summary,
         size_no_subdirs: s.size_no_subdirs,
         autostart: s.autostart,
+        autostart_minimized: s.autostart_minimized,
         date_format: match s.date_format {
             naygo_core::format::DateFormat::IsoMinute => 0,
             naygo_core::format::DateFormat::IsoDate => 1,

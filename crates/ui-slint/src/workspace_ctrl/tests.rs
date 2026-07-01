@@ -2219,3 +2219,56 @@ fn release_pane_watcher_quita_el_watcher() {
         "release_pane_watcher debe quitar el watcher del panel"
     );
 }
+
+/// Mover el divisor 0 de un split de 3 paneles en fila solo reparte peso entre sus DOS
+/// vecinos (paneles 0 y 1); el 3er panel (no vecino de ese divisor) conserva su ancho.
+/// Armamos el árbol a mano con 3 paneles Files reales en una fila plana para probar un
+/// split con 2+ divisores de forma directa (mismo patrón que el test equivalente en core:
+/// `set_divider_solo_afecta_a_los_dos_vecinos` en `crates/core/src/workspace/layout.rs`).
+#[test]
+fn solo_vecinos_resto_fijo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let p0 = c.active_id().unwrap();
+    // Dos paneles Files más, reales (creados vía el controlador, no ids inventados).
+    let p1 = c.ws.add_pane(PanePurpose::Files, tmp.path().to_path_buf());
+    let p2 = c.ws.add_pane(PanePurpose::Files, tmp.path().to_path_buf());
+    // Arma directamente una fila de 3 en el MISMO split (2 divisores), reemplazando el
+    // layout de a lo sumo 1 hoja que dejó `WorkspaceCtrl::new`.
+    c.ws.layout.root = Some(DockNode::Split {
+        dir: SplitDir::Horizontal,
+        children: vec![DockNode::Leaf(p0), DockNode::Leaf(p1), DockNode::Leaf(p2)],
+        weights: vec![1.0, 1.0, 1.0],
+    });
+
+    let area = area();
+    let w2_antes = c
+        .pane_rects(area)
+        .into_iter()
+        .find(|(id, _)| *id == p2)
+        .unwrap()
+        .1
+        .w;
+
+    let handles = c.split_handles(area);
+    assert_eq!(handles.len(), 2, "3 paneles en fila → 2 divisores");
+    let h0 = &handles[0];
+    assert_eq!(
+        h0.divider, 0,
+        "primer handle es el divisor 0 del split raíz"
+    );
+
+    // Mover el divisor 0 hacia la izquierda (más peso para el panel 1, menos para el 0).
+    c.set_divider(&h0.path.clone(), h0.divider, 0.2);
+
+    let rects = c.pane_rects(area);
+    let w0 = rects.iter().find(|(id, _)| *id == p0).unwrap().1.w;
+    let w1 = rects.iter().find(|(id, _)| *id == p1).unwrap().1.w;
+    let w2 = rects.iter().find(|(id, _)| *id == p2).unwrap().1.w;
+    assert!(w0 < w1, "el vecino izquierdo del divisor 0 se achica");
+    assert!(
+        (w2 - w2_antes).abs() < 1.0,
+        "el panel 2 (no vecino del divisor 0) conserva su ancho: {w2} vs {w2_antes}"
+    );
+}

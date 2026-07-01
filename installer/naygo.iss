@@ -43,15 +43,34 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "de"; MessagesFile: "compiler:Languages\German.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "pt"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
+
+[CustomMessages]
+en.StartupWin=Start Naygo when Windows starts
+es.StartupWin=Iniciar Naygo al arrancar Windows
+en.OpenWithFolders=Register Naygo in 'Open with' for folders
+es.OpenWithFolders=Registrar Naygo en 'Abrir con' para carpetas
+en.CtxMenuFolders=Add 'Open in Naygo' to the folder context menu
+es.CtxMenuFolders=Agregar 'Abrir en Naygo' al menú contextual de carpetas
+en.AppLangPage=Naygo language
+es.AppLangPage=Idioma de Naygo
+en.AppLangPrompt=Choose the language Naygo will start in:
+es.AppLangPrompt=Elige el idioma con el que Naygo se iniciará:
 
 [Tasks]
 ; Acceso directo en el escritorio (marcado por defecto vía el grupo estándar).
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+; Iniciar con Windows (desmarcada por defecto).
+Name: "startupwin"; Description: "{cm:StartupWin}"; Flags: unchecked
 ; Integraciones opcionales con el shell (desmarcadas por defecto).
-Name: "openwith"; Description: "Registrar Naygo en 'Abrir con' para carpetas"; Flags: unchecked
-Name: "ctxmenu"; Description: "Agregar 'Abrir en Naygo' al menú contextual de carpetas"; Flags: unchecked
+Name: "openwith"; Description: "{cm:OpenWithFolders}"; Flags: unchecked
+Name: "ctxmenu"; Description: "{cm:CtxMenuFolders}"; Flags: unchecked
 
 [Files]
 ; Único ejecutable (CRT estático + assets embebidos), licencia y readme.
@@ -67,6 +86,11 @@ Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Registry]
+; Iniciar con Windows (clave Run del usuario). El flag --tray es ADVISORY: la app solo arranca
+; minimizada si en tiempo de ejecución `autostart_minimized` (default true) Y la bandeja están
+; activos; si el usuario desactiva la bandeja, --tray es un no-op inofensivo (no esconde una
+; ventana sin bandeja). Ver should_quit_on_close / start_in_tray en la app.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Naygo"; ValueData: """{app}\{#MyAppExe}"" --tray"; Flags: uninsdeletevalue; Tasks: startupwin
 ; "Abrir con" (NO predeterminado): registra el ProgId y lo lista para carpetas.
 Root: HKA; Subkey: "Software\Classes\Naygo.Folder"; ValueType: string; ValueData: "Carpeta en Naygo"; Flags: uninsdeletekey; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Naygo.Folder\shell\open\command"; ValueType: string; ValueData: """{app}\{#MyAppExe}"" ""%1"""; Flags: uninsdeletekey; Tasks: openwith
@@ -81,3 +105,83 @@ Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Naygo\command"; 
 [Run]
 ; Página final: ofrecer ejecutar Naygo.
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+var
+  LangPage: TInputOptionWizardPage;
+
+function NaygoLangId(Index: Integer): String;
+begin
+  case Index of
+    0: Result := 'en';
+    1: Result := 'es';
+    2: Result := 'de';
+    3: Result := 'fr';
+    4: Result := 'it';
+    5: Result := 'pt';
+    6: Result := 'ja';
+    7: Result := 'hi';
+    8: Result := 'ko';
+    9: Result := 'zh';
+  else Result := 'en';
+  end;
+end;
+
+// Mapea el LangID primario de Windows (GetUILanguage and $3FF) a un índice de NaygoLangId.
+function DetectWindowsLangIndex(): Integer;
+var prim: Integer;
+begin
+  prim := GetUILanguage() and $3FF;
+  case prim of
+    $09: Result := 0; // inglés
+    $0A: Result := 1; // español
+    $07: Result := 2; // alemán
+    $0C: Result := 3; // francés
+    $10: Result := 4; // italiano
+    $16: Result := 5; // portugués
+    $11: Result := 6; // japonés
+    $39: Result := 7; // hindi
+    $12: Result := 8; // coreano
+    $04: Result := 9; // chino
+  else Result := 0;
+  end;
+end;
+
+procedure InitializeWizard();
+begin
+  LangPage := CreateInputOptionPage(wpSelectTasks,
+    ExpandConstant('{cm:AppLangPage}'), '',
+    ExpandConstant('{cm:AppLangPrompt}'), True, False);
+  LangPage.Add('English');
+  LangPage.Add('Español');
+  LangPage.Add('Deutsch');
+  LangPage.Add('Français');
+  LangPage.Add('Italiano');
+  LangPage.Add('Português');
+  LangPage.Add('日本語');
+  LangPage.Add('हिन्दी');
+  LangPage.Add('한국어');
+  LangPage.Add('中文');
+  LangPage.SelectedValueIndex := DetectWindowsLangIndex();
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  path, content, lang: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    path := ExpandConstant('{app}\settings.json');
+    if not FileExists(path) then
+    begin
+      lang := NaygoLangId(LangPage.SelectedValueIndex);
+      { El "version" DEBE coincidir con core::config::CONFIG_VERSION (hoy 2). Si esa constante
+        sube, actualizar este número: un settings.json con versión desfasada se descarta y la app
+        arranca con defaults (ignorando el idioma elegido aquí). El resto de campos los completa la
+        app por #[serde(default)]; con version+language basta. }
+      content := '{' + #13#10 + '  "version": 2,' + #13#10 +
+                 '  "language": "' + lang + '"' + #13#10 + '}';
+      SaveStringToFile(path, content, False);
+    end;
+  end;
+end;

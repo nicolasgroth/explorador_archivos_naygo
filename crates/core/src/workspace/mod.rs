@@ -254,12 +254,14 @@ impl Workspace {
                     let f = shape_to_node(first, ids);
                     let s = shape_to_node(second, ids);
                     match (f, s) {
-                        (Some(first), Some(second)) => Some(DockNode::Split {
-                            dir: *dir,
-                            fraction: *fraction,
-                            first: Box::new(first),
-                            second: Box::new(second),
-                        }),
+                        (Some(first), Some(second)) => {
+                            let frac = fraction.clamp(0.05, 0.95);
+                            Some(DockNode::Split {
+                                dir: *dir,
+                                children: vec![first, second],
+                                weights: vec![frac, 1.0 - frac],
+                            })
+                        }
                         // Si un lado no se pudo construir, usar el otro.
                         (Some(only), None) | (None, Some(only)) => Some(only),
                         (None, None) => None,
@@ -305,15 +307,47 @@ impl Workspace {
                 },
                 DockNode::Split {
                     dir,
-                    fraction,
-                    first,
-                    second,
-                } => LayoutShape::Split {
-                    dir: *dir,
-                    fraction: *fraction,
-                    first: Box::new(node_to_shape(first, order)),
-                    second: Box::new(node_to_shape(second, order)),
-                },
+                    children,
+                    weights,
+                } => split_children_to_shape(*dir, children, weights, order),
+            }
+        }
+        // `LayoutShape::Split` es binario; un `DockNode::Split` N-ario se pliega en una
+        // cadena anidada a la derecha, preservando la proporción relativa de cada hijo.
+        fn split_children_to_shape(
+            dir: SplitDir,
+            children: &[DockNode],
+            weights: &[f32],
+            order: &mut Vec<PaneId>,
+        ) -> LayoutShape {
+            debug_assert_eq!(children.len(), weights.len());
+            // Guard defensivo: un `DockNode::Split` con 0 hijos viola su invariante documentada
+            // (`children.len() >= 2`) y no debería poder construirse — la deserialización en
+            // `layout.rs` (`dock_from_wire`) ya lo previene aguas arriba, rechazando los splits
+            // degenerados al cargar `workspace.json`. Este guard es defensa en profundidad: si
+            // pese a todo llegara un split vacío (p. ej. construido a mano por código futuro),
+            // indexar `children[0]`/`weights[0]` sin este chequeo paniquearía en release. No hay
+            // una `LayoutShape` "vacía"; la más neutra es una hoja al índice 0, igual que el
+            // layout vacío en `to_template` (ver más abajo).
+            if children.is_empty() {
+                return LayoutShape::Leaf(0);
+            }
+            if children.len() == 1 {
+                return node_to_shape(&children[0], order);
+            }
+            let first = node_to_shape(&children[0], order);
+            let rest = split_children_to_shape(dir, &children[1..], &weights[1..], order);
+            let total: f32 = weights.iter().sum();
+            let fraction = if total > 0.0 {
+                (weights[0] / total).clamp(0.05, 0.95)
+            } else {
+                0.5
+            };
+            LayoutShape::Split {
+                dir,
+                fraction,
+                first: Box::new(first),
+                second: Box::new(rest),
             }
         }
 
@@ -591,5 +625,43 @@ mod tests {
         let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
         assert_eq!(w2.panes().len(), w.panes().len());
         assert_eq!(w2.layout.pane_ids().len(), w.layout.pane_ids().len());
+    }
+
+    #[test]
+    fn to_template_split_3_hijos_roundtrip() {
+        // Un Split N-ario de 3 hijos (fila de 3 paneles) ejercita `split_children_to_shape`
+        // con children.len() > 2, que se pliega en una cadena binaria anidada a la derecha.
+        let mut w = Workspace::new();
+        let a = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        let b = w.add_pane(PanePurpose::Files, PathBuf::from("C:/b"));
+        let c = w.add_pane(PanePurpose::Files, PathBuf::from("C:/c"));
+        w.layout = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(a), DockNode::Leaf(b), DockNode::Leaf(c)],
+                weights: vec![1.0, 1.0, 1.0],
+            }),
+        };
+        w.set_active(a);
+
+        let captured = w.to_template("Fila de 3");
+        let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
+
+        // Los 3 paneles Files sobreviven, en el mismo orden que el árbol original.
+        assert_eq!(w2.panes().len(), 3);
+        assert_eq!(w2.layout.pane_ids().len(), 3);
+        let dirs: Vec<_> = w2
+            .panes()
+            .iter()
+            .filter_map(|p| p.files.as_ref().map(|f| f.current_dir.clone()))
+            .collect();
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("C:/a"),
+                PathBuf::from("C:/b"),
+                PathBuf::from("C:/c"),
+            ]
+        );
     }
 }
