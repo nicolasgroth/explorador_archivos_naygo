@@ -695,9 +695,16 @@ pub fn load_workspace(dir: &Path) -> Option<WorkspacePersist> {
 pub fn load_workspace_flagged(dir: &Path) -> (Option<WorkspacePersist>, bool) {
     let (read, recovered) = read_json_recovering::<WorkspacePersist>(&dir.join("workspace.json"));
     let ws = match read {
-        Some(w) if w.version == CONFIG_VERSION => Some(w),
+        // Se acepta cualquier versión HASTA la actual (`<=`), no solo la exacta: el struct
+        // `WorkspacePersist` no ha cambiado de forma incompatible entre versiones y el layout
+        // en formato viejo (binario `fraction/first/second`) se migra solo al deserializar
+        // (`DockNodeWire`). Exigir igualdad estricta hacía que subir `CONFIG_VERSION` (p. ej.
+        // por una migración de settings.json) descartara el workspace.json del usuario y le
+        // borrara su disposición de paneles al actualizar. Una versión FUTURA (mayor que la
+        // que entiende este binario) sí se ignora, porque podría traer campos que no sabemos leer.
+        Some(w) if w.version <= CONFIG_VERSION => Some(w),
         Some(_) => {
-            tracing::warn!("workspace.json de versión incompatible; ignorando");
+            tracing::warn!("workspace.json de versión más nueva que la soportada; ignorando");
             None
         }
         None => None,
@@ -1092,6 +1099,34 @@ mod tests {
         assert_eq!(loaded.active, Some(PaneId(3)));
         assert_eq!(loaded.layout.pane_ids(), vec![PaneId(3)]);
         assert_eq!(loaded.purposes.len(), 1);
+    }
+
+    #[test]
+    fn workspace_de_version_vieja_se_acepta() {
+        // Un workspace.json escrito por un binario anterior (version 1) NO debe descartarse al
+        // subir CONFIG_VERSION: el usuario perdería su disposición de paneles al actualizar.
+        // El formato es compatible y el layout viejo se migra al deserializar.
+        let dir = tempfile::tempdir().unwrap();
+        let viejo = r#"{"version":1,"layout":{"root":{"Leaf":5}},"active":5,"files":[],"purposes":[[5,"Files"]]}"#;
+        std::fs::write(dir.path().join("workspace.json"), viejo).unwrap();
+        let loaded = load_workspace(dir.path()).expect("un workspace v1 debe seguir cargando");
+        assert_eq!(loaded.layout.pane_ids(), vec![crate::workspace::PaneId(5)]);
+    }
+
+    #[test]
+    fn workspace_de_version_futura_se_ignora() {
+        // Una versión MÁS NUEVA que la que entiende este binario sí se ignora (podría traer
+        // campos no soportados). Se cae al layout por defecto, sin romper.
+        let dir = tempfile::tempdir().unwrap();
+        let futuro = format!(
+            r#"{{"version":{},"layout":{{"root":{{"Leaf":5}}}},"active":5,"files":[],"purposes":[[5,"Files"]]}}"#,
+            CONFIG_VERSION + 1
+        );
+        std::fs::write(dir.path().join("workspace.json"), futuro).unwrap();
+        assert!(
+            load_workspace(dir.path()).is_none(),
+            "versión futura → ignorada"
+        );
     }
 
     #[test]

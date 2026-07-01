@@ -86,7 +86,10 @@ Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Registry]
-; Iniciar con Windows (clave Run del usuario). --tray = arrancar minimizado en bandeja.
+; Iniciar con Windows (clave Run del usuario). El flag --tray es ADVISORY: la app solo arranca
+; minimizada si en tiempo de ejecución `autostart_minimized` (default true) Y la bandeja están
+; activos; si el usuario desactiva la bandeja, --tray es un no-op inofensivo (no esconde una
+; ventana sin bandeja). Ver should_quit_on_close / start_in_tray en la app.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Naygo"; ValueData: """{app}\{#MyAppExe}"" --tray"; Flags: uninsdeletevalue; Tasks: startupwin
 ; "Abrir con" (NO predeterminado): registra el ProgId y lo lista para carpetas.
 Root: HKA; Subkey: "Software\Classes\Naygo.Folder"; ValueType: string; ValueData: "Carpeta en Naygo"; Flags: uninsdeletekey; Tasks: openwith
@@ -172,6 +175,10 @@ begin
     if not FileExists(path) then
     begin
       lang := NaygoLangId(LangPage.SelectedValueIndex);
+      { El "version" DEBE coincidir con core::config::CONFIG_VERSION (hoy 2). Si esa constante
+        sube, actualizar este número: un settings.json con versión desfasada se descarta y la app
+        arranca con defaults (ignorando el idioma elegido aquí). El resto de campos los completa la
+        app por #[serde(default)]; con version+language basta. }
       content := '{' + #13#10 + '  "version": 2,' + #13#10 +
                  '  "language": "' + lang + '"' + #13#10 + '}';
       SaveStringToFile(path, content, False);
