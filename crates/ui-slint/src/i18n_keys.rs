@@ -392,6 +392,7 @@ where
     tr.set_cfg_bar_side(c.t("settings.bar.side").into());
     tr.set_cfg_size_no_subdirs(c.t("slint.cfg.size_no_subdirs").into());
     tr.set_cfg_autostart(c.t("slint.cfg.autostart").into());
+    tr.set_cfg_autostart_minimized(c.t("slint.cfg.autostart_minimized").into());
     tr.set_cfg_default_table(c.t("slint.cfg.default_table").into());
     tr.set_cfg_default_table_save(c.t("slint.cfg.default_table_save").into());
     tr.set_cfg_default_table_clear(c.t("slint.cfg.default_table_clear").into());
@@ -498,6 +499,7 @@ where
     tr.set_cfg_tip_bar_position(c.t("slint.cfg.tip.bar_position").into());
     tr.set_cfg_tip_size_no_subdirs(c.t("slint.cfg.tip.size_no_subdirs").into());
     tr.set_cfg_tip_autostart(c.t("slint.cfg.tip.autostart").into());
+    tr.set_cfg_tip_autostart_minimized(c.t("slint.cfg.tip.autostart_minimized").into());
     tr.set_cfg_tip_default_table(c.t("slint.cfg.tip.default_table").into());
     tr.set_cfg_tip_ops_mode(c.t("slint.cfg.tip.ops_mode").into());
     tr.set_cfg_tip_confirm_trash(c.t("slint.cfg.tip.confirm_trash").into());

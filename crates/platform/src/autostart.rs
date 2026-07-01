@@ -50,8 +50,10 @@ mod windows_impl {
         }
     }
 
-    /// Activa/desactiva el inicio con Windows para el exe ACTUAL.
-    pub fn set_enabled(on: bool) -> Result<(), String> {
+    /// Activa/desactiva el inicio con Windows para el exe ACTUAL. `extra_args` se agregan
+    /// tal cual (separados por espacio) después de la ruta entre comillas, p.ej. `&["--tray"]`
+    /// para que el proceso arranque directo a la bandeja.
+    pub fn set_enabled(on: bool, extra_args: &[&str]) -> Result<(), String> {
         unsafe {
             let mut key = HKEY::default();
             let kw = wide(RUN_KEY);
@@ -74,7 +76,12 @@ mod windows_impl {
                     .map_err(|e| format!("ruta del exe: {e}"))?
                     .display()
                     .to_string();
-                let data_w = wide(&format!("\"{exe}\""));
+                let mut cmd = format!("\"{exe}\"");
+                for a in extra_args {
+                    cmd.push(' ');
+                    cmd.push_str(a);
+                }
+                let data_w = wide(&cmd);
                 // RegSetValueExW espera los bytes crudos del wide string (incl. el nul).
                 let bytes: &[u8] =
                     std::slice::from_raw_parts(data_w.as_ptr() as *const u8, data_w.len() * 2);
@@ -105,6 +112,6 @@ pub fn is_enabled() -> bool {
 }
 
 #[cfg(not(windows))]
-pub fn set_enabled(_on: bool) -> Result<(), String> {
+pub fn set_enabled(_on: bool, _extra_args: &[&str]) -> Result<(), String> {
     Err("autostart solo está soportado en Windows".to_string())
 }

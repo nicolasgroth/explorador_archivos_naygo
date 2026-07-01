@@ -230,6 +230,18 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // El registro (HKCU\...\Run) es la fuente de verdad de `autostart`, no settings.json: el
+    // instalador puede crear la entrada Run sin pasar por la UI (o el usuario puede borrarla a
+    // mano). Sincronizamos el ajuste guardado contra el registro real al arrancar.
+    #[cfg(windows)]
+    {
+        let reg_on = naygo_platform::autostart::is_enabled();
+        let mut c = ctrl.borrow_mut();
+        if c.config.settings.autostart != reg_on {
+            c.config.settings.autostart = reg_on;
+            c.config.save();
+        }
+    }
     // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
     // abierta (la arma `build_palette_commands` al abrir) y, en paralelo, el índice del COMANDO
     // que cada FILA visible ejecuta (lo llena `palette_items_from_matches`). El callback
@@ -1557,6 +1569,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak_wake = ui.as_weak();
         let ctrl_wake = ctrl.clone();
         let logged_first_wake = std::rc::Rc::new(std::cell::Cell::new(false));
+        // Arranque minimizado (autostart --tray): solo si vinimos de la entrada Run con --tray
+        // Y el usuario quiere arrancar en bandeja Y el tray está activo. Si no hubiera tray, NO
+        // escondemos la ventana (se perdería el único punto de acceso a la app).
+        let start_in_tray =
+            cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
@@ -1611,6 +1628,19 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                         };
                         naygo_platform::window_geometry::set(hwnd, placement);
+                    }
+                }
+                // Arranque minimizado: si venimos de autostart con --tray y el usuario quiere
+                // arrancar en bandeja, minimizamos la ventana en el primer wake (el proceso sigue
+                // vivo por el ícono de tray; el clic en el ícono la restaura, ya cableado). Se usa
+                // `set_minimized` y NO `window().hide()`: `hide()` decrementa el contador interno
+                // de ventanas visibles de Slint y, si esta es la única ventana visible en ese
+                // momento, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en
+                // bandeja. `set_minimized` solo cambia el estado de la ventana (equivalente a
+                // minimizar a la barra de tareas) y no toca ese contador.
+                if start_in_tray {
+                    if let Some(ui) = ui_weak_wake.upgrade() {
+                        ui.window().set_minimized(true);
                     }
                 }
             }
@@ -2853,6 +2883,7 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_set_bar_position, i32, set_bar_position);
     cfg_setter!(on_set_size_no_subdirs, bool, set_size_no_subdirs);
     cfg_setter!(on_set_autostart, bool, set_autostart);
+    cfg_setter!(on_set_autostart_minimized, bool, set_autostart_minimized);
     cfg_setter!(on_set_date_format, i32, set_date_format);
     cfg_setter!(on_set_size_format, i32, set_size_format);
     cfg_setter!(on_set_row_density, i32, set_row_density);
@@ -5711,6 +5742,7 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         show_op_summary: s.show_op_summary,
         size_no_subdirs: s.size_no_subdirs,
         autostart: s.autostart,
+        autostart_minimized: s.autostart_minimized,
         date_format: match s.date_format {
             naygo_core::format::DateFormat::IsoMinute => 0,
             naygo_core::format::DateFormat::IsoDate => 1,

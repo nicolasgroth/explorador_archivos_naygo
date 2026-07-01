@@ -228,10 +228,14 @@ component Field inherits HorizontalLayout {
 // (transición de color/posición instantánea-ish, sin costo de GPU).
 component Switch inherits Rectangle {
     in-out property <bool> checked;
+    // Deshabilitado (p.ej. "arrancar minimizado" solo tiene sentido si autostart está activo):
+    // se atenúa y deja de reaccionar al clic, pero conserva el valor de `checked` a la vista.
+    in property <bool> enabled: true;
     callback toggled(bool);
     width: 36px;
     height: 20px;
     border-radius: 10px;
+    opacity: root.enabled ? 1.0 : 0.5;
     background: root.checked ? Theme.accent : Theme.row-bg;
     border-width: 1px;
     border-color: root.checked ? Theme.accent : Theme.selection-bg;
@@ -244,6 +248,7 @@ component Switch inherits Rectangle {
         y: (parent.height - self.height) / 2;
     }
     TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.checked = !root.checked;
             root.toggled(root.checked);
@@ -346,6 +351,7 @@ export component ConfigWindow inherits Window {
     callback set-bar-position(int);
     callback set-size-no-subdirs(bool);
     callback set-autostart(bool);
+    callback set-autostart-minimized(bool);
     callback set-paste-confirm(bool);
     callback set-paste-text-name(string);
     callback set-paste-text-ext(string);
@@ -578,6 +584,15 @@ export component ConfigWindow inherits Window {
                                     label: Tr.cfg-autostart;
                                     tip: Tr.cfg-tip-autostart;
                                     Switch { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-autostart-minimized;
+                                    tip: Tr.cfg-tip-autostart-minimized;
+                                    Switch {
+                                        enabled: root.vm.autostart;
+                                        checked: root.vm.autostart-minimized;
+                                        toggled => { root.set-autostart-minimized(self.checked); }
+                                    }
                                 }
                                 // Plantilla de tabla por defecto (C4): usar la tabla del panel
                                 // activo como predeterminada para paneles nuevos.
