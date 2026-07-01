@@ -104,6 +104,36 @@ pub enum HighlightDuration {
     UntilRefresh,
 }
 
+/// Geometría persistida de la ventana principal, para restaurarla entre sesiones.
+/// Coordenadas en px físicos (las que da/consume el SO). `maximized` recuerda el estado;
+/// `width/height/x/y` guardan SIEMPRE el rect "restaurado" (des-maximizado), para volver a
+/// un tamaño sensato al des-maximizar.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    /// ¿El rect de la ventana intersecta de forma USABLE alguno de los monitores dados?
+    /// `monitors` son rects (x,y,w,h) en las mismas coords físicas. "Usable" = al menos
+    /// `MIN_VISIBLE` px de la ventana caen dentro de algún monitor, así una ventana en un
+    /// monitor desconectado o fuera de pantalla se detecta como no visible. Puro y testeable.
+    pub fn is_visible_on(&self, monitors: &[(i32, i32, u32, u32)]) -> bool {
+        const MIN_VISIBLE: i32 = 64;
+        let (wx, wy, ww, wh) = (self.x, self.y, self.width as i32, self.height as i32);
+        monitors.iter().any(|&(mx, my, mw, mh)| {
+            // Ancho/alto del solape entre el rect de la ventana y el del monitor.
+            let ox = (wx + ww).min(mx + mw as i32) - wx.max(mx);
+            let oy = (wy + wh).min(my + mh as i32) - wy.max(my);
+            ox >= MIN_VISIBLE && oy >= MIN_VISIBLE
+        })
+    }
+}
+
 /// Ajustes de la app (settings.json).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -267,6 +297,10 @@ pub struct Settings {
     /// es independiente y SIEMPRE aparece, esté esto en `true` o `false`.
     #[serde(default = "default_confirm_drop_between_panes")]
     pub confirm_drop_between_panes: bool,
+    /// Geometría de la ventana principal (tamaño/posición/maximizado) para restaurar al
+    /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
+    #[serde(default)]
+    pub window: Option<WindowGeometry>,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -471,6 +505,7 @@ impl Default for Settings {
             show_system: true,
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
+            window: None,
         }
     }
 }
@@ -745,6 +780,13 @@ mod tests {
             show_system: false,
             hide_dotfiles: true,
             confirm_drop_between_panes: false,
+            window: Some(WindowGeometry {
+                width: 1280,
+                height: 800,
+                x: 50,
+                y: 60,
+                maximized: true,
+            }),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -1154,5 +1196,45 @@ mod tests {
                 set_id: "material".into()
             })
         );
+    }
+
+    #[test]
+    fn window_geometry_visibilidad_multimonitor() {
+        let primario = (0i32, 0i32, 1920u32, 1080u32);
+        let g = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: 100,
+            y: 100,
+            maximized: false,
+        };
+        assert!(g.is_visible_on(&[primario]));
+        let g2 = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: 3000,
+            y: 100,
+            maximized: false,
+        };
+        assert!(
+            !g2.is_visible_on(&[primario]),
+            "fuera de todo monitor → no visible"
+        );
+        let secundario = (1920i32, 0i32, 1920u32, 1080u32);
+        assert!(g2.is_visible_on(&[primario, secundario]));
+    }
+
+    #[test]
+    fn settings_default_no_tiene_ventana_guardada() {
+        assert!(Settings::default().window.is_none());
+    }
+
+    #[test]
+    fn settings_viejo_sin_window_deserializa_a_none() {
+        // Un settings.json previo (sin el campo `window`) debe conservar el resto y
+        // caer a `None` en `window` gracias a #[serde(default)].
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.window.is_none());
     }
 }
