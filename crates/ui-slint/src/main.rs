@@ -1201,8 +1201,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let drag_rx = drag_rx.clone();
         let drop_guard = drop_guard.clone();
         let tray = tray.clone();
+        // Solo se LEE el id del hotkey (en el tick, bajo cfg windows). El registro en sí lo
+        // mantiene vivo el binding `global_hotkey_slot` del scope de `main`, no este closure.
+        #[cfg(windows)]
         let hotkey_id = hotkey_id.clone();
-        let global_hotkey_slot = global_hotkey_slot.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -1217,10 +1219,11 @@ fn main() -> Result<(), slint::PlatformError> {
             let drag_rx = drag_rx.clone();
             let drop_guard = drop_guard.clone();
             let tray = tray.clone();
+            // Solo se clona `hotkey_id` para LEER el id en el tick (bajo cfg windows). El registro
+            // lo mantiene vivo el binding `global_hotkey_slot` del scope de `main` (vive hasta
+            // después de `ui.run()`, toda la sesión), NO este closure.
+            #[cfg(windows)]
             let hotkey_id = hotkey_id.clone();
-            // Mantener vivo el registro del hotkey (drop = se libera): capturarlo aquí, aunque
-            // no se lea directo, garantiza que el slot sobreviva mientras el timer siga vivo.
-            let _global_hotkey_slot = global_hotkey_slot.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),

@@ -109,6 +109,10 @@ pub fn register(chord: &Chord) -> Result<GlobalHotkey, String> {
 }
 
 /// ¿Llegó un evento de PRESIÓN del hotkey con `id`? No bloquea: drena el receptor global.
+/// SUPUESTO de un solo hotkey: drena TODOS los eventos y descarta los de otros `id` (no los
+/// re-encola). Naygo registra un único hotkey global, así que es correcto. Si en el futuro se
+/// registraran varios y se sondearan por separado, el primer `was_pressed` se tragaría los
+/// eventos de los demás — habría que cambiar a un demultiplexado por id.
 #[cfg(windows)]
 pub fn was_pressed(id: u32) -> bool {
     use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
