@@ -1110,8 +1110,16 @@ mod tests {
         assert!(!new_id.is_empty());
         assert!(c.is_editing_theme());
         assert_eq!(c.themes.available().len(), before, "no debe guardarse aún");
-        // Nombre = "<orig> (copia)".
-        assert!(c.editing_name().ends_with("(copia)"));
+        // Nombre = "<orig> <sufijo>". El sufijo es i18n ("(copia)"/"(copy)") y el idioma del
+        // primer arranque depende del locale del SO (en CI el runner está en inglés), así que
+        // se compara contra la clave activa, no contra un literal.
+        let suffix = c.t("slint.theme.copy_suffix");
+        assert!(
+            c.editing_name().ends_with(&suffix),
+            "editing_name='{}' debería terminar en '{}'",
+            c.editing_name(),
+            suffix
+        );
     }
 
     #[test]
