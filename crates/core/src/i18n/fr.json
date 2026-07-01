@@ -870,7 +870,7 @@
   "slint.cfg.tip.new_items_at_end": "Files created during the session appear at the end of the list instead of being re-sorted.",
   "slint.cfg.tip.tray_enabled": "Shows a Naygo icon in the system tray (next to the clock).",
   "slint.cfg.tip.close_to_tray": "En fermant la fenêtre, Naygo se réduit dans la zone de notification au lieu de quitter. Nécessite l'icône de la zone de notification.",
-  "slint.cfg.tip.global_hotkey": "Une combinaison de touches qui affiche ou masque Naygo depuis n'importe quelle application. Nécessite l'icône de la zone de notification. La touche Windows ne peut pas être utilisée.",
+  "slint.cfg.tip.global_hotkey": "Une combinaison de touches qui affiche ou masque Naygo depuis n'importe quelle application. Le masquer dans la zone de notification nécessite l'icône de la zone de notification. La touche Windows ne peut pas être utilisée.",
   "slint.cfg.tip.recent_limit": "How many visited folders the history keeps. Accepts 1 to 100.",
   "slint.cfg.tip.footer_enabled": "Shows an info line at the bottom of each pane (selection, totals, disk space).",
   "slint.cfg.tip.footer_template": "What the footer shows. Pick a ready-made template or «Custom…» to write your own with tokens.",
