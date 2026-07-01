@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Versión del formato de los archivos de config; permite migrar/descartar.
-const CONFIG_VERSION: u32 = 1;
+const CONFIG_VERSION: u32 = 2;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,9 +214,9 @@ pub struct Settings {
     /// pedido de Nicolás (acceso rápido). `#[serde(default)]` retro-compat.
     #[serde(default = "default_tray_enabled")]
     pub tray_enabled: bool,
-    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir. Opt-in (default
-    /// `false`): residente = memoria ocupada, que sea decisión del usuario.
-    #[serde(default)]
+    /// Al cerrar la ventana, ocultar a la bandeja en vez de salir. Default `true`
+    /// (pedido de Nicolás): la X esconde a la bandeja en vez de salir.
+    #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     /// Iniciar Naygo con Windows (entrada Run del registro). `#[serde(default)]` retro-compat.
     #[serde(default)]
@@ -356,6 +356,11 @@ fn default_tray_enabled() -> bool {
     true
 }
 
+/// Default de `close_to_tray`: true (la X esconde a la bandeja en vez de salir).
+fn default_close_to_tray() -> bool {
+    true
+}
+
 /// Default de `icon_set` para `#[serde(default)]` (campo aditivo retro-compatible).
 fn default_icon_set() -> String {
     "lucide".to_string()
@@ -484,7 +489,7 @@ impl Default for Settings {
             new_items_at_end: false,
             size_no_subdirs: false,
             tray_enabled: true,
-            close_to_tray: false,
+            close_to_tray: true,
             autostart: false,
             date_format: crate::format::DateFormat::IsoMinute,
             size_format: crate::format::SizeFormat::Auto,
@@ -590,6 +595,30 @@ pub fn load_settings(dir: &Path) -> Settings {
 pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
     let (read, recovered) = read_json_recovering::<Settings>(&dir.join("settings.json"));
     let settings = match read {
+        Some(mut s) if s.version == 1 => {
+            // Migración v1 → v2: forzar close_to_tray=true una vez (la X esconde a bandeja por
+            // defecto). Se hace explícita para que instalaciones existentes adopten el nuevo
+            // comportamiento sin que el usuario toque nada.
+            s.close_to_tray = true;
+            s.version = CONFIG_VERSION;
+            // Mismas normalizaciones que el brazo de la versión actual (ver abajo): migra el
+            // formato viejo y luego coacciona contra el catálogo: un id de pack suelto que ya
+            // no existe en disco (carpeta borrada) cae a "lucide" en vez de quedar como
+            // selección colgada con la toolbar rota.
+            let normalized = normalize_icon_set_id(&s.icon_set);
+            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
+            // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
+            // hay reglas explícitas (settings anterior al lote 3). Si tras eso siguen
+            // vacías (settings raro), caer a las reglas por defecto.
+            if !s.preview_text_exts_legacy.is_empty() && s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::rules_from_csv(&s.preview_text_exts_legacy);
+            }
+            if s.preview_rules.is_empty() {
+                s.preview_rules = crate::preview::default_preview_rules();
+            }
+            s.preview_text_exts_legacy.clear();
+            s
+        }
         Some(mut s) if s.version == CONFIG_VERSION => {
             // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
             // suelto que ya no existe en disco (carpeta borrada) cae a "lucide" en vez de
@@ -1236,5 +1265,34 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(s.window.is_none());
+    }
+
+    #[test]
+    fn migracion_v1_a_v2_fuerza_close_to_tray() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Settings {
+            version: 1,
+            close_to_tray: false,
+            ..Settings::default()
+        };
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::to_string_pretty(&s).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.version, CONFIG_VERSION,
+            "se migra a la versión nueva"
+        );
+        assert!(
+            loaded.close_to_tray,
+            "la migración fuerza close_to_tray=true una vez"
+        );
+    }
+
+    #[test]
+    fn default_close_to_tray_es_true() {
+        assert!(Settings::default().close_to_tray);
     }
 }
