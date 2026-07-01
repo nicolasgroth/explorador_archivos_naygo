@@ -318,6 +318,14 @@ pub struct Settings {
     /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
     #[serde(default)]
     pub window: Option<WindowGeometry>,
+    /// Atajo GLOBAL del sistema para mostrar/ocultar Naygo (funciona desde cualquier app).
+    /// Activado de fábrica. `#[serde(default)]` retro-compat.
+    #[serde(default = "default_global_hotkey_enabled")]
+    pub global_hotkey_enabled: bool,
+    /// Combinación del atajo global. Default Ctrl+Alt+Q. La tecla Win NO se soporta
+    /// (`RegisterHotKey` la reserva el sistema). `#[serde(default)]` retro-compat.
+    #[serde(default = "default_global_hotkey")]
+    pub global_hotkey: crate::keymap::Chord,
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
@@ -484,6 +492,16 @@ fn default_confirm_drop_between_panes() -> bool {
     true
 }
 
+/// Default de `global_hotkey_enabled`: true (activado de fábrica).
+fn default_global_hotkey_enabled() -> bool {
+    true
+}
+
+/// Default de `global_hotkey`: Ctrl+Alt+Q.
+fn default_global_hotkey() -> crate::keymap::Chord {
+    crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -534,6 +552,8 @@ impl Default for Settings {
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
             window: None,
+            global_hotkey_enabled: true,
+            global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
         }
     }
 }
@@ -847,6 +867,8 @@ mod tests {
                 y: 60,
                 maximized: true,
             }),
+            global_hotkey_enabled: false,
+            global_hotkey: crate::keymap::Chord::alt(crate::keymap::KeyCode::Char('z')),
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
@@ -1391,5 +1413,29 @@ mod tests {
     #[test]
     fn default_close_to_tray_es_true() {
         assert!(Settings::default().close_to_tray);
+    }
+
+    #[test]
+    fn defaults_del_hotkey_global() {
+        let s = Settings::default();
+        assert!(
+            s.global_hotkey_enabled,
+            "el hotkey global viene activado de fábrica"
+        );
+        assert_eq!(
+            s.global_hotkey,
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+        );
+    }
+
+    #[test]
+    fn settings_viejo_sin_hotkey_hereda_defaults() {
+        let json = r#"{"version":2,"bar_position":"Top","icon_only":false}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.global_hotkey_enabled);
+        assert_eq!(
+            s.global_hotkey,
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+        );
     }
 }

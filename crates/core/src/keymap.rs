@@ -87,6 +87,15 @@ impl Chord {
             alt: false,
         }
     }
+    /// Con Ctrl+Alt.
+    pub fn ctrl_alt(key: KeyCode) -> Chord {
+        Chord {
+            key,
+            ctrl: true,
+            shift: false,
+            alt: true,
+        }
+    }
     /// Con Alt.
     pub fn alt(key: KeyCode) -> Chord {
         Chord {
