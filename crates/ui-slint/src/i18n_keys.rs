@@ -352,6 +352,7 @@ where
     tr.set_cfg_paste_fmt_jpg(c.t("slint.cfg.paste_fmt_jpg").into());
     tr.set_cfg_tray_enabled(c.t("slint.cfg.tray_enabled").into());
     tr.set_cfg_close_to_tray(c.t("slint.cfg.close_to_tray").into());
+    tr.set_cfg_global_hotkey(c.t("slint.cfg.global_hotkey").into());
     tr.set_cfg_new_items_at_end(c.t("slint.cfg.new_items_at_end").into());
     tr.set_cfg_low_power(c.t("slint.cfg.low_power").into());
     tr.set_cfg_low_power_auto(c.t("slint.cfg.low_power_auto").into());
@@ -528,6 +529,7 @@ where
     tr.set_cfg_tip_new_items_at_end(c.t("slint.cfg.tip.new_items_at_end").into());
     tr.set_cfg_tip_tray_enabled(c.t("slint.cfg.tip.tray_enabled").into());
     tr.set_cfg_tip_close_to_tray(c.t("slint.cfg.tip.close_to_tray").into());
+    tr.set_cfg_tip_global_hotkey(c.t("slint.cfg.tip.global_hotkey").into());
     tr.set_cfg_tip_recent_limit(c.t("slint.cfg.tip.recent_limit").into());
     tr.set_cfg_tip_footer_enabled(c.t("slint.cfg.tip.footer_enabled").into());
     tr.set_cfg_tip_footer_template(c.t("slint.cfg.tip.footer_template").into());

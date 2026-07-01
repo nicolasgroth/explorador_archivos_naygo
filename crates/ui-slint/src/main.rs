@@ -242,6 +242,52 @@ fn main() -> Result<(), slint::PlatformError> {
             c.config.save();
         }
     }
+
+    // Hotkey global (mostrar/ocultar Naygo desde cualquier app). El registro se mantiene vivo en
+    // este slot durante toda la ejecución (drop = se libera). `hotkey_id` guarda el id para
+    // reconocer sus eventos en el tick.
+    let global_hotkey_slot: Rc<RefCell<Option<naygo_platform::global_hotkey::GlobalHotkey>>> =
+        Rc::new(RefCell::new(None));
+    let hotkey_id: Rc<std::cell::Cell<Option<u32>>> = Rc::new(std::cell::Cell::new(None));
+
+    // (Re)arma el hotkey global según la config actual. Suelta el registro anterior, y si está
+    // activo re-registra. Devuelve Err si el SO lo rechaza (el llamador decide si avisar). Se usa
+    // tanto en el registro inicial como desde los handlers de Config (toggle + recaptura).
+    let rearm_hotkey = {
+        let ctrl = ctrl.clone();
+        let slot = global_hotkey_slot.clone();
+        let id_cell = hotkey_id.clone();
+        Rc::new(move || -> Result<(), String> {
+            *slot.borrow_mut() = None; // soltar el registro anterior primero
+            id_cell.set(None);
+            let s = ctrl.borrow().config.settings.clone();
+            if !s.global_hotkey_enabled {
+                return Ok(());
+            }
+            #[cfg(windows)]
+            {
+                match naygo_platform::global_hotkey::register(&s.global_hotkey) {
+                    Ok(h) => {
+                        id_cell.set(Some(h.id()));
+                        *slot.borrow_mut() = Some(h);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                Ok(())
+            }
+        })
+    };
+    // Registro inicial (un fallo solo se loguea, sin modal: no queremos molestar cada arranque).
+    if let Err(e) = rearm_hotkey() {
+        logging::log_line(&format!("no se pudo registrar el hotkey global: {e}"));
+    } else if hotkey_id.get().is_some() {
+        logging::log_line("hotkey global registrado");
+    }
+
     // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
     // abierta (la arma `build_palette_commands` al abrir) y, en paralelo, el índice del COMANDO
     // que cada FILA visible ejecuta (lo llena `palette_items_from_matches`). El callback
@@ -1173,6 +1219,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let drag_rx = drag_rx.clone();
         let drop_guard = drop_guard.clone();
         let tray = tray.clone();
+        // Solo se LEE el id del hotkey (en el tick, bajo cfg windows). El registro en sí lo
+        // mantiene vivo el binding `global_hotkey_slot` del scope de `main`, no este closure.
+        #[cfg(windows)]
+        let hotkey_id = hotkey_id.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -1187,6 +1237,11 @@ fn main() -> Result<(), slint::PlatformError> {
             let drag_rx = drag_rx.clone();
             let drop_guard = drop_guard.clone();
             let tray = tray.clone();
+            // Solo se clona `hotkey_id` para LEER el id en el tick (bajo cfg windows). El registro
+            // lo mantiene vivo el binding `global_hotkey_slot` del scope de `main` (vive hasta
+            // después de `ui.run()`, toda la sesión), NO este closure.
+            #[cfg(windows)]
+            let hotkey_id = hotkey_id.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
@@ -1482,6 +1537,15 @@ fn main() -> Result<(), slint::PlatformError> {
                                     ctrl.borrow().save_session();
                                     let _ = slint::quit_event_loop();
                                 }
+                            }
+                        }
+                    }
+                    // Hotkey global: ¿se presionó? Alterna mostrar/ocultar Naygo.
+                    #[cfg(windows)]
+                    if let Some(id) = hotkey_id.get() {
+                        if naygo_platform::global_hotkey::was_pressed(id) {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                toggle_window_visibility(&ui, tray_active);
                             }
                         }
                     }
@@ -2843,6 +2907,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));
+    // Sentinel que distingue la captura del hotkey GLOBAL (no ligado a una `Action` del keymap) de
+    // la captura de un atajo normal. La UI (config-window.slint) reusa el MISMO mecanismo de
+    // captura (root.capturing + FocusScope + capture-key) para ambos casos: cuando el usuario
+    // pulsa "Cambiar" en el control del hotkey global, `shortcut-capture` llega con esta clave en
+    // vez de una `action-key` real; `on_capture_key` la reconoce y arma un `Chord` para
+    // `set_global_hotkey` en lugar de `rebind`.
+    const GLOBAL_HOTKEY_CAPTURE_KEY: &str = "__global_hotkey__";
+    let capturing_global_hotkey: Rc<std::cell::Cell<bool>> = Rc::new(std::cell::Cell::new(false));
 
     // Toggles/combos/text que solo persisten (no requieren refrescar la vista de paneles).
     // Todos los handlers se registran ahora en la ventana de configuración (`cfg_win`), no en la
@@ -2894,6 +2966,31 @@ fn main() -> Result<(), slint::PlatformError> {
     cfg_setter!(on_set_new_items_at_end, bool, set_new_items_at_end);
     cfg_setter!(on_set_tray_enabled, bool, set_tray_enabled);
     cfg_setter!(on_set_close_to_tray, bool, set_close_to_tray);
+    // Hotkey global: activar/desactivar re-arma el registro real en caliente. Si el SO rechaza la
+    // combinación al activar (p. ej. ya está tomada por otra app), revertimos el flag a apagado
+    // (no queremos dejar "activado" en la UI sin que surta efecto) y avisamos con un toast, igual
+    // que el resto de los avisos de Config (import/export de packs).
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let rearm = rearm_hotkey.clone();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_set_global_hotkey_enabled(move |on| {
+            ctrl.borrow_mut().config.set_global_hotkey_enabled(on);
+            if on {
+                if let Err(e) = rearm() {
+                    ctrl.borrow_mut().config.set_global_hotkey_enabled(false);
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let tmpl = ctrl.borrow().config.t("slint.cfg.global_hotkey_rejected");
+                        ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                    }
+                }
+            } else {
+                let _ = rearm(); // apagar = soltar el registro; no puede fallar
+            }
+            refresh();
+        });
+    }
     cfg_setter!(on_set_paste_confirm, bool, set_paste_confirm);
     {
         let ctrl = ctrl.clone();
@@ -3569,19 +3666,70 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
-    // Editor de atajos: capturar la acción a reasignar.
+    // Editor de atajos: capturar la acción a reasignar (o el hotkey global, ver sentinel arriba).
     {
         let capturing = capturing_action.clone();
+        let capturing_hotkey = capturing_global_hotkey.clone();
         cfg_win.on_shortcut_capture(move |key| {
-            *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
+            if key == GLOBAL_HOTKEY_CAPTURE_KEY {
+                capturing_hotkey.set(true);
+                *capturing.borrow_mut() = None;
+            } else {
+                capturing_hotkey.set(false);
+                *capturing.borrow_mut() = config_ctrl::ConfigCtrl::action_from_key(&key);
+            }
         });
     }
-    // Captura de la combinación: si hay acción en captura y el chord es válido, reasigna.
+    // Captura de la combinación: si hay acción en captura y el chord es válido, reasigna. Si en
+    // cambio se estaba capturando el HOTKEY GLOBAL, arma el Chord y lo valida/persiste vía
+    // `set_global_hotkey`, re-arma el registro en caliente, y si el SO lo rechaza (o el chord no
+    // tiene modificador) avisa con un toast y NO toca el hotkey anterior (sigue vigente).
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
         let capturing = capturing_action.clone();
+        let capturing_hotkey = capturing_global_hotkey.clone();
+        let rearm = rearm_hotkey.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_capture_key(move |text, c, s, a| {
+            if capturing_hotkey.take() {
+                // Esc cancela la captura sin reasignar (la UI ya salió del modo captura).
+                if text == keys::escape_char().to_string() {
+                    return;
+                }
+                let Some(chord) = keys::chord_from(&text, c, s, a) else {
+                    return;
+                };
+                // Guardar la combinación ANTERIOR: si el SO rechaza la nueva al re-armar, se
+                // restaura (best-effort) para no dejar al usuario con un hotkey "activado pero sin
+                // funcionar" mostrando una combinación muerta. Coherente con la ruta del toggle,
+                // que también revierte a un estado limpio.
+                let prev_chord = ctrl.borrow().config.settings.global_hotkey;
+                let set_result = ctrl.borrow_mut().config.set_global_hotkey(chord);
+                match set_result {
+                    Ok(()) => {
+                        if let Err(e) = rearm() {
+                            // El SO rechazó la combinación nueva: revertir a la anterior y re-armar
+                            // (que funcionaba), de modo que el usuario conserva su hotkey vigente.
+                            let _ = ctrl.borrow_mut().config.set_global_hotkey(prev_chord);
+                            let _ = rearm();
+                            if let Some(ui) = ui_weak.upgrade() {
+                                let tmpl =
+                                    ctrl.borrow().config.t("slint.cfg.global_hotkey_rejected");
+                                ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                            }
+                        }
+                        refresh();
+                    }
+                    Err(e) => {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let tmpl = ctrl.borrow().config.t("slint.cfg.global_hotkey_invalid");
+                            ui.invoke_show_toast(tmpl.replace("{err}", &e).into());
+                        }
+                    }
+                }
+                return;
+            }
             let action = match capturing.borrow_mut().take() {
                 Some(act) => act,
                 None => return,
@@ -5773,6 +5921,8 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         paste_jpg_quality: s.paste_jpg_quality as i32,
         tray_enabled: s.tray_enabled,
         close_to_tray: s.close_to_tray,
+        global_hotkey_enabled: s.global_hotkey_enabled,
+        global_hotkey_text: config_ctrl::ConfigCtrl::chord_to_text(&s.global_hotkey).into(),
         new_items_at_end: s.new_items_at_end,
         low_power_mode: match s.low_power_mode {
             naygo_core::config::LowPowerMode::Auto => 0,
@@ -5813,6 +5963,36 @@ fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
         RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
         _ => None,
     }
+}
+
+/// Alterna la visibilidad de Naygo para el hotkey global: si Naygo NO es la ventana activa
+/// (minimizada o detrás de otras) la muestra + trae al frente; si YA es la ventana activa, la
+/// minimiza (solo si el tray está activo — si no, no la esconde, para no dejarla inalcanzable:
+/// sin tray no hay otro punto de acceso). Coherente con `should_quit_on_close`.
+///
+/// Se usa `set_minimized(true)` y NO `window().hide()` a propósito: `hide()` decrementa el
+/// contador interno de ventanas visibles de Slint y, si esta es la única ventana visible (el
+/// caso normal: la ventana de Config solo se muestra al abrirla), dispara `quit_event_loop()` —
+/// terminaría la app en vez de dejarla en bandeja. Es el mismo motivo por el que el arranque
+/// minimizado (`start_in_tray`, más arriba) usa `set_minimized` en vez de `hide()`.
+#[cfg(windows)]
+fn toggle_window_visibility(ui: &AppWindow, tray_active: bool) {
+    let Some(hwnd) = naygo_hwnd(ui) else {
+        let _ = ui.show();
+        return;
+    };
+    let is_foreground = naygo_platform::window::is_foreground(hwnd);
+    if is_foreground && tray_active {
+        ui.window().set_minimized(true);
+    } else {
+        let _ = ui.show();
+        ui.window().set_minimized(false);
+        naygo_platform::window::bring_to_front(hwnd);
+    }
+}
+#[cfg(not(windows))]
+fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
+    let _ = ui.show();
 }
 
 /// El `PreviewVm` actual a partir del último resultado guardado en el controlador. El

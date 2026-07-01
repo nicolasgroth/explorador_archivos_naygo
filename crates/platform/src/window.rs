@@ -110,6 +110,30 @@ pub fn bring_to_front(hwnd: isize) {
 #[cfg(not(windows))]
 pub fn bring_to_front(_hwnd: isize) {}
 
+/// ¿Es `hwnd` la ventana en primer plano (foreground) del SO ahora mismo? Lo usa el hotkey
+/// global para decidir si Naygo ya está al frente (entonces el atajo la esconde) o no (entonces
+/// la trae al frente), sin exponer `windows::Win32::*` fuera de esta capa.
+///
+/// `hwnd` nulo → `false` (nunca es la foreground). En no-Windows es un stub que siempre
+/// devuelve `false`.
+#[cfg(windows)]
+pub fn is_foreground(hwnd: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    if hwnd == 0 {
+        return false;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe { GetForegroundWindow() == hwnd }
+}
+
+/// Stub no-Windows: no hay noción de foreground window fuera de Win32.
+#[cfg(not(windows))]
+pub fn is_foreground(_hwnd: isize) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
