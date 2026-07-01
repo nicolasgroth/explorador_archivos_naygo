@@ -254,12 +254,14 @@ impl Workspace {
                     let f = shape_to_node(first, ids);
                     let s = shape_to_node(second, ids);
                     match (f, s) {
-                        (Some(first), Some(second)) => Some(DockNode::Split {
-                            dir: *dir,
-                            fraction: *fraction,
-                            first: Box::new(first),
-                            second: Box::new(second),
-                        }),
+                        (Some(first), Some(second)) => {
+                            let frac = fraction.clamp(0.05, 0.95);
+                            Some(DockNode::Split {
+                                dir: *dir,
+                                children: vec![first, second],
+                                weights: vec![frac, 1.0 - frac],
+                            })
+                        }
                         // Si un lado no se pudo construir, usar el otro.
                         (Some(only), None) | (None, Some(only)) => Some(only),
                         (None, None) => None,
@@ -305,15 +307,36 @@ impl Workspace {
                 },
                 DockNode::Split {
                     dir,
-                    fraction,
-                    first,
-                    second,
-                } => LayoutShape::Split {
-                    dir: *dir,
-                    fraction: *fraction,
-                    first: Box::new(node_to_shape(first, order)),
-                    second: Box::new(node_to_shape(second, order)),
-                },
+                    children,
+                    weights,
+                } => split_children_to_shape(*dir, children, weights, order),
+            }
+        }
+        // `LayoutShape::Split` es binario; un `DockNode::Split` N-ario se pliega en una
+        // cadena anidada a la derecha, preservando la proporción relativa de cada hijo.
+        fn split_children_to_shape(
+            dir: SplitDir,
+            children: &[DockNode],
+            weights: &[f32],
+            order: &mut Vec<PaneId>,
+        ) -> LayoutShape {
+            debug_assert_eq!(children.len(), weights.len());
+            if children.len() == 1 {
+                return node_to_shape(&children[0], order);
+            }
+            let first = node_to_shape(&children[0], order);
+            let rest = split_children_to_shape(dir, &children[1..], &weights[1..], order);
+            let total: f32 = weights.iter().sum();
+            let fraction = if total > 0.0 {
+                (weights[0] / total).clamp(0.05, 0.95)
+            } else {
+                0.5
+            };
+            LayoutShape::Split {
+                dir,
+                fraction,
+                first: Box::new(first),
+                second: Box::new(rest),
             }
         }
 

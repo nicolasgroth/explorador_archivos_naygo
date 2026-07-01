@@ -20,8 +20,8 @@ pub enum SplitDir {
 }
 
 /// Un nodo del árbol de disposición: una hoja (un panel), un grupo de pestañas
-/// (varios paneles apilados en el mismo rect) o un split de dos.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// (varios paneles apilados en el mismo rect) o un split de N hijos con pesos.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum DockNode {
     /// Una hoja: el panel con este id ocupa el espacio.
     Leaf(PaneId),
@@ -29,13 +29,84 @@ pub enum DockNode {
     /// (en `0`) de la pestaña visible. Invariante: `members` no vacío y `active < len`.
     /// Un grupo que queda con un solo miembro se colapsa a `Leaf` (ver `remove_in`).
     Tabs { members: Vec<PaneId>, active: usize },
-    /// Un split: `fraction` es la proporción [0,1] que toma el primer hijo.
+    /// Un split: una fila (Horizontal) o columna (Vertical) de N≥2 hijos, cada uno con
+    /// un peso relativo (`weights[i]`). El ancho/alto de cada hijo se reparte por
+    /// `weights[i] / Σweights`. Los divisores viven entre hijos consecutivos: hay
+    /// `children.len() - 1` divisores por split. Invariantes: `children.len() ==
+    /// weights.len() >= 2`; `weights[i] > 0`. Un split que quedaría con un solo hijo se
+    /// colapsa a ese hijo (ver `remove_in`).
     Split {
         dir: SplitDir,
-        fraction: f32,
-        first: Box<DockNode>,
-        second: Box<DockNode>,
+        children: Vec<DockNode>,
+        weights: Vec<f32>,
     },
+}
+
+/// Formato "de cable" para deserializar `DockNode`: acepta tanto el formato N-ario actual
+/// (`children`/`weights`) como el formato binario viejo (`fraction`/`first`/`second`), para
+/// que las disposiciones guardadas antes de la migración a pesos sigan cargando.
+#[derive(Deserialize)]
+enum DockNodeWire {
+    Leaf(PaneId),
+    Tabs {
+        members: Vec<PaneId>,
+        active: usize,
+    },
+    Split {
+        dir: SplitDir,
+        #[serde(default)]
+        children: Vec<DockNodeWire>,
+        #[serde(default)]
+        weights: Vec<f32>,
+        #[serde(default)]
+        fraction: Option<f32>,
+        #[serde(default)]
+        first: Option<Box<DockNodeWire>>,
+        #[serde(default)]
+        second: Option<Box<DockNodeWire>>,
+    },
+}
+
+impl From<DockNodeWire> for DockNode {
+    fn from(w: DockNodeWire) -> Self {
+        match w {
+            DockNodeWire::Leaf(id) => DockNode::Leaf(id),
+            DockNodeWire::Tabs { members, active } => DockNode::Tabs { members, active },
+            DockNodeWire::Split {
+                dir,
+                children,
+                weights,
+                fraction,
+                first,
+                second,
+            } => {
+                if let (Some(f), Some(s)) = (first, second) {
+                    let frac = fraction.unwrap_or(0.5).clamp(0.05, 0.95);
+                    return DockNode::Split {
+                        dir,
+                        children: vec![(*f).into(), (*s).into()],
+                        weights: vec![frac, 1.0 - frac],
+                    };
+                }
+                let children: Vec<DockNode> = children.into_iter().map(Into::into).collect();
+                let mut weights = weights;
+                if weights.len() != children.len() {
+                    weights = vec![1.0; children.len()];
+                }
+                DockNode::Split {
+                    dir,
+                    children,
+                    weights,
+                }
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DockNode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        DockNodeWire::deserialize(d).map(Into::into)
+    }
 }
 
 /// La disposición completa: el árbol raíz (o vacío si no hay paneles).
@@ -56,17 +127,16 @@ pub struct Rect {
 /// Grosor (px) de la barra entre dos paneles de un split (zona de arrastre + hueco visual).
 pub const SPLIT_BAR: f32 = 4.0;
 
-/// Un paso en la ruta a un split: por cuál hijo se baja.
+/// Un paso en la ruta a un split anidado: por cuál hijo (índice) se baja.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SplitStep {
-    First,
-    Second,
-}
+pub struct SplitStep(pub usize);
 
-/// Un splitter arrastrable: la ruta a su split, el rect de su barra y su orientación.
+/// Un splitter arrastrable: la ruta al split, cuál divisor interno es (`divider`: 0..N-2),
+/// el rect de su barra y su orientación.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplitHandle {
     pub path: Vec<SplitStep>,
+    pub divider: usize,
     pub rect: Rect,
     pub dir: SplitDir,
 }
@@ -221,103 +291,122 @@ impl SerializableDockLayout {
         out
     }
 
-    /// Ajusta la fracción del split en `path` (clamp 0.05..0.95). No-op si la ruta no
-    /// apunta a un split.
-    pub fn set_fraction(&mut self, path: &[SplitStep], fraction: f32) {
+    /// Mueve el divisor `divider` (0..N-2) del split en `path`: `frac_local` ∈ [0.05, 0.95]
+    /// es la proporción que toma el hijo `divider` DENTRO del par (`divider`, `divider+1`).
+    /// Transfiere peso solo entre esos dos hijos (su suma se conserva) → el resto no se mueve.
+    /// No-op si la ruta no apunta a un split o el índice de divisor está fuera de rango.
+    pub fn set_divider(&mut self, path: &[SplitStep], divider: usize, frac_local: f32) {
         let Some(root) = self.root.as_mut() else {
             return;
         };
         let mut node = root;
-        for step in path {
+        for SplitStep(i) in path {
             match node {
-                DockNode::Split { first, second, .. } => {
-                    node = match step {
-                        SplitStep::First => first,
-                        SplitStep::Second => second,
+                DockNode::Split { children, .. } => {
+                    let Some(child) = children.get_mut(*i) else {
+                        return;
                     };
+                    node = child;
                 }
                 // Una hoja o un grupo de pestañas no tiene sub-splits que recorrer.
                 DockNode::Leaf(_) | DockNode::Tabs { .. } => return,
             }
         }
-        if let DockNode::Split { fraction: fr, .. } = node {
-            *fr = fraction.clamp(0.05, 0.95);
+        if let DockNode::Split { weights, .. } = node {
+            if divider + 1 >= weights.len() {
+                return;
+            }
+            let f = frac_local.clamp(0.05, 0.95);
+            let pair = weights[divider] + weights[divider + 1];
+            weights[divider] = pair * f;
+            weights[divider + 1] = pair * (1.0 - f);
         }
     }
 
-    /// Dado el split en `path`, el `area` total y la posición del puntero `(px, py)` en coords de
-    /// contenido, calcula (fraction, bar_rect): la fracción CLAMP [0.05,0.95] que pondría el corte
-    /// bajo el puntero, y el rect de la barra resultante. La fracción se mide DENTRO del sub-rect
-    /// del split (no sobre el área total), que es lo correcto para splits anidados. Devuelve
-    /// `None` si la ruta no apunta a un split. Lo usan tanto la barra-fantasma del arrastre (vista
-    /// previa en vivo) como el commit al soltar, para que ambos coincidan.
-    pub fn fraction_at(
+    /// Dado el split en `path`, el divisor `divider` (entre hijos `divider` y `divider+1`), el
+    /// `area` total y el puntero `(px,py)`, calcula (frac_local, bar_rect): la fracción CLAMP
+    /// [0.05,0.95] que el corte pondría DENTRO del par de hijos adyacentes, y el rect de la
+    /// barra-fantasma resultante. Se mide sobre el sub-rect del PAR. `None` si la ruta no es un
+    /// split o el divisor está fuera de rango. Lo usan el preview del arrastre y el commit.
+    pub fn divider_at(
         &self,
         path: &[SplitStep],
+        divider: usize,
         area: Rect,
         px: f32,
         py: f32,
     ) -> Option<(f32, Rect)> {
         let root = self.root.as_ref()?;
-        // Bajar al split objetivo, recortando el sub-rect en cada paso.
         let mut node = root;
         let mut sub = area;
-        for step in path {
+        for SplitStep(i) in path {
             if let DockNode::Split {
                 dir,
-                fraction,
-                first,
-                second,
+                children,
+                weights,
             } = node
             {
-                let (a, b) = split_area(sub, *dir, *fraction);
-                match step {
-                    SplitStep::First => {
-                        node = first;
-                        sub = a;
-                    }
-                    SplitStep::Second => {
-                        node = second;
-                        sub = b;
-                    }
-                }
+                let rects = child_rects(sub, *dir, weights);
+                node = children.get(*i)?;
+                sub = *rects.get(*i)?;
             } else {
                 return None;
             }
         }
-        let DockNode::Split { dir, .. } = node else {
+        let DockNode::Split {
+            dir,
+            children,
+            weights,
+        } = node
+        else {
             return None;
         };
+        if divider + 1 >= children.len() {
+            return None;
+        }
+        let rects = child_rects(sub, *dir, weights);
+        let a = rects[divider];
+        let b = rects[divider + 1];
         let half = SPLIT_BAR / 2.0;
-        let f = match dir {
+        let (f, bar) = match dir {
             SplitDir::Horizontal => {
-                if sub.w <= 0.0 {
+                let pair_x = a.x;
+                let pair_w = (b.x + b.w) - a.x;
+                let f = if pair_w <= 0.0 {
                     0.5
                 } else {
-                    ((px - sub.x) / sub.w).clamp(0.05, 0.95)
-                }
+                    ((px - pair_x) / pair_w).clamp(0.05, 0.95)
+                };
+                let bx = pair_x + pair_w * f - half;
+                (
+                    f,
+                    Rect {
+                        x: bx,
+                        y: a.y,
+                        w: SPLIT_BAR,
+                        h: a.h,
+                    },
+                )
             }
             SplitDir::Vertical => {
-                if sub.h <= 0.0 {
+                let pair_y = a.y;
+                let pair_h = (b.y + b.h) - a.y;
+                let f = if pair_h <= 0.0 {
                     0.5
                 } else {
-                    ((py - sub.y) / sub.h).clamp(0.05, 0.95)
-                }
+                    ((py - pair_y) / pair_h).clamp(0.05, 0.95)
+                };
+                let by = pair_y + pair_h * f - half;
+                (
+                    f,
+                    Rect {
+                        x: a.x,
+                        y: by,
+                        w: a.w,
+                        h: SPLIT_BAR,
+                    },
+                )
             }
-        };
-        let bar = match dir {
-            SplitDir::Horizontal => Rect {
-                x: sub.x + sub.w * f - half,
-                y: sub.y,
-                w: SPLIT_BAR,
-                h: sub.h,
-            },
-            SplitDir::Vertical => Rect {
-                x: sub.x,
-                y: sub.y + sub.h * f - half,
-                w: sub.w,
-                h: SPLIT_BAR,
-            },
         };
         Some((f, bar))
     }
@@ -377,20 +466,24 @@ impl SerializableDockLayout {
     }
 }
 
-/// Busca el split que separa `a` de `b` (uno en cada subárbol) e intercambia sus hijos.
+/// Busca el split cuyo hijo `ia` contiene a `a` y cuyo hijo `ib` contiene a `b` (ia != ib) e
+/// intercambia esos dos hijos (posición y peso). Si no hay tal split en este nivel, baja a los
+/// hijos que sean splits.
 fn swap_children_in(node: &mut DockNode, a: PaneId, b: PaneId) -> bool {
-    if let DockNode::Split { first, second, .. } = node {
-        let fa = subtree_contains(first, a);
-        let fb = subtree_contains(first, b);
-        let sa = subtree_contains(second, a);
-        let sb = subtree_contains(second, b);
-        // Este es el split que los separa (a en uno, b en el otro).
-        if (fa && sb) || (fb && sa) {
-            std::mem::swap(first, second);
-            return true;
+    if let DockNode::Split {
+        children, weights, ..
+    } = node
+    {
+        let ia = children.iter().position(|c| subtree_contains(c, a));
+        let ib = children.iter().position(|c| subtree_contains(c, b));
+        if let (Some(ia), Some(ib)) = (ia, ib) {
+            if ia != ib {
+                children.swap(ia, ib);
+                weights.swap(ia, ib);
+                return true;
+            }
         }
-        // Si no, bajar al subárbol que contenga ambos.
-        return swap_children_in(first, a, b) || swap_children_in(second, a, b);
+        return children.iter_mut().any(|c| swap_children_in(c, a, b));
     }
     false
 }
@@ -400,9 +493,7 @@ fn subtree_contains(node: &DockNode, id: PaneId) -> bool {
     match node {
         DockNode::Leaf(leaf) => *leaf == id,
         DockNode::Tabs { members, .. } => members.contains(&id),
-        DockNode::Split { first, second, .. } => {
-            subtree_contains(first, id) || subtree_contains(second, id)
-        }
+        DockNode::Split { children, .. } => children.iter().any(|c| subtree_contains(c, id)),
     }
 }
 
@@ -419,105 +510,105 @@ fn place(node: &DockNode, area: Rect, out: &mut Vec<(PaneId, Rect)>) {
         }
         DockNode::Split {
             dir,
-            fraction,
-            first,
-            second,
+            children,
+            weights,
         } => {
-            let (a, b) = split_area(area, *dir, *fraction);
-            place(first, a, out);
-            place(second, b, out);
+            let rects = child_rects(area, *dir, weights);
+            for (child, r) in children.iter().zip(rects) {
+                place(child, r, out);
+            }
         }
     }
 }
 
-/// Divide `area` en dos sub-rects según la orientación y la fracción del primer hijo,
-/// descontando media barra a cada lado del corte. `fraction` se clampa a [0.05, 0.95].
-fn split_area(area: Rect, dir: SplitDir, fraction: f32) -> (Rect, Rect) {
-    let f = fraction.clamp(0.05, 0.95);
-    let half = SPLIT_BAR / 2.0;
+/// Reparte `area` entre N hijos según sus pesos y la orientación, descontando la barra
+/// `SPLIT_BAR` entre cada par de hijos. Devuelve un rect por hijo, en orden. Los pesos se
+/// normalizan (Σ); un hijo nunca recibe menos de 1.0 px de lado útil (el render por software
+/// castea f32→i32 y paniquea con geometrías degeneradas). Pura.
+fn child_rects(area: Rect, dir: SplitDir, weights: &[f32]) -> Vec<Rect> {
+    let n = weights.len();
+    debug_assert!(n >= 2, "un split tiene ≥2 hijos");
+    let sum: f32 = weights.iter().copied().filter(|w| *w > 0.0).sum();
+    let sum = if sum > 0.0 { sum } else { n as f32 };
+    let bars = SPLIT_BAR * (n as f32 - 1.0);
+    let mut out = Vec::with_capacity(n);
     match dir {
         SplitDir::Horizontal => {
-            // Mínimo 1.0 px para que el render por software nunca reciba w=0
-            // (Slint castea f32→i32 y paniquea con geometrías degeneradas).
-            let first_w = (area.w * f - half).max(1.0);
-            let second_x = area.x + area.w * f + half;
-            let second_w = (area.x + area.w - second_x).max(1.0);
-            (
-                Rect {
-                    x: area.x,
+            let usable = (area.w - bars).max(n as f32); // ≥1px por hijo
+            let mut x = area.x;
+            for (i, w) in weights.iter().enumerate() {
+                let cw = (usable * (w.max(0.0) / sum)).max(1.0);
+                out.push(Rect {
+                    x,
                     y: area.y,
-                    w: first_w,
+                    w: cw,
                     h: area.h,
-                },
-                Rect {
-                    x: second_x,
-                    y: area.y,
-                    w: second_w,
-                    h: area.h,
-                },
-            )
+                });
+                x += cw;
+                if i + 1 < n {
+                    x += SPLIT_BAR;
+                }
+            }
         }
         SplitDir::Vertical => {
-            // Mínimo 1.0 px por la misma razón (h=0 también paniquea).
-            let first_h = (area.h * f - half).max(1.0);
-            let second_y = area.y + area.h * f + half;
-            let second_h = (area.y + area.h - second_y).max(1.0);
-            (
-                Rect {
+            let usable = (area.h - bars).max(n as f32);
+            let mut y = area.y;
+            for (i, w) in weights.iter().enumerate() {
+                let ch = (usable * (w.max(0.0) / sum)).max(1.0);
+                out.push(Rect {
                     x: area.x,
-                    y: area.y,
+                    y,
                     w: area.w,
-                    h: first_h,
-                },
-                Rect {
-                    x: area.x,
-                    y: second_y,
-                    w: area.w,
-                    h: second_h,
-                },
-            )
+                    h: ch,
+                });
+                y += ch;
+                if i + 1 < n {
+                    y += SPLIT_BAR;
+                }
+            }
         }
     }
+    out
 }
 
-/// Recorre el árbol acumulando el handle (barra) de cada split. La barra ocupa el hueco
-/// `SPLIT_BAR` entre los dos hijos.
+/// Recorre el árbol acumulando el handle (barra) de cada divisor de cada split. La barra
+/// ocupa el hueco `SPLIT_BAR` entre dos hijos consecutivos.
 fn handles(node: &DockNode, area: Rect, path: &mut Vec<SplitStep>, out: &mut Vec<SplitHandle>) {
     if let DockNode::Split {
         dir,
-        fraction,
-        first,
-        second,
+        children,
+        weights,
     } = node
     {
-        let f = fraction.clamp(0.05, 0.95);
-        let half = SPLIT_BAR / 2.0;
-        let bar = match dir {
-            SplitDir::Horizontal => Rect {
-                x: area.x + area.w * f - half,
-                y: area.y,
-                w: SPLIT_BAR,
-                h: area.h,
-            },
-            SplitDir::Vertical => Rect {
-                x: area.x,
-                y: area.y + area.h * f - half,
-                w: area.w,
-                h: SPLIT_BAR,
-            },
-        };
-        out.push(SplitHandle {
-            path: path.clone(),
-            rect: bar,
-            dir: *dir,
-        });
-        let (a, b) = split_area(area, *dir, *fraction);
-        path.push(SplitStep::First);
-        handles(first, a, path, out);
-        path.pop();
-        path.push(SplitStep::Second);
-        handles(second, b, path, out);
-        path.pop();
+        let rects = child_rects(area, *dir, weights);
+        let divider_count = children.len().saturating_sub(1);
+        for (i, a) in rects.iter().copied().enumerate().take(divider_count) {
+            let bar = match dir {
+                SplitDir::Horizontal => Rect {
+                    x: a.x + a.w,
+                    y: a.y,
+                    w: SPLIT_BAR,
+                    h: a.h,
+                },
+                SplitDir::Vertical => Rect {
+                    x: a.x,
+                    y: a.y + a.h,
+                    w: a.w,
+                    h: SPLIT_BAR,
+                },
+            };
+            out.push(SplitHandle {
+                path: path.clone(),
+                divider: i,
+                rect: bar,
+                dir: *dir,
+            });
+        }
+        for (i, child) in children.iter().enumerate() {
+            path.push(SplitStep(i));
+            handles(child, rects[i], path, out);
+            path.pop();
+        }
     }
 }
 
@@ -527,9 +618,8 @@ fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
         DockNode::Leaf(id) if *id == leaf => {
             *node = DockNode::Split {
                 dir,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(leaf)),
-                second: Box::new(DockNode::Leaf(new_id)),
+                children: vec![DockNode::Leaf(leaf), DockNode::Leaf(new_id)],
+                weights: vec![1.0, 1.0],
             };
         }
         DockNode::Leaf(_) => {}
@@ -539,21 +629,22 @@ fn split_in(node: &mut DockNode, leaf: PaneId, dir: SplitDir, new_id: PaneId) {
             let group = node.clone();
             *node = DockNode::Split {
                 dir,
-                fraction: 0.5,
-                first: Box::new(group),
-                second: Box::new(DockNode::Leaf(new_id)),
+                children: vec![group, DockNode::Leaf(new_id)],
+                weights: vec![1.0, 1.0],
             };
         }
         DockNode::Tabs { .. } => {}
-        DockNode::Split { first, second, .. } => {
-            split_in(first, leaf, dir, new_id);
-            split_in(second, leaf, dir, new_id);
+        DockNode::Split { children, .. } => {
+            for c in children.iter_mut() {
+                split_in(c, leaf, dir, new_id);
+            }
         }
     }
 }
 
 /// Quita la hoja `id` del subárbol. Devuelve el subárbol resultante (o None si todo el
-/// subárbol era esa hoja). Un split que pierde un hijo colapsa al otro.
+/// subárbol era esa hoja). Un split que pierde hijos hasta quedar con uno solo colapsa a ese
+/// hijo; si quedan cero, desaparece.
 fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
     match node {
         DockNode::Leaf(leaf) => {
@@ -583,21 +674,25 @@ fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
         }
         DockNode::Split {
             dir,
-            fraction,
-            first,
-            second,
+            children,
+            weights,
         } => {
-            let f = remove_in(*first, id);
-            let s = remove_in(*second, id);
-            match (f, s) {
-                (Some(f), Some(s)) => Some(DockNode::Split {
+            let mut kept: Vec<DockNode> = Vec::new();
+            let mut kw: Vec<f32> = Vec::new();
+            for (c, w) in children.into_iter().zip(weights) {
+                if let Some(c) = remove_in(c, id) {
+                    kept.push(c);
+                    kw.push(w);
+                }
+            }
+            match kept.len() {
+                0 => None,
+                1 => Some(kept.into_iter().next().unwrap()),
+                _ => Some(DockNode::Split {
                     dir,
-                    fraction,
-                    first: Box::new(f),
-                    second: Box::new(s),
+                    children: kept,
+                    weights: kw,
                 }),
-                (Some(only), None) | (None, Some(only)) => Some(only),
-                (None, None) => None,
             }
         }
     }
@@ -607,9 +702,10 @@ fn collect(node: &DockNode, out: &mut Vec<PaneId>) {
     match node {
         DockNode::Leaf(id) => out.push(*id),
         DockNode::Tabs { members, .. } => out.extend_from_slice(members),
-        DockNode::Split { first, second, .. } => {
-            collect(first, out);
-            collect(second, out);
+        DockNode::Split { children, .. } => {
+            for c in children {
+                collect(c, out);
+            }
         }
     }
 }
@@ -629,9 +725,10 @@ fn stack_in(node: &mut DockNode, onto: PaneId, new_id: PaneId) {
             *active = members.len() - 1;
         }
         DockNode::Tabs { .. } => {}
-        DockNode::Split { first, second, .. } => {
-            stack_in(first, onto, new_id);
-            stack_in(second, onto, new_id);
+        DockNode::Split { children, .. } => {
+            for c in children.iter_mut() {
+                stack_in(c, onto, new_id);
+            }
         }
     }
 }
@@ -645,9 +742,10 @@ fn activate_in(node: &mut DockNode, member: PaneId) {
                 *active = pos;
             }
         }
-        DockNode::Split { first, second, .. } => {
-            activate_in(first, member);
-            activate_in(second, member);
+        DockNode::Split { children, .. } => {
+            for c in children.iter_mut() {
+                activate_in(c, member);
+            }
         }
     }
 }
@@ -657,9 +755,10 @@ fn collect_groups(node: &DockNode, out: &mut Vec<(Vec<PaneId>, usize)>) {
     match node {
         DockNode::Leaf(_) => {}
         DockNode::Tabs { members, active } => out.push((members.clone(), *active)),
-        DockNode::Split { first, second, .. } => {
-            collect_groups(first, out);
-            collect_groups(second, out);
+        DockNode::Split { children, .. } => {
+            for c in children {
+                collect_groups(c, out);
+            }
         }
     }
 }
@@ -684,14 +783,15 @@ mod tests {
         let l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.3,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Split {
-                    dir: SplitDir::Horizontal,
-                    fraction: 0.5,
-                    first: Box::new(DockNode::Leaf(PaneId(2))),
-                    second: Box::new(DockNode::Leaf(PaneId(3))),
-                }),
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Split {
+                        dir: SplitDir::Horizontal,
+                        children: vec![DockNode::Leaf(PaneId(2)), DockNode::Leaf(PaneId(3))],
+                        weights: vec![1.0, 1.0],
+                    },
+                ],
+                weights: vec![0.3, 0.7],
             }),
         };
         assert_eq!(l.pane_ids(), vec![PaneId(1), PaneId(2), PaneId(3)]);
@@ -713,6 +813,27 @@ mod tests {
     }
 
     #[test]
+    fn child_rects_reparte_por_pesos_horizontal() {
+        let rects = child_rects(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 800.0,
+                h: 600.0,
+            },
+            SplitDir::Horizontal,
+            &[1.0, 2.0, 1.0],
+        );
+        assert_eq!(rects.len(), 3);
+        assert!((rects[0].w - 198.0).abs() < 1.0, "1º ~198: {}", rects[0].w);
+        assert!((rects[1].w - 396.0).abs() < 1.0, "2º ~396: {}", rects[1].w);
+        assert!((rects[2].w - 198.0).abs() < 1.0, "3º ~198: {}", rects[2].w);
+        assert!(rects[1].x > rects[0].x + rects[0].w - 0.1);
+        assert!(rects[2].x > rects[1].x + rects[1].w - 0.1);
+        assert!(rects.iter().all(|r| (r.h - 600.0).abs() < 0.01));
+    }
+
+    #[test]
     fn pane_rects_un_panel_ocupa_todo() {
         let l = SerializableDockLayout::single(PaneId(1));
         let rects = l.pane_rects(Rect {
@@ -731,9 +852,8 @@ mod tests {
         let l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.25,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Leaf(PaneId(2))),
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![0.25, 0.75],
             }),
         };
         let rects = l.pane_rects(Rect {
@@ -754,9 +874,8 @@ mod tests {
         let l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Vertical,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Leaf(PaneId(2))),
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
             }),
         };
         let rects = l.pane_rects(Rect {
@@ -772,13 +891,12 @@ mod tests {
     }
 
     #[test]
-    fn split_handles_y_set_fraction() {
+    fn split_handles_y_set_divider() {
         let mut l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Leaf(PaneId(2))),
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
             }),
         };
         let area = Rect {
@@ -794,7 +912,7 @@ mod tests {
         assert!((h.rect.x - 398.0).abs() < 3.0);
         assert!((h.rect.h - 600.0).abs() < 0.01);
         let path = h.path.clone();
-        l.set_fraction(&path, 0.25);
+        l.set_divider(&path, 0, 0.25);
         let r1 = l
             .pane_rects(area)
             .iter()
@@ -805,67 +923,119 @@ mod tests {
     }
 
     #[test]
-    fn fraction_at_mide_dentro_del_subrect_del_split() {
-        // Layout: split horizontal raíz al 50%; el segundo hijo es OTRO split horizontal.
-        // El handle del split ANIDADO vive en la mitad derecha [400..800]. Poner el puntero en
-        // x=600 (el centro de esa mitad) debe dar fraction ~0.5 del SUB-rect, no ~0.75 del total.
+    fn split_handles_uno_por_divisor() {
         let l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Split {
-                    dir: SplitDir::Horizontal,
-                    fraction: 0.5,
-                    first: Box::new(DockNode::Leaf(PaneId(2))),
-                    second: Box::new(DockNode::Leaf(PaneId(3))),
-                }),
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Leaf(PaneId(2)),
+                    DockNode::Leaf(PaneId(3)),
+                ],
+                weights: vec![1.0, 1.0, 1.0],
             }),
         };
         let area = Rect {
             x: 0.0,
             y: 0.0,
-            w: 800.0,
+            w: 900.0,
             h: 600.0,
         };
-        // El handle anidado es el segundo (path = [Second]).
-        let handles = l.split_handles(area);
-        let nested = handles
-            .iter()
-            .find(|h| h.path == vec![SplitStep::Second])
-            .unwrap();
-        let (f, bar) = l.fraction_at(&nested.path, area, 600.0, 300.0).unwrap();
-        assert!(
-            (f - 0.5).abs() < 0.02,
-            "fraction relativa al sub-rect, no al total: {f}"
-        );
-        assert!(
-            (bar.x - 598.0).abs() < 3.0,
-            "la barra-fantasma cae en x~600: {}",
-            bar.x
-        );
-        // Clamp en los extremos.
-        let (fmin, _) = l.fraction_at(&nested.path, area, 0.0, 300.0).unwrap();
-        assert!((fmin - 0.05).abs() < 0.001, "clamp mínimo");
-        // Ruta a una hoja → None.
-        assert!(l
-            .fraction_at(&[SplitStep::First], area, 100.0, 100.0)
-            .is_none());
+        let hs = l.split_handles(area);
+        assert_eq!(hs.len(), 2, "3 hijos → 2 divisores");
+        assert_eq!(hs[0].divider, 0);
+        assert_eq!(hs[1].divider, 1);
+        assert!(hs[0].rect.x < hs[1].rect.x);
     }
 
     #[test]
-    fn set_fraction_clampa() {
+    fn divider_at_mide_local_al_par() {
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Leaf(PaneId(2)),
+                    DockNode::Leaf(PaneId(3)),
+                ],
+                weights: vec![1.0, 1.0, 1.0],
+            }),
+        };
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 900.0,
+            h: 600.0,
+        };
+        let (f, bar) = l.divider_at(&[], 1, area, 600.0, 300.0).unwrap();
+        assert!((f - 0.5).abs() < 0.05, "frac local ~0.5: {f}");
+        assert!(
+            (bar.x - 598.0).abs() < 6.0,
+            "barra cerca de x~600: {}",
+            bar.x
+        );
+        let (fmin, _) = l.divider_at(&[], 1, area, 0.0, 300.0).unwrap();
+        assert!((fmin - 0.05).abs() < 0.001);
+        assert!(l.divider_at(&[], 9, area, 100.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn set_divider_solo_afecta_a_los_dos_vecinos() {
         let mut l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Leaf(PaneId(2))),
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Leaf(PaneId(2)),
+                    DockNode::Leaf(PaneId(3)),
+                ],
+                weights: vec![1.0, 1.0, 1.0],
             }),
         };
-        l.set_fraction(&[], 2.0);
-        if let Some(DockNode::Split { fraction, .. }) = &l.root {
-            assert!(*fraction <= 0.95 && *fraction >= 0.05);
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 900.0,
+            h: 600.0,
+        };
+        let w2_antes = l
+            .pane_rects(area)
+            .iter()
+            .find(|(id, _)| *id == PaneId(3))
+            .unwrap()
+            .1
+            .w;
+        l.set_divider(&[], 0, 0.1);
+        let rects = l.pane_rects(area);
+        let w0 = rects.iter().find(|(id, _)| *id == PaneId(1)).unwrap().1.w;
+        let w1 = rects.iter().find(|(id, _)| *id == PaneId(2)).unwrap().1.w;
+        let w2 = rects.iter().find(|(id, _)| *id == PaneId(3)).unwrap().1.w;
+        assert!(w0 < w1);
+        assert!(
+            (w2 - w2_antes).abs() < 1.0,
+            "el hijo 2 (no vecino) no cambia: {w2} vs {w2_antes}"
+        );
+    }
+
+    #[test]
+    fn set_divider_clampa() {
+        let mut l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
+            }),
+        };
+        let pair_antes = 2.0; // 1.0 + 1.0
+        l.set_divider(&[], 0, 2.0);
+        if let Some(DockNode::Split { weights, .. }) = &l.root {
+            assert_eq!(weights.len(), 2);
+            assert!(weights[0] > 0.0 && weights[1] > 0.0, "ninguno domina 100%");
+            assert!(
+                (weights[0] + weights[1] - pair_antes).abs() < 0.001,
+                "el par sigue sumando lo mismo: {:?}",
+                weights
+            );
         } else {
             panic!("raíz debe seguir siendo split");
         }
@@ -877,12 +1047,17 @@ mod tests {
         l.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(2));
         assert_eq!(l.pane_ids(), vec![PaneId(1), PaneId(2)]);
         if let Some(DockNode::Split {
-            dir, first, second, ..
+            dir,
+            children,
+            weights,
         }) = &l.root
         {
             assert_eq!(*dir, SplitDir::Horizontal);
-            assert_eq!(**first, DockNode::Leaf(PaneId(1)));
-            assert_eq!(**second, DockNode::Leaf(PaneId(2)));
+            assert_eq!(
+                children.as_slice(),
+                [DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))]
+            );
+            assert_eq!(weights.len(), 2);
         } else {
             panic!("raíz debe ser split");
         }
@@ -893,9 +1068,8 @@ mod tests {
         let mut l = SerializableDockLayout {
             root: Some(DockNode::Split {
                 dir: SplitDir::Horizontal,
-                fraction: 0.5,
-                first: Box::new(DockNode::Leaf(PaneId(1))),
-                second: Box::new(DockNode::Leaf(PaneId(2))),
+                children: vec![DockNode::Leaf(PaneId(1)), DockNode::Leaf(PaneId(2))],
+                weights: vec![1.0, 1.0],
             }),
         };
         l.remove_leaf(PaneId(1));
@@ -1017,15 +1191,16 @@ mod tests {
         };
         l.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(9));
         // El grupo entero queda en el primer lado; el panel nuevo en el segundo.
-        if let Some(DockNode::Split { first, second, .. }) = &l.root {
+        if let Some(DockNode::Split { children, .. }) = &l.root {
+            assert_eq!(children.len(), 2);
             assert_eq!(
-                **first,
+                children[0],
                 DockNode::Tabs {
                     members: vec![PaneId(1), PaneId(2)],
                     active: 0,
                 }
             );
-            assert_eq!(**second, DockNode::Leaf(PaneId(9)));
+            assert_eq!(children[1], DockNode::Leaf(PaneId(9)));
         } else {
             panic!("la raíz debe ser un split");
         }
@@ -1106,5 +1281,39 @@ mod tests {
         let json = serde_json::to_string(&l).unwrap();
         let back: SerializableDockLayout = serde_json::from_str(&json).unwrap();
         assert_eq!(l, back);
+    }
+
+    #[test]
+    fn round_trip_serde_con_split_nario() {
+        let l = SerializableDockLayout {
+            root: Some(DockNode::Split {
+                dir: SplitDir::Horizontal,
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Leaf(PaneId(2)),
+                    DockNode::Leaf(PaneId(3)),
+                ],
+                weights: vec![1.0, 2.0, 1.0],
+            }),
+        };
+        let json = serde_json::to_string(&l).unwrap();
+        let back: SerializableDockLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(l, back);
+    }
+
+    #[test]
+    fn migra_split_binario_viejo_a_pesos() {
+        let viejo = r#"{"root":{"Split":{"dir":"Horizontal","fraction":0.25,"first":{"Leaf":1},"second":{"Leaf":2}}}}"#;
+        let l: SerializableDockLayout = serde_json::from_str(viejo).unwrap();
+        if let Some(DockNode::Split {
+            children, weights, ..
+        }) = &l.root
+        {
+            assert_eq!(children.len(), 2);
+            assert!((weights[0] - 0.25).abs() < 0.001);
+            assert!((weights[1] - 0.75).abs() < 0.001);
+        } else {
+            panic!("debe migrar a Split N-ario");
+        }
     }
 }
