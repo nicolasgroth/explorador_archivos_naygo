@@ -242,6 +242,34 @@ fn main() -> Result<(), slint::PlatformError> {
             c.config.save();
         }
     }
+
+    // Hotkey global (mostrar/ocultar Naygo desde cualquier app). El registro se mantiene vivo en
+    // este slot durante toda la ejecución (drop = se libera). `hotkey_id` guarda el id para
+    // reconocer sus eventos en el tick. (El re-registro en caliente al cambiar la config llega en
+    // la task siguiente; por ahora solo registro inicial.)
+    let global_hotkey_slot: Rc<RefCell<Option<naygo_platform::global_hotkey::GlobalHotkey>>> =
+        Rc::new(RefCell::new(None));
+    let hotkey_id: Rc<std::cell::Cell<Option<u32>>> = Rc::new(std::cell::Cell::new(None));
+
+    #[cfg(windows)]
+    {
+        let s = ctrl.borrow().config.settings.clone();
+        if s.global_hotkey_enabled {
+            match naygo_platform::global_hotkey::register(&s.global_hotkey) {
+                Ok(h) => {
+                    hotkey_id.set(Some(h.id()));
+                    *global_hotkey_slot.borrow_mut() = Some(h);
+                    logging::log_line("hotkey global registrado");
+                }
+                Err(e) => {
+                    // Al arrancar, un fallo NO muestra modal (para no molestar cada arranque):
+                    // se loguea y el hotkey queda inactivo. El usuario podrá recapturar en Config.
+                    logging::log_line(&format!("no se pudo registrar el hotkey global: {e}"));
+                }
+            }
+        }
+    }
+
     // Estado de la paleta de comandos (Ctrl+P): la lista de comandos vigente mientras está
     // abierta (la arma `build_palette_commands` al abrir) y, en paralelo, el índice del COMANDO
     // que cada FILA visible ejecuta (lo llena `palette_items_from_matches`). El callback
@@ -1173,6 +1201,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let drag_rx = drag_rx.clone();
         let drop_guard = drop_guard.clone();
         let tray = tray.clone();
+        let hotkey_id = hotkey_id.clone();
+        let global_hotkey_slot = global_hotkey_slot.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -1187,6 +1217,10 @@ fn main() -> Result<(), slint::PlatformError> {
             let drag_rx = drag_rx.clone();
             let drop_guard = drop_guard.clone();
             let tray = tray.clone();
+            let hotkey_id = hotkey_id.clone();
+            // Mantener vivo el registro del hotkey (drop = se libera): capturarlo aquí, aunque
+            // no se lea directo, garantiza que el slot sobreviva mientras el timer siga vivo.
+            let _global_hotkey_slot = global_hotkey_slot.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
@@ -1482,6 +1516,15 @@ fn main() -> Result<(), slint::PlatformError> {
                                     ctrl.borrow().save_session();
                                     let _ = slint::quit_event_loop();
                                 }
+                            }
+                        }
+                    }
+                    // Hotkey global: ¿se presionó? Alterna mostrar/ocultar Naygo.
+                    #[cfg(windows)]
+                    if let Some(id) = hotkey_id.get() {
+                        if naygo_platform::global_hotkey::was_pressed(id) {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                toggle_window_visibility(&ui, tray_active);
                             }
                         }
                     }
@@ -5813,6 +5856,36 @@ fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
         RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
         _ => None,
     }
+}
+
+/// Alterna la visibilidad de Naygo para el hotkey global: si Naygo NO es la ventana activa
+/// (minimizada o detrás de otras) la muestra + trae al frente; si YA es la ventana activa, la
+/// minimiza (solo si el tray está activo — si no, no la esconde, para no dejarla inalcanzable:
+/// sin tray no hay otro punto de acceso). Coherente con `should_quit_on_close`.
+///
+/// Se usa `set_minimized(true)` y NO `window().hide()` a propósito: `hide()` decrementa el
+/// contador interno de ventanas visibles de Slint y, si esta es la única ventana visible (el
+/// caso normal: la ventana de Config solo se muestra al abrirla), dispara `quit_event_loop()` —
+/// terminaría la app en vez de dejarla en bandeja. Es el mismo motivo por el que el arranque
+/// minimizado (`start_in_tray`, más arriba) usa `set_minimized` en vez de `hide()`.
+#[cfg(windows)]
+fn toggle_window_visibility(ui: &AppWindow, tray_active: bool) {
+    let Some(hwnd) = naygo_hwnd(ui) else {
+        let _ = ui.show();
+        return;
+    };
+    let is_foreground = naygo_platform::window::is_foreground(hwnd);
+    if is_foreground && tray_active {
+        ui.window().set_minimized(true);
+    } else {
+        let _ = ui.show();
+        ui.window().set_minimized(false);
+        naygo_platform::window::bring_to_front(hwnd);
+    }
+}
+#[cfg(not(windows))]
+fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
+    let _ = ui.show();
 }
 
 /// El `PreviewVm` actual a partir del último resultado guardado en el controlador. El
