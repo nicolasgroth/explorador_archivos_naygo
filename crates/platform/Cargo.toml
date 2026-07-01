@@ -34,6 +34,8 @@ windows = { workspace = true, features = [
 # El macro `#[implement]` genera rutas absolutas `::windows_core::...`; necesitamos el
 # crate disponible por ese nombre como dependencia directa.
 windows-core = "0.62"
+# Hotkey global del sistema (RegisterHotKey). MIT, mismos autores que tray-icon.
+global-hotkey = "0.6"
 
 [dependencies]
 naygo-core = { path = "../core" }

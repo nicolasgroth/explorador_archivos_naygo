@@ -17,6 +17,7 @@ pub mod drive_space;
 pub mod drives;
 pub mod drop_target;
 pub mod eject;
+pub mod global_hotkey;
 pub mod locale;
 pub mod open;
 pub mod time;
