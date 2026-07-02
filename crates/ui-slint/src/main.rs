@@ -230,6 +230,10 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // Proveedor de metadata de versión de exe/dll (Win32 VerQueryValue). Se registra una
+    // sola vez al arrancar, antes de que la UI pueda pedir metadata de un archivo.
+    #[cfg(windows)]
+    naygo_core::metadata::register_provider(Box::new(naygo_platform::exe_meta::ExeMeta));
     // El registro (HKCU\...\Run) es la fuente de verdad de `autostart`, no settings.json: el
     // instalador puede crear la entrada Run sin pasar por la UI (o el usuario puede borrarla a
     // mano). Sincronizamos el ajuste guardado contra el registro real al arrancar.
