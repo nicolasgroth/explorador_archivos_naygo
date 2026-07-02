@@ -378,6 +378,17 @@ impl WorkspaceCtrl {
         })
     }
 
+    /// Status del cálculo de tamaño SOLO si el job en curso/terminado corresponde a `folder`. Lo usa
+    /// el Inspector: si el usuario cambió el foco a OTRA carpeta, el resultado viejo no debe pegarse
+    /// a la nueva; devolviendo `None` en ese caso, el Inspector vuelve a mostrar el botón «Calcular».
+    pub fn size_status_for(&self, folder: &std::path::Path) -> Option<String> {
+        let job = self.size_job.as_ref()?;
+        if job.target != folder {
+            return None;
+        }
+        self.size_status()
+    }
+
     // ----- Búsqueda recursiva (Ctrl+F / lupa) ----------------------------------------------
 
     /// Lanza una búsqueda recursiva de `query` bajo la carpeta del panel Files activo. Cancela y

@@ -290,13 +290,18 @@ component OpButton inherits Rectangle {
 
     height: 30px;
     border-radius: 8px;
+    // El botón se ajusta a su CONTENIDO (ícono + texto), no se estira: dentro de un
+    // HorizontalLayout, un Rectangle se estiraría por defecto y "Pausar"/"Saltar" saldrían anchos
+    // y descuadrados. `horizontal-stretch: 0` lo evita; el ancho lo fija el layout interno.
+    horizontal-stretch: 0;
+    width: content-layout.preferred-width;
     // Primario: chip de fondo tenue que se oscurece en hover. Secundario/solo-ícono: transparente en
     // reposo, fondo tenue al pasar el mouse.
     background: root.variant == 0
         ? (btn-touch.has-hover ? Theme.selection-bg.darker(15%) : Theme.selection-bg)
         : (btn-touch.has-hover ? Theme.selection-bg : transparent);
 
-    HorizontalLayout {
+    content-layout := HorizontalLayout {
         padding-left: root.variant == 2 ? 6px : 12px;
         padding-right: root.variant == 2 ? 6px : 12px;
         spacing: 6px;

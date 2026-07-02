@@ -51,6 +51,18 @@ slint::include_modules!();
 /// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
+/// Versión completa mostrada al usuario: `X.Y.Z+build.YYYYMMDDHHMM`. El sufijo `+build.<id>` es el
+/// metadato de build de semver (no altera la versión semver base); lo estampa `build.rs` en
+/// `NAYGO_BUILD_ID` en cada compilación, así cada build es identificable sin ambigüedad al probar.
+/// Si el id es "unknown" (no se pudo leer la hora en el build), se muestra solo la versión base.
+fn naygo_full_version() -> String {
+    let base = env!("CARGO_PKG_VERSION");
+    match option_env!("NAYGO_BUILD_ID") {
+        Some(id) if id != "unknown" && !id.is_empty() => format!("{base}+build.{id}"),
+        _ => base.to_string(),
+    }
+}
+
 /// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
 struct PaneModels {
     rows: Rc<VecModel<RowData>>,
@@ -218,7 +230,7 @@ fn main() -> Result<(), slint::PlatformError> {
             .set_title("Naygo")
             .set_description(format!(
                 "Naygo v{}\nNicolás Groth / ISGroth · MIT",
-                env!("CARGO_PKG_VERSION")
+                naygo_full_version()
             ))
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
@@ -226,6 +238,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let ui = AppWindow::new()?;
+    // Título de la ventana con la versión-build (p. ej. "Naygo — 0.3.0+build.202607021614"): así el
+    // build en prueba se distingue de un vistazo en la barra de título y en la barra de tareas.
+    ui.set_window_title(format!("Naygo — {}", naygo_full_version()).into());
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
@@ -487,10 +502,12 @@ fn main() -> Result<(), slint::PlatformError> {
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
             let info = c.inspector_info();
             let mut inspector = to_inspector_vm(info.clone());
-            // Carpeta: el tamaño no viene del listado, se pide con el botón "Calcular" (F3
-            // hace lo mismo). Si hay un job vivo/terminado, refleja su estado en vivo aquí.
+            // Carpeta: el tamaño no viene del listado, se pide con el botón "Calcular" (F3 hace lo
+            // mismo). Solo se refleja el resultado si el cálculo corresponde a ESTA carpeta (la
+            // enfocada, `info.path`): si el usuario cambió de foco a otra carpeta, el resultado viejo
+            // NO se pega y el Inspector vuelve a mostrar el botón «Calcular» (size_status_for → None).
             if inspector.is_dir {
-                if let Some(txt) = c.size_status() {
+                if let Some(txt) = c.size_status_for(std::path::Path::new(info.path.as_str())) {
                     inspector.size_calc = SharedString::from(txt);
                 }
             }
@@ -1234,6 +1251,9 @@ fn main() -> Result<(), slint::PlatformError> {
         // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log: sin este
         // aviso el fallo era invisible. Ya no afecta al cierre (la X respeta close_to_tray aunque
         // el tray falle), pero explica por qué no aparece el ícono en la bandeja.
+        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log (sin este aviso
+        // el fallo era invisible). No afecta al cierre (la X respeta close_to_tray aunque el tray
+        // falle), pero explica por qué no aparece el ícono de bandeja.
         if t.is_none() {
             crate::logging::log_line(
                 "[tray] tray_enabled=true pero la creación del tray falló; sin ícono de bandeja",
@@ -2723,7 +2743,7 @@ fn main() -> Result<(), slint::PlatformError> {
             cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(editing_gs))));
             cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(editing_bs))));
             cfg.set_config_dir(config_dir_str.into());
-            cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
+            cfg.set_app_version(naygo_full_version().into());
             // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
             // versión actual. Se setea una sola vez (no cambia en runtime).
             {
@@ -5819,12 +5839,23 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
-            if tray::should_quit_on_close(close_to_tray, tray_active) {
+            let quit = tray::should_quit_on_close(close_to_tray, tray_active);
+            if quit {
+                // Salir de verdad: terminar el loop y dejar que Slint oculte la ventana.
                 let _ = slint::quit_event_loop();
+                slint::CloseRequestResponse::HideWindow
+            } else {
+                // Ir a la BANDEJA sin matar la app. CLAVE: NO se puede responder `HideWindow` — al
+                // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y TERMINA
+                // el event loop (el proceso muere). Por eso se responde `KeepWindowShown` (mantiene
+                // la app viva) y se minimiza la ventana a mano con `set_minimized(true)`, que NO toca
+                // ese contador (mismo mecanismo que el toggle del hotkey global). Así la X esconde la
+                // ventana y el proceso sigue corriendo en la bandeja.
+                if let Some(ui) = ui_weak_close.upgrade() {
+                    ui.window().set_minimized(true);
+                }
+                slint::CloseRequestResponse::KeepWindowShown
             }
-            // En ambos casos HideWindow: al salir, el loop ya está marcado para terminar; al ir
-            // a bandeja, la ventana se oculta y el proceso sigue.
-            slint::CloseRequestResponse::HideWindow
         });
     }
 

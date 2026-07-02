@@ -413,7 +413,10 @@ component HistoryCaret inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "Naygo";
+    // Título con la versión-build (lo setea Rust con `naygo_full_version()`), así el build en prueba
+    // se identifica de un vistazo en la barra de título. Default "Naygo" por si Rust no lo setea.
+    in property <string> window-title: "Naygo";
+    title: root.window-title;
     preferred-width: 1000px;
     preferred-height: 640px;
     // Tope de tamaño explícito y amplio: sin esto, el max-width que Slint computa del árbol de

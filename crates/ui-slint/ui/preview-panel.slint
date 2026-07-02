@@ -10,29 +10,6 @@ import { PreviewVm, MetaFieldVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
-// Una fila etiqueta/valor de metadata (dimensiones, versión), consistente con el inspector.
-component MetaRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> value;
-    spacing: 8px;
-    padding: 2px;
-    Text {
-        text: root.label;
-        color: Theme.text-dim;
-        font-weight: 700;
-        width: 84px;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
-    Text {
-        text: root.value;
-        color: Theme.text;
-        vertical-alignment: center;
-        horizontal-stretch: 1;
-        overflow: elide;
-    }
-}
-
 // Ícono "abrir con el programa del sistema": un rectángulo con una flecha saliente, dibujado con
 // Path (no glifo de fuente, que bajo render por software puede no existir y salir invisible).
 component OpenExternalIcon inherits Rectangle {
@@ -131,14 +108,8 @@ export component PreviewPanel inherits Rectangle {
             }
         }
 
-        // Metadata extra por tipo (imagen: dimensiones; exe/dll: versión). La lee un worker async;
-        // mientras tanto se muestra "Leyendo…". Se pinta entre la barra de título y el contenido.
-        if root.view.meta-loading: Text {
-            text: Tr.meta-loading;
-            color: Theme.text-dim;
-            font-size: 11px;
-        }
-        for field in root.view.meta: MetaRow { label: field.label; value: field.value; }
+        // (La metadata por tipo ya se muestra en Propiedades; no se repite en la Vista previa para
+        // no duplicar la misma información — Nicolás lo pidió así.)
 
         if root.view.mode == 0: Text {
             text: Tr.preview-select;
