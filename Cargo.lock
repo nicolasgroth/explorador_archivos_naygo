@@ -3425,6 +3425,7 @@ version = "0.3.0"
 dependencies = [
  "image",
  "lofty",
+ "quick-xml",
  "regex",
  "resvg",
  "serde",

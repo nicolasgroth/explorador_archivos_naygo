@@ -11,6 +11,7 @@ use std::path::Path;
 
 pub mod audio_meta;
 pub mod image_meta;
+pub mod office_meta;
 
 /// Un campo de metadata: la clave i18n de su etiqueta + el valor ya formateado.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +47,7 @@ fn ensure_core_providers() {
     ONCE.call_once(|| {
         register_provider(Box::new(image_meta::ImageMeta));
         register_provider(Box::new(audio_meta::AudioMeta));
+        register_provider(Box::new(office_meta::OfficeMeta));
     });
 }
 
