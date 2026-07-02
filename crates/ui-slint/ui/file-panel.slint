@@ -504,26 +504,34 @@ export component FilePanel inherits FocusScope {
                 }
                 // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela, perder foco
                 // (clic afuera) vuelve a los breadcrumbs.
-                if root.editing: path-edit := LineEdit {
-                    text: root.edit-text;
-                    placeholder-text: "C:\\…";
-                    // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca el
-                    // LineEdit y el "perder foco" nunca tendría foco que perder).
-                    init => { self.focus(); }
-                    edited(t) => { root.path-edit-changed(root.pane-id, t); }
-                    accepted(t) => { root.path-edit-commit(root.pane-id, t); }
-                    // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
-                    changed has-focus => {
-                        if (!self.has-focus) {
-                            root.path-edit-cancel(root.pane-id);
+                // Envuelto en HorizontalLayout (mismo patrón que los breadcrumbs de arriba) para
+                // que el texto quede alineado a la izquierda; el estilo fluent centra el texto
+                // de un LineEdit suelto sin layout.
+                if root.editing: HorizontalLayout {
+                    padding-left: 4px;
+                    path-edit := LineEdit {
+                        horizontal-stretch: 1;
+                        text: root.edit-text;
+                        placeholder-text: "C:\\…";
+                        // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca
+                        // el LineEdit y el "perder foco" nunca tendría foco que perder). Además
+                        // selecciona todo el texto para que escribir reemplace la ruta completa.
+                        init => { self.focus(); self.select-all(); }
+                        edited(t) => { root.path-edit-changed(root.pane-id, t); }
+                        accepted(t) => { root.path-edit-commit(root.pane-id, t); }
+                        // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
+                        changed has-focus => {
+                            if (!self.has-focus) {
+                                root.path-edit-cancel(root.pane-id);
+                            }
                         }
-                    }
-                    key-pressed(ev) => {
-                        if (ev.text == Key.Escape) {
-                            root.path-edit-cancel(root.pane-id);
-                            return accept;
+                        key-pressed(ev) => {
+                            if (ev.text == Key.Escape) {
+                                root.path-edit-cancel(root.pane-id);
+                                return accept;
+                            }
+                            return reject;
                         }
-                        return reject;
                     }
                 }
             }
