@@ -285,6 +285,7 @@ where
     tr.set_inspector_name(c.t("slint.inspector.name").into());
     tr.set_inspector_kind(c.t("slint.inspector.kind").into());
     tr.set_inspector_size(c.t("slint.inspector.size").into());
+    tr.set_inspector_calc_size(c.t("slint.inspector.calc_size").into());
     tr.set_inspector_modified(c.t("slint.inspector.modified").into());
     tr.set_inspector_created(c.t("slint.inspector.created").into());
     tr.set_inspector_path(c.t("slint.inspector.path").into());

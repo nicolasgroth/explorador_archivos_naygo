@@ -609,6 +609,7 @@
   "slint.inspector.name": "名前",
   "slint.inspector.kind": "種類",
   "slint.inspector.size": "サイズ",
+  "slint.inspector.calc_size": "計算",
   "slint.inspector.modified": "更新日時",
   "slint.inspector.created": "作成日時",
   "slint.inspector.path": "パス",

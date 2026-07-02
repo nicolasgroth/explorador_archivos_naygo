@@ -32,6 +32,7 @@ export component InspectorPanel inherits Rectangle {
     in property <bool> active;
     in property <InspectorVm> info;
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
+    callback calc-size();    // pedir el cálculo del tamaño de la carpeta enfocada
     background: Theme.panel-bg;
     border-width: root.active ? 1.5px : 0px;
     border-color: Theme.accent;
@@ -55,7 +56,42 @@ export component InspectorPanel inherits Rectangle {
             spacing: 2px;
             PropRow { label: Tr.inspector-name; value: root.info.name; }
             PropRow { label: Tr.inspector-kind; value: root.info.kind; }
-            PropRow { label: Tr.inspector-size; value: root.info.size; }
+            if !root.info.is-dir: PropRow { label: Tr.inspector-size; value: root.info.size; }
+            if root.info.is-dir: HorizontalLayout {
+                spacing: 8px;
+                padding: 2px;
+                Text {
+                    text: Tr.inspector-size;
+                    color: Theme.text-dim;
+                    font-weight: 700;
+                    width: 84px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                if root.info.size-calc != "": Text {
+                    text: root.info.size-calc;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if root.info.size-calc == "": Rectangle {
+                    width: 90px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: calc-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    Text {
+                        text: Tr.inspector-calc-size;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        font-size: 12px;
+                    }
+                    calc-touch := TouchArea { clicked => { root.calc-size(); } }
+                }
+            }
             PropRow { label: Tr.inspector-modified; value: root.info.modified; }
             PropRow { label: Tr.inspector-created; value: root.info.created; }
             PropRow { label: Tr.inspector-path; value: root.info.path; }

@@ -609,6 +609,7 @@
   "slint.inspector.name": "Nombre",
   "slint.inspector.kind": "Tipo",
   "slint.inspector.size": "Tamaño",
+  "slint.inspector.calc_size": "Calcular",
   "slint.inspector.modified": "Modificado",
   "slint.inspector.created": "Creado",
   "slint.inspector.path": "Ruta",

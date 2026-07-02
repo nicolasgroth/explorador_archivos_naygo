@@ -321,7 +321,7 @@ impl WorkspaceCtrl {
     }
 
     /// Fragmento de barra de estado del cálculo de tamaño en curso/terminado (vacío si no hay).
-    pub(super) fn size_status(&self) -> Option<String> {
+    pub fn size_status(&self) -> Option<String> {
         let job = self.size_job.as_ref()?;
         let name = job
             .target

@@ -609,6 +609,7 @@
   "slint.inspector.name": "이름",
   "slint.inspector.kind": "형식",
   "slint.inspector.size": "크기",
+  "slint.inspector.calc_size": "계산",
   "slint.inspector.modified": "수정한 날짜",
   "slint.inspector.created": "만든 날짜",
   "slint.inspector.path": "경로",

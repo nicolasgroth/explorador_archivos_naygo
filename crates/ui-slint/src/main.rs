@@ -481,7 +481,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 .collect();
             let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
-            let inspector = to_inspector_vm(c.inspector_info());
+            let mut inspector = to_inspector_vm(c.inspector_info());
+            // Carpeta: el tamaño no viene del listado, se pide con el botón "Calcular" (F3
+            // hace lo mismo). Si hay un job vivo/terminado, refleja su estado en vivo aquí.
+            if inspector.is_dir {
+                if let Some(txt) = c.size_status() {
+                    inspector.size_calc = SharedString::from(txt);
+                }
+            }
 
             // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
             // y para el submenú "Mover a…" del panel (lista de grupos destino).
@@ -4660,6 +4667,19 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    {
+        // Botón "Calcular" del Inspector: dispara el mismo cálculo async cancelable que F3
+        // sobre la carpeta enfocada/actual. `pump_sizes` (drenado en el tick) y `sync_rows`
+        // (vía `size_status`) se encargan de reflejar el progreso hasta que termine.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_calc_size(move || {
+            ctrl.borrow_mut().compute_size_active();
+            start_timer();
+            sync_rows();
+        });
+    }
     // --- Diálogos modales y panel de progreso de operaciones (F3) ---
     {
         let ctrl = ctrl.clone();
@@ -6392,5 +6412,7 @@ fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
         size: SharedString::from(i.size.as_str()),
         modified: SharedString::from(i.modified.as_str()),
         created: SharedString::from(i.created.as_str()),
+        is_dir: i.is_dir,
+        size_calc: SharedString::from(i.size_calc.as_str()),
     }
 }

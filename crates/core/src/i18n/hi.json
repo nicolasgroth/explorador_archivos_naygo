@@ -609,6 +609,7 @@
   "slint.inspector.name": "नाम",
   "slint.inspector.kind": "प्रकार",
   "slint.inspector.size": "आकार",
+  "slint.inspector.calc_size": "गणना करें",
   "slint.inspector.modified": "संशोधित",
   "slint.inspector.created": "निर्मित",
   "slint.inspector.path": "पथ",

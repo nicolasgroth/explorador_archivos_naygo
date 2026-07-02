@@ -552,6 +552,7 @@ export component AppWindow inherits Window {
     callback fav-move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
     callback preview-open(string);       // abrir el archivo previsualizado con el programa por defecto
     callback undo-entry(int);            // deshacer la entrada del historial
+    callback calc-size();                 // Inspector: pedir el cálculo del tamaño de la carpeta enfocada
     // Acciones multi-panel (toolbar):
     callback swap-panes();               // intercambiar el activo con el otro panel
     callback clone-pane();               // clonar la carpeta del activo en otro panel
@@ -1291,6 +1292,7 @@ export component AppWindow inherits Window {
                         active: p.active;
                         info: p.inspector;
                         focus-pane() => { root.activate(p.id); }
+                        calc-size() => { root.calc-size(); }
                     }
                     if p.purpose == 3: HistoryPanel {
                         width: 100%;

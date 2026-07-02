@@ -609,6 +609,7 @@
   "slint.inspector.name": "名称",
   "slint.inspector.kind": "类型",
   "slint.inspector.size": "大小",
+  "slint.inspector.calc_size": "计算",
   "slint.inspector.modified": "修改时间",
   "slint.inspector.created": "创建时间",
   "slint.inspector.path": "路径",

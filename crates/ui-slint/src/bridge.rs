@@ -264,6 +264,11 @@ pub struct InspectorInfo {
     pub size: String,
     pub modified: String,
     pub created: String,
+    /// El objeto es una carpeta (el tamaño no viene del listado; se calcula bajo demanda).
+    pub is_dir: bool,
+    /// Texto vivo del cálculo de tamaño de carpeta ("Calculando… X" / "X" / vacío si no se
+    /// ha pedido). Lo llena la UI desde `size_status`; `inspector_info` lo deja vacío.
+    pub size_calc: String,
 }
 
 /// Construye la info del inspector desde el `FilePaneState` del panel Files activo.
@@ -294,6 +299,8 @@ pub fn inspector_info(
         },
         modified: fmt_time(e.modified, date_format, tz_offset_secs),
         created: fmt_time(e.created, date_format, tz_offset_secs),
+        is_dir: e.kind == EntryKind::Directory,
+        size_calc: String::new(),
     }
 }
 
