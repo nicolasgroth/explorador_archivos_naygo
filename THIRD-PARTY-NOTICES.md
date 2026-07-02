@@ -47,6 +47,17 @@ lee cabeceras y etiquetas, nunca decodifica el audio. Sus dependencias (`byteord
 
 ---
 
+## Metadata de PDF (lopdf)
+
+La metadata de archivos PDF (`.pdf` — número de páginas, autor y título) se lee con
+[lopdf](https://github.com/J-F-Liu/lopdf) (licencia MIT). Es una implementación pura en Rust, sin
+dependencias nativas: solo parsea la estructura del documento (tabla de referencias cruzadas y el
+diccionario `/Info` del trailer), nunca renderiza ni extrae el contenido. Su parser (`nom`,
+`minimal-lexical`) y el resto de sus dependencias (`encoding_rs`, `weezl`, `rangemap`, `md-5`,
+`indexmap`, `flate2`) también son permisivas (MIT / Apache-2.0 / BSD-3-Clause).
+
+---
+
 ## Vista previa de archivos comprimidos (tar, flate2, miniz_oxide)
 
 La vista previa de `.tar`, `.tar.gz` y `.zip` usa:

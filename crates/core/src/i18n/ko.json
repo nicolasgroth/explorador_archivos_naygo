@@ -637,6 +637,7 @@
   "meta.word_count": "단어 수",
   "meta.sheet_count": "시트 수",
   "meta.slide_count": "슬라이드 수",
+  "meta.pages": "페이지 수",
   "meta.loading": "읽는 중…",
   "slint.history.empty": "아직 작업이 없습니다",
   "slint.history.undo": "실행 취소",

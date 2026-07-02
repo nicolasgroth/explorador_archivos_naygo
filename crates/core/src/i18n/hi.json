@@ -637,6 +637,7 @@
   "meta.word_count": "शब्द",
   "meta.sheet_count": "शीट",
   "meta.slide_count": "स्लाइड",
+  "meta.pages": "पृष्ठ",
   "meta.loading": "पढ़ा जा रहा है…",
   "slint.history.empty": "अभी तक कोई ऑपरेशन नहीं",
   "slint.history.undo": "पूर्ववत करें",

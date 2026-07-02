@@ -32,6 +32,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 lofty = "0.22"
 # Parseo de XML (docProps de los Office modernos). Puro-Rust, MIT.
 quick-xml = "0.39"
+# Metadata de PDF (páginas, autor, título). Puro-Rust, MIT.
+lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] }
 # Deps del generador de íconos (solo bajo feature gen-icons, no se incluyen en la app).
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }

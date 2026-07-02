@@ -637,6 +637,7 @@
   "meta.word_count": "単語数",
   "meta.sheet_count": "シート数",
   "meta.slide_count": "スライド数",
+  "meta.pages": "ページ数",
   "meta.loading": "読み込み中…",
   "slint.history.empty": "操作はまだありません",
   "slint.history.undo": "元に戻す",

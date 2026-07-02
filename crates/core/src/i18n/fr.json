@@ -637,6 +637,7 @@
   "meta.word_count": "Mots",
   "meta.sheet_count": "Feuilles",
   "meta.slide_count": "Diapositives",
+  "meta.pages": "Pages",
   "meta.loading": "Lecture…",
   "slint.history.empty": "Aucune opération pour l'instant",
   "slint.history.undo": "Annuler",
