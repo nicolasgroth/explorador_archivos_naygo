@@ -364,109 +364,113 @@ component DataCell inherits Rectangle {
     }
 }
 
-// Par etiqueta:valor en una línea (aún usado por OpCard hasta la Task 5).
-component DataLine inherits HorizontalLayout {
-    in property <string> caption;
-    in property <string> value;
-    spacing: 4px;
-    Text {
-        text: root.caption;
-        color: Theme.text-dim;
-        font-size: 11px;
-        vertical-alignment: center;
-    }
-    Text {
-        text: root.value;
-        color: Theme.text;
-        font-size: 11px;
-        font-weight: 600;
-        vertical-alignment: center;
-        overflow: elide;
-        horizontal-stretch: 1;
-    }
-}
-
 // Tarjeta de una operación EN CURSO.
 component OpCard inherits Rectangle {
     in property <OpRowVm> op;
+    in property <bool> animations-enabled: false;
     callback pause(int);
     callback resume(int);
     callback skip(int);
     callback cancel(int);
 
     background: Theme.row-bg;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 12px;
 
     VerticalLayout {
-        padding: 9px;
-        spacing: 5px;
+        padding: 14px;
+        spacing: 12px;
 
-        // Encabezado: etiqueta de la op + archivo en curso.
+        // Cabecera: chip de tipo + verbo/archivo + % grande.
         HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: root.op.label;
-                color: Theme.text;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
-                overflow: elide;
+            spacing: 9px;
+            OpKindChip {
+                op-kind: root.op.op-kind;
+                y: (parent.height - self.height) / 2;
             }
-            Rectangle { horizontal-stretch: 1; }
-            Text {
-                text: round(root.op.percent) + "%";
-                color: Theme.accent;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                Text {
+                    text: root.op.op-kind == 0 ? Tr.ops-verb-copy : root.op.op-kind == 1 ? Tr.ops-verb-move : root.op.op-kind == 2 ? Tr.ops-verb-delete : root.op.op-kind == 3 ? Tr.ops-verb-compress : root.op.op-kind == 4 ? Tr.ops-verb-extract : Tr.ops-verb-other;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 500;
+                    overflow: elide;
+                }
+                if root.op.current-file != "": Text {
+                    text: root.op.current-file;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    overflow: elide;
+                }
             }
-        }
-        if root.op.current-file != "": Text {
-            text: root.op.current-file;
-            color: Theme.text-dim;
-            font-size: 11px;
-            overflow: elide;
+            HorizontalLayout {
+                spacing: 1px;
+                y: (parent.height - self.height) / 2;
+                Text {
+                    text: round(root.op.percent);
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "%";
+                    color: Theme.text-dim;
+                    font-size: 13px;
+                    vertical-alignment: bottom;
+                }
+            }
         }
 
-        // Barra de progreso (amarilla si está pausada, acento si avanza).
+        // Barra de progreso (amarilla si pausada, acento si avanza). `glow` solo si el usuario activó
+        // animaciones (brillo continuo — Task 7) y la op no está pausada.
         ProgressBar {
             percent: root.op.percent;
             fill: root.op.paused ? Theme.highlight : Theme.accent;
+            glow: root.animations-enabled && !root.op.paused;
         }
 
-        // Datos: copiado, velocidad, tiempos.
-        DataLine {
-            caption: Tr.ops-copied + ":";
-            value: root.op.bytes-done + " / " + root.op.bytes-total;
-        }
-        DataLine {
-            caption: Tr.ops-speed + ":";
-            value: root.op.speed != ""
-                ? root.op.speed + "  (" + Tr.ops-peak + " " + root.op.speed-peak + ")"
-                : "—";
-        }
+        // Datos en grilla 3+2. Fila de 3: transferido · velocidad · pico.
         HorizontalLayout {
-            spacing: 14px;
-            DataLine {
+            spacing: 8px;
+            DataCell {
                 horizontal-stretch: 1;
-                caption: Tr.ops-elapsed + ":";
+                caption: Tr.ops-copied;
+                value: root.op.bytes-done;
+                unit: "/ " + root.op.bytes-total;
+            }
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-speed;
+                value: root.op.speed != "" ? root.op.speed : "—";
+            }
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-peak;
+                value: root.op.speed-peak != "" ? root.op.speed-peak : "—";
+            }
+        }
+        // Fila de 2: transcurrido · restante.
+        HorizontalLayout {
+            spacing: 8px;
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-elapsed;
                 value: root.op.elapsed != "" ? root.op.elapsed : "—";
             }
-            DataLine {
+            DataCell {
                 horizontal-stretch: 1;
-                caption: Tr.ops-remaining + ":";
+                caption: Tr.ops-remaining;
                 value: root.op.eta != "" ? root.op.eta : "—";
             }
         }
 
-        // Botones de control.
+        // Controles: Pausar (chip) · Saltar (texto) · espaciador · X cancelar (solo ícono).
         HorizontalLayout {
-            spacing: 6px;
-            padding-top: 2px;
-            // Pausar / Reanudar según el estado.
+            spacing: 8px;
             OpButton {
+                variant: 0;
                 label: root.op.paused ? Tr.ops-resume : Tr.ops-pause;
                 show-pause: !root.op.paused;
                 show-play: root.op.paused;
@@ -479,13 +483,14 @@ component OpCard inherits Rectangle {
                 }
             }
             OpButton {
+                variant: 1;
                 label: Tr.ops-skip;
                 show-skip: true;
                 pressed => { root.skip(root.op.index); }
             }
             Rectangle { horizontal-stretch: 1; }
-            OpButton {
-                label: Tr.ops-cancel;
+            cancel-btn := OpButton {
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel(root.op.index); }
