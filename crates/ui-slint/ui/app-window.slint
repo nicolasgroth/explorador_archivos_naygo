@@ -594,6 +594,8 @@ export component AppWindow inherits Window {
     in property <int> op-queued-count;
     in property <int> op-history-count;
     in property <int> op-planning-count;
+    // ¿Encender las animaciones adicionales del panel de ops (brillo de la barra)? Config default: false.
+    in property <bool> op-animations-enabled: false;
     callback op-cancel(int);
     callback op-pause(int);
     callback op-resume(int);
@@ -1347,6 +1349,7 @@ export component AppWindow inherits Window {
                         queued-count: root.op-queued-count;
                         history-count: root.op-history-count;
                         planning-count: root.op-planning-count;
+                        animations-enabled: root.op-animations-enabled;
                         pause(i) => { root.op-pause(i); }
                         resume(i) => { root.op-resume(i); }
                         skip(i) => { root.op-skip(i); }

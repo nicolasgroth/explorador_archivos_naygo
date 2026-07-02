@@ -680,6 +680,17 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// ¿Activar animaciones adicionales de mayor costo (p. ej. el brillo de la barra del panel de operaciones)?
+    pub fn animations_enabled(&self) -> bool {
+        self.settings.animations_enabled
+    }
+
+    /// Activa/desactiva las animaciones adicionales y persiste.
+    pub fn set_animations_enabled(&mut self, v: bool) {
+        self.settings.animations_enabled = v;
+        self.save();
+    }
+
     // --- Visibilidad de archivos (menú del "ojo" en la toolbar) ---
 
     /// ¿Mostrar los archivos/carpetas con atributo OCULTO?

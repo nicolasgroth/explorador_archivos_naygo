@@ -721,6 +721,8 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_op_queued_rows(ModelRc::from(Rc::new(VecModel::from(queued))));
             ui.set_op_history_rows(ModelRc::from(Rc::new(VecModel::from(history))));
             ui.set_op_planning_rows(ModelRc::from(Rc::new(VecModel::from(planning))));
+            // Brillo animado de la barra del panel de ops: solo si el usuario lo activó (default false).
+            ui.set_op_animations_enabled(c.config.animations_enabled());
             let resume_rows: Vec<ResumeRowVm> = c
                 .ops
                 .resume_rows()
@@ -2414,6 +2416,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 settings_vm,
                 recent_limit,
                 auto_hl,
+                anim_enabled,
                 footer_en,
                 footer_preset,
                 footer_tpl,
@@ -2441,6 +2444,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let settings_vm = build_settings_vm(&c.config);
                 let recent_limit = c.config.settings.recent_limit as i32;
                 let auto_hl = c.config.auto_highlight_code();
+                let anim_enabled = c.config.animations_enabled();
                 let footer_en = c.config.footer_enabled();
                 let footer_preset = c.config.footer_preset_index();
                 let footer_tpl = c.config.footer_custom_template().to_string();
@@ -2523,6 +2527,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     settings_vm,
                     recent_limit,
                     auto_hl,
+                    anim_enabled,
                     footer_en,
                     footer_preset,
                     footer_tpl,
@@ -2667,6 +2672,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
             // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
             cfg.set_auto_highlight_code(auto_hl);
+            cfg.set_animations_enabled(anim_enabled);
             cfg.set_footer_enabled(footer_en);
             cfg.set_footer_preset_index(footer_preset);
             cfg.set_footer_custom_template(footer_tpl.into());
@@ -3113,6 +3119,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         cfg_win.on_set_auto_highlight_code(move |v| {
             ctrl.borrow_mut().config.set_auto_highlight_code(v);
+            refresh();
+        });
+    }
+    // Activar animaciones adicionales (brillo de la barra del panel de ops): persiste el toggle.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_animations_enabled(move |v| {
+            ctrl.borrow_mut().config.set_animations_enabled(v);
             refresh();
         });
     }
