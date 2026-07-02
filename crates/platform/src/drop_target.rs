@@ -32,6 +32,10 @@ pub struct DropPayload {
     pub paths: Vec<PathBuf>,
     /// `true` si `MK_SHIFT` estaba activo al soltar (mover); `false` = copiar.
     pub move_: bool,
+    /// `true` si `MK_CONTROL` estaba activo al soltar (copiar SIEMPRE, aunque sea el mismo disco).
+    /// El teclado de la app queda stale durante `DoDragDrop`, así que este flag —leído del
+    /// `grfKeyState` que Windows entrega al SOLTAR— es la ÚNICA fuente fiable del Ctrl del usuario.
+    pub copy_forced: bool,
     /// X del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). El SO lo entrega
     /// en `IDropTarget::Drop`. La UI lo convierte a coords de contenido para hit-testear paneles.
     pub screen_x: i32,
@@ -117,7 +121,7 @@ mod windows_impl {
         IDropTarget, IDropTarget_Impl, OleInitialize, RegisterDragDrop, ReleaseStgMedium,
         RevokeDragDrop, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE,
     };
-    use windows::Win32::System::SystemServices::{MK_SHIFT, MODIFIERKEYS_FLAGS};
+    use windows::Win32::System::SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS};
     use windows::Win32::UI::Shell::HDROP;
 
     /// Construye el `HWND` a partir del handle nativo `isize`. En windows 0.62 `HWND`
@@ -139,9 +143,12 @@ mod windows_impl {
         }
     }
 
-    /// El efecto a mostrar según los modificadores de teclado: Shift → MOVER, si no COPIAR.
+    /// El efecto a mostrar según los modificadores de teclado: Ctrl → COPIAR (siempre, tiene
+    /// prioridad), Shift → MOVER, si no COPIAR (el default).
     fn effect_for(grfkeystate: MODIFIERKEYS_FLAGS) -> DROPEFFECT {
-        if (grfkeystate.0 & MK_SHIFT.0) != 0 {
+        if (grfkeystate.0 & MK_CONTROL.0) != 0 {
+            DROPEFFECT_COPY
+        } else if (grfkeystate.0 & MK_SHIFT.0) != 0 {
             DROPEFFECT_MOVE
         } else {
             DROPEFFECT_COPY
@@ -226,6 +233,7 @@ mod windows_impl {
             }
 
             let move_ = (grfkeystate.0 & MK_SHIFT.0) != 0;
+            let copy_forced = (grfkeystate.0 & MK_CONTROL.0) != 0;
 
             // Tomar el IDataObject (puede venir nulo en casos raros).
             let data = match pdataobj.as_ref() {
@@ -258,6 +266,7 @@ mod windows_impl {
                     let _ = self.tx.send(DropPayload {
                         paths,
                         move_,
+                        copy_forced,
                         screen_x,
                         screen_y,
                     });
