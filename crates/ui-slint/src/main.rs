@@ -494,13 +494,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     inspector.size_calc = SharedString::from(txt);
                 }
             }
-            // Metadata por tipo del ítem enfocado: si es un ARCHIVO, pedirla (el worker no relanza
-            // si ya es la del mismo archivo); si es carpeta o no hay nada, limpiar el job. Luego
-            // poblar el VM del inspector (las etiquetas se traducen con `config.t`).
-            if info.present && !info.is_dir {
-                c.request_metadata(std::path::PathBuf::from(&info.path));
-            } else {
-                c.clear_metadata();
+            // Metadata por tipo del archivo a mostrar. Se sigue el MISMO archivo que la Vista
+            // previa (último Files activo → ítem enfocado, solo archivos), no el panel activo a
+            // secas: así coincide con el preview aun con varios paneles Files, y clicar en el
+            // Preview/Inspector no la vacía. Si es carpeta o no hay nada, se limpia el job. El
+            // worker no relanza si ya es la del mismo archivo. Las etiquetas se traducen con
+            // `config.t` en `meta_fields_model`.
+            match c.metadata_target() {
+                Some(path) => c.request_metadata(path),
+                None => c.clear_metadata(),
             }
             inspector.meta = meta_fields_model(&c);
             inspector.meta_loading = c.meta_loading();

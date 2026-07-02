@@ -102,7 +102,11 @@ export component ContextMenu inherits Rectangle {
                     sub-items := VerticalLayout {
                         padding: 4px;
                         spacing: 1px;
-                        MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
+                        // "Abrir (aquí)" solo cuando el target es una carpeta-FILA (modo archivo):
+                        // navegar el panel activo a ella. En folder-mode (zona vacía) el target es la
+                        // carpeta ACTUAL del panel, así que "abrir aquí" re-navegaría a sí misma
+                        // (no-op redundante); ahí se omite y quedan solo otro panel / nuevo / Explorador.
+                        if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
                         MenuRow { label: Tr.ctx-open-other-pane; clicked => { root.open-other-pane(); } }
                         MenuRow { label: Tr.ctx-open-new-pane; clicked => { root.open-new-pane(); } }
                         MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
@@ -121,7 +125,8 @@ export component ContextMenu inherits Rectangle {
             // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
             // "Abrir ▸" de arriba ya ofrece "Abrir" (evita dos filas "Abrir" con acciones distintas).
             if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
-            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            // "Abrir con…" solo para archivos: las carpetas ya tienen su submenú "Abrir ▸" propio.
+            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }

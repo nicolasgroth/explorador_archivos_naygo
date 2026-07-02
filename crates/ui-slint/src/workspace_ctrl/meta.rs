@@ -106,4 +106,20 @@ impl WorkspaceCtrl {
     pub fn meta_loading(&self) -> bool {
         matches!(self.meta_job.as_ref(), Some(job) if !job.done)
     }
+
+    /// Archivo cuya metadata debe mostrarse, o `None` si no aplica (carpeta / nada enfocado).
+    /// Sigue la MISMA regla que el panel de Vista previa (`drive_preview`): el ítem enfocado del
+    /// ÚLTIMO panel Files activo (no el panel activo a secas), con fallback al Files activo. Así,
+    /// con un panel Preview abierto, la metadata corresponde SIEMPRE al archivo que se está
+    /// previsualizando, y hacer clic dentro del propio Preview/Inspector no la vacía. Solo
+    /// archivos: para carpetas no hay metadata por tipo.
+    pub fn metadata_target(&self) -> Option<std::path::PathBuf> {
+        self.last_active_files
+            .and_then(|id| self.ws.pane(id))
+            .and_then(|p| p.files.as_ref())
+            .or_else(|| self.ws.active_files())
+            .and_then(|f| f.focused_view_entry())
+            .filter(|e| e.kind != naygo_core::fs_model::EntryKind::Directory)
+            .map(|e| e.path.clone())
+    }
 }
