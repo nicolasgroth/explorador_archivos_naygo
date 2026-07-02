@@ -160,6 +160,7 @@
   "action.favorites_menu": "打开收藏夹菜单",
   "action.open_config": "打开设置",
   "action.layouts_menu": "打开布局菜单",
+  "action.open_focused_other_pane": "在另一个面板中打开聚焦的文件夹",
   "pathbar.copy": "将路径复制到剪贴板",
   "pathbar.copied": "路径已复制到剪贴板",
   "pathbar.fav_add": "将此文件夹添加到收藏夹",

@@ -294,6 +294,7 @@ export component FilePanel inherits FocusScope {
     callback suggestion-clicked(int, string);// (pane-id, nombre) elegir un candidato
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift) — modificadores del clic
     callback row-double-clicked(int, int);
+    callback row-middle-clicked(int, int);   // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
@@ -806,6 +807,15 @@ export component FilePanel inherits FocusScope {
                         }
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
                             root.nav-forward(root.pane-id);
+                        }
+                        // Clic con el botón central (rueda) sobre una fila que es carpeta: abrirla
+                        // SIEMPRE en un panel NUEVO (Rust valida que sea carpeta; sobre un archivo
+                        // no hace nada).
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.middle) {
+                            root.activate(root.pane-id);
+                            if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
+                                root.row-middle-clicked(root.pane-id, self.cur-row);
+                            }
                         }
                         // Clic derecho: sobre fila válida la selecciona y abre el menú del ARCHIVO;
                         // en zona vacía abre el menú de la CARPETA. Coords en la ventana

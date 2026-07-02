@@ -160,6 +160,7 @@
   "action.favorites_menu": "Open the favorites menu",
   "action.open_config": "Open settings",
   "action.layouts_menu": "Open the layouts menu",
+  "action.open_focused_other_pane": "Open focused folder in other pane",
   "pathbar.copy": "Copy the path to the clipboard",
   "pathbar.copied": "Path copied to the clipboard",
   "pathbar.fav_add": "Add this folder to Favorites",

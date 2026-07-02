@@ -462,6 +462,7 @@ export component AppWindow inherits Window {
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift)
     callback row-double-clicked(int, int);
+    callback row-middle-clicked(int, int);  // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
@@ -1262,6 +1263,7 @@ export component AppWindow inherits Window {
                         suggestion-clicked(id, name) => { root.path-suggestion-clicked(id, name); }
                         row-clicked(id, pos, ctrl, shift) => { root.row-clicked(id, pos, ctrl, shift); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                        row-middle-clicked(id, pos) => { root.row-middle-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }

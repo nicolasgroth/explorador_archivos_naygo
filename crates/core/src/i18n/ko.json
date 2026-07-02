@@ -160,6 +160,7 @@
   "action.favorites_menu": "즐겨찾기 메뉴 열기",
   "action.open_config": "설정 열기",
   "action.layouts_menu": "레이아웃 메뉴 열기",
+  "action.open_focused_other_pane": "포커스된 폴더를 다른 패널에서 열기",
   "pathbar.copy": "경로를 클립보드에 복사",
   "pathbar.copied": "경로를 클립보드에 복사함",
   "pathbar.fav_add": "이 폴더를 즐겨찾기에 추가",

@@ -160,6 +160,7 @@
   "action.favorites_menu": "Abrir el menú de favoritos",
   "action.open_config": "Abrir configuración",
   "action.layouts_menu": "Abrir el menú de disposiciones",
+  "action.open_focused_other_pane": "Abrir carpeta enfocada en otro panel",
   "pathbar.copy": "Copiar la ruta al portapapeles",
   "pathbar.copied": "Ruta copiada al portapapeles",
   "pathbar.fav_add": "Agregar esta carpeta a Favoritos",

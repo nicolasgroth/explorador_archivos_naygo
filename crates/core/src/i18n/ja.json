@@ -160,6 +160,7 @@
   "action.favorites_menu": "お気に入りメニューを開く",
   "action.open_config": "設定を開く",
   "action.layouts_menu": "レイアウトメニューを開く",
+  "action.open_focused_other_pane": "フォーカス中のフォルダーをもう一方のパネルで開く",
   "pathbar.copy": "パスをクリップボードにコピー",
   "pathbar.copied": "パスをクリップボードにコピーしました",
   "pathbar.fav_add": "このフォルダーをお気に入りに追加",

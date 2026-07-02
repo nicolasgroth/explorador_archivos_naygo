@@ -160,6 +160,7 @@
   "action.favorites_menu": "Favoritenmenü öffnen",
   "action.open_config": "Einstellungen öffnen",
   "action.layouts_menu": "Anordnungsmenü öffnen",
+  "action.open_focused_other_pane": "Fokussierten Ordner im anderen Bereich öffnen",
   "pathbar.copy": "Pfad in die Zwischenablage kopieren",
   "pathbar.copied": "Pfad in die Zwischenablage kopiert",
   "pathbar.fav_add": "Diesen Ordner zu Favoriten hinzufügen",

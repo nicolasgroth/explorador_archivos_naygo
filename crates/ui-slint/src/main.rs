@@ -1793,6 +1793,22 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        // Clic-medio (rueda) sobre una fila-carpeta: abre SIEMPRE en un panel nuevo (split).
+        // Sobre un archivo no hace nada (on_row_middle_clicked devuelve false).
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_row_middle_clicked(move |id, pos| {
+            if ctrl
+                .borrow_mut()
+                .on_row_middle_clicked(PaneId(id as u64), pos as usize)
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
         // Arrastre OLE hacia afuera (Fase 5C): saca los archivos seleccionados del panel
         // hacia el Explorer/escritorio/otra app —o a otro panel de Naygo—. `start_drag` es
         // BLOQUEANTE: `DoDragDrop` corre su propio bucle modal de mensajes de Windows hasta

@@ -160,6 +160,7 @@
   "action.favorites_menu": "Apri il menu dei preferiti",
   "action.open_config": "Apri impostazioni",
   "action.layouts_menu": "Apri il menu delle disposizioni",
+  "action.open_focused_other_pane": "Apri la cartella selezionata nell'altro pannello",
   "pathbar.copy": "Copia il percorso negli appunti",
   "pathbar.copied": "Percorso copiato negli appunti",
   "pathbar.fav_add": "Aggiungi questa cartella ai Preferiti",

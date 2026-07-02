@@ -333,11 +333,6 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
-        self.add_pane_split(area);
-        if let Some(dest) = self.active_id() {
-            self.open_in_pane(dest, dir);
-            return true;
-        }
-        false
+        self.open_dir_in_new_pane(dir, area)
     }
 }

@@ -190,6 +190,19 @@ impl WorkspaceCtrl {
         self.add_pane_split_dir(dir, false);
     }
 
+    /// Abre `dir` SIEMPRE en un panel NUEVO (divide el leaf activo por su lado más largo, vía
+    /// `add_pane_split`) y navega ese panel nuevo a `dir`. Lo usan el clic-medio sobre una fila
+    /// (siempre split, a diferencia de Shift+Enter/Ctrl+doble-clic que reusan otro panel si ya
+    /// hay uno) y `ctx_open_new_pane` del menú contextual.
+    pub fn open_dir_in_new_pane(&mut self, dir: PathBuf, area: Rect) -> bool {
+        self.add_pane_split(area);
+        let Some(dest) = self.active_id() else {
+            return false;
+        };
+        self.open_in_pane(dest, dir);
+        true
+    }
+
     /// Agrega un panel Files dividiendo el leaf activo en la dirección dada. `first=true` pone
     /// el panel NUEVO antes (a la izquierda / arriba); `false`, después (derecha / abajo). Lo
     /// deja activo y arranca su listado en la misma carpeta que el activo (o el home).

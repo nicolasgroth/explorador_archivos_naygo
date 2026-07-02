@@ -160,6 +160,7 @@
   "action.favorites_menu": "Abrir o menu de favoritos",
   "action.open_config": "Abrir configurações",
   "action.layouts_menu": "Abrir o menu de disposições",
+  "action.open_focused_other_pane": "Abrir a pasta focada no outro painel",
   "pathbar.copy": "Copiar o caminho para a área de transferência",
   "pathbar.copied": "Caminho copiado para a área de transferência",
   "pathbar.fav_add": "Adicionar esta pasta aos Favoritos",

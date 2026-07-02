@@ -1596,6 +1596,96 @@ fn doble_clic_en_rust_navega() {
     assert!(rows.iter().any(|r| r.name == "dentro.txt"));
 }
 
+/// Clic-medio sobre una fila-CARPETA la abre en un panel NUEVO (siempre divide, aunque ya haya
+/// otro panel disponible): a diferencia de Shift+Enter/Ctrl+doble-clic, nunca reusa un panel
+/// existente.
+#[test]
+fn clic_medio_en_carpeta_abre_panel_nuevo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "sub").expect("'sub' visible");
+    c.set_area(area());
+
+    assert!(
+        c.on_row_middle_clicked(origin, pos),
+        "clic-medio en carpeta abre panel nuevo"
+    );
+    assert!(drain(&mut c));
+
+    // Ahora hay DOS paneles Files: el origen sigue en tmp, el nuevo quedó activo en sub.
+    assert_eq!(c.ws.files_panes().len(), 2, "se creó un panel nuevo");
+    let new_id = c.active_id().unwrap();
+    assert_ne!(new_id, origin, "el panel nuevo quedó activo, no el origen");
+    assert_eq!(c.path_of(origin), tmp.path().display().to_string());
+    assert_eq!(c.path_of(new_id), sub.display().to_string());
+}
+
+/// Clic-medio sobre una fila-ARCHIVO no hace nada: no abre el archivo ni crea un panel.
+#[test]
+fn clic_medio_en_archivo_no_hace_nada() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "a.txt").expect("'a.txt' visible");
+    c.set_area(area());
+
+    assert!(
+        !c.on_row_middle_clicked(origin, pos),
+        "clic-medio sobre un archivo no hace nada"
+    );
+    assert_eq!(c.ws.files_panes().len(), 1, "no se creó ningún panel");
+}
+
+/// Shift+Enter sobre la carpeta enfocada la abre en OTRO panel (el origen NO navega), vía
+/// `run_action(Action::OpenFocusedOtherPane)`. Con un solo panel, divide y usa el nuevo.
+#[test]
+fn shift_enter_abre_carpeta_enfocada_en_otro_panel() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "sub").expect("'sub' visible");
+    c.with_active(|f| f.select_single(pos));
+    c.set_area(area());
+
+    assert!(
+        c.run_action(naygo_core::keymap::Action::OpenFocusedOtherPane),
+        "Shift+Enter abre en otro panel"
+    );
+    assert!(drain(&mut c));
+
+    let panes = c.ws.files_panes();
+    assert_eq!(panes.len(), 2, "se dividió (no había otro panel)");
+    // El origen NO navegó (ni pierde el foco: split_for_target lo deja activo): sigue en tmp.
+    assert_eq!(c.path_of(origin), tmp.path().display().to_string());
+    assert_eq!(c.active_id(), Some(origin), "el foco se queda en el origen");
+    let new_id = panes.into_iter().find(|&p| p != origin).unwrap();
+    assert_eq!(c.path_of(new_id), sub.display().to_string());
+}
+
+/// Shift+Enter sin nada enfocado (o enfocado un archivo) no hace nada.
+#[test]
+fn shift_enter_sin_carpeta_enfocada_no_hace_nada() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pos = active_pos_of(&c, "a.txt").expect("'a.txt' visible");
+    c.with_active(|f| f.select_single(pos));
+    c.set_area(area());
+
+    assert!(!c.run_action(naygo_core::keymap::Action::OpenFocusedOtherPane));
+    assert_eq!(c.ws.files_panes().len(), 1, "no se creó ningún panel");
+}
+
 /// Agregar un panel divide el layout y deja DOS paneles Files; el nuevo queda activo.
 #[test]
 fn agregar_panel_divide_y_deja_dos() {

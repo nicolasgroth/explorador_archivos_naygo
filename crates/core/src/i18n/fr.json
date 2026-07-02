@@ -160,6 +160,7 @@
   "action.favorites_menu": "Ouvrir le menu des favoris",
   "action.open_config": "Ouvrir la configuration",
   "action.layouts_menu": "Ouvrir le menu des dispositions",
+  "action.open_focused_other_pane": "Ouvrir le dossier ciblé dans l'autre panneau",
   "pathbar.copy": "Copier le chemin dans le presse-papiers",
   "pathbar.copied": "Chemin copié dans le presse-papiers",
   "pathbar.fav_add": "Ajouter ce dossier aux Favoris",

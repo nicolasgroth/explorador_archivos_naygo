@@ -160,6 +160,7 @@
   "action.favorites_menu": "पसंदीदा मेन्यू खोलें",
   "action.open_config": "सेटिंग्स खोलें",
   "action.layouts_menu": "लेआउट मेन्यू खोलें",
+  "action.open_focused_other_pane": "फ़ोकस किया गया फ़ोल्डर दूसरे पैनल में खोलें",
   "pathbar.copy": "पथ क्लिपबोर्ड पर कॉपी करें",
   "pathbar.copied": "पथ क्लिपबोर्ड पर कॉपी किया गया",
   "pathbar.fav_add": "इस फ़ोल्डर को पसंदीदा में जोड़ें",
