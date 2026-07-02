@@ -33,6 +33,7 @@ pub mod icons;
 pub mod keymap;
 pub mod listing;
 pub mod listing_cache;
+pub mod metadata;
 pub mod ops;
 pub mod palette;
 pub mod path_segments;
