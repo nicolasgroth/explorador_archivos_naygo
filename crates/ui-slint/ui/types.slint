@@ -307,6 +307,7 @@ export struct OpRowVm {
     eta: string,           // tiempo restante estimado, p. ej. "11:08" o ""
     elapsed: string,       // transcurrido, p. ej. "01:48"
     kind: int,             // 0=en curso 1=en cola 2=historial
+    op-kind: int,          // tipo de operación para el ícono/verbo: 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro
     // Detalle de QUÉ archivos se procesaron (solo en filas de historial):
     files-summary: string, // nombres inline si son 1-2 ("a.txt, b.txt"); vacío si son más o ninguno
     has-file-list: bool,   // true si hay 3+ archivos → la fila ofrece "Ver archivos" (abre popup)

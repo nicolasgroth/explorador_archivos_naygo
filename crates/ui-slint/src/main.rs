@@ -6337,6 +6337,7 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         eta: SharedString::from(r.eta.as_str()),
         elapsed: SharedString::from(r.elapsed.as_str()),
         kind: r.kind,
+        op_kind: r.op_kind,
         files_summary: SharedString::from(r.files_summary.as_str()),
         has_file_list: r.has_file_list,
         files_done_count: r.files_done_count,

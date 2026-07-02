@@ -1533,6 +1533,7 @@ impl OpsCtrl {
                     eta,
                     elapsed: format_duration(elapsed_secs as u64),
                     kind,
+                    op_kind: op_kind_code(&o.plan_kind),
                     files_summary,
                     has_file_list,
                     files_done_count,
@@ -2043,6 +2044,20 @@ pub struct OpDialogVmData {
     pub incoming_is_dir: bool,
 }
 
+/// Mapea el tipo de operación al código que consume el panel (`OpRowVm.op-kind`).
+/// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro.
+pub fn op_kind_code(kind: &OpKind) -> i32 {
+    match kind {
+        OpKind::Copy => 0,
+        OpKind::Move => 1,
+        OpKind::Delete { .. } => 2,
+        OpKind::Compress { .. } => 3,
+        OpKind::Extract => 4,
+        // Rename/BatchRename/CreateDir/CreateFile y cualquier otra → "otro".
+        _ => 5,
+    }
+}
+
 /// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
 /// Los campos de tamaño/velocidad/tiempo vienen ya formateados como String (listos para la UI).
 #[derive(Clone, Debug)]
@@ -2064,6 +2079,8 @@ pub struct OpRowData {
     pub elapsed: String,
     /// 0=en curso 1=en cola 2=historial.
     pub kind: i32,
+    /// Tipo de operación para el ícono/verbo del panel: 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro.
+    pub op_kind: i32,
     /// Nombres inline de los archivos procesados cuando son POCOS (1-2 Done): "a.txt, b.txt".
     /// Vacío si la op procesó 3+ (entonces se ofrece "Ver archivos") o nada Done (o no es historial).
     pub files_summary: String,
