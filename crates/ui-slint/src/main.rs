@@ -1400,17 +1400,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                 let scale = ui.window().scale_factor().max(0.01);
                                 let cx = client_x as f32 / scale;
                                 let cy = client_y as f32 / scale - TOP_BAR_H;
-                                let (ctrl_down, shift_down) = {
-                                    let c = ctrl.borrow();
-                                    (c.ctrl_down, c.shift_down)
-                                };
                                 routed = ctrl.borrow_mut().drop_at(
                                     cx,
                                     cy,
-                                    ctrl_down,
-                                    shift_down,
+                                    payload.move_,       // move_hint (Shift del OLE)
+                                    payload.copy_forced, // copy_forced (Ctrl del OLE)
                                     payload.paths.clone(),
-                                    payload.move_,
                                 );
                             }
                         }

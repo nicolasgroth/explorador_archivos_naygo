@@ -210,9 +210,10 @@ impl WorkspaceCtrl {
 
     /// Recibe un drop OLE en el PUNTO `(content_x, content_y)` (coordenadas de contenido, el
     /// mismo sistema que usa `pane_rects`/`drop_hit`): enruta al panel Files que está BAJO el
-    /// cursor, no al panel activo. Decide mover/copiar con las reglas del Explorador
-    /// (`decide_drop_action`: Shift→mover, Ctrl→copiar, si no según mismo disco); el `move_hint`
-    /// del OLE es secundario (Ctrl/Shift + mismo disco mandan, igual que en `drop_external`).
+    /// cursor, no al panel activo. Decide mover/copiar con `decide_drop`, usando SOLO las señales
+    /// fiables del OLE: `move_hint` (Shift real) y `copy_forced` (Ctrl real), ambas leídas del
+    /// `grfKeyState` al soltar. Los flags de teclado de la app NO se usan aquí: durante el bucle
+    /// modal de `DoDragDrop` llegan stale. Prioridad: Shift→mover, Ctrl→copiar, si no según disco.
     ///
     /// No-op (devuelve false) si: no hay rutas, el punto no cae sobre ningún panel, el panel
     /// destino no es Files, o el destino ES la misma carpeta de origen de las rutas (soltar
@@ -221,12 +222,11 @@ impl WorkspaceCtrl {
         &mut self,
         content_x: f32,
         content_y: f32,
-        ctrl: bool,
-        shift: bool,
-        paths: Vec<std::path::PathBuf>,
         move_hint: bool,
+        copy_forced: bool,
+        paths: Vec<std::path::PathBuf>,
     ) -> bool {
-        use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
+        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
         if paths.is_empty() {
             crate::logging::breadcrumb("drop_at: sin rutas, no-op");
@@ -277,15 +277,14 @@ impl WorkspaceCtrl {
             crate::logging::breadcrumb("drop_at: soltado sobre la propia carpeta, no-op");
             return false;
         }
-        // Acción según modificadores + mismo disco. CLAVE: el `move_hint` del OLE viene del
-        // grfKeyState que Windows entrega al SOLTAR (refleja el Shift REAL en ese instante).
-        // Los flags `ctrl`/`shift` de la app NO sirven aquí: durante el bucle modal de
-        // DoDragDrop la app no recibe eventos de teclado, así que llegan desactualizados (false)
-        // aunque el usuario tenga Shift presionado. Por eso, si el OLE reporta Shift
-        // (`move_hint`), MOVEMOS; si no, caemos a decide_drop_action (default por disco + Ctrl).
+        // Acción según las señales del OLE + mismo disco. CLAVE: `move_hint` (Shift) y
+        // `copy_forced` (Ctrl) vienen del grfKeyState que Windows entrega al SOLTAR, así que
+        // reflejan las teclas REALES en ese instante. Los flags de teclado de la app NO sirven
+        // aquí: durante el bucle modal de DoDragDrop la app no recibe eventos de teclado y llegan
+        // stale (false) aunque el usuario tenga Ctrl/Shift presionado. `decide_drop` prioriza
+        // Shift→mover, Ctrl→copiar, si no según disco (mismo→mover, distinto→copiar).
         let same = same_drive(&paths[0], &dest_dir);
-        let is_move =
-            move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
+        let is_move = matches!(decide_drop(move_hint, copy_forced, same), DropAction::Move);
         let label = if is_move {
             self.config.t("ops.file_kind_move")
         } else {

@@ -617,14 +617,13 @@ fn drop_at_enruta_al_panel_bajo_el_cursor_no_al_activo() {
     // mismo disco MUEVE (regla del Explorador), y `a`/`b` viven en el mismo disco temporal.
     // `move_hint=false` (sin Shift del OLE), si no el move_hint forzaría Mover y rompería el
     // aserto de copia. Lo que prueba este test es el RUTEO (que el archivo aterriza en `b`,
-    // bajo el cursor), no la elección mover/copiar (eso ya lo cubre dnd::decide_drop_action).
+    // bajo el cursor), no la elección mover/copiar (eso ya lo cubre dnd::decide_drop).
     let routed = c.drop_at(
         cx,
         cy,
-        true,  // ctrl → copiar
-        false, // shift
-        vec![a.path().join("doc.txt")],
         false, // move_hint del OLE (sin Shift al soltar)
+        true,  // copy_forced (Ctrl del OLE) → copiar
+        vec![a.path().join("doc.txt")],
     );
     assert!(routed, "drop_at debe enrutar (no caer al fallback)");
     // CONFIRMAR AL SOLTAR: `drop_at` ya no ejecuta; deja el drop pendiente. La op real arranca
@@ -907,9 +906,9 @@ fn drop_at_move_hint_del_ole_fuerza_mover() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // ctrl=false, shift=false (estado de la app stale durante el modal), PERO move_hint=true
-    // (Shift REAL al soltar, reportado por el OLE). Debe MOVER → el original desaparece.
-    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], true);
+    // copy_forced=false, PERO move_hint=true (Shift REAL al soltar, reportado por el OLE). Debe
+    // MOVER → el original desaparece. (El estado de teclado de la app ya no se pasa: llega stale.)
+    let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     // El drop queda pendiente: debe ser MOVER (el move_hint del OLE manda).
     assert_eq!(
@@ -967,8 +966,8 @@ fn drop_at_mismo_disco_sin_modificadores_mueve_por_defecto() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // ctrl=false, shift=false, move_hint=false → la decisión depende del disco. Mismo disco → Mover.
-    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], false);
+    // move_hint=false, copy_forced=false → la decisión depende del disco. Mismo disco → Mover.
+    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     assert!(c.confirm_pending_drop(), "confirmar arranca la op");
     for _ in 0..2000 {
@@ -1015,8 +1014,8 @@ fn drop_at_no_ejecuta_hasta_confirmar_y_cancelar_descarta() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // Soltar (Ctrl=copia para que el dato sea determinista).
-    let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false);
+    // Soltar (copy_forced=Ctrl=copia para que el dato sea determinista).
+    let routed = c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     // NADA se ejecutó todavía: el drop está pendiente y no hay op alguna.
     let pd = c.pending_drop.as_ref().expect("drop pendiente");
