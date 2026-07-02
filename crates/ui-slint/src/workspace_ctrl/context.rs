@@ -278,4 +278,40 @@ impl WorkspaceCtrl {
         }
         self.close_context_menu();
     }
+
+    /// Abre la carpeta objetivo del menú contextual en OTRO panel. Reusa `request_action`:
+    /// 1 otro panel → directo; 2+ → selector 1..9; 0 → crea panel nuevo (split por lado largo).
+    /// `area` es el área de contenido (la UI la pasa).
+    #[allow(dead_code)] // se cablea en la task del submenú (Task 6)
+    pub fn ctx_open_other_pane(&mut self, area: Rect) -> bool {
+        let Some(dir) = self
+            .context_menu
+            .as_ref()
+            .and_then(|s| s.targets.first().cloned())
+        else {
+            return false;
+        };
+        let Some(origin) = self.active_files_id() else {
+            return false;
+        };
+        self.request_action(PaneAction::OpenDir(dir), origin, area)
+    }
+
+    /// Abre la carpeta objetivo del menú en un panel NUEVO (split por el lado más largo).
+    #[allow(dead_code)] // se cablea en la task del submenú (Task 6)
+    pub fn ctx_open_new_pane(&mut self, area: Rect) -> bool {
+        let Some(dir) = self
+            .context_menu
+            .as_ref()
+            .and_then(|s| s.targets.first().cloned())
+        else {
+            return false;
+        };
+        self.add_pane_split(area);
+        if let Some(dest) = self.active_id() {
+            self.open_in_pane(dest, dir);
+            return true;
+        }
+        false
+    }
 }
