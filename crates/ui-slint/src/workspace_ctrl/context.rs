@@ -19,11 +19,22 @@ impl WorkspaceCtrl {
         if targets.is_empty() {
             return;
         }
+        // ¿El objetivo es una única carpeta? Se calcula UNA vez aquí (al abrir), usando el `kind`
+        // del entry enfocado (sin tocar disco) cuando hay un solo target; el submenú "Abrir ▸" se
+        // ofrece solo en ese caso (no en multi-selección ni sobre un archivo).
+        let target_is_folder = targets.len() == 1
+            && self
+                .ws
+                .active_files()
+                .and_then(|f| f.focused_view_entry())
+                .map(|e| e.kind == naygo_core::fs_model::EntryKind::Directory)
+                .unwrap_or(false);
         self.context_menu = Some(ContextMenuState {
             x,
             y,
             targets,
             folder_mode: false,
+            target_is_folder,
         });
     }
 
@@ -44,6 +55,7 @@ impl WorkspaceCtrl {
                 y,
                 targets: vec![dir],
                 folder_mode: true,
+                target_is_folder: true,
             });
         }
     }

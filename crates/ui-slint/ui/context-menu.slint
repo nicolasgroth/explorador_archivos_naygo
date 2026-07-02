@@ -88,7 +88,9 @@ export component ContextMenu inherits Rectangle {
                 open-sub := Rectangle {
                     property <bool> has-hover-sub: sub-touch.has-hover;
                     visible: open-row-touch.has-hover || sub-touch.has-hover;
-                    x: parent.width + 2px;
+                    // Pegado a la fila (sin hueco): un gap dejaría una banda sin hover entre la
+                    // fila y el submenú que lo cerraría al cruzarla despacio con el mouse.
+                    x: parent.width;
                     y: 0;
                     width: 230px;
                     height: sub-items.preferred-height + 8px;
@@ -116,7 +118,9 @@ export component ContextMenu inherits Rectangle {
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
-            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
+            // "Abrir ▸" de arriba ya ofrece "Abrir" (evita dos filas "Abrir" con acciones distintas).
+            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }

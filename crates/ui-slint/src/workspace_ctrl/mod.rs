@@ -239,6 +239,10 @@ pub struct ContextMenuState {
     /// objetivo es la carpeta del panel; el menú muestra Explorador/Nueva carpeta/Pegar en vez
     /// de las acciones de archivo.
     pub folder_mode: bool,
+    /// El objetivo del menú es una carpeta (habilita el submenú "Abrir ▸"). Se calcula UNA VEZ
+    /// al abrir el menú (no en cada tick): `folder_mode`, o clic sobre una única fila que es un
+    /// directorio. Cachearlo evita un `stat` por tick que en un share de red lento sería costoso.
+    pub target_is_folder: bool,
 }
 
 /// Modal "nueva(s) carpeta(s)": cada línea del `text` es una subcarpeta a crear dentro de `dir`;

@@ -725,10 +725,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     folder_mode: cm.folder_mode,
                     is_single_zip: c.sel_is_single_zip(),
                     has_selection: !c.selected_paths().is_empty(),
-                    // Carpeta objetivo: folder-mode (zona vacía) o clic sobre una única fila que
-                    // es un directorio. Habilita el submenú "Abrir ▸".
-                    target_is_folder: cm.folder_mode
-                        || matches!(cm.targets.as_slice(), [only] if only.is_dir()),
+                    // Carpeta objetivo (habilita el submenú "Abrir ▸"): flag YA cacheado al abrir
+                    // el menú (evita un `stat` por tick, costoso en shares de red lentos).
+                    target_is_folder: cm.target_is_folder,
                 },
                 None => ContextMenuVm {
                     active: false,
