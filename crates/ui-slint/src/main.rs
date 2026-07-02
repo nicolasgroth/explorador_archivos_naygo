@@ -238,9 +238,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let ui = AppWindow::new()?;
-    // Título de la ventana con la versión-build (p. ej. "Naygo — 0.3.0+build.202607021614"): así el
-    // build en prueba se distingue de un vistazo en la barra de título y en la barra de tareas.
-    ui.set_window_title(format!("Naygo — {}", naygo_full_version()).into());
+    // Título de la ventana limpio: solo "Naygo". El id de build (p. ej. "0.3.0+build.202607021614")
+    // se muestra en el Acerca de (vía `set_app_version`) y en el splash de arranque, no en la barra
+    // de título ni en la barra de tareas.
+    ui.set_window_title("Naygo".into());
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
@@ -410,20 +411,22 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Splash de arranque (Fase 5F): solo en release. Ventana breve de bienvenida que se cierra
-    // sola a ~1.2s. La ventana principal se construye por detrás (el splash no la bloquea). En
+    // sola a ~1.8s. La ventana principal se construye por detrás (el splash no la bloquea). En
     // debug se omite (arranque directo). Se mantiene vivo en una variable de la función `main`.
     // Nota: el Splash usa los colores POR DEFECTO del global Theme (azul marino), que coinciden
     // con el tema default — no hace falta aplicarle el tema activo (es una pantalla efímera).
     #[cfg(not(debug_assertions))]
     let _splash_keepalive = match Splash::new() {
         Ok(splash) => {
+            // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
+            splash.set_build_version(naygo_full_version().into());
             let _ = splash.show();
             let splash = Rc::new(splash);
             let splash_for_timer = splash.clone();
             let timer = slint::Timer::default();
             timer.start(
                 slint::TimerMode::SingleShot,
-                std::time::Duration::from_millis(1200),
+                std::time::Duration::from_millis(1800),
                 move || {
                     let _ = splash_for_timer.hide();
                 },
@@ -1239,10 +1242,36 @@ fn main() -> Result<(), slint::PlatformError> {
     let tray: Rc<Option<tray::Tray>> = Rc::new(if ctrl.borrow().config.settings.tray_enabled {
         let t = {
             let c = ctrl.borrow();
+            // Cada opción del menú muestra su atajo a la derecha (didáctico). En los menús nativos de
+            // Windows, un `\t` alinea el texto que le sigue a la derecha. Componemos el atajo aquí
+            // (donde está el keymap + el hotkey global), no en tray.rs, que solo recibe los labels.
+            // Reusamos los formateadores ya existentes: `chord_to_text` (para el hotkey global) y
+            // `chord_text_for` (primer chord de una acción del keymap; vacío si no tiene atajo).
+            let with_shortcut = |label: String, shortcut: &str| -> String {
+                if shortcut.is_empty() {
+                    label
+                } else {
+                    format!("{label}\t{shortcut}")
+                }
+            };
+            // Abrir → hotkey global (restaura la ventana), solo si está habilitado.
+            let open_shortcut = if c.config.settings.global_hotkey_enabled {
+                config_ctrl::ConfigCtrl::chord_to_text(&c.config.settings.global_hotkey)
+            } else {
+                String::new()
+            };
+            // Nuevo panel → Action::SplitPanel; Configuración → Action::OpenConfig. Centrar ventana y
+            // Salir no tienen acción con chord configurable, así que van sin atajo (solo el label).
+            let new_pane_shortcut = c
+                .config
+                .chord_text_for(naygo_core::keymap::Action::SplitPanel);
+            let config_shortcut = c
+                .config
+                .chord_text_for(naygo_core::keymap::Action::OpenConfig);
             tray::create(
-                &c.config.t("slint.tray.open"),
-                &c.config.t("slint.tray.new_pane"),
-                &c.config.t("slint.tray.config"),
+                &with_shortcut(c.config.t("slint.tray.open"), &open_shortcut),
+                &with_shortcut(c.config.t("slint.tray.new_pane"), &new_pane_shortcut),
+                &with_shortcut(c.config.t("slint.tray.config"), &config_shortcut),
                 &c.config.t("slint.tray.center"),
                 &c.config.t("slint.tray.exit"),
                 waker.clone(),

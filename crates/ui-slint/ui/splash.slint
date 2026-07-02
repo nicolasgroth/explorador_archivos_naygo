@@ -1,5 +1,5 @@
 // Naygo — splash de arranque (Fase 5F): ventana breve de bienvenida en release. Se cierra sola
-// tras ~1.2s o cuando la ventana principal está lista. No retrasa el arranque real.
+// tras ~1.8s o cuando la ventana principal está lista. No retrasa el arranque real.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 import { Theme } from "theme.slint";
@@ -7,8 +7,12 @@ import { Theme } from "theme.slint";
 export component Splash inherits Window {
     no-frame: true;
     width: 360px;
-    height: 200px;
+    height: 220px;
     background: transparent;
+
+    // Id de build (p. ej. "0.3.0+build.202607021800"). Lo setea main.rs desde `naygo_full_version()`
+    // tras crear el splash. Si queda vacío, la línea de build no se muestra.
+    in property <string> build-version;
 
     Rectangle {
         background: Theme.panel-bg;
@@ -19,10 +23,17 @@ export component Splash inherits Window {
             padding: 18px;
             spacing: 8px;
             alignment: center;
+            // Logo real de Naygo (embebido en tiempo de compilación por slint_build).
+            Image {
+                source: @image-url("../../../assets/icons/logo_naygo.png");
+                width: 64px;
+                height: 64px;
+                horizontal-alignment: center;
+            }
             Text {
-                text: "📁  Naygo";
+                text: "Naygo";
                 color: Theme.text;
-                font-size: 34px;
+                font-size: 28px;
                 font-weight: 800;
                 horizontal-alignment: center;
             }
@@ -38,6 +49,13 @@ export component Splash inherits Window {
                 text: "© 2026 Nicolás Groth / ISGroth";
                 color: Theme.text-dim;
                 font-size: 11px;
+                horizontal-alignment: center;
+            }
+            // Id de build al pie, pequeño y tenue. Solo si main.rs lo entregó.
+            if root.build-version != "": Text {
+                text: "build " + root.build-version;
+                color: Theme.text-dim;
+                font-size: 10px;
                 horizontal-alignment: center;
             }
         }
