@@ -104,6 +104,12 @@ where
     tr.set_ops_remaining(c.t("ops.remaining").into());
     tr.set_ops_waiting(c.t("ops.waiting").into());
     tr.set_ops_calculating(c.t("ops.calculating").into());
+    tr.set_ops_verb_copy(c.t("ops.verb_copy").into());
+    tr.set_ops_verb_move(c.t("ops.verb_move").into());
+    tr.set_ops_verb_delete(c.t("ops.verb_delete").into());
+    tr.set_ops_verb_compress(c.t("ops.verb_compress").into());
+    tr.set_ops_verb_extract(c.t("ops.verb_extract").into());
+    tr.set_ops_verb_other(c.t("ops.verb_other").into());
     tr.set_ops_view_files(c.t("ops.view_files").into());
     tr.set_ops_files_word(c.t("ops.files_word").into());
     tr.set_ops_file_list_title(c.t("ops.file_list_title").into());
@@ -432,6 +438,7 @@ where
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
     tr.set_cfg_theme(c.t("slint.cfg.theme").into());
     tr.set_cfg_theme_preview(c.t("slint.cfg.theme_preview").into());
+    tr.set_cfg_animations(c.t("slint.cfg.animations").into());
     // Editor de temas.
     tr.set_theme_customize(c.t("slint.theme.customize").into());
     tr.set_theme_edit(c.t("slint.theme.edit").into());
@@ -519,6 +526,7 @@ where
     tr.set_cfg_tip_paste_ext(c.t("slint.cfg.tip.paste_ext").into());
     tr.set_cfg_tip_theme(c.t("slint.cfg.tip.theme").into());
     tr.set_cfg_tip_icon_set(c.t("slint.cfg.tip.icon_set").into());
+    tr.set_cfg_tip_animations(c.t("slint.cfg.tip.animations").into());
     tr.set_cfg_tip_date_format(c.t("slint.cfg.tip.date_format").into());
     tr.set_cfg_tip_size_format(c.t("slint.cfg.tip.size_format").into());
     tr.set_cfg_tip_row_density(c.t("slint.cfg.tip.row_density").into());

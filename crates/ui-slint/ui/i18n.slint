@@ -76,6 +76,13 @@ export global Tr {
     in property <string> ops-remaining: "Restante";
     in property <string> ops-waiting: "en espera";
     in property <string> ops-calculating: "Calculando…";
+    // Verbos de operación en gerundio (cabecera de las tarjetas del panel de operaciones).
+    in property <string> ops-verb-copy: "Copiando";
+    in property <string> ops-verb-move: "Moviendo";
+    in property <string> ops-verb-delete: "Eliminando";
+    in property <string> ops-verb-compress: "Comprimiendo";
+    in property <string> ops-verb-extract: "Extrayendo";
+    in property <string> ops-verb-other: "Procesando";
     // Detalle de archivos de una op terminada (nombres inline + popup con la lista).
     in property <string> ops-view-files: "Ver";          // enlace "Ver N archivos"
     in property <string> ops-files-word: "archivos";       // sustantivo del enlace
@@ -437,6 +444,7 @@ export global Tr {
     in property <string> cfg-paste-ext: "Extensión";
     in property <string> cfg-theme: "Tema";
     in property <string> cfg-theme-preview: "Colores";
+    in property <string> cfg-animations: "Activar animaciones";
     // Editor de temas (galería de Apariencia).
     in property <string> theme-customize: "Personalizar";
     in property <string> theme-edit: "Editar";
@@ -546,6 +554,7 @@ export global Tr {
     // Apariencia (cat 3).
     in property <string> cfg-tip-theme: "Elige el tema de colores. Se aplica en caliente. «Personalizar» abre el editor para crear el tuyo.";
     in property <string> cfg-tip-icon-set: "Elige el set de íconos. Se aplica en caliente. «Personalizar» salta a la pestaña Íconos.";
+    in property <string> cfg-tip-animations: "Activa animaciones adicionales (como el brillo de la barra de progreso del panel de operaciones). Consumen un poco más de CPU.";
     in property <string> cfg-tip-date-format: "Formato con que se muestran las fechas de los archivos en los paneles.";
     in property <string> cfg-tip-size-format: "Unidad para mostrar los tamaños. Automático elige la más legible según el tamaño.";
     in property <string> cfg-tip-row-density: "Alto de las filas de los paneles. Compacta muestra más archivos a la vez.";
