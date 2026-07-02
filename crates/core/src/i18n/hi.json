@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "{items} को «{dest}» में स्थानांतरित करें?",
   "slint.drop.confirm_more": " और {n} अधिक",
   "slint.ctx.open": "खोलें",
+  "slint.ctx.open_other_pane": "दूसरे पैनल में खोलें",
+  "slint.ctx.open_new_pane": "नए पैनल में खोलें",
   "slint.ctx.open_with": "इसके साथ खोलें…",
   "slint.ctx.copy": "कॉपी",
   "slint.ctx.cut": "कट",

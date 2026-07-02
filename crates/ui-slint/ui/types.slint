@@ -215,6 +215,10 @@ export struct ContextMenuVm {
     // solo se abre con selección, pero hacerlo explícito evita mostrar el ítem si esa invariante
     // cambia.)
     has-selection: bool,
+    // El objetivo del menú es una carpeta: true si es folder-mode (clic en zona vacía) O si el
+    // único target (clic sobre una fila) es un directorio. Habilita el submenú "Abrir ▸" con
+    // Abrir / Abrir en otro panel / Abrir en panel nuevo / Abrir en el Explorador de Windows.
+    target-is-folder: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.

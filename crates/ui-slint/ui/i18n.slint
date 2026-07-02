@@ -166,6 +166,10 @@ export global Tr {
 
     // Menú contextual (context-menu).
     in property <string> ctx-open: "Abrir";
+    // Submenú "Abrir ▸": las entradas "Abrir" y "Abrir en el Explorador de Windows" reusan
+    // ctx-open / ctx-explorer (mismo texto que las entradas existentes).
+    in property <string> ctx-open-other-pane: "Abrir en otro panel";
+    in property <string> ctx-open-new-pane: "Abrir en panel nuevo";
     in property <string> ctx-open-with: "Abrir con…";
     in property <string> ctx-copy: "Copiar";
     in property <string> ctx-cut: "Cortar";

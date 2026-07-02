@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "{items} nach «{dest}» verschieben?",
   "slint.drop.confirm_more": " und {n} weitere",
   "slint.ctx.open": "Öffnen",
+  "slint.ctx.open_other_pane": "In anderem Bereich öffnen",
+  "slint.ctx.open_new_pane": "In neuem Bereich öffnen",
   "slint.ctx.open_with": "Öffnen mit…",
   "slint.ctx.copy": "Kopieren",
   "slint.ctx.cut": "Ausschneiden",

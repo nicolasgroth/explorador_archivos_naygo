@@ -636,6 +636,9 @@ export component AppWindow inherits Window {
     callback row-context(int, int, length, length);  // (pane-id, pos, x, y)
     in property <ContextMenuVm> ctx-menu;
     callback ctx-open();
+    callback ctx-open-here();        // submenú "Abrir ▸": navegar el panel activo (= doble-clic)
+    callback ctx-open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
+    callback ctx-open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
     callback ctx-open-with();
     callback ctx-copy();
     callback ctx-cut();
@@ -1513,6 +1516,9 @@ export component AppWindow inherits Window {
         height: 100%;
         vm: root.ctx-menu;
         open() => { root.ctx-open(); }
+        open-here() => { root.ctx-open-here(); }
+        open-other-pane() => { root.ctx-open-other-pane(); }
+        open-new-pane() => { root.ctx-open-new-pane(); }
         open-with() => { root.ctx-open-with(); }
         copy() => { root.ctx-copy(); }
         cut() => { root.ctx-cut(); }

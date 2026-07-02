@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "将 {items} 移动到「{dest}」？",
   "slint.drop.confirm_more": " 以及另外 {n} 项",
   "slint.ctx.open": "打开",
+  "slint.ctx.open_other_pane": "在其他面板中打开",
+  "slint.ctx.open_new_pane": "在新面板中打开",
   "slint.ctx.open_with": "打开方式…",
   "slint.ctx.copy": "复制",
   "slint.ctx.cut": "剪切",

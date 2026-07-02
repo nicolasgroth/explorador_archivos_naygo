@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "{items} を「{dest}」に移動しますか？",
   "slint.drop.confirm_more": " ほか {n} 件",
   "slint.ctx.open": "開く",
+  "slint.ctx.open_other_pane": "別のパネルで開く",
+  "slint.ctx.open_new_pane": "新しいパネルで開く",
   "slint.ctx.open_with": "プログラムから開く…",
   "slint.ctx.copy": "コピー",
   "slint.ctx.cut": "切り取り",

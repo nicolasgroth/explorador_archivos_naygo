@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "{items}을(를) «{dest}»(으)로 이동하시겠습니까?",
   "slint.drop.confirm_more": " 외 {n}개 더",
   "slint.ctx.open": "열기",
+  "slint.ctx.open_other_pane": "다른 패널에서 열기",
+  "slint.ctx.open_new_pane": "새 패널에서 열기",
   "slint.ctx.open_with": "다음으로 열기…",
   "slint.ctx.copy": "복사",
   "slint.ctx.cut": "잘라내기",

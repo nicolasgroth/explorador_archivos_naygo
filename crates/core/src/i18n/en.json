@@ -523,6 +523,8 @@
   "slint.drop.confirm_move": "Move {items} to «{dest}»?",
   "slint.drop.confirm_more": " and {n} more",
   "slint.ctx.open": "Open",
+  "slint.ctx.open_other_pane": "Open in other pane",
+  "slint.ctx.open_new_pane": "Open in new pane",
   "slint.ctx.open_with": "Open with…",
   "slint.ctx.copy": "Copy",
   "slint.ctx.cut": "Cut",

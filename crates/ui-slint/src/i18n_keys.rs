@@ -179,6 +179,10 @@ where
     tr.set_drop_confirm_more(c.t("slint.drop.confirm_more").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
+    // Submenú "Abrir ▸": "Abrir" reusa slint.ctx.open (mismo texto); Explorador reusa
+    // slint.ctx.explorer. Solo hacen falta claves nuevas para las dos entradas de panel.
+    tr.set_ctx_open_other_pane(c.t("slint.ctx.open_other_pane").into());
+    tr.set_ctx_open_new_pane(c.t("slint.ctx.open_new_pane").into());
     tr.set_ctx_open_with(c.t("slint.ctx.open_with").into());
     tr.set_ctx_copy(c.t("slint.ctx.copy").into());
     tr.set_ctx_cut(c.t("slint.ctx.cut").into());

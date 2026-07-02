@@ -725,6 +725,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     folder_mode: cm.folder_mode,
                     is_single_zip: c.sel_is_single_zip(),
                     has_selection: !c.selected_paths().is_empty(),
+                    // Carpeta objetivo: folder-mode (zona vacía) o clic sobre una única fila que
+                    // es un directorio. Habilita el submenú "Abrir ▸".
+                    target_is_folder: cm.folder_mode
+                        || matches!(cm.targets.as_slice(), [only] if only.is_dir()),
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -735,6 +739,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     folder_mode: false,
                     is_single_zip: false,
                     has_selection: false,
+                    target_is_folder: false,
                 },
             };
             ui.set_ctx_menu(ctx);
@@ -5217,6 +5222,49 @@ fn main() -> Result<(), slint::PlatformError> {
         let sync_rows = sync_rows.clone();
         ui.on_ctx_open(move || {
             ctrl.borrow_mut().ctx_open();
+            sync_rows();
+        });
+    }
+    // Submenú "Abrir ▸" (solo target carpeta): Abrir aquí / en otro panel / en panel nuevo.
+    // "Abrir en el Explorador de Windows" reusa `ctx_open_explorer` (ya cableado arriba).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_open_here(move || {
+            if ctrl.borrow_mut().ctx_open_here() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_ctx_open_other_pane(move || {
+            let area = area_of();
+            let acted = ctrl.borrow_mut().ctx_open_other_pane(area);
+            ctrl.borrow_mut().close_context_menu();
+            if acted {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_ctx_open_new_pane(move || {
+            let area = area_of();
+            let acted = ctrl.borrow_mut().ctx_open_new_pane(area);
+            ctrl.borrow_mut().close_context_menu();
+            if acted {
+                start_timer();
+            }
             sync_rows();
         });
     }
