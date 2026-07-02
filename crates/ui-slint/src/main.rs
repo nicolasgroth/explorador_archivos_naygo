@@ -1226,6 +1226,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 waker.clone(),
             )
         };
+        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log: sin este
+        // aviso el fallo era invisible. Ya no afecta al cierre (la X respeta close_to_tray aunque
+        // el tray falle), pero explica por qué no aparece el ícono en la bandeja.
+        if t.is_none() {
+            crate::logging::log_line(
+                "[tray] tray_enabled=true pero la creación del tray falló; sin ícono de bandeja",
+            );
+        }
         t
     } else {
         None

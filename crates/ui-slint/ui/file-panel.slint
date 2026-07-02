@@ -861,10 +861,15 @@ export component FilePanel inherits FocusScope {
                     // rodar hacia abajo, así que restarlo BAJA (aumenta wheel-scroll). Si el
                     // contenido cabe entero, el clamp deja el valor en 0.
                     scroll-event(ev) => {
+                        // Tope del scroll con `list.visible-height` (alto REAL del ListView), NO
+                        // con `self.height` del body-touch: este último puede ser mayor que el área
+                        // visible de la lista, y entonces el máximo salía más chico que el real (o
+                        // 0), bloqueando la rueda aunque hubiera contenido de sobra. El auto-scroll
+                        // por teclado ya usa `list.visible-height` (arriba); así ambos coinciden.
                         root.wheel-scroll = clamp(
                             root.wheel-scroll - ev.delta-y,
                             0px,
-                            max(0px, root.rows.length * root.row-h - self.height));
+                            max(0px, root.rows.length * root.row-h - list.visible-height));
                         return accept;
                     }
                 }

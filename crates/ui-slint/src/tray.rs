@@ -115,20 +115,28 @@ pub fn create(
 /// Decodifica el `.ico` embebido y lo reescala a 32×32 RGBA para la bandeja.
 fn load_icon() -> Option<tray_icon::Icon> {
     let bytes = include_bytes!("../../../assets/icons/naygo_icon.ico");
+    // Si el ícono no carga, se registra en el log (antes iba a stderr, invisible en una
+    // instalación): un tray sin ícono es una de las causas de que el tray no llegue a crearse.
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico)
-        .map_err(|e| eprintln!("[tray] ícono ilegible: {e}"))
+        .map_err(|e| crate::logging::log_line(&format!("[tray] ícono ilegible: {e}")))
         .ok()?
         .to_rgba8();
     let img = image::imageops::resize(&img, 32, 32, image::imageops::FilterType::Lanczos3);
     tray_icon::Icon::from_rgba(img.into_raw(), 32, 32)
-        .map_err(|e| eprintln!("[tray] ícono inválido: {e}"))
+        .map_err(|e| crate::logging::log_line(&format!("[tray] ícono inválido: {e}")))
         .ok()
 }
 
-/// ¿La app debe SALIR al cerrar la ventana? Sale salvo que se haya pedido "cerrar a bandeja" y
-/// el tray esté activo (en cuyo caso se oculta a la bandeja en vez de salir).
-pub fn should_quit_on_close(close_to_tray: bool, tray_active: bool) -> bool {
-    !(close_to_tray && tray_active)
+/// ¿La app debe SALIR al cerrar la ventana? Sale SOLO si el usuario NO pidió "cerrar a bandeja".
+/// Si sí lo pidió (`close_to_tray`), la ventana se oculta y la app sigue viva, AUNQUE el tray no se
+/// haya podido crear: matar el proceso porque el ícono de bandeja falló al cargar sería la peor
+/// opción (el usuario perdería la app sin querer). Con la ventana oculta y sin tray, la app sigue
+/// recuperable por el hotkey global (Ctrl+Alt+Q) que restaura la ventana. Antes esta decisión
+/// dependía de `tray_active`, y si la creación del tray fallaba en silencio, la X cerraba la app.
+/// `tray_active` se conserva en la firma solo para el diagnóstico del llamador (loguearlo), no
+/// decide el cierre.
+pub fn should_quit_on_close(close_to_tray: bool, _tray_active: bool) -> bool {
+    !close_to_tray
 }
 
 #[cfg(test)]
@@ -136,9 +144,13 @@ mod tests {
     use super::should_quit_on_close;
 
     #[test]
-    fn cierre_sale_salvo_close_to_tray_con_tray() {
+    fn cierre_sale_solo_si_no_pidio_bandeja() {
+        // Sin "cerrar a bandeja": la X sale, haya tray o no.
         assert!(should_quit_on_close(false, true));
-        assert!(should_quit_on_close(true, false));
+        assert!(should_quit_on_close(false, false));
+        // Con "cerrar a bandeja": NUNCA sale, aunque el tray haya fallado (tray_active=false).
+        // Antes este caso cerraba la app; ahora se oculta y sigue viva.
+        assert!(!should_quit_on_close(true, false));
         assert!(!should_quit_on_close(true, true));
     }
 }
