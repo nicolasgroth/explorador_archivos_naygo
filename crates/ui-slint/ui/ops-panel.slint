@@ -432,18 +432,6 @@ component OpCard inherits Rectangle {
     background: Theme.row-bg;
     border-radius: 12px;
 
-    // Fade de entrada barato: la tarjeta aparece con un pequeño desvanecido al construirse. Anima
-    // una sola vez (al aparecer); en reposo no cuesta CPU.
-    property <bool> shown: false;
-    opacity: root.shown ? 1.0 : 0.0;
-    init => {
-        root.shown = true;
-    }
-    animate opacity {
-        duration: 150ms;
-        easing: ease-out;
-    }
-
     VerticalLayout {
         padding: 14px;
         spacing: 12px;
@@ -577,17 +565,6 @@ component PlanningCard inherits Rectangle {
     background: Theme.row-bg;
     border-radius: 12px;
 
-    // Fade de entrada barato (una sola vez al aparecer; en reposo, 0 costo).
-    property <bool> shown: false;
-    opacity: root.shown ? 1.0 : 0.0;
-    init => {
-        root.shown = true;
-    }
-    animate opacity {
-        duration: 150ms;
-        easing: ease-out;
-    }
-
     VerticalLayout {
         padding: 14px;
         spacing: 12px;
@@ -654,17 +631,6 @@ component QueuedRow inherits Rectangle {
     height: 34px;
     background: Theme.row-bg;
     border-radius: 8px;
-
-    // Fade de entrada barato (una sola vez al aparecer; en reposo, 0 costo).
-    property <bool> shown: false;
-    opacity: root.shown ? 1.0 : 0.0;
-    init => {
-        root.shown = true;
-    }
-    animate opacity {
-        duration: 150ms;
-        easing: ease-out;
-    }
 
     HorizontalLayout {
         padding-left: 8px;
