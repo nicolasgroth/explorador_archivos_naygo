@@ -266,7 +266,7 @@ fn plantilla_de_tabla_por_defecto_se_aplica_a_paneles_nuevos() {
     c.save_default_table_from_active();
     assert!(c.config.settings.default_table.is_some());
     // Un panel nuevo (split) hereda la plantilla: Extensión oculta.
-    c.add_pane_split();
+    c.add_pane_split(area());
     let new_id = *c.ws.files_panes().last().unwrap();
     let ext_visible =
         c.ws.pane(new_id)
@@ -301,7 +301,7 @@ fn cerrar_panel_quita_uno_y_protege_el_ultimo() {
     let first = *c.ws.files_panes().first().unwrap();
     assert!(!c.can_close_pane(first));
     // Agregar un segundo panel y cerrarlo: vuelve a quedar uno.
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let second = *c.ws.files_panes().last().unwrap();
     assert!(c.can_close_pane(second));
@@ -1229,7 +1229,7 @@ fn sesion_guarda_y_restaura_dos_paneles() {
     // el panel activo (el nuevo) a la subcarpeta.
     let mut c1 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     assert!(drain(&mut c1));
-    c1.add_pane_split();
+    c1.add_pane_split(area());
     assert_eq!(c1.ws.panes().len(), 2, "tras dividir hay dos paneles");
     assert!(drain(&mut c1));
     c1.navigate_active_to(sub.clone());
@@ -1445,11 +1445,11 @@ fn navega_al_ultimo_files_activo_no_al_primero() {
     let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let first = c.active_id().unwrap(); // primer Files
-    c.add_pane_split(); // segundo Files, queda activo
+    c.add_pane_split(area()); // segundo Files, queda activo
     let second = c.active_id().unwrap();
     assert_ne!(first, second);
     // Agregar un Árbol y activarlo (simula clic en el panel Carpetas).
-    c.add_pane_of(PanePurpose::Tree);
+    c.add_pane_of(PanePurpose::Tree, area());
     let tree = c.active_id().unwrap();
     c.set_active(tree);
     // Navegar desde el árbol → debe ir al SEGUNDO Files (el último activo), no al primero.
@@ -1604,7 +1604,7 @@ fn agregar_panel_divide_y_deja_dos() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let first = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     // Dos paneles Files en el layout, y el activo es el nuevo (distinto del primero).
     assert_eq!(c.ws.files_panes().len(), 2);
@@ -1631,7 +1631,7 @@ fn agregar_panel_especial_no_lista_archivos() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let files_listings_antes = c.listings.len();
-    c.add_pane_of(PanePurpose::Tree);
+    c.add_pane_of(PanePurpose::Tree, area());
     // Se agregó un panel Tree y no aumentaron los listados de archivos.
     assert!(c.ws.panes().iter().any(|p| p.purpose == PanePurpose::Tree));
     assert_eq!(
@@ -1864,12 +1864,12 @@ fn resolve_target_segun_cantidad_de_paneles() {
     // Un solo panel → hay que dividir.
     assert_eq!(c.resolve_target(a, area()), PaneTarget::NeedsSplit);
     // Dos paneles → destino directo (el otro).
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     assert_eq!(c.resolve_target(b, area()), PaneTarget::Direct(a));
     // Tres paneles → selector (Pick con 2 candidatos).
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let third = c.active_id().unwrap();
     match c.resolve_target(third, area()) {
@@ -1887,7 +1887,7 @@ fn swap_intercambia_carpetas() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Mandar b a la subcarpeta.
@@ -1908,9 +1908,9 @@ fn selector_pendiente_y_resolucion() {
     std::fs::create_dir(&sub).unwrap();
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let origin = c.active_id().unwrap();
     // Clonar desde el origen: 3 paneles → queda pendiente el selector con 2 candidatos.
@@ -1933,7 +1933,7 @@ fn apilar_crea_un_grupo_de_pestanas() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Apilar b sobre a: quedan en un grupo de 2.
@@ -1954,7 +1954,7 @@ fn cambiar_pestana_activa() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     c.stack_into(b, a);
@@ -1972,7 +1972,7 @@ fn cerrar_pestana_colapsa_el_grupo() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     c.stack_into(b, a);
@@ -1991,7 +1991,7 @@ fn drop_en_el_centro_apila() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Layout: [a | b] en 800x600. Soltar a en el centro de b.
@@ -2026,7 +2026,7 @@ fn drop_en_borde_divide() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Apilar primero a+b para tener un grupo, luego sacar 'a' soltándolo en un borde.
@@ -2049,9 +2049,9 @@ fn cancelar_selector() {
     let tmp = tempfile::tempdir().unwrap();
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let origin = c.active_id().unwrap();
     c.request_action(PaneAction::Clone, origin, area());

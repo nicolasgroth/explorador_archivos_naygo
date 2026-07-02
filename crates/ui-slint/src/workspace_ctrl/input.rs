@@ -271,7 +271,9 @@ impl WorkspaceCtrl {
             // directa, no el combo de terminales). term_int 0 = PowerShell, ver `term_from_int`.
             Action::OpenTerminal => self.ctx_open_terminal(0),
             // Dividir (Ctrl+Shift+T): agrega un panel de archivos (la opción más común del menú "+").
-            Action::SplitPanel => self.add_pane_split(),
+            // `run_action` no recibe el área de contenido (viene de teclado/paleta): usa la última
+            // área conocida (`self.last_area`, que la UI mantiene al día vía `set_area`).
+            Action::SplitPanel => self.add_pane_split(self.last_area),
             // Mostrar/ocultar ocultos (Ctrl+H): togglea el flag, re-arma los árboles filtrados y deja
             // que el `sync_rows` posterior refiltre los paneles. Mismo efecto que la casilla del ojo.
             Action::ToggleHidden => {

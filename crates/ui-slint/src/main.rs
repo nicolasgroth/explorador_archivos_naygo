@@ -1507,11 +1507,24 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                                 tray::TrayMsg::NewPane => {
                                     // Traer al frente y abrir un panel nuevo (divide el activo).
-                                    if let Some(ui) = ui_weak.upgrade() {
+                                    let area = if let Some(ui) = ui_weak.upgrade() {
                                         let _ = ui.show();
                                         ui.window().set_minimized(false);
-                                    }
-                                    ctrl.borrow_mut().add_pane_split();
+                                        Rect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            w: ui.get_content_w().max(0.0),
+                                            h: ui.get_content_h().max(0.0),
+                                        }
+                                    } else {
+                                        Rect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            w: 0.0,
+                                            h: 0.0,
+                                        }
+                                    };
+                                    ctrl.borrow_mut().add_pane_split(area);
                                     sync_layout();
                                 }
                                 tray::TrayMsg::OpenConfig => {
@@ -2297,8 +2310,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
         ui.on_add_pane(move || {
-            ctrl.borrow_mut().add_pane_split();
+            ctrl.borrow_mut().add_pane_split(area_of());
             start_timer();
             sync_layout();
         });
@@ -2307,8 +2321,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
         ui.on_add_pane_of(move |purpose| {
-            ctrl.borrow_mut().add_pane_of(int_to_purpose(purpose));
+            ctrl.borrow_mut()
+                .add_pane_of(int_to_purpose(purpose), area_of());
             start_timer();
             sync_layout();
         });
