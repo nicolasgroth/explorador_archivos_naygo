@@ -37,6 +37,16 @@ La vista previa de código resalta la sintaxis con [syntect](https://github.com/
 
 ---
 
+## Metadata de audio (lofty)
+
+La metadata de archivos de audio (`.mp3`, `.flac`, `.ogg`, `.m4a`, `.wav` — duración, bitrate,
+frecuencia, canales y etiquetas) se lee con [lofty](https://github.com/Serial-ATA/lofty-rs)
+(licencia MIT/Apache-2.0). Es una implementación pura en Rust, sin dependencias nativas: solo
+lee cabeceras y etiquetas, nunca decodifica el audio. Sus dependencias (`byteorder`,
+`data-encoding`, `ogg_pager`, `lofty_attr`) también son permisivas (MIT/Apache-2.0).
+
+---
+
 ## Vista previa de archivos comprimidos (tar, flate2, miniz_oxide)
 
 La vista previa de `.tar`, `.tar.gz` y `.zip` usa:

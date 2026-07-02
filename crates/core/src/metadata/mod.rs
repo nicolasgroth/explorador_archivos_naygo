@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+pub mod audio_meta;
 pub mod image_meta;
 
 /// Un campo de metadata: la clave i18n de su etiqueta + el valor ya formateado.
@@ -44,6 +45,7 @@ fn ensure_core_providers() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         register_provider(Box::new(image_meta::ImageMeta));
+        register_provider(Box::new(audio_meta::AudioMeta));
     });
 }
 

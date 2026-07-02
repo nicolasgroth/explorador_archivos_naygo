@@ -28,6 +28,8 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 # Empaquetado/desempaquetado de .naygoset. También lo usa el generador de íconos
 # (siempre disponible; no requiere feature).
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Metadata de audio (mp3/flac/ogg/m4a/wav): duración, bitrate, sample rate, tags. Pura-Rust, MIT/Apache.
+lofty = "0.22"
 # Deps del generador de íconos (solo bajo feature gen-icons, no se incluyen en la app).
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }
