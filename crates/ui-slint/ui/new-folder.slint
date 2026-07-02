@@ -66,6 +66,18 @@ export component NewFolder inherits Rectangle {
                     text: root.vm.text;
                     wrap: no-wrap;
                     edited(t) => { root.set-text(t); }
+                    // Ctrl+Enter = Crear (si hay líneas válidas). El TextEdit expone su propio
+                    // `key-pressed` (alias del TextInput interno), que Slint invoca ANTES de
+                    // que la tecla se procese como inserción de texto: si devolvemos `accept`,
+                    // el salto de línea NUNCA se inserta. Enter solo (sin Ctrl) se deja pasar
+                    // (`reject`) para que el editor lo trate como salto de línea normal.
+                    key-pressed(event) => {
+                        if (event.text == Key.Return && event.modifiers.control) {
+                            if (root.vm.can-create) { root.create(); }
+                            return accept;
+                        }
+                        return reject;
+                    }
                 }
             }
             Text {
