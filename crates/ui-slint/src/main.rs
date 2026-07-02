@@ -3123,11 +3123,18 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     // Activar animaciones adicionales (brillo de la barra del panel de ops): persiste el toggle.
+    // Además de refrescar la config, se propaga el flag AL INSTANTE al panel de operaciones: si el
+    // usuario alterna el toggle con el panel abierto y sin operaciones que disparen un refresco de
+    // filas, el brillo cambiaría recién en el próximo refresco; este empujón lo hace inmediato.
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
         cfg_win.on_set_animations_enabled(move |v| {
             ctrl.borrow_mut().config.set_animations_enabled(v);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_op_animations_enabled(v);
+            }
             refresh();
         });
     }
