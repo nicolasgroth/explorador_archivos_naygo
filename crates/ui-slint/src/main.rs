@@ -1694,6 +1694,11 @@ fn main() -> Result<(), slint::PlatformError> {
         // escondemos la ventana (se perdería el único punto de acceso a la app).
         let start_in_tray =
             cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
+        // ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si venimos
+        // por autostart con `--tray` Y la última vez la ventana NO estaba abierta (estaba en
+        // bandeja). Si estaba abierta al cerrar, se restaura la ventana. Ver `should_show_on_start`.
+        let window_was_open_on_exit = ctrl.borrow().config.settings.window_was_open_on_exit;
+        let show_on_start = should_show_on_start(cli_args.tray, window_was_open_on_exit);
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
@@ -1750,16 +1755,24 @@ fn main() -> Result<(), slint::PlatformError> {
                         naygo_platform::window_geometry::set(hwnd, placement);
                     }
                 }
-                // Arranque minimizado: si venimos de autostart con --tray y el usuario quiere
-                // arrancar en bandeja, minimizamos la ventana en el primer wake (el proceso sigue
-                // vivo por el ícono de tray; el clic en el ícono la restaura, ya cableado). Se usa
-                // `set_minimized` y NO `window().hide()`: `hide()` decrementa el contador interno
-                // de ventanas visibles de Slint y, si esta es la única ventana visible en ese
-                // momento, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en
-                // bandeja. `set_minimized` solo cambia el estado de la ventana (equivalente a
-                // minimizar a la barra de tareas) y no toca ese contador.
-                if start_in_tray {
+                // Arranque DIRECTO en bandeja: si venimos de autostart con --tray, el usuario
+                // quiere arrancar en bandeja (`start_in_tray`) Y NO hay que mostrar la ventana
+                // (`!show_on_start`: la última vez estaba en bandeja, no abierta), quitamos el botón
+                // de la barra de tareas y dejamos la ventana oculta — sin "flash" ni botón. El
+                // proceso sigue vivo por el ícono de tray; el clic en el ícono (o el hotkey global)
+                // la restaura devolviendo el botón (ver `toggle_window_visibility`).
+                //
+                // `set_taskbar_visible(hwnd, false)` ya hace `ShowWindow(SW_HIDE)`, así que la
+                // ventana queda oculta. El `set_minimized(true)` posterior es defensa por si el
+                // cambio de estilo no bastó en algún backend. NO se usa `window().hide()` de Slint:
+                // decrementa el contador interno de ventanas visibles y, si esta es la única,
+                // dispara `quit_event_loop()` — terminaría la app en vez de dejarla en bandeja.
+                if start_in_tray && !show_on_start {
                     if let Some(ui) = ui_weak_wake.upgrade() {
+                        #[cfg(windows)]
+                        if let Some(hwnd) = naygo_hwnd(&ui) {
+                            naygo_platform::window::set_taskbar_visible(hwnd, false);
+                        }
                         ui.window().set_minimized(true);
                     }
                 }
@@ -5755,8 +5768,18 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let ui_weak_close = ui.as_weak();
         ui.window().on_close_requested(move || {
-            // Capturar y persistir la geometría ANTES de save_session/salir. Va en su propio
-            // scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que siguen.
+            // ¿La ventana estaba ABIERTA (visible, no minimizada/en bandeja) en el momento del
+            // cierre? Se persiste para que el próximo arranque por autostart-a-bandeja decida si
+            // restaurar la ventana o volver a la bandeja (ver `should_show_on_start`). Heurística
+            // simple y correcta en el caso común: si NO está minimizada, estaba abierta. Al cerrar
+            // a bandeja con la X la ventana ya está minimizada/oculta, así que quedará `false`.
+            let window_was_open = ui_weak_close
+                .upgrade()
+                .map(|ui| !ui.window().is_minimized())
+                .unwrap_or(true);
+            // Capturar y persistir la geometría + el flag "ventana abierta al cerrar" ANTES de
+            // save_session/salir. Va en su propio scope para que el borrow_mut() suelte `c` antes
+            // de los ctrl.borrow() que siguen.
             #[cfg(windows)]
             {
                 if let Some(ui) = ui_weak_close.upgrade() {
@@ -5770,10 +5793,19 @@ fn main() -> Result<(), slint::PlatformError> {
                                 y: p.y,
                                 maximized: p.maximized,
                             });
+                            c.config.settings.window_was_open_on_exit = window_was_open;
                             c.config.save();
                         }
                     }
                 }
+            }
+            // En no-Windows no hay geometría que capturar, pero igual persistimos el flag para no
+            // dejar un valor obsoleto (mantiene coherente el arranque en cualquier plataforma).
+            #[cfg(not(windows))]
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.window_was_open_on_exit = window_was_open;
+                c.config.save();
             }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
@@ -6104,6 +6136,14 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
     }
 }
 
+/// ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si es un arranque
+/// por autostart-a-bandeja (`tray_flag`) Y la última vez la ventana NO estaba abierta (estaba en
+/// bandeja). En cualquier otro caso, mostrar (arranque normal, o autostart con la ventana abierta
+/// al cerrar la última vez). Pura y testeable.
+fn should_show_on_start(tray_flag: bool, window_was_open_on_exit: bool) -> bool {
+    !tray_flag || window_was_open_on_exit
+}
+
 /// El HWND de la ventana de Naygo (backend winit), para el menú contextual del Shell.
 /// `None` si no se puede obtener (otro backend) — entonces se oculta "Más opciones de
 /// Windows…". Usa raw-window-handle vía el feature `raw-window-handle-06` de slint.
@@ -6136,6 +6176,11 @@ fn toggle_window_visibility(ui: &AppWindow, tray_active: bool) {
     if is_foreground && tray_active {
         ui.window().set_minimized(true);
     } else {
+        // Devolver el botón de la barra de tareas ANTES de mostrar: si arrancamos directo en
+        // bandeja (autostart), le habíamos quitado el botón con `set_taskbar_visible(false)`. Es
+        // idempotente: si ya era una ventana normal, `true` solo re-afirma el estilo. También
+        // re-muestra la ventana (SW_SHOW), coherente con el `ui.show()` que sigue.
+        naygo_platform::window::set_taskbar_visible(hwnd, true);
         let _ = ui.show();
         ui.window().set_minimized(false);
         naygo_platform::window::bring_to_front(hwnd);
@@ -6561,4 +6606,17 @@ fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arranque_tray_oculta_salvo_ventana_abierta() {
+        assert!(!should_show_on_start(true, false)); // autostart-tray + estaba en bandeja → oculto
+        assert!(should_show_on_start(true, true)); // autostart-tray + estaba abierta → mostrar
+        assert!(should_show_on_start(false, false)); // arranque normal → mostrar
+        assert!(should_show_on_start(false, true)); // arranque normal → mostrar
+    }
 }
