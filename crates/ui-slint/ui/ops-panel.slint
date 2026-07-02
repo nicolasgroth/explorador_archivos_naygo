@@ -703,6 +703,16 @@ component HistoryRow inherits Rectangle {
                 horizontal-stretch: 1;
                 overflow: elide;
             }
+            // Fecha de fin del registro, alineada a la derecha en la MISMA primera línea (no rompe
+            // el alto adaptable 28/44). `status` tiene el stretch, así que empuja la fecha al borde.
+            Text {
+                text: root.op.when;
+                color: Theme.text-dim;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                horizontal-stretch: 0;
+            }
         }
         // Segunda línea: nombres inline (1-2) o el enlace "Ver N archivos" (3+).
         if root.op.files-summary != "": Text {
