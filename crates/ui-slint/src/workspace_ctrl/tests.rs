@@ -350,6 +350,48 @@ fn calcular_tamano_de_carpeta() {
     );
 }
 
+/// El worker de metadata lee las dimensiones de un PNG enfocado: `request_metadata` lanza el
+/// job, se drena con `pump_meta` hasta terminar, y `meta_fields()` trae la clave i18n + el valor.
+#[test]
+fn metadata_de_imagen_reporta_dimensiones() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // PNG 4x2 mínimo (el proveedor de imágenes de core lee solo la cabecera).
+    let png = work.path().join("pic.png");
+    image::RgbaImage::new(4, 2).save(&png).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    // Pedir la metadata del PNG y drenar el worker hasta que responda.
+    c.request_metadata(png.clone());
+    assert!(c.meta_loading(), "el job arranca en estado de lectura");
+    let mut done = false;
+    for _ in 0..3000 {
+        if c.pump_meta() {
+            done = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(done, "el worker de metadata debe terminar");
+    assert!(!c.meta_loading(), "ya no está leyendo");
+    // Se compara contra la CLAVE i18n (la traducción ocurre al construir el VM), no contra el
+    // literal: el runner de CI corre en inglés y no debe romper por el idioma.
+    assert!(
+        c.meta_fields()
+            .iter()
+            .any(|(key, value)| key == "meta.dimensions" && value == "4 × 2"),
+        "debe reportar las dimensiones 4 × 2: {:?}",
+        c.meta_fields()
+    );
+    // Enfocar el mismo path no relanza (el job sigue siendo el mismo, ya terminado).
+    c.request_metadata(png.clone());
+    assert!(!c.meta_loading(), "no relanza para el mismo archivo");
+    // Limpiar cancela el job y deja los campos vacíos.
+    c.clear_metadata();
+    assert!(c.meta_fields().is_empty());
+    assert!(!c.meta_loading());
+}
+
 /// Navegación por teclado del árbol: ↓ mueve el cursor, → expande, Enter navega el panel
 /// Files a la carpeta del cursor.
 #[test]

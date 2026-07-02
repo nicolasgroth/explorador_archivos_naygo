@@ -293,6 +293,9 @@ where
     tr.set_inspector_modified(c.t("slint.inspector.modified").into());
     tr.set_inspector_created(c.t("slint.inspector.created").into());
     tr.set_inspector_path(c.t("slint.inspector.path").into());
+    // Metadata por tipo: solo el rótulo "Leyendo…" se usa directo en el .slint (las etiquetas de
+    // cada campo se resuelven en Rust con `config.t` al construir el VM).
+    tr.set_meta_loading(c.t("meta.loading").into());
     tr.set_history_title(c.t("pane.history.title").into());
     tr.set_history_empty(c.t("slint.history.empty").into());
     tr.set_history_undo(c.t("slint.history.undo").into());

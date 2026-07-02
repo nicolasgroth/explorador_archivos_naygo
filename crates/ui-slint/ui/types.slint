@@ -366,6 +366,13 @@ export struct TreeRow {
     icon: image,
 }
 
+// Un campo de metadata por tipo (dimensiones de una imagen, versión de un exe, …): la etiqueta
+// ya traducida + el valor ya formateado. Lo llena un worker async y lo puebla `sync_rows`.
+export struct MetaFieldVm {
+    label: string,
+    value: string,
+}
+
 // Datos del inspector (propiedades del ítem enfocado del panel activo).
 export struct InspectorVm {
     present: bool,
@@ -377,6 +384,10 @@ export struct InspectorVm {
     created: string,
     is-dir: bool,
     size-calc: string,
+    // Metadata extra por tipo (imagen: dimensiones; exe/dll: versión). Vacío para carpetas o
+    // tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
 }
 
 // Un segmento coloreado de una línea de código resaltado (un Text por segmento en la UI).
@@ -403,6 +414,10 @@ export struct PreviewVm {
     highlighted: bool,
     hl-lines: [HlLineVm],
     path: string,
+    // Metadata extra por tipo del archivo en preview (imagen: dimensiones; exe/dll: versión).
+    // Vacío para tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
 }
 
 // Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.

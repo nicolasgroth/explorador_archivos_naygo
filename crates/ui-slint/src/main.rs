@@ -485,7 +485,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 .collect();
             let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
-            let mut inspector = to_inspector_vm(c.inspector_info());
+            let info = c.inspector_info();
+            let mut inspector = to_inspector_vm(info.clone());
             // Carpeta: el tamaño no viene del listado, se pide con el botón "Calcular" (F3
             // hace lo mismo). Si hay un job vivo/terminado, refleja su estado en vivo aquí.
             if inspector.is_dir {
@@ -493,6 +494,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     inspector.size_calc = SharedString::from(txt);
                 }
             }
+            // Metadata por tipo del ítem enfocado: si es un ARCHIVO, pedirla (el worker no relanza
+            // si ya es la del mismo archivo); si es carpeta o no hay nada, limpiar el job. Luego
+            // poblar el VM del inspector (las etiquetas se traducen con `config.t`).
+            if info.present && !info.is_dir {
+                c.request_metadata(std::path::PathBuf::from(&info.path));
+            } else {
+                c.clear_metadata();
+            }
+            inspector.meta = meta_fields_model(&c);
+            inspector.meta_loading = c.meta_loading();
 
             // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
             // y para el submenú "Mover a…" del panel (lista de grupos destino).
@@ -1593,6 +1604,12 @@ fn main() -> Result<(), slint::PlatformError> {
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
                     // Drenar el cálculo de tamaño de carpeta (F3 «calcular tamaño»).
                     let size_done = ctrl.borrow_mut().pump_sizes();
+                    // Drenar la lectura de metadata por tipo del archivo enfocado (worker async).
+                    // `sync_rows` (más abajo) repuebla el VM cada tick. El estado que decide si el
+                    // timer puede dormir se re-lee DESPUÉS de `sync_rows` (que es quien puede LANZAR
+                    // un job nuevo al enfocar otro archivo): si aquí ya está drenado pero sync_rows
+                    // lanza uno, `meta_done` recalculado abajo lo detecta y mantiene el timer vivo.
+                    ctrl.borrow_mut().pump_meta();
                     // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
                     let search_done = ctrl.borrow_mut().pump_search();
                     // Drenar el listado profundo en vuelo (vista profunda / toggle).
@@ -1615,6 +1632,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         .sync_highlighted_from_watchers(hl_secs, now);
                     let fresh_pending = ctrl.borrow().watchers.any_fresh(hl_secs, now);
                     sync_rows();
+                    // Re-leer el estado de la metadata DESPUÉS de sync_rows: puede haber lanzado un
+                    // job nuevo (al enfocar otro archivo). Si sigue leyendo, el timer no debe dormir.
+                    let meta_done = !ctrl.borrow().meta_loading();
                     // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato
                     // si no cambió. Antes de parar el timer, así el último cambio se guarda.
                     ctrl.borrow_mut().maybe_persist_session();
@@ -1638,6 +1658,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         && !preview_busy
                         && ops_done
                         && size_done
+                        && meta_done
                         && search_done
                         && !deep_changed
                         && !fresh_pending
@@ -6133,6 +6154,9 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
         .as_ref()
         .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
         .unwrap_or_default();
+    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
+    let meta = meta_fields_model(c);
+    let meta_loading = c.meta_loading();
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
@@ -6174,6 +6198,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 highlighted: is_hl,
                 hl_lines: ModelRc::from(Rc::new(VecModel::from(hl_lines))),
                 path,
+                meta,
+                meta_loading,
             }
         }
         Some(preview::ViewCache::Image {
@@ -6191,6 +6217,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 highlighted: false,
                 hl_lines: ModelRc::default(),
                 path,
+                meta,
+                meta_loading,
             }
         }
         Some(preview::ViewCache::Message(m)) => PreviewVm {
@@ -6202,6 +6230,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             highlighted: false,
             hl_lines: ModelRc::default(),
             path,
+            meta,
+            meta_loading,
         },
         None => PreviewVm {
             mode: 0,
@@ -6212,6 +6242,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             highlighted: false,
             hl_lines: ModelRc::default(),
             path: SharedString::new(),
+            meta,
+            meta_loading,
         },
     }
 }
@@ -6481,5 +6513,23 @@ fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
         created: SharedString::from(i.created.as_str()),
         is_dir: i.is_dir,
         size_calc: SharedString::from(i.size_calc.as_str()),
+        // La metadata por tipo (dimensiones, versión) se puebla en `sync_rows` leyendo del worker
+        // (ahí está el ctrl con la traducción i18n); aquí van los valores por defecto.
+        meta: ModelRc::default(),
+        meta_loading: false,
     }
+}
+
+/// Construye el modelo de campos de metadata para un VM, traduciendo cada clave i18n de etiqueta
+/// con `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
+fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
+    let fields: Vec<MetaFieldVm> = c
+        .meta_fields()
+        .iter()
+        .map(|(label_key, value)| MetaFieldVm {
+            label: SharedString::from(c.config.t(label_key)),
+            value: SharedString::from(value.as_str()),
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(fields)))
 }
