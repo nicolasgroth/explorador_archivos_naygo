@@ -588,6 +588,72 @@ impl WorkspaceCtrl {
         Some(next)
     }
 
+    /// Arma el texto de PREVISUALIZACIÓN del deshacer para el popup de confirmación (antes de
+    /// ejecutar). Devuelve `None` si la entrada no existe, ya se deshizo, o el inverso ya no aplica
+    /// (`validate`). Todo se compone con `config.t(...)` (i18n) para respetar el idioma activo.
+    ///
+    /// El resultado `(resumen, lineas)`:
+    /// - `resumen`: una frase con el verbo y el conteo, p. ej. "Deshacer «Copiar»: se borrarán 2
+    ///   archivo(s)" o "Deshacer «Mover»: se devolverán 3 archivo(s) a su origen". El verbo se deriva
+    ///   de las `actions` (predominancia de `TrashCreated` vs `MoveBack`); el conteo es la cantidad
+    ///   de acciones.
+    /// - `lineas`: una por acción — el nombre del archivo + a dónde va (papelera / carpeta origen).
+    pub fn undo_preview(&self, id: u64) -> Option<(String, Vec<String>)> {
+        let idx = self.ops.undo_history.iter().position(|e| e.id == id)?;
+        let entry = &self.ops.undo_history[idx];
+        if entry.undone || naygo_core::ops::undo::validate(&entry.actions).is_err() {
+            return None;
+        }
+        let n = entry.actions.len();
+        // ¿Es un deshacer de COPIAR/CREAR (trashea) o de MOVER/RENOMBRAR (devuelve)? Se decide por
+        // el tipo predominante de acción: si hay al menos un MoveBack, el verbo es "devolver"; si
+        // todas son TrashCreated, es "borrar". (Una entrada mezcla un solo tipo en la práctica, pero
+        // el criterio es robusto ante cualquier combinación.)
+        let has_move = entry
+            .actions
+            .iter()
+            .any(|a| matches!(a, naygo_core::ops::undo::UndoAction::MoveBack { .. }));
+        // Resumen: "Deshacer «<label>»: se {borrarán|devolverán} N archivo(s) [a su origen]".
+        let phrase_key = if has_move {
+            "slint.undo.will_move_back"
+        } else {
+            "slint.undo.will_delete"
+        };
+        let phrase = self.config.t(phrase_key).replace("{n}", &n.to_string());
+        let summary = self
+            .config
+            .t("slint.undo.summary")
+            .replace("{label}", &entry.label)
+            .replace("{detail}", &phrase);
+        // Lista: una línea por acción. TrashCreated → "<nombre> → Papelera"; MoveBack → "<nombre> →
+        // <carpeta destino>". Los nombres/carpetas se derivan de las rutas de cada acción.
+        let to_trash = self.config.t("slint.undo.to_trash");
+        let to_arrow = self.config.t("slint.undo.to_arrow");
+        let file_name = |p: &std::path::Path| -> String {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string_lossy().into_owned())
+        };
+        let folder_of = |p: &std::path::Path| -> String {
+            p.parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let lines: Vec<String> = entry
+            .actions
+            .iter()
+            .map(|a| match a {
+                naygo_core::ops::undo::UndoAction::TrashCreated { path } => {
+                    format!("{} {} {}", file_name(path), to_arrow, to_trash)
+                }
+                naygo_core::ops::undo::UndoAction::MoveBack { now, back_to } => {
+                    format!("{} {} {}", file_name(now), to_arrow, folder_of(back_to))
+                }
+            })
+            .collect();
+        Some((summary, lines))
+    }
+
     /// Deshace la entrada del historial con `id` (botón "Deshacer" del panel Historial).
     /// Valida, re-emite el inverso y la marca deshecha. Devuelve true si arrancó algo.
     pub fn undo_entry(&mut self, id: u64) -> bool {

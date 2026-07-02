@@ -323,6 +323,9 @@ export global Tr {
     in property <string> history-empty: "Sin operaciones todavía";
     in property <string> history-undo: "Deshacer";
     in property <string> history-undone: "Deshecho ✓";
+    // Título del popup de confirmación del deshacer (MessageModal kind 5). El cuerpo (resumen +
+    // lista de archivos) se compone en Rust con i18n; aquí solo va el título.
+    in property <string> slint-undo-confirm-title: "Deshacer acción";
     in property <string> fav-title: "Favoritos";
     in property <string> fav-empty: "Sin favoritos (Ctrl+D)";
     in property <string> fav-recents: "Recientes";

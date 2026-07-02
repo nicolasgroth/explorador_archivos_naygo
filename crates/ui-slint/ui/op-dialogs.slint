@@ -279,8 +279,15 @@ export component OpDialogs inherits Rectangle {
             if root.vm.kind == 2: VerticalLayout {
                 spacing: 12px;
                 Text {
-                    // "Ya existe «X». ¿Qué quieres hacer?" (el nombre va inline; la pregunta es i18n).
-                    text: "«" + root.vm.conflict-name + "» — " + Tr.dlg-conflict-question;
+                    // "Copiar — «X» — ¿Qué quieres hacer?": el verbo de la acción en conflicto se
+                    // antepone (según op-kind) para que el usuario sepa QUÉ operación provocó el
+                    // choque (el nombre va inline; el verbo y la pregunta son i18n).
+                    text: (root.vm.op-kind == 0
+                            ? Tr.ops-file-kind-copy
+                            : (root.vm.op-kind == 1
+                                ? Tr.ops-file-kind-move
+                                : (root.vm.op-kind == 2 ? Tr.dlg-delete : Tr.ops-file-kind-other)))
+                        + " — «" + root.vm.conflict-name + "» — " + Tr.dlg-conflict-question;
                     color: white;
                     wrap: word-wrap;
                 }

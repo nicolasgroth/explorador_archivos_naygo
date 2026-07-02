@@ -4385,6 +4385,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // Ids de los paneles a soltar (cerrar watcher) antes de expulsar, mientras el modal está abierto.
     let pending_eject_panes: std::rc::Rc<std::cell::RefCell<Vec<u64>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Id de la entrada del historial a DESHACER mientras el popup de confirmación (MessageVm kind 5)
+    // está abierto. El botón "Deshacer" ya NO ejecuta directo: abre el popup con el detalle de lo
+    // que se hará y guarda aquí el id; el deshacer real ocurre en `on_message_confirm` (kind 5).
+    let pending_undo: std::rc::Rc<std::cell::RefCell<Option<u64>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
@@ -4446,7 +4451,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh_drives = refresh_drives.clone();
         let pending_eject = pending_eject.clone();
         let pending_eject_panes = pending_eject_panes.clone();
+        let pending_undo = pending_undo.clone();
         let sync_layout = sync_layout.clone();
+        let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_message_confirm(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -4455,6 +4462,17 @@ fn main() -> Result<(), slint::PlatformError> {
             let kind = ui.get_message().kind;
             // Cerrar el modal.
             ui.set_message(MessageVm::default());
+            // kind 5 = confirmar DESHACER → ejecutar el undo de la entrada pendiente. El popup ya
+            // mostró el detalle de lo que se hará; aquí recién se dispara.
+            if kind == 5 {
+                if let Some(id) = pending_undo.borrow_mut().take() {
+                    if ctrl.borrow_mut().undo_entry(id) {
+                        start_timer();
+                    }
+                    sync_rows();
+                }
+                return;
+            }
             // kind 3 = confirmar drop entre paneles → arrancar la op real.
             if kind == 3 {
                 let started = ctrl.borrow_mut().confirm_pending_drop();
@@ -4534,6 +4552,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let pending_eject = pending_eject.clone();
         let pending_eject_panes = pending_eject_panes.clone();
+        let pending_undo = pending_undo.clone();
         ui.on_message_cancel(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -4541,6 +4560,9 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_message(MessageVm::default());
             pending_eject.borrow_mut().take();
             pending_eject_panes.borrow_mut().clear();
+            // Cancelar el deshacer pendiente (si el popup era el de confirmar deshacer): NO se
+            // ejecuta nada, solo se descarta el id guardado.
+            pending_undo.borrow_mut().take();
             // Si había un drop entre paneles esperando confirmación, descartarlo (no-op si no había).
             ctrl.borrow_mut().cancel_pending_drop();
         });
@@ -4767,15 +4789,58 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        // Botón "Deshacer" del panel Historial: deshace la entrada por id.
+        // Botón "Deshacer" del panel Historial: en vez de deshacer directo, abre un popup de
+        // CONFIRMACIÓN (MessageVm kind 5) que explica QUÉ se hará (borrar N / devolver N + lista de
+        // archivos). El deshacer real ocurre al confirmar (ver `on_message_confirm`, kind 5). El id
+        // pendiente se guarda en `pending_undo`.
+        let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
-        let sync_rows = sync_rows.clone();
+        let pending_undo = pending_undo.clone();
         let start_timer = start_timer.clone();
         ui.on_undo_entry(move |id| {
-            if ctrl.borrow_mut().undo_entry(id as u64) {
-                start_timer();
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let id = id as u64;
+            // Componer el detalle (resumen + lista de líneas) desde el ctrl. Si la entrada ya no es
+            // deshacible (ya deshecha / inválida), no se abre nada.
+            let preview = ctrl.borrow().undo_preview(id);
+            let Some((summary, lines)) = preview else {
+                return;
+            };
+            let tr = ui.global::<Tr>();
+            let cfg = ctrl.borrow();
+            // Cuerpo del popup: el resumen y, debajo, hasta MAX_LINES nombres. Si sobran, una línea
+            // final "(y N más)". Así el detalle esencial siempre cabe sin volver ilegible el modal.
+            const MAX_LINES: usize = 5;
+            let mut body = summary;
+            let shown = lines.len().min(MAX_LINES);
+            for line in lines.iter().take(shown) {
+                body.push_str("\n• ");
+                body.push_str(line);
             }
-            sync_rows();
+            if lines.len() > MAX_LINES {
+                let more = cfg
+                    .config
+                    .t("slint.undo.and_more")
+                    .replace("{n}", &(lines.len() - MAX_LINES).to_string());
+                body.push('\n');
+                body.push_str(&more);
+            }
+            drop(cfg);
+            // Guardar el id a deshacer y abrir el popup de confirmación (2 botones).
+            *pending_undo.borrow_mut() = Some(id);
+            ui.set_message(MessageVm {
+                kind: 5, // 5 = confirmar deshacer (2 botones, velo/Esc = cancelar)
+                level: 0,
+                title: tr.get_slint_undo_confirm_title(),
+                body: body.into(),
+                confirm_label: tr.get_history_undo(),
+                cancel_label: tr.get_dlg_cancel(),
+                danger: false,
+            });
+            // Modal abierto desde un clic: rearmar el timer para que el popup responda al instante.
+            start_timer();
         });
     }
     {
@@ -6406,6 +6471,7 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         del_count: d.del_count,
         del_permanent: d.del_permanent,
         conflict_name: SharedString::from(d.conflict_name.as_str()),
+        op_kind: d.op_kind,
         conflict_from: SharedString::from(d.conflict_from.as_str()),
         conflict_to: SharedString::from(d.conflict_to.as_str()),
         existing_name: SharedString::from(d.existing_name.as_str()),

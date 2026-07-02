@@ -1313,10 +1313,18 @@ impl OpsCtrl {
                 del_permanent: *permanent,
                 ..Default::default()
             },
-            Some(OpDialog::Conflict { prompt, .. }) => {
+            Some(OpDialog::Conflict { op_id, prompt }) => {
                 // Comparación LADO A LADO: cada lado (existente | nuevo) trae nombre/tamaño/fecha/
                 // tipo ya formateados para la UI. Tamaño con `SizeFormat::Auto` (igual que el panel
                 // de ops); fecha en la zona local con el formato ISO por defecto.
+                // Tipo de la op en conflicto (para el verbo del encabezado): se resuelve por id
+                // estable en `active_ops` (el vector se puede reordenar). Si no se encuentra, "otro".
+                let op_kind = self
+                    .active_ops
+                    .iter()
+                    .find(|o| o.id == *op_id)
+                    .map(|o| op_kind_code(&o.plan_kind))
+                    .unwrap_or(5);
                 let (ex_name, ex_size, ex_date, ex_ext) = conflict_side(
                     &prompt.existing,
                     prompt.existing_size,
@@ -1331,6 +1339,7 @@ impl OpsCtrl {
                 );
                 OpDialogVmData {
                     kind: 2,
+                    op_kind,
                     conflict_name: ex_name.clone(),
                     // "De dónde a dónde": la carpeta que CONTIENE el archivo entrante (`incoming` es
                     // el origen del paso) y la que CONTIENE el archivo que ya existe (`existing` es el
@@ -2071,6 +2080,9 @@ pub struct OpDialogVmData {
     pub del_count: i32,
     pub del_permanent: bool,
     pub conflict_name: String,
+    /// Tipo de la operación EN CONFLICTO (para que el modal anteponga la acción al encabezado):
+    /// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
+    pub op_kind: i32,
     /// Carpeta de ORIGEN de la operación en conflicto (de dónde sale el archivo/carpeta). Vacía si
     /// no se conoce. Aplica a kind==2 (archivo) y kind==6 (carpeta).
     pub conflict_from: String,

@@ -147,6 +147,9 @@ export struct OpDialogVm {
     del-permanent: bool,
     // Conflicto (por-ítem):
     conflict-name: string,
+    // Tipo de la operación EN CONFLICTO (para anteponer la acción al encabezado del modal):
+    // 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
+    op-kind: int,
     // Carpetas de origen y destino de la operación en conflicto (de dónde a dónde), para mostrar
     // el contexto bajo el "Ya existe «X»". Vacías si no se conocen. Aplican a kind==2 (archivo) y
     // kind==6 (carpeta).

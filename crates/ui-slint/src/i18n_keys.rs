@@ -306,6 +306,7 @@ where
     tr.set_history_empty(c.t("slint.history.empty").into());
     tr.set_history_undo(c.t("slint.history.undo").into());
     tr.set_history_undone(c.t("slint.history.undone").into());
+    tr.set_slint_undo_confirm_title(c.t("slint.undo.confirm_title").into());
     tr.set_fav_title(c.t("pane.favorites.title").into());
     tr.set_fav_empty(c.t("slint.fav.empty").into());
     tr.set_fav_recents(c.t("slint.fav.recents").into());
