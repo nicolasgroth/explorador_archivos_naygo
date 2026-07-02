@@ -153,15 +153,15 @@ begin
     ExpandConstant('{cm:AppLangPage}'), '',
     ExpandConstant('{cm:AppLangPrompt}'), True, False);
   LangPage.Add('English');
-  LangPage.Add('Español');
-  LangPage.Add('Deutsch');
-  LangPage.Add('Français');
-  LangPage.Add('Italiano');
-  LangPage.Add('Português');
-  LangPage.Add('日本語');
-  LangPage.Add('हिन्दी');
-  LangPage.Add('한국어');
-  LangPage.Add('中文');
+  LangPage.Add('Español (Spanish)');
+  LangPage.Add('Deutsch (German)');
+  LangPage.Add('Français (French)');
+  LangPage.Add('Italiano (Italian)');
+  LangPage.Add('Português (Portuguese)');
+  LangPage.Add('日本語 (Japanese)');
+  LangPage.Add('हिन्दी (Hindi)');
+  LangPage.Add('한국어 (Korean)');
+  LangPage.Add('中文 (Chinese)');
   LangPage.SelectedValueIndex := DetectWindowsLangIndex();
 end;
 
