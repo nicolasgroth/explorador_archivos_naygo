@@ -229,6 +229,34 @@ component ExtractIcon inherits Rectangle {
     }
 }
 
+// --- Íconos de RESULTADO (para el historial) ---
+
+// Hecho: un check. Se usa neutro en el historial (color `text-dim`): el VM no distingue hoy
+// éxito/fallo con un bool y no se parsea el `status` traducido, así que el ícono NO afirma resultado;
+// el detalle (hecho / con avisos) va en el propio `status`.
+component DoneIcon inherits Rectangle {
+    in property <color> tint: Theme.accent;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2.5; y: 6.5; }
+        LineTo { x: 5; y: 9; }
+        LineTo { x: 9.5; y: 3; }
+    }
+}
+
+// Nota: no se declara un ícono de fallo (triángulo/!) porque el VM no expone hoy un `failed: bool`
+// y no se parsea el `status` traducido; el historial usa solo `DoneIcon` en tono neutro. Cuando el
+// VM distinga éxito/fallo se podrá añadir un ícono de aviso aquí.
+
 // Chip cuadrado-redondeado que envuelve el ícono del tipo de operación (identidad visual de la
 // tarjeta). Elige el ícono según `op-kind` (0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro).
 component OpKindChip inherits Rectangle {
@@ -507,53 +535,59 @@ component PlanningCard inherits Rectangle {
     callback cancel(int);
 
     background: Theme.row-bg;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 12px;
 
     VerticalLayout {
-        padding: 9px;
-        spacing: 5px;
+        padding: 14px;
+        spacing: 12px;
 
-        // Encabezado: etiqueta de la op + estado "Calculando…" con el punto de acento.
+        // Cabecera: chip de tipo + verbo + a la derecha el punto de escaneo + "Calculando…".
         HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: root.op.label;
-                color: Theme.text;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Rectangle { horizontal-stretch: 1; }
-            ScanDot {
+            spacing: 9px;
+            OpKindChip {
+                op-kind: root.op.op-kind;
                 y: (parent.height - self.height) / 2;
             }
-            Text {
-                text: Tr.ops-calculating;
-                color: Theme.accent;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                Text {
+                    text: root.op.op-kind == 0 ? Tr.ops-verb-copy : root.op.op-kind == 1 ? Tr.ops-verb-move : root.op.op-kind == 2 ? Tr.ops-verb-delete : root.op.op-kind == 3 ? Tr.ops-verb-compress : root.op.op-kind == 4 ? Tr.ops-verb-extract : Tr.ops-verb-other;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 500;
+                    overflow: elide;
+                }
+                // Contadores del escaneo (suben en vivo). Si aún no llegó el primer Progress, "—".
+                Text {
+                    text: root.op.status != "" ? root.op.status : "—";
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                y: (parent.height - self.height) / 2;
+                ScanDot {
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: Tr.ops-calculating;
+                    color: Theme.accent;
+                    font-size: 13px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
             }
         }
 
-        // Contadores del escaneo (suben en vivo). Si aún no llegó el primer Progress, "—".
-        Text {
-            text: root.op.status != "" ? root.op.status : "—";
-            color: Theme.text-dim;
-            font-size: 11px;
-            overflow: elide;
-        }
-
-        // Botón Cancelar (aborta el escaneo: el worker ve el token y corta).
+        // Controles: espaciador + X cancelar (aborta el escaneo; el worker ve el token y corta).
         HorizontalLayout {
-            spacing: 6px;
-            padding-top: 2px;
+            spacing: 8px;
             Rectangle { horizontal-stretch: 1; }
             OpButton {
-                label: Tr.ops-cancel;
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel(root.op.index); }
@@ -562,35 +596,38 @@ component PlanningCard inherits Rectangle {
     }
 }
 
-// Fila compacta de una op EN COLA.
+// Fila compacta de una op EN COLA: chip de tipo pequeño + etiqueta + "en espera" + X cancelar.
 component QueuedRow inherits Rectangle {
     in property <OpRowVm> op;
     callback cancel(int);
-    height: 30px;
+    height: 34px;
     background: Theme.row-bg;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 8px;
     HorizontalLayout {
-        padding-left: 9px;
+        padding-left: 8px;
         padding-right: 6px;
         spacing: 8px;
+        alignment: center;
+        OpKindChip {
+            op-kind: root.op.op-kind;
+            box: 22px;
+        }
         Text {
             text: root.op.label;
             color: Theme.text;
-            font-size: 11px;
+            font-size: 12px;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
             text: "— " + Tr.ops-waiting;
             color: Theme.text-dim;
-            font-size: 11px;
+            font-size: 12px;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
         OpButton {
-            label: Tr.ops-cancel;
+            variant: 2;
             danger: true;
             show-cancel: true;
             pressed => { root.cancel(root.op.index); }
@@ -613,7 +650,14 @@ component HistoryRow inherits Rectangle {
         padding-bottom: 4px;
         spacing: 1px;
         HorizontalLayout {
-            spacing: 8px;
+            spacing: 6px;
+            // Íconito neutro de "hecho" (no afirma éxito/fallo: ver nota junto a DoneIcon).
+            DoneIcon {
+                width: 14px;
+                height: 14px;
+                tint: Theme.text-dim;
+                y: (parent.height - self.height) / 2;
+            }
             Text {
                 text: root.op.label;
                 color: Theme.text-dim;
@@ -681,6 +725,9 @@ export component OpsPanel inherits Rectangle {
     in property <int> queued-count: 0;
     in property <int> history-count: 0;
     in property <int> planning-count: 0;
+    // Activa las animaciones costosas del panel (brillo continuo de la barra). Lo gobierna el flag
+    // global `animations_enabled` de config (default false). Se propaga a cada OpCard.
+    in property <bool> animations-enabled: false;
     callback pause(int);
     callback resume(int);
     callback skip(int);
@@ -697,7 +744,7 @@ export component OpsPanel inherits Rectangle {
         padding: 8px;
         spacing: 6px;
 
-        // Encabezado del panel + botón "Cancelar todo" + resumen.
+        // Encabezado del panel: título + chip-contador con el resumen + X "cancelar todo".
         HorizontalLayout {
             spacing: 8px;
             Text {
@@ -707,26 +754,33 @@ export component OpsPanel inherits Rectangle {
                 font-weight: 800;
                 vertical-alignment: center;
             }
+            // Chip-contador: resumen compacto "[K calculando · ]N en curso · M en cola". El tramo
+            // "calculando" solo aparece si hay alguna op escaneando su plan.
+            Rectangle {
+                background: Theme.selection-bg;
+                border-radius: 20px;
+                height: 22px;
+                horizontal-stretch: 0;
+                y: (parent.height - self.height) / 2;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    Text {
+                        text: (root.planning-count > 0 ? root.planning-count + " " + Tr.ops-calculating + " · " : "") + root.running-count + " " + Tr.ops-in-progress + " · " + root.queued-count + " " + Tr.ops-queued;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
             Rectangle { horizontal-stretch: 1; }
             // "Cancelar todo": visible solo cuando hay ALGO activo (calculando / en curso / en cola).
             // La confirmación la abre Rust (modal MessageModal de 2 botones) antes de cancelar.
             if (root.planning-count + root.running-count + root.queued-count) > 0: OpButton {
-                label: Tr.ops-cancel-all;
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel-all(); }
-            }
-            Text {
-                // Resumen: "[K calculando · ]N en curso · M en cola". El tramo "calculando" solo
-                // aparece si hay alguna op escaneando su plan.
-                text: (root.planning-count > 0
-                        ? root.planning-count + " " + Tr.ops-calculating + " · "
-                        : "")
-                    + root.running-count + " " + Tr.ops-in-progress
-                    + " · " + root.queued-count + " " + Tr.ops-queued;
-                color: Theme.text-dim;
-                font-size: 11px;
-                vertical-alignment: center;
             }
         }
 
@@ -746,6 +800,7 @@ export component OpsPanel inherits Rectangle {
                 if root.running-count > 0: SectionHeader { text: Tr.ops-in-progress; }
                 for r in root.running-rows: OpCard {
                     op: r;
+                    animations-enabled: root.animations-enabled;
                     pause(i) => { root.pause(i); }
                     resume(i) => { root.resume(i); }
                     skip(i) => { root.skip(i); }
