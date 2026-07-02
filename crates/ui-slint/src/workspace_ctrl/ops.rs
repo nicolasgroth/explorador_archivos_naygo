@@ -175,7 +175,8 @@ impl WorkspaceCtrl {
         &mut self,
         dest: PaneId,
         sources: Vec<std::path::PathBuf>,
-        move_: bool,
+        move_hint: bool,
+        copy_forced: bool,
     ) -> bool {
         if sources.is_empty() {
             return false;
@@ -188,6 +189,16 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
+        // Misma decisión que `drop_at`: usar las señales FIABLES del OLE (Shift=`move_hint`,
+        // Ctrl=`copy_forced`) + mismo disco, vía `decide_drop`. Antes este fallback decidía solo por
+        // `move_` (Shift), así que un Ctrl+arrastre que cayera aquí (drop fuera de un panel Files
+        // concreto) movía en vez de copiar en el mismo disco — la misma pérdida de datos que se
+        // arregló en `drop_at`. `is_move` alimenta ejecución y label por igual (el label no miente).
+        let same = naygo_core::dnd::same_drive(&sources[0], &dir);
+        let move_ = matches!(
+            naygo_core::dnd::decide_drop(move_hint, copy_forced, same),
+            naygo_core::dnd::DropAction::Move
+        );
         let label = if move_ {
             self.config.t("ops.file_kind_move")
         } else {

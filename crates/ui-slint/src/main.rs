@@ -1432,6 +1432,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                     active,
                                     payload.paths,
                                     payload.move_,
+                                    payload.copy_forced,
                                 );
                             }
                         }
@@ -5782,10 +5783,15 @@ fn main() -> Result<(), slint::PlatformError> {
             // de los ctrl.borrow() que siguen.
             #[cfg(windows)]
             {
+                let mut c = ctrl.borrow_mut();
+                // El flag "ventana abierta al cerrar" se persiste SIEMPRE, aunque la captura de
+                // geometría falle: si dependiera del `if let` de la geometría, un fallo al leerla
+                // dejaría el flag stale del arranque anterior y el próximo autostart podría decidir
+                // mal entre mostrar la ventana o ir a la bandeja.
+                c.config.settings.window_was_open_on_exit = window_was_open;
                 if let Some(ui) = ui_weak_close.upgrade() {
                     if let Some(hwnd) = naygo_hwnd(&ui) {
                         if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
-                            let mut c = ctrl.borrow_mut();
                             c.config.settings.window = Some(naygo_core::config::WindowGeometry {
                                 width: p.width,
                                 height: p.height,
@@ -5793,11 +5799,10 @@ fn main() -> Result<(), slint::PlatformError> {
                                 y: p.y,
                                 maximized: p.maximized,
                             });
-                            c.config.settings.window_was_open_on_exit = window_was_open;
-                            c.config.save();
                         }
                     }
                 }
+                c.config.save();
             }
             // En no-Windows no hay geometría que capturar, pero igual persistimos el flag para no
             // dejar un valor obsoleto (mantiene coherente el arranque en cualquier plataforma).
