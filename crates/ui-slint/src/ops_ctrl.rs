@@ -1419,9 +1419,9 @@ impl OpsCtrl {
     /// Calcula al vuelo el transcurrido, la velocidad media (bytes_done/elapsed), la velocidad
     /// pico (acumulada en el poll) y la ETA (bytes restantes / velocidad media). Los tamaños se
     /// formatean con `SizeFormat::Auto` (el OpsCtrl no tiene acceso a Settings).
-    pub fn op_rows(&self) -> Vec<OpRowData> {
+    pub fn op_rows(&self, date_fmt: naygo_core::format::DateFormat) -> Vec<OpRowData> {
         use naygo_core::format::{
-            format_duration, format_size, format_speed, format_time, DateFormat, SizeFormat,
+            format_duration, format_size, format_speed, format_time, SizeFormat,
         };
         const FMT: SizeFormat = SizeFormat::Auto;
         let mut rows: Vec<OpRowData> = self
@@ -1552,13 +1552,14 @@ impl OpsCtrl {
                     op_kind: op_kind_code(&o.plan_kind),
                     // Fecha de FIN solo para el historial: se ajusta el epoch UTC al huso local
                     // (mismo criterio que las columnas del panel) y se formatea con el formato de
-                    // fecha por defecto (el OpsCtrl no tiene acceso a Settings). Vacío para las
-                    // filas en curso/cola/planificación.
+                    // fecha con el formato elegido por el usuario (`date_fmt`, que el llamador toma
+                    // de la config), igual que el historial de acciones. Vacío para las filas en
+                    // curso/cola/planificación.
                     when: if kind == 2 {
                         format_time(
                             o.finished_epoch_secs
                                 .map(|s| s as i64 + crate::logging::tz_offset_secs()),
-                            DateFormat::default(),
+                            date_fmt,
                         )
                     } else {
                         String::new()
@@ -3413,7 +3414,7 @@ mod tests {
         // "Ver archivos" (caben en la fila).
         let (_tmp, c, _id) = copia_n_archivos(2);
         let row = c
-            .op_rows()
+            .op_rows(naygo_core::format::DateFormat::default())
             .into_iter()
             .find(|r| r.kind == 2)
             .expect("hay una fila de historial");
@@ -3433,7 +3434,7 @@ mod tests {
         // archivos", y `op_file_list` devuelve los 5 con estado Done.
         let (_tmp, c, id) = copia_n_archivos(5);
         let row = c
-            .op_rows()
+            .op_rows(naygo_core::format::DateFormat::default())
             .into_iter()
             .find(|r| r.kind == 2)
             .expect("hay una fila de historial");
@@ -3518,7 +3519,7 @@ mod tests {
         c.active_ops.push(mk_done(3, 300));
         c.active_ops.push(mk_done(4, 200));
 
-        let rows = c.op_rows();
+        let rows = c.op_rows(naygo_core::format::DateFormat::default());
         // La fila en curso (id 2) sigue presente y con kind==0.
         let running: Vec<i32> = rows
             .iter()

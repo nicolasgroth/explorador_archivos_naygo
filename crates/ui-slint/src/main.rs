@@ -706,7 +706,12 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_hide_dotfiles(c.config.settings.hide_dotfiles);
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
-            let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
+            let op_rows: Vec<OpRowVm> = c
+                .ops
+                .op_rows(c.config.settings.date_format)
+                .into_iter()
+                .map(to_op_row_vm)
+                .collect();
             // El panel rico de operaciones consume modelos separados por zona (kind: 0=en curso
             // 1=en cola 2=historial 3=calculando). Separarlos en Rust evita filas-fantasma en Slint.
             let running: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 0).cloned().collect();
