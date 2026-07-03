@@ -35,6 +35,11 @@ export component HistoryPanel inherits Rectangle {
                 height: 30px;
                 background: row-touch.has-hover ? Theme.row-bg : transparent;
                 border-radius: 3px;
+                // El TouchArea de la fila (solo para el hover del fondo) va PRIMERO → queda por
+                // DEBAJO en z-order del botón «Deshacer». Antes iba último (por encima) y se tragaba
+                // el clic destinado al botón, así que Deshacer no hacía nada. Ahora el `undo-touch`
+                // (dentro del layout, declarado después) queda encima y recibe el clic.
+                row-touch := TouchArea { }
                 HorizontalLayout {
                     padding-left: 6px;
                     padding-right: 4px;
@@ -75,7 +80,6 @@ export component HistoryPanel inherits Rectangle {
                         }
                     }
                 }
-                row-touch := TouchArea { }
             }
         }
     }

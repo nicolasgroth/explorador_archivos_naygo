@@ -30,6 +30,22 @@ pub fn decide_drop_action(ctrl: bool, shift: bool, same_drive: bool) -> DropActi
     }
 }
 
+/// Decide la acción de un drop combinando las señales FIABLES del OLE (`move_hint` = Shift,
+/// `copy_forced` = Ctrl, ambas leídas del `grfKeyState` al soltar) con la heurística de disco.
+/// Es la que debe usar el drop entre paneles: los flags de teclado de la app llegan stale durante
+/// `DoDragDrop`, así que aquí NO se usan. Prioridad: Shift→Move, Ctrl→Copy, si no same_drive→Move.
+pub fn decide_drop(move_hint: bool, copy_forced: bool, same_drive: bool) -> DropAction {
+    if move_hint {
+        DropAction::Move
+    } else if copy_forced {
+        DropAction::Copy
+    } else if same_drive {
+        DropAction::Move
+    } else {
+        DropAction::Copy
+    }
+}
+
 /// ¿`a` y `b` están en el mismo disco/volumen? En Windows el "volumen" puede ser una letra
 /// de unidad (`C:`) o un recurso de red UNC (`\\servidor\recurso`). Se compara una CLAVE de
 /// volumen normalizada (`volume_key`), case-insensitive, tolerante a:
@@ -129,6 +145,27 @@ mod tests {
     #[test]
     fn sin_tecla_distinto_disco_copia() {
         assert_eq!(decide_drop_action(false, false, false), DropAction::Copy);
+    }
+    #[test]
+    fn decide_drop_ctrl_mismo_disco_copia() {
+        // EL BUG: Ctrl + mismo disco DEBE copiar, no mover.
+        assert_eq!(decide_drop(false, true, true), DropAction::Copy);
+    }
+    #[test]
+    fn decide_drop_shift_gana_a_ctrl() {
+        assert_eq!(decide_drop(true, true, false), DropAction::Move);
+    }
+    #[test]
+    fn decide_drop_sin_teclas_mismo_disco_mueve() {
+        assert_eq!(decide_drop(false, false, true), DropAction::Move);
+    }
+    #[test]
+    fn decide_drop_sin_teclas_distinto_disco_copia() {
+        assert_eq!(decide_drop(false, false, false), DropAction::Copy);
+    }
+    #[test]
+    fn decide_drop_shift_mueve_entre_discos() {
+        assert_eq!(decide_drop(true, false, false), DropAction::Move);
     }
     #[test]
     fn same_drive_misma_letra() {

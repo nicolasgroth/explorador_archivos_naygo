@@ -6,7 +6,7 @@
 // solo se pinta según `mode`: 0=vacío 1=texto 2=imagen 3=mensaje. En modo texto, si la regla
 // forzó un lenguaje, se pinta el código resaltado (un Text por segmento); si no, texto plano.
 import { ScrollView } from "std-widgets.slint";
-import { PreviewVm } from "types.slint";
+import { PreviewVm, MetaFieldVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
@@ -107,6 +107,9 @@ export component PreviewPanel inherits Rectangle {
                 }
             }
         }
+
+        // (La metadata por tipo ya se muestra en Propiedades; no se repite en la Vista previa para
+        // no duplicar la misma información — Nicolás lo pidió así.)
 
         if root.view.mode == 0: Text {
             text: Tr.preview-select;

@@ -155,6 +155,10 @@ pub struct WorkspaceCtrl {
     /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
     /// cancela y reemplaza el anterior. El resultado se muestra en la barra de estado.
     pub size_job: Option<SizeJob>,
+    /// Lectura de metadata por tipo (dimensiones de imagen, versión de exe) del archivo enfocado,
+    /// en un hilo worker. Un solo job a la vez: enfocar otro archivo cancela y reemplaza. `None`
+    /// = sin metadata (carpeta o nada enfocado). Ver `MetaJob` y `meta.rs`.
+    pub meta_job: Option<meta::MetaJob>,
     /// Búsqueda recursiva en curso/terminada (Ctrl+F / lupa), si la hay. Mientras esté presente
     /// la UI muestra el panel de resultados; `None` = sin búsqueda. Ver `SearchJob`.
     pub search_job: Option<SearchJob>,
@@ -239,6 +243,10 @@ pub struct ContextMenuState {
     /// objetivo es la carpeta del panel; el menú muestra Explorador/Nueva carpeta/Pegar en vez
     /// de las acciones de archivo.
     pub folder_mode: bool,
+    /// El objetivo del menú es una carpeta (habilita el submenú "Abrir ▸"). Se calcula UNA VEZ
+    /// al abrir el menú (no en cada tick): `folder_mode`, o clic sobre una única fila que es un
+    /// directorio. Cachearlo evita un `stat` por tick que en un share de red lento sería costoso.
+    pub target_is_folder: bool,
 }
 
 /// Modal "nueva(s) carpeta(s)": cada línea del `text` es una subcarpeta a crear dentro de `dir`;
@@ -451,6 +459,7 @@ mod favorites;
 mod input;
 mod layout_panes;
 mod listing;
+mod meta;
 mod navigation;
 mod ops;
 mod session;
@@ -517,6 +526,7 @@ impl WorkspaceCtrl {
             new_folder: None,
             help_open: false,
             size_job: None,
+            meta_job: None,
             search_job: None,
             deep_job: None,
             last_saved_fingerprint: None,

@@ -264,6 +264,11 @@ pub struct InspectorInfo {
     pub size: String,
     pub modified: String,
     pub created: String,
+    /// El objeto es una carpeta (el tamaño no viene del listado; se calcula bajo demanda).
+    pub is_dir: bool,
+    /// Texto vivo del cálculo de tamaño de carpeta ("Calculando… X" / "X" / vacío si no se
+    /// ha pedido). Lo llena la UI desde `size_status`; `inspector_info` lo deja vacío.
+    pub size_calc: String,
 }
 
 /// Construye la info del inspector desde el `FilePaneState` del panel Files activo.
@@ -294,6 +299,8 @@ pub fn inspector_info(
         },
         modified: fmt_time(e.modified, date_format, tz_offset_secs),
         created: fmt_time(e.created, date_format, tz_offset_secs),
+        is_dir: e.kind == EntryKind::Directory,
+        size_calc: String::new(),
     }
 }
 
@@ -489,9 +496,19 @@ pub struct HistRow {
 /// Convierte el historial de deshacer a filas, validando cada entrada contra el disco
 /// (igual que el panel egui: deshabilita "Deshacer" y muestra el motivo si ya no aplica).
 /// Las entradas ya deshechas no se ofrecen (undoable = false, `undone = true`).
-pub fn history_rows(entries: &[UndoEntry]) -> Vec<HistRow> {
+///
+/// `date_fmt`/`tz_offset_secs` formatean `when` como fecha legible en hora local (según el
+/// ajuste del usuario), en vez del epoch crudo. El orden de presentación es del más reciente
+/// al más antiguo (`undo_history` se llena con `push`, la más nueva al final) — esto SOLO
+/// afecta el orden de las filas devueltas, no el `Vec` original ni el orden que usa Ctrl+Z.
+pub fn history_rows(
+    entries: &[UndoEntry],
+    date_fmt: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+) -> Vec<HistRow> {
     entries
         .iter()
+        .rev() // más reciente primero (solo presentación).
         .map(|e| {
             // Tres estados: deshecha (undone), deshacible (undoable), o trabada/no-deshacible
             // (ninguna de las dos, con motivo). `undone` tiene prioridad: si ya se aplicó, no
@@ -507,7 +524,10 @@ pub fn history_rows(entries: &[UndoEntry]) -> Vec<HistRow> {
             HistRow {
                 id: e.id,
                 label: e.label.clone(),
-                when: format!("{}", e.when_epoch_secs),
+                when: naygo_core::format::format_time(
+                    Some(e.when_epoch_secs as i64 + tz_offset_secs),
+                    date_fmt,
+                ),
                 count: e.actions.len() as i32,
                 undoable,
                 undone: e.undone,
@@ -860,7 +880,24 @@ mod tests {
 
     #[test]
     fn historial_vacio_da_filas_vacias() {
-        assert!(history_rows(&[]).is_empty());
+        assert!(history_rows(&[], naygo_core::format::DateFormat::IsoMinute, 0).is_empty());
+    }
+
+    #[test]
+    fn history_when_se_formatea_como_fecha() {
+        let e = UndoEntry {
+            id: 1,
+            label: "Mover".into(),
+            when_epoch_secs: 1_700_000_000,
+            actions: vec![],
+            undone: false,
+        };
+        let rows = history_rows(&[e], naygo_core::format::DateFormat::IsoMinute, 0);
+        assert!(
+            rows[0].when.contains('-') && rows[0].when.contains(':'),
+            "when debe ser una fecha legible (IsoMinute), no el epoch crudo: {}",
+            rows[0].when
+        );
     }
 
     #[test]
@@ -900,21 +937,28 @@ mod tests {
             undone: false,
         };
 
-        let rows = history_rows(&[deshacible, ya_deshecho, trabada]);
+        // `history_rows` presenta la más reciente primero (.rev()): como las tres entradas
+        // comparten `when_epoch_secs`, el orden de inserción se invierte tal cual, así que
+        // rows[0]=trabada(id3), rows[1]=ya_deshecho(id2), rows[2]=deshacible(id1).
+        let rows = history_rows(
+            &[deshacible, ya_deshecho, trabada],
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+        );
         assert_eq!(rows.len(), 3);
-        // Deshacible.
-        assert!(rows[0].undoable && !rows[0].undone, "id1 es deshacible");
+        // Deshacible (id1, ahora al final por el orden invertido).
+        assert!(rows[2].undoable && !rows[2].undone, "id1 es deshacible");
         // Ya deshecho: NO deshacible, pero marcado undone (la UI lo distingue de la trabada).
         assert!(
             !rows[1].undoable && rows[1].undone,
             "id2 ya se deshizo (undone=true)"
         );
-        // Trabada: ni deshacible ni deshecha, con motivo.
+        // Trabada: ni deshacible ni deshecha, con motivo (id3, ahora primera).
         assert!(
-            !rows[2].undoable && !rows[2].undone,
+            !rows[0].undoable && !rows[0].undone,
             "id3 no es deshacible por estado, NO por haberse deshecho"
         );
-        assert!(!rows[2].reason.is_empty(), "la trabada explica el motivo");
+        assert!(!rows[0].reason.is_empty(), "la trabada explica el motivo");
     }
 
     #[test]

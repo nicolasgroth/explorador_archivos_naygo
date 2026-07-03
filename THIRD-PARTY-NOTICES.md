@@ -6,7 +6,7 @@
 
 Naygo se distribuye bajo licencia **MIT** (ver `LICENSE`). El binario incluye o enlaza
 software de terceros, cada uno bajo su propia licencia. Esta lista cubre las dependencias
-que entran en la compilación para Windows (x86_64-pc-windows-msvc): **382 paquetes**.
+que entran en la compilación para Windows (x86_64-pc-windows-msvc): **394 paquetes**.
 
 Todas son licencias permisivas (MIT, Apache-2.0, BSD, ISC, Zlib, etc.) o, en el caso de
 **Slint**, su licencia *royalty-free* (ver más abajo). Ninguna obliga a Naygo a cambiar su
@@ -34,6 +34,27 @@ sección «Acerca de» («Hecho con Rust + Slint»). Más información: <https:/
 
 La vista previa de código resalta la sintaxis con [syntect](https://github.com/trishume/syntect)
 (licencia MIT) y sus gramáticas/temas embebidos. Todas sus dependencias son permisivas.
+
+---
+
+## Metadata de audio (lofty)
+
+La metadata de archivos de audio (`.mp3`, `.flac`, `.ogg`, `.m4a`, `.wav` — duración, bitrate,
+frecuencia, canales y etiquetas) se lee con [lofty](https://github.com/Serial-ATA/lofty-rs)
+(licencia MIT/Apache-2.0). Es una implementación pura en Rust, sin dependencias nativas: solo
+lee cabeceras y etiquetas, nunca decodifica el audio. Sus dependencias (`byteorder`,
+`data-encoding`, `ogg_pager`, `lofty_attr`) también son permisivas (MIT/Apache-2.0).
+
+---
+
+## Metadata de PDF (lopdf)
+
+La metadata de archivos PDF (`.pdf` — número de páginas, autor y título) se lee con
+[lopdf](https://github.com/J-F-Liu/lopdf) (licencia MIT). Es una implementación pura en Rust, sin
+dependencias nativas: solo parsea la estructura del documento (tabla de referencias cruzadas y el
+diccionario `/Info` del trailer), nunca renderiza ni extrae el contenido. Su parser (`nom`,
+`minimal-lexical`) y el resto de sus dependencias (`encoding_rs`, `weezl`, `rangemap`, `md-5`,
+`indexmap`, `flate2`) también son permisivas (MIT / Apache-2.0 / BSD-3-Clause).
 
 ---
 

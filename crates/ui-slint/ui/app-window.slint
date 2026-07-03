@@ -413,7 +413,10 @@ component HistoryCaret inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "Naygo";
+    // Título con la versión-build (lo setea Rust con `naygo_full_version()`), así el build en prueba
+    // se identifica de un vistazo en la barra de título. Default "Naygo" por si Rust no lo setea.
+    in property <string> window-title: "Naygo";
+    title: root.window-title;
     preferred-width: 1000px;
     preferred-height: 640px;
     // Tope de tamaño explícito y amplio: sin esto, el max-width que Slint computa del árbol de
@@ -462,6 +465,7 @@ export component AppWindow inherits Window {
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift)
     callback row-double-clicked(int, int);
+    callback row-middle-clicked(int, int);  // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
@@ -552,6 +556,7 @@ export component AppWindow inherits Window {
     callback fav-move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
     callback preview-open(string);       // abrir el archivo previsualizado con el programa por defecto
     callback undo-entry(int);            // deshacer la entrada del historial
+    callback calc-size();                 // Inspector: pedir el cálculo del tamaño de la carpeta enfocada
     // Acciones multi-panel (toolbar):
     callback swap-panes();               // intercambiar el activo con el otro panel
     callback clone-pane();               // clonar la carpeta del activo en otro panel
@@ -592,6 +597,8 @@ export component AppWindow inherits Window {
     in property <int> op-queued-count;
     in property <int> op-history-count;
     in property <int> op-planning-count;
+    // ¿Encender las animaciones adicionales del panel de ops (brillo de la barra)? Config default: false.
+    in property <bool> op-animations-enabled: false;
     callback op-cancel(int);
     callback op-pause(int);
     callback op-resume(int);
@@ -635,6 +642,9 @@ export component AppWindow inherits Window {
     callback row-context(int, int, length, length);  // (pane-id, pos, x, y)
     in property <ContextMenuVm> ctx-menu;
     callback ctx-open();
+    callback ctx-open-here();        // submenú "Abrir ▸": navegar el panel activo (= doble-clic)
+    callback ctx-open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
+    callback ctx-open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
     callback ctx-open-with();
     callback ctx-copy();
     callback ctx-cut();
@@ -1258,6 +1268,7 @@ export component AppWindow inherits Window {
                         suggestion-clicked(id, name) => { root.path-suggestion-clicked(id, name); }
                         row-clicked(id, pos, ctrl, shift) => { root.row-clicked(id, pos, ctrl, shift); }
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
+                        row-middle-clicked(id, pos) => { root.row-middle-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
@@ -1291,6 +1302,7 @@ export component AppWindow inherits Window {
                         active: p.active;
                         info: p.inspector;
                         focus-pane() => { root.activate(p.id); }
+                        calc-size() => { root.calc-size(); }
                     }
                     if p.purpose == 3: HistoryPanel {
                         width: 100%;
@@ -1340,6 +1352,7 @@ export component AppWindow inherits Window {
                         queued-count: root.op-queued-count;
                         history-count: root.op-history-count;
                         planning-count: root.op-planning-count;
+                        animations-enabled: root.op-animations-enabled;
                         pause(i) => { root.op-pause(i); }
                         resume(i) => { root.op-resume(i); }
                         skip(i) => { root.op-skip(i); }
@@ -1511,6 +1524,9 @@ export component AppWindow inherits Window {
         height: 100%;
         vm: root.ctx-menu;
         open() => { root.ctx-open(); }
+        open-here() => { root.ctx-open-here(); }
+        open-other-pane() => { root.ctx-open-other-pane(); }
+        open-new-pane() => { root.ctx-open-new-pane(); }
         open-with() => { root.ctx-open-with(); }
         copy() => { root.ctx-copy(); }
         cut() => { root.ctx-cut(); }

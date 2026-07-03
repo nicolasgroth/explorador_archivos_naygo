@@ -413,6 +413,9 @@ export component ConfigWindow inherits Window {
     // Auto-resaltado de código (Previsualización).
     in property <bool> auto-highlight-code: true;
     callback set-auto-highlight-code(bool);
+    // Animaciones adicionales de mayor costo (p. ej. el brillo de la barra del panel de operaciones).
+    in property <bool> animations-enabled: false;
+    callback set-animations-enabled(bool);
     // Pie de panel (Avanzado): mostrar/ocultar + plantilla (0..3 fijas, 4=Personalizada) +
     // template personalizado + vista previa en vivo (renderizada por Rust).
     in property <bool> footer-enabled: true;
@@ -664,6 +667,11 @@ export component ConfigWindow inherits Window {
                                     label: Tr.cfg-show-op-summary;
                                     tip: Tr.cfg-tip-show-op-summary;
                                     Switch { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-animations;
+                                    tip: Tr.cfg-tip-animations;
+                                    Switch { checked: root.animations-enabled; toggled => { root.set-animations-enabled(self.checked); } }
                                 }
                             }
 

@@ -111,8 +111,8 @@ fn drop_con_confirmacion_off_ejecuta_directo_y_sin_conflicto_copia() {
     c.ws.set_active(origin);
     let (cx, cy) = pane_center(&c, area, dest);
 
-    // Soltar (Ctrl = copia, determinista). Con la confirmación OFF NO debe quedar pendiente.
-    let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false);
+    // Soltar (copy_forced=Ctrl=copia, determinista). Con la confirmación OFF NO debe quedar pendiente.
+    let routed = c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]);
     assert!(
         routed,
         "drop_at enruta igual (devuelve true en ambos modos)"
@@ -155,8 +155,8 @@ fn drop_con_confirmacion_off_pero_archivo_existente_pide_conflicto() {
     c.ws.set_active(origin);
     let (cx, cy) = pane_center(&c, area, dest);
 
-    // Soltar con la confirmación OFF → arranca directo, sin modal kind 3.
-    assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false));
+    // Soltar con la confirmación OFF → arranca directo, sin modal kind 3. (copy_forced=Ctrl.)
+    assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]));
     assert!(c.pending_drop.is_none(), "no hay confirmación de drop");
 
     // El motor debe DETENERSE en el conflicto, no sobrescribir.
@@ -209,10 +209,10 @@ fn drop_sobre_archivo_existente_confirmado_pide_conflicto_no_sobrescribe() {
     c.ws.set_active(origin);
     let (cx, cy) = pane_center(&c, area, dest);
 
-    // Soltar el archivo sobre el destino (Ctrl=copia, determinista). UN SOLO POPUP: como HAY
-    // conflicto (doc.txt ya existe en el destino), `drop_at` NO deja un drop pendiente de
+    // Soltar el archivo sobre el destino (copy_forced=Ctrl=copia, determinista). UN SOLO POPUP:
+    // como HAY conflicto (doc.txt ya existe en el destino), `drop_at` NO deja un drop pendiente de
     // confirmación — ejecuta directo y va al diálogo de CONFLICTO (que ya es la confirmación).
-    assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false));
+    assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]));
     assert!(
         c.pending_drop.is_none(),
         "con conflicto NO se pide confirmación de drop (un solo popup: el de conflicto)"
@@ -272,16 +272,16 @@ fn drop_un_solo_popup_segun_haya_conflicto() {
     c.ws.set_active(origin);
     let (cx, cy) = pane_center(&c, area, dest);
 
-    // Drop SIN choque → deja pending_drop (sale el modal de confirmación).
-    assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("nuevo.txt")], false));
+    // Drop SIN choque → deja pending_drop (sale el modal de confirmación). copy_forced=Ctrl.
+    assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("nuevo.txt")]));
     assert!(
         c.pending_drop.is_some(),
         "sin conflicto + confirmación ON → se pide confirmar el drop"
     );
     c.cancel_pending_drop();
 
-    // Drop CON choque → NO deja pending_drop (va directo al conflicto, un solo popup).
-    assert!(c.drop_at(cx, cy, true, false, vec![a.path().join("choca.txt")], false));
+    // Drop CON choque → NO deja pending_drop (va directo al conflicto, un solo popup). copy_forced=Ctrl.
+    assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("choca.txt")]));
     assert!(
         c.pending_drop.is_none(),
         "con conflicto → sin confirmación de drop (el conflicto es la confirmación)"
@@ -713,14 +713,7 @@ fn mover_archivo_arrastrando_al_panel_destino() {
     let (cx, cy) = pane_center(&c, a, dest);
 
     // Soltar sobre el panel destino con move_hint=true (Shift real del OLE) → MOVER.
-    let routed = c.drop_at(
-        cx,
-        cy,
-        false,
-        false,
-        vec![src.path().join("clip.txt")],
-        true,
-    );
+    let routed = c.drop_at(cx, cy, true, false, vec![src.path().join("clip.txt")]);
     assert!(routed, "el drop debe enrutar al panel destino");
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles ahora pide confirmación antes de
     // ejecutar; lo confirmamos (equivale a pulsar Mover en el modal).
@@ -756,15 +749,8 @@ fn arrastrar_mismo_disco_sin_modificadores_mueve() {
     c.set_area(a);
     let (cx, cy) = pane_center(&c, a, dest);
 
-    // ctrl=false, shift=false, move_hint=false → mismo disco → Mover.
-    let routed = c.drop_at(
-        cx,
-        cy,
-        false,
-        false,
-        vec![src.path().join("nota.txt")],
-        false,
-    );
+    // move_hint=false, copy_forced=false → mismo disco → Mover.
+    let routed = c.drop_at(cx, cy, false, false, vec![src.path().join("nota.txt")]);
     assert!(routed, "el drop debe enrutar");
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
     assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
@@ -1054,8 +1040,8 @@ fn move_hint_fuerza_mover_con_modificadores_stale() {
     c.set_area(a);
     let (cx, cy) = pane_center(&c, a, dest);
 
-    // Modificadores de la app stale (false), pero move_hint del OLE = true → MOVER.
-    let routed = c.drop_at(cx, cy, false, false, vec![src.path().join("reg.txt")], true);
+    // copy_forced=false, pero move_hint del OLE = true (Shift real al soltar) → MOVER.
+    let routed = c.drop_at(cx, cy, true, false, vec![src.path().join("reg.txt")]);
     assert!(routed, "el drop debe enrutar");
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
     // El move_hint queda guardado en el pendiente, así que confirmar MUEVE igual.

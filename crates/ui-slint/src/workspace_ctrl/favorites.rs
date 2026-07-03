@@ -29,9 +29,14 @@ impl WorkspaceCtrl {
         recent_rows(&self.recents, &folder)
     }
 
-    /// Filas del historial de deshacer (validadas contra el disco).
+    /// Filas del historial de deshacer (validadas contra el disco). Fecha en formato legible
+    /// según el ajuste del usuario y con los registros más nuevos primero.
     pub fn history_rows(&self) -> Vec<HistRow> {
-        history_rows(&self.ops.undo_history)
+        history_rows(
+            &self.ops.undo_history,
+            self.config.settings.date_format,
+            self.tz_offset_secs(),
+        )
     }
 
     /// Persiste el árbol de favoritos a disco. Se llama tras CADA mutación (anclar/quitar,

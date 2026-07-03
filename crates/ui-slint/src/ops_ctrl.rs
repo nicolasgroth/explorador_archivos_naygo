@@ -171,6 +171,11 @@ pub struct ActiveOp {
     /// no son de zip. Es un canal aparte del de progreso porque `OpMsg` (de core) no transporta el
     /// inverso; mantenerlo separado evita tocar el enum compartido.
     pub zip_undo_rx: Option<Receiver<Vec<UndoAction>>>,
+    /// Segundos epoch UTC del instante en que la op pasó a TERMINADA (se asigna cuando se setea
+    /// `summary`). `None` mientras la op está en curso/cola/planificación. Se usa para mostrar la
+    /// fecha del registro en el historial del panel y para ordenar las filas terminadas por
+    /// recencia (más nuevas arriba).
+    pub finished_epoch_secs: Option<u64>,
 }
 
 impl ActiveOp {
@@ -386,6 +391,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         });
     }
 
@@ -425,6 +431,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         });
     }
 
@@ -458,6 +465,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: Some((req, record_undo)),
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         });
     }
 
@@ -513,6 +521,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         });
     }
 
@@ -578,6 +587,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: record_undo.then_some(undo_rx),
+            finished_epoch_secs: None,
         });
 
         std::thread::spawn(move || {
@@ -788,6 +798,7 @@ impl OpsCtrl {
                 op.plan_rx = None;
                 op.request = None;
                 op.summary = Some(OpSummary::default());
+                op.finished_epoch_secs = Some(now_epoch_secs());
                 continue;
             }
 
@@ -949,6 +960,7 @@ impl OpsCtrl {
                     journal::remove(&self.config_dir, &jid);
                 }
                 self.active_ops[i].summary = Some(summary);
+                self.active_ops[i].finished_epoch_secs = Some(now_epoch_secs());
                 self.active_ops[i].rx = None;
             }
         }
@@ -1163,6 +1175,7 @@ impl OpsCtrl {
             op.request = None;
             // Cerrar a historial: la op no llegó a copiar nada.
             op.summary = Some(OpSummary::default());
+            op.finished_epoch_secs = Some(now_epoch_secs());
         }
         self.pending_dialog = None;
     }
@@ -1300,10 +1313,18 @@ impl OpsCtrl {
                 del_permanent: *permanent,
                 ..Default::default()
             },
-            Some(OpDialog::Conflict { prompt, .. }) => {
+            Some(OpDialog::Conflict { op_id, prompt }) => {
                 // Comparación LADO A LADO: cada lado (existente | nuevo) trae nombre/tamaño/fecha/
                 // tipo ya formateados para la UI. Tamaño con `SizeFormat::Auto` (igual que el panel
                 // de ops); fecha en la zona local con el formato ISO por defecto.
+                // Tipo de la op en conflicto (para el verbo del encabezado): se resuelve por id
+                // estable en `active_ops` (el vector se puede reordenar). Si no se encuentra, "otro".
+                let op_kind = self
+                    .active_ops
+                    .iter()
+                    .find(|o| o.id == *op_id)
+                    .map(|o| op_kind_code(&o.plan_kind))
+                    .unwrap_or(5);
                 let (ex_name, ex_size, ex_date, ex_ext) = conflict_side(
                     &prompt.existing,
                     prompt.existing_size,
@@ -1318,6 +1339,7 @@ impl OpsCtrl {
                 );
                 OpDialogVmData {
                     kind: 2,
+                    op_kind,
                     conflict_name: ex_name.clone(),
                     // "De dónde a dónde": la carpeta que CONTIENE el archivo entrante (`incoming` es
                     // el origen del paso) y la que CONTIENE el archivo que ya existe (`existing` es el
@@ -1406,10 +1428,13 @@ impl OpsCtrl {
     /// Calcula al vuelo el transcurrido, la velocidad media (bytes_done/elapsed), la velocidad
     /// pico (acumulada en el poll) y la ETA (bytes restantes / velocidad media). Los tamaños se
     /// formatean con `SizeFormat::Auto` (el OpsCtrl no tiene acceso a Settings).
-    pub fn op_rows(&self) -> Vec<OpRowData> {
-        use naygo_core::format::{format_duration, format_size, format_speed, SizeFormat};
+    pub fn op_rows(&self, date_fmt: naygo_core::format::DateFormat) -> Vec<OpRowData> {
+        use naygo_core::format::{
+            format_duration, format_size, format_speed, format_time, SizeFormat,
+        };
         const FMT: SizeFormat = SizeFormat::Auto;
-        self.active_ops
+        let mut rows: Vec<OpRowData> = self
+            .active_ops
             .iter()
             .map(|o| {
                 let running = o.rx.is_some();
@@ -1533,12 +1558,65 @@ impl OpsCtrl {
                     eta,
                     elapsed: format_duration(elapsed_secs as u64),
                     kind,
+                    op_kind: op_kind_code(&o.plan_kind),
+                    // Fecha de FIN solo para el historial: se ajusta el epoch UTC al huso local
+                    // (mismo criterio que las columnas del panel) y se formatea con el formato de
+                    // fecha con el formato elegido por el usuario (`date_fmt`, que el llamador toma
+                    // de la config), igual que el historial de acciones. Vacío para las filas en
+                    // curso/cola/planificación.
+                    when: if kind == 2 {
+                        format_time(
+                            o.finished_epoch_secs
+                                .map(|s| s as i64 + crate::logging::tz_offset_secs()),
+                            date_fmt,
+                        )
+                    } else {
+                        String::new()
+                    },
                     files_summary,
                     has_file_list,
                     files_done_count,
                 }
             })
-            .collect()
+            .collect();
+
+        // Historial "nuevos arriba": solo se reordena la PRESENTACIÓN de las filas terminadas
+        // (`kind==2`), de más reciente a más antigua según su instante de fin. Es un cambio
+        // puramente visual sobre la copia de filas que se manda a la UI: NO altera `active_ops`
+        // (el orden real de las ops), ni el undo, ni la ejecución. Las filas en curso/cola/
+        // planificación conservan su orden.
+        //
+        // Se recogen las posiciones de las filas `kind==2` y, en esas MISMAS posiciones, se colocan
+        // las filas de historial ordenadas por su timestamp de fin descendente. El timestamp se
+        // busca por el id estable de la op (`row.index`), no por posición. `sort_by` es estable:
+        // los empates de timestamp conservan su orden previo. Las ops sin fin registrado (clave 0)
+        // quedan al final.
+        let history_positions: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.kind == 2)
+            .map(|(i, _)| i)
+            .collect();
+        if history_positions.len() > 1 {
+            let mut history_rows: Vec<OpRowData> =
+                history_positions.iter().map(|&i| rows[i].clone()).collect();
+            history_rows.sort_by(|a, b| {
+                let ts = |r: &OpRowData| {
+                    // `index` guarda el id estable de la op; se busca su timestamp de fin.
+                    self.active_ops
+                        .iter()
+                        .find(|o| o.id as i32 == r.index)
+                        .and_then(|o| o.finished_epoch_secs)
+                        .unwrap_or(0)
+                };
+                ts(b).cmp(&ts(a))
+            });
+            for (pos, row) in history_positions.iter().zip(history_rows) {
+                rows[*pos] = row;
+            }
+        }
+
+        rows
     }
 
     /// Lista completa de archivos procesados por la op terminada `op_id` (la que pidió "Ver
@@ -1828,6 +1906,7 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         });
         self.drop_resume_item(id);
         true
@@ -2001,6 +2080,9 @@ pub struct OpDialogVmData {
     pub del_count: i32,
     pub del_permanent: bool,
     pub conflict_name: String,
+    /// Tipo de la operación EN CONFLICTO (para que el modal anteponga la acción al encabezado):
+    /// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
+    pub op_kind: i32,
     /// Carpeta de ORIGEN de la operación en conflicto (de dónde sale el archivo/carpeta). Vacía si
     /// no se conoce. Aplica a kind==2 (archivo) y kind==6 (carpeta).
     pub conflict_from: String,
@@ -2043,6 +2125,20 @@ pub struct OpDialogVmData {
     pub incoming_is_dir: bool,
 }
 
+/// Mapea el tipo de operación al código que consume el panel (`OpRowVm.op-kind`).
+/// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro.
+pub fn op_kind_code(kind: &OpKind) -> i32 {
+    match kind {
+        OpKind::Copy => 0,
+        OpKind::Move => 1,
+        OpKind::Delete { .. } => 2,
+        OpKind::Compress { .. } => 3,
+        OpKind::Extract => 4,
+        // Rename/BatchRename/CreateDir/CreateFile y cualquier otra → "otro".
+        _ => 5,
+    }
+}
+
 /// Datos planos de una fila del panel de progreso (espejo de `OpRowVm` de Slint).
 /// Los campos de tamaño/velocidad/tiempo vienen ya formateados como String (listos para la UI).
 #[derive(Clone, Debug)]
@@ -2064,6 +2160,11 @@ pub struct OpRowData {
     pub elapsed: String,
     /// 0=en curso 1=en cola 2=historial.
     pub kind: i32,
+    /// Tipo de operación para el ícono/verbo del panel: 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro.
+    pub op_kind: i32,
+    /// Fecha de FIN formateada (hora local) para las filas de HISTORIAL (`kind==2`); vacío en las
+    /// filas en curso/cola/planificación. Se muestra inline en la primera línea del registro.
+    pub when: String,
     /// Nombres inline de los archivos procesados cuando son POCOS (1-2 Done): "a.txt, b.txt".
     /// Vacío si la op procesó 3+ (entonces se ofrece "Ver archivos") o nada Done (o no es historial).
     pub files_summary: String,
@@ -2950,6 +3051,7 @@ mod tests {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            finished_epoch_secs: None,
         }
     }
 
@@ -3324,7 +3426,7 @@ mod tests {
         // "Ver archivos" (caben en la fila).
         let (_tmp, c, _id) = copia_n_archivos(2);
         let row = c
-            .op_rows()
+            .op_rows(naygo_core::format::DateFormat::default())
             .into_iter()
             .find(|r| r.kind == 2)
             .expect("hay una fila de historial");
@@ -3344,7 +3446,7 @@ mod tests {
         // archivos", y `op_file_list` devuelve los 5 con estado Done.
         let (_tmp, c, id) = copia_n_archivos(5);
         let row = c
-            .op_rows()
+            .op_rows(naygo_core::format::DateFormat::default())
             .into_iter()
             .find(|r| r.kind == 2)
             .expect("hay una fila de historial");
@@ -3403,6 +3505,55 @@ mod tests {
             ("D:/c.txt", OpOutcome::Done),
         ]));
         assert!(s.is_empty() && has && n == 3);
+    }
+
+    #[test]
+    fn historial_se_presenta_nuevos_arriba_sin_tocar_curso() {
+        // El historial (kind==2) debe salir con la op terminada MÁS RECIENTE primero, ordenada por
+        // su `finished_epoch_secs`. Las ops en curso (kind==0) NO se reordenan ni se mezclan.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+
+        // Tres ops TERMINADAS con timestamps de fin desordenados (100, 300, 200) y, entremedio, una
+        // op EN CURSO (sin summary). Los ids se asignan crecientes para distinguirlas.
+        let mk_done = |id: u64, ts: u64| {
+            let mut op = fake_active_op(id);
+            op.rx = None; // sin canal => terminada (junto con el summary)
+            op.summary = Some(OpSummary {
+                items: vec![],
+                bytes_done: 0,
+                elapsed_secs: 0.0,
+            });
+            op.finished_epoch_secs = Some(ts);
+            op
+        };
+        c.active_ops.push(mk_done(1, 100));
+        c.active_ops.push(fake_active_op(2)); // en curso (kind==0)
+        c.active_ops.push(mk_done(3, 300));
+        c.active_ops.push(mk_done(4, 200));
+
+        let rows = c.op_rows(naygo_core::format::DateFormat::default());
+        // La fila en curso (id 2) sigue presente y con kind==0.
+        let running: Vec<i32> = rows
+            .iter()
+            .filter(|r| r.kind == 0)
+            .map(|r| r.index)
+            .collect();
+        assert_eq!(
+            running,
+            vec![2],
+            "la op en curso no se reordena ni desaparece"
+        );
+        // El historial sale por recencia: 300 (id 3), 200 (id 4), 100 (id 1).
+        let history: Vec<i32> = rows
+            .iter()
+            .filter(|r| r.kind == 2)
+            .map(|r| r.index)
+            .collect();
+        assert_eq!(
+            history,
+            vec![3, 4, 1],
+            "el historial se presenta de la más reciente a la más antigua"
+        );
     }
 
     #[test]

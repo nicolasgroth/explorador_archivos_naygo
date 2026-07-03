@@ -202,6 +202,10 @@ pub enum Action {
     OpenConfig,
     /// Abrir el menú de plantillas de disposición de paneles (Ctrl+Shift+L).
     LayoutsMenu,
+    /// Abrir la carpeta enfocada del panel activo en OTRO panel (el origen no navega).
+    /// Shift+Enter. Si no hay otro panel, divide y abre en el nuevo (misma resolución que
+    /// Ctrl+doble-clic, vía `request_action`).
+    OpenFocusedOtherPane,
 }
 
 impl Action {
@@ -269,6 +273,7 @@ impl Action {
             FavoritesMenu,
             OpenConfig,
             LayoutsMenu,
+            OpenFocusedOtherPane,
         ]
     }
 
@@ -336,6 +341,7 @@ impl Action {
             FavoritesMenu => "action.favorites_menu",
             OpenConfig => "action.open_config",
             LayoutsMenu => "action.layouts_menu",
+            OpenFocusedOtherPane => "action.open_focused_other_pane",
         }
     }
 
@@ -441,6 +447,8 @@ impl KeyMap {
             (FavoritesMenu, vec![Chord::ctrl(Char('d'))]),
             (OpenConfig, vec![Chord::ctrl_shift(Char('o'))]),
             (LayoutsMenu, vec![Chord::ctrl_shift(Char('l'))]),
+            // Shift+Enter: abrir la carpeta enfocada en OTRO panel (Activate usa Enter a secas).
+            (OpenFocusedOtherPane, vec![Chord::shift(Enter)]),
         ];
         KeyMap { bindings: b }
     }
@@ -560,13 +568,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_60_acciones_con_clave_i18n_unica() {
+    fn all_tiene_61_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 60);
+        assert_eq!(all.len(), 61);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 60, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 61, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -624,6 +632,18 @@ mod tests {
         let km = KeyMap::defaults();
         let chord = Chord::ctrl(KeyCode::Char('p'));
         assert_eq!(km.action_for(&chord), Some(Action::CommandPalette));
+    }
+
+    #[test]
+    fn shift_enter_dispara_open_focused_other_pane() {
+        let km = KeyMap::defaults();
+        let chord = Chord::shift(KeyCode::Enter);
+        assert_eq!(km.action_for(&chord), Some(Action::OpenFocusedOtherPane));
+        // Enter a secas sigue siendo Activate (no chocan).
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::Enter)),
+            Some(Action::Activate)
+        );
     }
 
     #[test]

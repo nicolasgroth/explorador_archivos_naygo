@@ -27,6 +27,9 @@ component MenuRow inherits Rectangle {
 export component ContextMenu inherits Rectangle {
     in property <ContextMenuVm> vm;
     callback open();
+    callback open-here();        // submenú "Abrir ▸": navegar el panel activo a la carpeta (= doble-clic)
+    callback open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
+    callback open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
     callback open-with();
     callback copy();
     callback cut();
@@ -65,15 +68,65 @@ export component ContextMenu inherits Rectangle {
         items := VerticalLayout {
             padding: 4px;
             spacing: 1px;
+            // --- Submenú "Abrir ▸" (solo cuando el target del menú es una carpeta) ---
+            // Un nivel de submenú: fila "Abrir ▸" + panel flotante a la derecha, visible mientras
+            // el mouse está sobre la fila O sobre el propio submenú (para poder desplazarse hacia
+            // él sin que se cierre). La tarjeta padre no tiene `clip`, así que el submenú flotante
+            // (hijo de la fila, `x: parent.width + …`) se dibuja fuera de sus límites sin recorte.
+            if root.vm.target-is-folder: Rectangle {
+                height: 26px;
+                background: open-row-touch.has-hover || open-sub.has-hover-sub ? Theme.selection-bg : transparent;
+                border-radius: 3px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    Text { text: Tr.ctx-open; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "▸"; color: Theme.text-dim; vertical-alignment: center; }
+                }
+                open-row-touch := TouchArea {}
+                // Submenú flotante a la derecha de la fila "Abrir ▸".
+                open-sub := Rectangle {
+                    property <bool> has-hover-sub: sub-touch.has-hover;
+                    visible: open-row-touch.has-hover || sub-touch.has-hover;
+                    // Pegado a la fila (sin hueco): un gap dejaría una banda sin hover entre la
+                    // fila y el submenú que lo cerraría al cruzarla despacio con el mouse.
+                    x: parent.width;
+                    y: 0;
+                    width: 230px;
+                    height: sub-items.preferred-height + 8px;
+                    background: Theme.row-bg;
+                    border-color: Theme.selection-bg;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    sub-touch := TouchArea {}
+                    sub-items := VerticalLayout {
+                        padding: 4px;
+                        spacing: 1px;
+                        // "Abrir (aquí)" solo cuando el target es una carpeta-FILA (modo archivo):
+                        // navegar el panel activo a ella. En folder-mode (zona vacía) el target es la
+                        // carpeta ACTUAL del panel, así que "abrir aquí" re-navegaría a sí misma
+                        // (no-op redundante); ahí se omite y quedan solo otro panel / nuevo / Explorador.
+                        if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
+                        MenuRow { label: Tr.ctx-open-other-pane; clicked => { root.open-other-pane(); } }
+                        MenuRow { label: Tr.ctx-open-new-pane; clicked => { root.open-new-pane(); } }
+                        MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
+                    }
+                }
+            }
+            if root.vm.target-is-folder: Rectangle { height: 1px; background: Theme.border; }
             // --- Modo CARPETA (clic derecho en zona vacía): acciones de la carpeta ---
-            if root.vm.folder-mode: MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
+            // "Abrir en Explorador de Windows" ya vive en el submenú "Abrir ▸" de arriba (el
+            // target-is-folder cubre folder-mode), así que no se duplica aquí.
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-new-folder; clicked => { root.new-folder(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
-            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
-            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
+            // "Abrir ▸" de arriba ya ofrece "Abrir" (evita dos filas "Abrir" con acciones distintas).
+            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            // "Abrir con…" solo para archivos: las carpetas ya tienen su submenú "Abrir ▸" propio.
+            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }

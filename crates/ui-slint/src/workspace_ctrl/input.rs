@@ -235,6 +235,24 @@ impl WorkspaceCtrl {
                     return self.on_row_double_clicked(id, pos);
                 }
             }
+            // Shift+Enter: abrir la carpeta ENFOCADA del panel activo en OTRO panel (el origen
+            // no navega). Si no es carpeta, no hace nada. Mismo camino que Ctrl+doble-clic
+            // (`request_action`): 1 otro panel → directo; 2+ → selector; 0 → divide y usa el nuevo.
+            Action::OpenFocusedOtherPane => {
+                let Some(origin) = active else {
+                    return false;
+                };
+                let target = self
+                    .ws
+                    .active_files()
+                    .and_then(|f| f.focused_view_entry())
+                    .filter(|e| e.kind == EntryKind::Directory)
+                    .map(|e| e.path.clone());
+                let Some(dir) = target else {
+                    return false;
+                };
+                return self.request_action(PaneAction::OpenDir(dir), origin, self.last_area);
+            }
             Action::GoFavorite1 => return self.go_favorite(0),
             Action::GoFavorite2 => return self.go_favorite(1),
             Action::GoFavorite3 => return self.go_favorite(2),
@@ -271,7 +289,9 @@ impl WorkspaceCtrl {
             // directa, no el combo de terminales). term_int 0 = PowerShell, ver `term_from_int`.
             Action::OpenTerminal => self.ctx_open_terminal(0),
             // Dividir (Ctrl+Shift+T): agrega un panel de archivos (la opción más común del menú "+").
-            Action::SplitPanel => self.add_pane_split(),
+            // `run_action` no recibe el área de contenido (viene de teclado/paleta): usa la última
+            // área conocida (`self.last_area`, que la UI mantiene al día vía `set_area`).
+            Action::SplitPanel => self.add_pane_split(self.last_area),
             // Mostrar/ocultar ocultos (Ctrl+H): togglea el flag, re-arma los árboles filtrados y deja
             // que el `sync_rows` posterior refiltre los paneles. Mismo efecto que la casilla del ojo.
             Action::ToggleHidden => {

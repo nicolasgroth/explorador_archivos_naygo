@@ -52,16 +52,43 @@ Name: "pt"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [CustomMessages]
+; Los CustomMessages deben existir para CADA idioma de [Languages] (en/es/de/fr/it/pt/ja);
+; si falta uno, Inno cae al inglés y avisa con un warning al compilar el instalador.
 en.StartupWin=Start Naygo when Windows starts
 es.StartupWin=Iniciar Naygo al arrancar Windows
+de.StartupWin=Naygo beim Start von Windows ausführen
+fr.StartupWin=Lancer Naygo au démarrage de Windows
+it.StartupWin=Avvia Naygo all'avvio di Windows
+pt.StartupWin=Iniciar o Naygo ao iniciar o Windows
+ja.StartupWin=Windows の起動時に Naygo を起動する
 en.OpenWithFolders=Register Naygo in 'Open with' for folders
 es.OpenWithFolders=Registrar Naygo en 'Abrir con' para carpetas
+de.OpenWithFolders=Naygo unter „Öffnen mit" für Ordner registrieren
+fr.OpenWithFolders=Enregistrer Naygo dans « Ouvrir avec » pour les dossiers
+it.OpenWithFolders=Registra Naygo in "Apri con" per le cartelle
+pt.OpenWithFolders=Registrar o Naygo em "Abrir com" para pastas
+ja.OpenWithFolders=フォルダーの「プログラムから開く」に Naygo を登録する
 en.CtxMenuFolders=Add 'Open in Naygo' to the folder context menu
 es.CtxMenuFolders=Agregar 'Abrir en Naygo' al menú contextual de carpetas
+de.CtxMenuFolders=„In Naygo öffnen" zum Kontextmenü von Ordnern hinzufügen
+fr.CtxMenuFolders=Ajouter « Ouvrir dans Naygo » au menu contextuel des dossiers
+it.CtxMenuFolders=Aggiungi "Apri in Naygo" al menu contestuale delle cartelle
+pt.CtxMenuFolders=Adicionar "Abrir no Naygo" ao menu de contexto das pastas
+ja.CtxMenuFolders=フォルダーの右クリックメニューに「Naygo で開く」を追加する
 en.AppLangPage=Naygo language
 es.AppLangPage=Idioma de Naygo
+de.AppLangPage=Naygo-Sprache
+fr.AppLangPage=Langue de Naygo
+it.AppLangPage=Lingua di Naygo
+pt.AppLangPage=Idioma do Naygo
+ja.AppLangPage=Naygo の言語
 en.AppLangPrompt=Choose the language Naygo will start in:
 es.AppLangPrompt=Elige el idioma con el que Naygo se iniciará:
+de.AppLangPrompt=Wählen Sie die Sprache, in der Naygo startet:
+fr.AppLangPrompt=Choisissez la langue de démarrage de Naygo :
+it.AppLangPrompt=Scegli la lingua con cui verrà avviato Naygo:
+pt.AppLangPrompt=Escolha o idioma com que o Naygo será iniciado:
+ja.AppLangPrompt=Naygo を起動する言語を選んでください：
 
 [Tasks]
 ; Acceso directo en el escritorio (marcado por defecto vía el grupo estándar).
@@ -153,15 +180,15 @@ begin
     ExpandConstant('{cm:AppLangPage}'), '',
     ExpandConstant('{cm:AppLangPrompt}'), True, False);
   LangPage.Add('English');
-  LangPage.Add('Español');
-  LangPage.Add('Deutsch');
-  LangPage.Add('Français');
-  LangPage.Add('Italiano');
-  LangPage.Add('Português');
-  LangPage.Add('日本語');
-  LangPage.Add('हिन्दी');
-  LangPage.Add('한국어');
-  LangPage.Add('中文');
+  LangPage.Add('Español (Spanish)');
+  LangPage.Add('Deutsch (German)');
+  LangPage.Add('Français (French)');
+  LangPage.Add('Italiano (Italian)');
+  LangPage.Add('Português (Portuguese)');
+  LangPage.Add('日本語 (Japanese)');
+  LangPage.Add('हिन्दी (Hindi)');
+  LangPage.Add('한국어 (Korean)');
+  LangPage.Add('中文 (Chinese)');
   LangPage.SelectedValueIndex := DetectWindowsLangIndex();
 end;
 

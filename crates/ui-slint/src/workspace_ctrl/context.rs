@@ -19,11 +19,22 @@ impl WorkspaceCtrl {
         if targets.is_empty() {
             return;
         }
+        // ¿El objetivo es una única carpeta? Se calcula UNA vez aquí (al abrir), usando el `kind`
+        // del entry enfocado (sin tocar disco) cuando hay un solo target; el submenú "Abrir ▸" se
+        // ofrece solo en ese caso (no en multi-selección ni sobre un archivo).
+        let target_is_folder = targets.len() == 1
+            && self
+                .ws
+                .active_files()
+                .and_then(|f| f.focused_view_entry())
+                .map(|e| e.kind == naygo_core::fs_model::EntryKind::Directory)
+                .unwrap_or(false);
         self.context_menu = Some(ContextMenuState {
             x,
             y,
             targets,
             folder_mode: false,
+            target_is_folder,
         });
     }
 
@@ -44,6 +55,7 @@ impl WorkspaceCtrl {
                 y,
                 targets: vec![dir],
                 folder_mode: true,
+                target_is_folder: true,
             });
         }
     }
@@ -54,6 +66,22 @@ impl WorkspaceCtrl {
             let _ = naygo_platform::open::open_default(&dir);
         }
         self.close_context_menu();
+    }
+
+    /// Submenú "Abrir ▸" → "Abrir": navega el panel ACTIVO a la carpeta objetivo del menú
+    /// (equivalente al doble-clic sobre esa fila). Devuelve `true` si navegó, para que el
+    /// llamador rearme el timer de listado. Cierra el menú siempre.
+    pub fn ctx_open_here(&mut self) -> bool {
+        let dir = self
+            .context_menu
+            .as_ref()
+            .and_then(|s| s.targets.first().cloned());
+        let navigated = match (dir, self.active_files_id()) {
+            (Some(dir), Some(active)) => self.navigate_pane_to(active, dir),
+            _ => false,
+        };
+        self.close_context_menu();
+        navigated
     }
 
     /// Desde el menú contextual de carpeta: abrir el modal "nueva(s) carpeta(s)" en la carpeta
@@ -277,5 +305,34 @@ impl WorkspaceCtrl {
             let _ = naygo_platform::clipboard::write_text(&lines.join("\r\n"));
         }
         self.close_context_menu();
+    }
+
+    /// Abre la carpeta objetivo del menú contextual en OTRO panel. Reusa `request_action`:
+    /// 1 otro panel → directo; 2+ → selector 1..9; 0 → crea panel nuevo (split por lado largo).
+    /// `area` es el área de contenido (la UI la pasa).
+    pub fn ctx_open_other_pane(&mut self, area: Rect) -> bool {
+        let Some(dir) = self
+            .context_menu
+            .as_ref()
+            .and_then(|s| s.targets.first().cloned())
+        else {
+            return false;
+        };
+        let Some(origin) = self.active_files_id() else {
+            return false;
+        };
+        self.request_action(PaneAction::OpenDir(dir), origin, area)
+    }
+
+    /// Abre la carpeta objetivo del menú en un panel NUEVO (split por el lado más largo).
+    pub fn ctx_open_new_pane(&mut self, area: Rect) -> bool {
+        let Some(dir) = self
+            .context_menu
+            .as_ref()
+            .and_then(|s| s.targets.first().cloned())
+        else {
+            return false;
+        };
+        self.open_dir_in_new_pane(dir, area)
     }
 }

@@ -147,6 +147,9 @@ export struct OpDialogVm {
     del-permanent: bool,
     // Conflicto (por-ítem):
     conflict-name: string,
+    // Tipo de la operación EN CONFLICTO (para anteponer la acción al encabezado del modal):
+    // 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
+    op-kind: int,
     // Carpetas de origen y destino de la operación en conflicto (de dónde a dónde), para mostrar
     // el contexto bajo el "Ya existe «X»". Vacías si no se conocen. Aplican a kind==2 (archivo) y
     // kind==6 (carpeta).
@@ -215,6 +218,10 @@ export struct ContextMenuVm {
     // solo se abre con selección, pero hacerlo explícito evita mostrar el ítem si esa invariante
     // cambia.)
     has-selection: bool,
+    // El objetivo del menú es una carpeta: true si es folder-mode (clic en zona vacía) O si el
+    // único target (clic sobre una fila) es un directorio. Habilita el submenú "Abrir ▸" con
+    // Abrir / Abrir en otro panel / Abrir en panel nuevo / Abrir en el Explorador de Windows.
+    target-is-folder: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
@@ -303,6 +310,8 @@ export struct OpRowVm {
     eta: string,           // tiempo restante estimado, p. ej. "11:08" o ""
     elapsed: string,       // transcurrido, p. ej. "01:48"
     kind: int,             // 0=en curso 1=en cola 2=historial
+    op-kind: int,          // tipo de operación para el ícono/verbo: 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro
+    when: string,          // fecha de fin ya formateada (solo en filas de historial); vacío en las demás
     // Detalle de QUÉ archivos se procesaron (solo en filas de historial):
     files-summary: string, // nombres inline si son 1-2 ("a.txt, b.txt"); vacío si son más o ninguno
     has-file-list: bool,   // true si hay 3+ archivos → la fila ofrece "Ver archivos" (abre popup)
@@ -362,6 +371,13 @@ export struct TreeRow {
     icon: image,
 }
 
+// Un campo de metadata por tipo (dimensiones de una imagen, versión de un exe, …): la etiqueta
+// ya traducida + el valor ya formateado. Lo llena un worker async y lo puebla `sync_rows`.
+export struct MetaFieldVm {
+    label: string,
+    value: string,
+}
+
 // Datos del inspector (propiedades del ítem enfocado del panel activo).
 export struct InspectorVm {
     present: bool,
@@ -371,6 +387,12 @@ export struct InspectorVm {
     size: string,
     modified: string,
     created: string,
+    is-dir: bool,
+    size-calc: string,
+    // Metadata extra por tipo (imagen: dimensiones; exe/dll: versión). Vacío para carpetas o
+    // tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
 }
 
 // Un segmento coloreado de una línea de código resaltado (un Text por segmento en la UI).
@@ -397,6 +419,10 @@ export struct PreviewVm {
     highlighted: bool,
     hl-lines: [HlLineVm],
     path: string,
+    // Metadata extra por tipo del archivo en preview (imagen: dimensiones; exe/dll: versión).
+    // Vacío para tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
 }
 
 // Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.

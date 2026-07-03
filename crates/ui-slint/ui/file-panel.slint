@@ -294,6 +294,7 @@ export component FilePanel inherits FocusScope {
     callback suggestion-clicked(int, string);// (pane-id, nombre) elegir un candidato
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift) — modificadores del clic
     callback row-double-clicked(int, int);
+    callback row-middle-clicked(int, int);   // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
@@ -503,26 +504,34 @@ export component FilePanel inherits FocusScope {
                 }
                 // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela, perder foco
                 // (clic afuera) vuelve a los breadcrumbs.
-                if root.editing: path-edit := LineEdit {
-                    text: root.edit-text;
-                    placeholder-text: "C:\\…";
-                    // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca el
-                    // LineEdit y el "perder foco" nunca tendría foco que perder).
-                    init => { self.focus(); }
-                    edited(t) => { root.path-edit-changed(root.pane-id, t); }
-                    accepted(t) => { root.path-edit-commit(root.pane-id, t); }
-                    // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
-                    changed has-focus => {
-                        if (!self.has-focus) {
-                            root.path-edit-cancel(root.pane-id);
+                // Envuelto en HorizontalLayout (mismo patrón que los breadcrumbs de arriba) para
+                // que el texto quede alineado a la izquierda; el estilo fluent centra el texto
+                // de un LineEdit suelto sin layout.
+                if root.editing: HorizontalLayout {
+                    padding-left: 4px;
+                    path-edit := LineEdit {
+                        horizontal-stretch: 1;
+                        text: root.edit-text;
+                        placeholder-text: "C:\\…";
+                        // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca
+                        // el LineEdit y el "perder foco" nunca tendría foco que perder). Además
+                        // selecciona todo el texto para que escribir reemplace la ruta completa.
+                        init => { self.focus(); self.select-all(); }
+                        edited(t) => { root.path-edit-changed(root.pane-id, t); }
+                        accepted(t) => { root.path-edit-commit(root.pane-id, t); }
+                        // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
+                        changed has-focus => {
+                            if (!self.has-focus) {
+                                root.path-edit-cancel(root.pane-id);
+                            }
                         }
-                    }
-                    key-pressed(ev) => {
-                        if (ev.text == Key.Escape) {
-                            root.path-edit-cancel(root.pane-id);
-                            return accept;
+                        key-pressed(ev) => {
+                            if (ev.text == Key.Escape) {
+                                root.path-edit-cancel(root.pane-id);
+                                return accept;
+                            }
+                            return reject;
                         }
-                        return reject;
                     }
                 }
             }
@@ -807,6 +816,15 @@ export component FilePanel inherits FocusScope {
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.forward) {
                             root.nav-forward(root.pane-id);
                         }
+                        // Clic con el botón central (rueda) sobre una fila que es carpeta: abrirla
+                        // SIEMPRE en un panel NUEVO (Rust valida que sea carpeta; sobre un archivo
+                        // no hace nada).
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.middle) {
+                            root.activate(root.pane-id);
+                            if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
+                                root.row-middle-clicked(root.pane-id, self.cur-row);
+                            }
+                        }
                         // Clic derecho: sobre fila válida la selecciona y abre el menú del ARCHIVO;
                         // en zona vacía abre el menú de la CARPETA. Coords en la ventana
                         // (absolute-position + puntero).
@@ -843,10 +861,13 @@ export component FilePanel inherits FocusScope {
                     // rodar hacia abajo, así que restarlo BAJA (aumenta wheel-scroll). Si el
                     // contenido cabe entero, el clamp deja el valor en 0.
                     scroll-event(ev) => {
+                        // Tope con `list.visible-height` (alto real del ListView), igual que el
+                        // auto-scroll por teclado; verificado en vivo: el scroll de rueda mueve
+                        // `wheel-scroll` en [0, contenido - visible] sin bloquearse.
                         root.wheel-scroll = clamp(
                             root.wheel-scroll - ev.delta-y,
                             0px,
-                            max(0px, root.rows.length * root.row-h - self.height));
+                            max(0px, root.rows.length * root.row-h - list.visible-height));
                         return accept;
                     }
                 }

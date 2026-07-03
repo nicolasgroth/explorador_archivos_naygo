@@ -104,6 +104,12 @@ where
     tr.set_ops_remaining(c.t("ops.remaining").into());
     tr.set_ops_waiting(c.t("ops.waiting").into());
     tr.set_ops_calculating(c.t("ops.calculating").into());
+    tr.set_ops_verb_copy(c.t("ops.verb_copy").into());
+    tr.set_ops_verb_move(c.t("ops.verb_move").into());
+    tr.set_ops_verb_delete(c.t("ops.verb_delete").into());
+    tr.set_ops_verb_compress(c.t("ops.verb_compress").into());
+    tr.set_ops_verb_extract(c.t("ops.verb_extract").into());
+    tr.set_ops_verb_other(c.t("ops.verb_other").into());
     tr.set_ops_view_files(c.t("ops.view_files").into());
     tr.set_ops_files_word(c.t("ops.files_word").into());
     tr.set_ops_file_list_title(c.t("ops.file_list_title").into());
@@ -179,6 +185,10 @@ where
     tr.set_drop_confirm_more(c.t("slint.drop.confirm_more").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
+    // Submenú "Abrir ▸": "Abrir" reusa slint.ctx.open (mismo texto); Explorador reusa
+    // slint.ctx.explorer. Solo hacen falta claves nuevas para las dos entradas de panel.
+    tr.set_ctx_open_other_pane(c.t("slint.ctx.open_other_pane").into());
+    tr.set_ctx_open_new_pane(c.t("slint.ctx.open_new_pane").into());
     tr.set_ctx_open_with(c.t("slint.ctx.open_with").into());
     tr.set_ctx_copy(c.t("slint.ctx.copy").into());
     tr.set_ctx_cut(c.t("slint.ctx.cut").into());
@@ -285,13 +295,18 @@ where
     tr.set_inspector_name(c.t("slint.inspector.name").into());
     tr.set_inspector_kind(c.t("slint.inspector.kind").into());
     tr.set_inspector_size(c.t("slint.inspector.size").into());
+    tr.set_inspector_calc_size(c.t("slint.inspector.calc_size").into());
     tr.set_inspector_modified(c.t("slint.inspector.modified").into());
     tr.set_inspector_created(c.t("slint.inspector.created").into());
     tr.set_inspector_path(c.t("slint.inspector.path").into());
+    // Metadata por tipo: solo el rótulo "Leyendo…" se usa directo en el .slint (las etiquetas de
+    // cada campo se resuelven en Rust con `config.t` al construir el VM).
+    tr.set_meta_loading(c.t("meta.loading").into());
     tr.set_history_title(c.t("pane.history.title").into());
     tr.set_history_empty(c.t("slint.history.empty").into());
     tr.set_history_undo(c.t("slint.history.undo").into());
     tr.set_history_undone(c.t("slint.history.undone").into());
+    tr.set_slint_undo_confirm_title(c.t("slint.undo.confirm_title").into());
     tr.set_fav_title(c.t("pane.favorites.title").into());
     tr.set_fav_empty(c.t("slint.fav.empty").into());
     tr.set_fav_recents(c.t("slint.fav.recents").into());
@@ -424,6 +439,7 @@ where
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
     tr.set_cfg_theme(c.t("slint.cfg.theme").into());
     tr.set_cfg_theme_preview(c.t("slint.cfg.theme_preview").into());
+    tr.set_cfg_animations(c.t("slint.cfg.animations").into());
     // Editor de temas.
     tr.set_theme_customize(c.t("slint.theme.customize").into());
     tr.set_theme_edit(c.t("slint.theme.edit").into());
@@ -511,6 +527,7 @@ where
     tr.set_cfg_tip_paste_ext(c.t("slint.cfg.tip.paste_ext").into());
     tr.set_cfg_tip_theme(c.t("slint.cfg.tip.theme").into());
     tr.set_cfg_tip_icon_set(c.t("slint.cfg.tip.icon_set").into());
+    tr.set_cfg_tip_animations(c.t("slint.cfg.tip.animations").into());
     tr.set_cfg_tip_date_format(c.t("slint.cfg.tip.date_format").into());
     tr.set_cfg_tip_size_format(c.t("slint.cfg.tip.size_format").into());
     tr.set_cfg_tip_row_density(c.t("slint.cfg.tip.row_density").into());

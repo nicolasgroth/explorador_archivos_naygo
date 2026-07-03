@@ -171,11 +171,36 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Agrega un panel Files dividiendo el leaf activo lado a lado (horizontal, el nuevo a la
-    /// derecha). Atajo de la dirección por defecto.
-    pub fn add_pane_split(&mut self) {
+    /// Agrega un panel Files dividiendo el leaf activo por su LADO MÁS LARGO (columnas si es
+    /// ancho, filas si es alto), usando `area` (el área de contenido actual) para medir el rect
+    /// del panel activo. El nuevo panel queda después (derecha/abajo).
+    pub fn add_pane_split(&mut self, area: Rect) {
         crate::logging::breadcrumb("abrir panel (split)");
-        self.add_pane_split_dir(SplitDir::Horizontal, false);
+        let dir = self
+            .ws
+            .active_id()
+            .and_then(|id| {
+                self.pane_rects(area)
+                    .into_iter()
+                    .find(|(pid, _)| *pid == id)
+                    .map(|(_, r)| r)
+            })
+            .map(naygo_core::workspace::layout::pick_split_dir)
+            .unwrap_or(SplitDir::Horizontal);
+        self.add_pane_split_dir(dir, false);
+    }
+
+    /// Abre `dir` SIEMPRE en un panel NUEVO (divide el leaf activo por su lado más largo, vía
+    /// `add_pane_split`) y navega ese panel nuevo a `dir`. Lo usan el clic-medio sobre una fila
+    /// (siempre split, a diferencia de Shift+Enter/Ctrl+doble-clic que reusan otro panel si ya
+    /// hay uno) y `ctx_open_new_pane` del menú contextual.
+    pub fn open_dir_in_new_pane(&mut self, dir: PathBuf, area: Rect) -> bool {
+        self.add_pane_split(area);
+        let Some(dest) = self.active_id() else {
+            return false;
+        };
+        self.open_in_pane(dest, dir);
+        true
     }
 
     /// Agrega un panel Files dividiendo el leaf activo en la dirección dada. `first=true` pone
@@ -205,10 +230,10 @@ impl WorkspaceCtrl {
     /// Agrega un panel del `purpose` dado DIVIDIENDO el leaf activo (horizontal). Los
     /// `Files` arrancan listado en la carpeta del activo; los demás no listan. El Tree
     /// inicializa su `DirTree` desde las unidades del sistema.
-    pub fn add_pane_of(&mut self, purpose: PanePurpose) {
+    pub fn add_pane_of(&mut self, purpose: PanePurpose, area: Rect) {
         crate::logging::breadcrumb(&format!("abrir panel {:?}", purpose));
         if matches!(purpose, PanePurpose::Files) {
-            self.add_pane_split();
+            self.add_pane_split(area);
             return;
         }
         let dir = self

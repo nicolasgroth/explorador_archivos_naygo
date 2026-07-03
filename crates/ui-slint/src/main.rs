@@ -51,6 +51,18 @@ slint::include_modules!();
 /// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
+/// Versión completa mostrada al usuario: `X.Y.Z+build.YYYYMMDDHHMM`. El sufijo `+build.<id>` es el
+/// metadato de build de semver (no altera la versión semver base); lo estampa `build.rs` en
+/// `NAYGO_BUILD_ID` en cada compilación, así cada build es identificable sin ambigüedad al probar.
+/// Si el id es "unknown" (no se pudo leer la hora en el build), se muestra solo la versión base.
+fn naygo_full_version() -> String {
+    let base = env!("CARGO_PKG_VERSION");
+    match option_env!("NAYGO_BUILD_ID") {
+        Some(id) if id != "unknown" && !id.is_empty() => format!("{base}+build.{id}"),
+        _ => base.to_string(),
+    }
+}
+
 /// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
 struct PaneModels {
     rows: Rc<VecModel<RowData>>,
@@ -218,7 +230,7 @@ fn main() -> Result<(), slint::PlatformError> {
             .set_title("Naygo")
             .set_description(format!(
                 "Naygo v{}\nNicolás Groth / ISGroth · MIT",
-                env!("CARGO_PKG_VERSION")
+                naygo_full_version()
             ))
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
@@ -226,10 +238,18 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let ui = AppWindow::new()?;
+    // Título de la ventana limpio: solo "Naygo". El id de build (p. ej. "0.3.0+build.202607021614")
+    // se muestra en el Acerca de (vía `set_app_version`) y en el splash de arranque, no en la barra
+    // de título ni en la barra de tareas.
+    ui.set_window_title("Naygo".into());
     let start = std::env::var_os("USERPROFILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
     let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // Proveedor de metadata de versión de exe/dll (Win32 VerQueryValue). Se registra una
+    // sola vez al arrancar, antes de que la UI pueda pedir metadata de un archivo.
+    #[cfg(windows)]
+    naygo_core::metadata::register_provider(Box::new(naygo_platform::exe_meta::ExeMeta));
     // El registro (HKCU\...\Run) es la fuente de verdad de `autostart`, no settings.json: el
     // instalador puede crear la entrada Run sin pasar por la UI (o el usuario puede borrarla a
     // mano). Sincronizamos el ajuste guardado contra el registro real al arrancar.
@@ -391,25 +411,49 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Splash de arranque (Fase 5F): solo en release. Ventana breve de bienvenida que se cierra
-    // sola a ~1.2s. La ventana principal se construye por detrás (el splash no la bloquea). En
+    // sola a ~1.8s. La ventana principal se construye por detrás (el splash no la bloquea). En
     // debug se omite (arranque directo). Se mantiene vivo en una variable de la función `main`.
     // Nota: el Splash usa los colores POR DEFECTO del global Theme (azul marino), que coinciden
     // con el tema default — no hace falta aplicarle el tema activo (es una pantalla efímera).
     #[cfg(not(debug_assertions))]
     let _splash_keepalive = match Splash::new() {
         Ok(splash) => {
+            // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
+            splash.set_build_version(naygo_full_version().into());
             let _ = splash.show();
             let splash = Rc::new(splash);
+            // El splash debe quedar ENCIMA de la ventana principal, que se muestra casi a la vez.
+            // `set_topmost` (SetWindowPos HWND_TOPMOST) lo eleva sin robarle el foco ni moverlo. El
+            // detalle clave: ANTES de `ui.run()` la ventana del splash NO está realizada por winit y
+            // NO tiene HWND todavía (medido: `splash_hwnd` devuelve `None` hasta ~1 s después de
+            // entrar al event loop). Por eso el topmost se aplica desde un `Timer` que corre en el
+            // hilo de UI YA con el loop andando: sondea cada 100 ms y, en cuanto obtiene el HWND, lo
+            // eleva UNA vez y se auto-detiene (`topmost_timer.stop()`). Es robusto ante equipos
+            // lentos (una VM podría tardar más en realizar la ventana): sigue reintentando hasta
+            // lograrlo, sin costo perceptible (el splash vive solo ~1.8 s).
+            let splash_topmost = splash.clone();
+            let topmost_timer = Rc::new(slint::Timer::default());
+            let topmost_timer_self = topmost_timer.clone();
+            topmost_timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(100),
+                move || {
+                    if let Some(hwnd) = splash_hwnd(&splash_topmost) {
+                        naygo_platform::window::set_topmost(hwnd);
+                        topmost_timer_self.stop();
+                    }
+                },
+            );
             let splash_for_timer = splash.clone();
             let timer = slint::Timer::default();
             timer.start(
                 slint::TimerMode::SingleShot,
-                std::time::Duration::from_millis(1200),
+                std::time::Duration::from_millis(1800),
                 move || {
                     let _ = splash_for_timer.hide();
                 },
             );
-            Some((splash, timer))
+            Some((splash, timer, topmost_timer))
         }
         Err(_) => None,
     };
@@ -481,7 +525,29 @@ fn main() -> Result<(), slint::PlatformError> {
                 .collect();
             let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
-            let inspector = to_inspector_vm(c.inspector_info());
+            let info = c.inspector_info();
+            let mut inspector = to_inspector_vm(info.clone());
+            // Carpeta: el tamaño no viene del listado, se pide con el botón "Calcular" (F3 hace lo
+            // mismo). Solo se refleja el resultado si el cálculo corresponde a ESTA carpeta (la
+            // enfocada, `info.path`): si el usuario cambió de foco a otra carpeta, el resultado viejo
+            // NO se pega y el Inspector vuelve a mostrar el botón «Calcular» (size_status_for → None).
+            if inspector.is_dir {
+                if let Some(txt) = c.size_status_for(std::path::Path::new(info.path.as_str())) {
+                    inspector.size_calc = SharedString::from(txt);
+                }
+            }
+            // Metadata por tipo del archivo a mostrar. Se sigue el MISMO archivo que la Vista
+            // previa (último Files activo → ítem enfocado, solo archivos), no el panel activo a
+            // secas: así coincide con el preview aun con varios paneles Files, y clicar en el
+            // Preview/Inspector no la vacía. Si es carpeta o no hay nada, se limpia el job. El
+            // worker no relanza si ya es la del mismo archivo. Las etiquetas se traducen con
+            // `config.t` en `meta_fields_model`.
+            match c.metadata_target() {
+                Some(path) => c.request_metadata(path),
+                None => c.clear_metadata(),
+            }
+            inspector.meta = meta_fields_model(&c);
+            inspector.meta_loading = c.meta_loading();
 
             // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
             // y para el submenú "Mover a…" del panel (lista de grupos destino).
@@ -682,7 +748,12 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_hide_dotfiles(c.config.settings.hide_dotfiles);
             // Operaciones de archivo (F3): modal activo + filas de progreso + retomar.
             ui.set_op_dialog(to_op_dialog_vm(c.ops.dialog_vm()));
-            let op_rows: Vec<OpRowVm> = c.ops.op_rows().into_iter().map(to_op_row_vm).collect();
+            let op_rows: Vec<OpRowVm> = c
+                .ops
+                .op_rows(c.config.settings.date_format)
+                .into_iter()
+                .map(to_op_row_vm)
+                .collect();
             // El panel rico de operaciones consume modelos separados por zona (kind: 0=en curso
             // 1=en cola 2=historial 3=calculando). Separarlos en Rust evita filas-fantasma en Slint.
             let running: Vec<OpRowVm> = op_rows.iter().filter(|r| r.kind == 0).cloned().collect();
@@ -697,6 +768,8 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_op_queued_rows(ModelRc::from(Rc::new(VecModel::from(queued))));
             ui.set_op_history_rows(ModelRc::from(Rc::new(VecModel::from(history))));
             ui.set_op_planning_rows(ModelRc::from(Rc::new(VecModel::from(planning))));
+            // Brillo animado de la barra del panel de ops: solo si el usuario lo activó (default false).
+            ui.set_op_animations_enabled(c.config.animations_enabled());
             let resume_rows: Vec<ResumeRowVm> = c
                 .ops
                 .resume_rows()
@@ -718,6 +791,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     folder_mode: cm.folder_mode,
                     is_single_zip: c.sel_is_single_zip(),
                     has_selection: !c.selected_paths().is_empty(),
+                    // Carpeta objetivo (habilita el submenú "Abrir ▸"): flag YA cacheado al abrir
+                    // el menú (evita un `stat` por tick, costoso en shares de red lentos).
+                    target_is_folder: cm.target_is_folder,
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -728,6 +804,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     folder_mode: false,
                     is_single_zip: false,
                     has_selection: false,
+                    target_is_folder: false,
                 },
             };
             ui.set_ctx_menu(ctx);
@@ -1187,15 +1264,52 @@ fn main() -> Result<(), slint::PlatformError> {
     let tray: Rc<Option<tray::Tray>> = Rc::new(if ctrl.borrow().config.settings.tray_enabled {
         let t = {
             let c = ctrl.borrow();
+            // Cada opción del menú muestra su atajo a la derecha (didáctico). En los menús nativos de
+            // Windows, un `\t` alinea el texto que le sigue a la derecha. Componemos el atajo aquí
+            // (donde está el keymap + el hotkey global), no en tray.rs, que solo recibe los labels.
+            // Reusamos los formateadores ya existentes: `chord_to_text` (para el hotkey global) y
+            // `chord_text_for` (primer chord de una acción del keymap; vacío si no tiene atajo).
+            let with_shortcut = |label: String, shortcut: &str| -> String {
+                if shortcut.is_empty() {
+                    label
+                } else {
+                    format!("{label}\t{shortcut}")
+                }
+            };
+            // Abrir → hotkey global (restaura la ventana), solo si está habilitado.
+            let open_shortcut = if c.config.settings.global_hotkey_enabled {
+                config_ctrl::ConfigCtrl::chord_to_text(&c.config.settings.global_hotkey)
+            } else {
+                String::new()
+            };
+            // Nuevo panel → Action::SplitPanel; Configuración → Action::OpenConfig. Centrar ventana y
+            // Salir no tienen acción con chord configurable, así que van sin atajo (solo el label).
+            let new_pane_shortcut = c
+                .config
+                .chord_text_for(naygo_core::keymap::Action::SplitPanel);
+            let config_shortcut = c
+                .config
+                .chord_text_for(naygo_core::keymap::Action::OpenConfig);
             tray::create(
-                &c.config.t("slint.tray.open"),
-                &c.config.t("slint.tray.new_pane"),
-                &c.config.t("slint.tray.config"),
+                &with_shortcut(c.config.t("slint.tray.open"), &open_shortcut),
+                &with_shortcut(c.config.t("slint.tray.new_pane"), &new_pane_shortcut),
+                &with_shortcut(c.config.t("slint.tray.config"), &config_shortcut),
                 &c.config.t("slint.tray.center"),
                 &c.config.t("slint.tray.exit"),
                 waker.clone(),
             )
         };
+        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log: sin este
+        // aviso el fallo era invisible. Ya no afecta al cierre (la X respeta close_to_tray aunque
+        // el tray falle), pero explica por qué no aparece el ícono en la bandeja.
+        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log (sin este aviso
+        // el fallo era invisible). No afecta al cierre (la X respeta close_to_tray aunque el tray
+        // falle), pero explica por qué no aparece el ícono de bandeja.
+        if t.is_none() {
+            crate::logging::log_line(
+                "[tray] tray_enabled=true pero la creación del tray falló; sin ícono de bandeja",
+            );
+        }
         t
     } else {
         None
@@ -1370,17 +1484,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                 let scale = ui.window().scale_factor().max(0.01);
                                 let cx = client_x as f32 / scale;
                                 let cy = client_y as f32 / scale - TOP_BAR_H;
-                                let (ctrl_down, shift_down) = {
-                                    let c = ctrl.borrow();
-                                    (c.ctrl_down, c.shift_down)
-                                };
                                 routed = ctrl.borrow_mut().drop_at(
                                     cx,
                                     cy,
-                                    ctrl_down,
-                                    shift_down,
+                                    payload.move_,       // move_hint (Shift del OLE)
+                                    payload.copy_forced, // copy_forced (Ctrl del OLE)
                                     payload.paths.clone(),
-                                    payload.move_,
                                 );
                             }
                         }
@@ -1399,6 +1508,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                     active,
                                     payload.paths,
                                     payload.move_,
+                                    payload.copy_forced,
                                 );
                             }
                         }
@@ -1507,11 +1617,24 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                                 tray::TrayMsg::NewPane => {
                                     // Traer al frente y abrir un panel nuevo (divide el activo).
-                                    if let Some(ui) = ui_weak.upgrade() {
+                                    let area = if let Some(ui) = ui_weak.upgrade() {
                                         let _ = ui.show();
                                         ui.window().set_minimized(false);
-                                    }
-                                    ctrl.borrow_mut().add_pane_split();
+                                        Rect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            w: ui.get_content_w().max(0.0),
+                                            h: ui.get_content_h().max(0.0),
+                                        }
+                                    } else {
+                                        Rect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            w: 0.0,
+                                            h: 0.0,
+                                        }
+                                    };
+                                    ctrl.borrow_mut().add_pane_split(area);
                                     sync_layout();
                                 }
                                 tray::TrayMsg::OpenConfig => {
@@ -1535,6 +1658,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                                 tray::TrayMsg::Exit => {
                                     ctrl.borrow().save_session();
+                                    // Quitar el ícono de la bandeja ANTES de salir, para que no
+                                    // quede "fantasma" hasta que Windows lo repinte al pasar el
+                                    // mouse. `Drop` al terminar el proceso no basta (no es síncrono).
+                                    if let Some(t) = tray.as_ref() {
+                                        t.hide_icon();
+                                    }
                                     let _ = slint::quit_event_loop();
                                 }
                             }
@@ -1565,6 +1694,12 @@ fn main() -> Result<(), slint::PlatformError> {
                     let ops_done = ctrl.borrow_mut().ops.pump_ops();
                     // Drenar el cálculo de tamaño de carpeta (F3 «calcular tamaño»).
                     let size_done = ctrl.borrow_mut().pump_sizes();
+                    // Drenar la lectura de metadata por tipo del archivo enfocado (worker async).
+                    // `sync_rows` (más abajo) repuebla el VM cada tick. El estado que decide si el
+                    // timer puede dormir se re-lee DESPUÉS de `sync_rows` (que es quien puede LANZAR
+                    // un job nuevo al enfocar otro archivo): si aquí ya está drenado pero sync_rows
+                    // lanza uno, `meta_done` recalculado abajo lo detecta y mantiene el timer vivo.
+                    ctrl.borrow_mut().pump_meta();
                     // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
                     let search_done = ctrl.borrow_mut().pump_search();
                     // Drenar el listado profundo en vuelo (vista profunda / toggle).
@@ -1587,6 +1722,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         .sync_highlighted_from_watchers(hl_secs, now);
                     let fresh_pending = ctrl.borrow().watchers.any_fresh(hl_secs, now);
                     sync_rows();
+                    // Re-leer el estado de la metadata DESPUÉS de sync_rows: puede haber lanzado un
+                    // job nuevo (al enfocar otro archivo). Si sigue leyendo, el timer no debe dormir.
+                    let meta_done = !ctrl.borrow().meta_loading();
                     // Persistir la sesión si cambió (agregar/cerrar/navegar paneles). Barato
                     // si no cambió. Antes de parar el timer, así el último cambio se guarda.
                     ctrl.borrow_mut().maybe_persist_session();
@@ -1610,6 +1748,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         && !preview_busy
                         && ops_done
                         && size_done
+                        && meta_done
                         && search_done
                         && !deep_changed
                         && !fresh_pending
@@ -1638,6 +1777,11 @@ fn main() -> Result<(), slint::PlatformError> {
         // escondemos la ventana (se perdería el único punto de acceso a la app).
         let start_in_tray =
             cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
+        // ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si venimos
+        // por autostart con `--tray` Y la última vez la ventana NO estaba abierta (estaba en
+        // bandeja). Si estaba abierta al cerrar, se restaura la ventana. Ver `should_show_on_start`.
+        let window_was_open_on_exit = ctrl.borrow().config.settings.window_was_open_on_exit;
+        let show_on_start = should_show_on_start(cli_args.tray, window_was_open_on_exit);
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
@@ -1694,16 +1838,24 @@ fn main() -> Result<(), slint::PlatformError> {
                         naygo_platform::window_geometry::set(hwnd, placement);
                     }
                 }
-                // Arranque minimizado: si venimos de autostart con --tray y el usuario quiere
-                // arrancar en bandeja, minimizamos la ventana en el primer wake (el proceso sigue
-                // vivo por el ícono de tray; el clic en el ícono la restaura, ya cableado). Se usa
-                // `set_minimized` y NO `window().hide()`: `hide()` decrementa el contador interno
-                // de ventanas visibles de Slint y, si esta es la única ventana visible en ese
-                // momento, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en
-                // bandeja. `set_minimized` solo cambia el estado de la ventana (equivalente a
-                // minimizar a la barra de tareas) y no toca ese contador.
-                if start_in_tray {
+                // Arranque DIRECTO en bandeja: si venimos de autostart con --tray, el usuario
+                // quiere arrancar en bandeja (`start_in_tray`) Y NO hay que mostrar la ventana
+                // (`!show_on_start`: la última vez estaba en bandeja, no abierta), quitamos el botón
+                // de la barra de tareas y dejamos la ventana oculta — sin "flash" ni botón. El
+                // proceso sigue vivo por el ícono de tray; el clic en el ícono (o el hotkey global)
+                // la restaura devolviendo el botón (ver `toggle_window_visibility`).
+                //
+                // `set_taskbar_visible(hwnd, false)` ya hace `ShowWindow(SW_HIDE)`, así que la
+                // ventana queda oculta. El `set_minimized(true)` posterior es defensa por si el
+                // cambio de estilo no bastó en algún backend. NO se usa `window().hide()` de Slint:
+                // decrementa el contador interno de ventanas visibles y, si esta es la única,
+                // dispara `quit_event_loop()` — terminaría la app en vez de dejarla en bandeja.
+                if start_in_tray && !show_on_start {
                     if let Some(ui) = ui_weak_wake.upgrade() {
+                        #[cfg(windows)]
+                        if let Some(hwnd) = naygo_hwnd(&ui) {
+                            naygo_platform::window::set_taskbar_visible(hwnd, false);
+                        }
                         ui.window().set_minimized(true);
                     }
                 }
@@ -1762,6 +1914,22 @@ fn main() -> Result<(), slint::PlatformError> {
             if ctrl
                 .borrow_mut()
                 .on_row_double_clicked_native(PaneId(id as u64), pos as usize)
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        // Clic-medio (rueda) sobre una fila-carpeta: abre SIEMPRE en un panel nuevo (split).
+        // Sobre un archivo no hace nada (on_row_middle_clicked devuelve false).
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_row_middle_clicked(move |id, pos| {
+            if ctrl
+                .borrow_mut()
+                .on_row_middle_clicked(PaneId(id as u64), pos as usize)
             {
                 start_timer();
             }
@@ -2297,8 +2465,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
         ui.on_add_pane(move || {
-            ctrl.borrow_mut().add_pane_split();
+            ctrl.borrow_mut().add_pane_split(area_of());
             start_timer();
             sync_layout();
         });
@@ -2307,8 +2476,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
         ui.on_add_pane_of(move |purpose| {
-            ctrl.borrow_mut().add_pane_of(int_to_purpose(purpose));
+            ctrl.borrow_mut()
+                .add_pane_of(int_to_purpose(purpose), area_of());
             start_timer();
             sync_layout();
         });
@@ -2344,6 +2515,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 settings_vm,
                 recent_limit,
                 auto_hl,
+                anim_enabled,
                 footer_en,
                 footer_preset,
                 footer_tpl,
@@ -2371,6 +2543,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let settings_vm = build_settings_vm(&c.config);
                 let recent_limit = c.config.settings.recent_limit as i32;
                 let auto_hl = c.config.auto_highlight_code();
+                let anim_enabled = c.config.animations_enabled();
                 let footer_en = c.config.footer_enabled();
                 let footer_preset = c.config.footer_preset_index();
                 let footer_tpl = c.config.footer_custom_template().to_string();
@@ -2453,6 +2626,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     settings_vm,
                     recent_limit,
                     auto_hl,
+                    anim_enabled,
                     footer_en,
                     footer_preset,
                     footer_tpl,
@@ -2597,6 +2771,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
             // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
             cfg.set_auto_highlight_code(auto_hl);
+            cfg.set_animations_enabled(anim_enabled);
             cfg.set_footer_enabled(footer_en);
             cfg.set_footer_preset_index(footer_preset);
             cfg.set_footer_custom_template(footer_tpl.into());
@@ -2625,7 +2800,7 @@ fn main() -> Result<(), slint::PlatformError> {
             cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(editing_gs))));
             cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(editing_bs))));
             cfg.set_config_dir(config_dir_str.into());
-            cfg.set_app_version(env!("CARGO_PKG_VERSION").into());
+            cfg.set_app_version(naygo_full_version().into());
             // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
             // versión actual. Se setea una sola vez (no cambia en runtime).
             {
@@ -3043,6 +3218,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh = refresh_config_vm.clone();
         cfg_win.on_set_auto_highlight_code(move |v| {
             ctrl.borrow_mut().config.set_auto_highlight_code(v);
+            refresh();
+        });
+    }
+    // Activar animaciones adicionales (brillo de la barra del panel de ops): persiste el toggle.
+    // Además de refrescar la config, se propaga el flag AL INSTANTE al panel de operaciones: si el
+    // usuario alterna el toggle con el panel abierto y sin operaciones que disparen un refresco de
+    // filas, el brillo cambiaría recién en el próximo refresco; este empujón lo hace inmediato.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        cfg_win.on_set_animations_enabled(move |v| {
+            ctrl.borrow_mut().config.set_animations_enabled(v);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_op_animations_enabled(v);
+            }
             refresh();
         });
     }
@@ -4251,6 +4442,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // Ids de los paneles a soltar (cerrar watcher) antes de expulsar, mientras el modal está abierto.
     let pending_eject_panes: std::rc::Rc<std::cell::RefCell<Vec<u64>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Id de la entrada del historial a DESHACER mientras el popup de confirmación (MessageVm kind 5)
+    // está abierto. El botón "Deshacer" ya NO ejecuta directo: abre el popup con el detalle de lo
+    // que se hará y guarda aquí el id; el deshacer real ocurre en `on_message_confirm` (kind 5).
+    let pending_undo: std::rc::Rc<std::cell::RefCell<Option<u64>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     {
         let ui_weak = ui.as_weak();
         let ctrl = ctrl.clone();
@@ -4312,7 +4508,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let refresh_drives = refresh_drives.clone();
         let pending_eject = pending_eject.clone();
         let pending_eject_panes = pending_eject_panes.clone();
+        let pending_undo = pending_undo.clone();
         let sync_layout = sync_layout.clone();
+        let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_message_confirm(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -4321,6 +4519,17 @@ fn main() -> Result<(), slint::PlatformError> {
             let kind = ui.get_message().kind;
             // Cerrar el modal.
             ui.set_message(MessageVm::default());
+            // kind 5 = confirmar DESHACER → ejecutar el undo de la entrada pendiente. El popup ya
+            // mostró el detalle de lo que se hará; aquí recién se dispara.
+            if kind == 5 {
+                if let Some(id) = pending_undo.borrow_mut().take() {
+                    if ctrl.borrow_mut().undo_entry(id) {
+                        start_timer();
+                    }
+                    sync_rows();
+                }
+                return;
+            }
             // kind 3 = confirmar drop entre paneles → arrancar la op real.
             if kind == 3 {
                 let started = ctrl.borrow_mut().confirm_pending_drop();
@@ -4400,6 +4609,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let pending_eject = pending_eject.clone();
         let pending_eject_panes = pending_eject_panes.clone();
+        let pending_undo = pending_undo.clone();
         ui.on_message_cancel(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -4407,6 +4617,9 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_message(MessageVm::default());
             pending_eject.borrow_mut().take();
             pending_eject_panes.borrow_mut().clear();
+            // Cancelar el deshacer pendiente (si el popup era el de confirmar deshacer): NO se
+            // ejecuta nada, solo se descarta el id guardado.
+            pending_undo.borrow_mut().take();
             // Si había un drop entre paneles esperando confirmación, descartarlo (no-op si no había).
             ctrl.borrow_mut().cancel_pending_drop();
         });
@@ -4633,14 +4846,70 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        // Botón "Deshacer" del panel Historial: deshace la entrada por id.
+        // Botón "Deshacer" del panel Historial: en vez de deshacer directo, abre un popup de
+        // CONFIRMACIÓN (MessageVm kind 5) que explica QUÉ se hará (borrar N / devolver N + lista de
+        // archivos). El deshacer real ocurre al confirmar (ver `on_message_confirm`, kind 5). El id
+        // pendiente se guarda en `pending_undo`.
+        let ui_weak = ui.as_weak();
+        let ctrl = ctrl.clone();
+        let pending_undo = pending_undo.clone();
+        let start_timer = start_timer.clone();
+        ui.on_undo_entry(move |id| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let id = id as u64;
+            // Componer el detalle (resumen + lista de líneas) desde el ctrl. Si la entrada ya no es
+            // deshacible (ya deshecha / inválida), no se abre nada.
+            let preview = ctrl.borrow().undo_preview(id);
+            let Some((summary, lines)) = preview else {
+                return;
+            };
+            let tr = ui.global::<Tr>();
+            let cfg = ctrl.borrow();
+            // Cuerpo del popup: el resumen y, debajo, hasta MAX_LINES nombres. Si sobran, una línea
+            // final "(y N más)". Así el detalle esencial siempre cabe sin volver ilegible el modal.
+            const MAX_LINES: usize = 5;
+            let mut body = summary;
+            let shown = lines.len().min(MAX_LINES);
+            for line in lines.iter().take(shown) {
+                body.push_str("\n• ");
+                body.push_str(line);
+            }
+            if lines.len() > MAX_LINES {
+                let more = cfg
+                    .config
+                    .t("slint.undo.and_more")
+                    .replace("{n}", &(lines.len() - MAX_LINES).to_string());
+                body.push('\n');
+                body.push_str(&more);
+            }
+            drop(cfg);
+            // Guardar el id a deshacer y abrir el popup de confirmación (2 botones).
+            *pending_undo.borrow_mut() = Some(id);
+            ui.set_message(MessageVm {
+                kind: 5, // 5 = confirmar deshacer (2 botones, velo/Esc = cancelar)
+                level: 0,
+                title: tr.get_slint_undo_confirm_title(),
+                body: body.into(),
+                confirm_label: tr.get_history_undo(),
+                cancel_label: tr.get_dlg_cancel(),
+                danger: false,
+            });
+            // Modal abierto desde un clic: rearmar el timer para que el popup responda al instante.
+            start_timer();
+        });
+    }
+    {
+        // Botón "Calcular" del Inspector: dispara el mismo cálculo async cancelable que F3
+        // sobre la carpeta enfocada/actual. `pump_sizes` (drenado en el tick) y `sync_rows`
+        // (vía `size_status`) se encargan de reflejar el progreso hasta que termine.
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
-        ui.on_undo_entry(move |id| {
-            if ctrl.borrow_mut().undo_entry(id as u64) {
-                start_timer();
-            }
+        ui.on_calc_size(move || {
+            ctrl.borrow_mut().compute_size_active();
+            start_timer();
             sync_rows();
         });
     }
@@ -5184,6 +5453,49 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_rows();
         });
     }
+    // Submenú "Abrir ▸" (solo target carpeta): Abrir aquí / en otro panel / en panel nuevo.
+    // "Abrir en el Explorador de Windows" reusa `ctx_open_explorer` (ya cableado arriba).
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_open_here(move || {
+            if ctrl.borrow_mut().ctx_open_here() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_ctx_open_other_pane(move || {
+            let area = area_of();
+            let acted = ctrl.borrow_mut().ctx_open_other_pane(area);
+            ctrl.borrow_mut().close_context_menu();
+            if acted {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let area_of = area_of.clone();
+        ui.on_ctx_open_new_pane(move || {
+            let area = area_of();
+            let acted = ctrl.borrow_mut().ctx_open_new_pane(area);
+            ctrl.borrow_mut().close_context_menu();
+            if acted {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
@@ -5604,14 +5916,29 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let ui_weak_close = ui.as_weak();
         ui.window().on_close_requested(move || {
-            // Capturar y persistir la geometría ANTES de save_session/salir. Va en su propio
-            // scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que siguen.
+            // ¿La ventana estaba ABIERTA (visible, no minimizada/en bandeja) en el momento del
+            // cierre? Se persiste para que el próximo arranque por autostart-a-bandeja decida si
+            // restaurar la ventana o volver a la bandeja (ver `should_show_on_start`). Heurística
+            // simple y correcta en el caso común: si NO está minimizada, estaba abierta. Al cerrar
+            // a bandeja con la X la ventana ya está minimizada/oculta, así que quedará `false`.
+            let window_was_open = ui_weak_close
+                .upgrade()
+                .map(|ui| !ui.window().is_minimized())
+                .unwrap_or(true);
+            // Capturar y persistir la geometría + el flag "ventana abierta al cerrar" ANTES de
+            // save_session/salir. Va en su propio scope para que el borrow_mut() suelte `c` antes
+            // de los ctrl.borrow() que siguen.
             #[cfg(windows)]
             {
+                let mut c = ctrl.borrow_mut();
+                // El flag "ventana abierta al cerrar" se persiste SIEMPRE, aunque la captura de
+                // geometría falle: si dependiera del `if let` de la geometría, un fallo al leerla
+                // dejaría el flag stale del arranque anterior y el próximo autostart podría decidir
+                // mal entre mostrar la ventana o ir a la bandeja.
+                c.config.settings.window_was_open_on_exit = window_was_open;
                 if let Some(ui) = ui_weak_close.upgrade() {
                     if let Some(hwnd) = naygo_hwnd(&ui) {
                         if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
-                            let mut c = ctrl.borrow_mut();
                             c.config.settings.window = Some(naygo_core::config::WindowGeometry {
                                 width: p.width,
                                 height: p.height,
@@ -5619,19 +5946,38 @@ fn main() -> Result<(), slint::PlatformError> {
                                 y: p.y,
                                 maximized: p.maximized,
                             });
-                            c.config.save();
                         }
                     }
                 }
+                c.config.save();
+            }
+            // En no-Windows no hay geometría que capturar, pero igual persistimos el flag para no
+            // dejar un valor obsoleto (mantiene coherente el arranque en cualquier plataforma).
+            #[cfg(not(windows))]
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.settings.window_was_open_on_exit = window_was_open;
+                c.config.save();
             }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
-            if tray::should_quit_on_close(close_to_tray, tray_active) {
+            let quit = tray::should_quit_on_close(close_to_tray, tray_active);
+            if quit {
+                // Salir de verdad: terminar el loop y dejar que Slint oculte la ventana.
                 let _ = slint::quit_event_loop();
+                slint::CloseRequestResponse::HideWindow
+            } else {
+                // Ir a la BANDEJA sin matar la app. CLAVE: NO se puede responder `HideWindow` — al
+                // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y TERMINA
+                // el event loop (el proceso muere). Por eso se responde `KeepWindowShown` (mantiene
+                // la app viva) y se minimiza la ventana a mano con `set_minimized(true)`, que NO toca
+                // ese contador (mismo mecanismo que el toggle del hotkey global). Así la X esconde la
+                // ventana y el proceso sigue corriendo en la bandeja.
+                if let Some(ui) = ui_weak_close.upgrade() {
+                    ui.window().set_minimized(true);
+                }
+                slint::CloseRequestResponse::KeepWindowShown
             }
-            // En ambos casos HideWindow: al salir, el loop ya está marcado para terminar; al ir
-            // a bandeja, la ventana se oculta y el proceso sigue.
-            slint::CloseRequestResponse::HideWindow
         });
     }
 
@@ -5953,12 +6299,33 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
     }
 }
 
+/// ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si es un arranque
+/// por autostart-a-bandeja (`tray_flag`) Y la última vez la ventana NO estaba abierta (estaba en
+/// bandeja). En cualquier otro caso, mostrar (arranque normal, o autostart con la ventana abierta
+/// al cerrar la última vez). Pura y testeable.
+fn should_show_on_start(tray_flag: bool, window_was_open_on_exit: bool) -> bool {
+    !tray_flag || window_was_open_on_exit
+}
+
 /// El HWND de la ventana de Naygo (backend winit), para el menú contextual del Shell.
 /// `None` si no se puede obtener (otro backend) — entonces se oculta "Más opciones de
 /// Windows…". Usa raw-window-handle vía el feature `raw-window-handle-06` de slint.
 fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = ui.window().window_handle();
+    match handle.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
+        _ => None,
+    }
+}
+
+/// El HWND de la ventana de splash (backend winit), para poder elevarla al frente (topmost). Mismo
+/// mecanismo que `naygo_hwnd` pero sobre la ventana `Splash`. Solo se usa en release (el splash está
+/// tras `cfg(not(debug_assertions))`); `#[allow(dead_code)]` evita el warning en builds debug.
+#[allow(dead_code)]
+fn splash_hwnd(splash: &Splash) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = splash.window().window_handle();
     match handle.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
         _ => None,
@@ -5985,6 +6352,11 @@ fn toggle_window_visibility(ui: &AppWindow, tray_active: bool) {
     if is_foreground && tray_active {
         ui.window().set_minimized(true);
     } else {
+        // Devolver el botón de la barra de tareas ANTES de mostrar: si arrancamos directo en
+        // bandeja (autostart), le habíamos quitado el botón con `set_taskbar_visible(false)`. Es
+        // idempotente: si ya era una ventana normal, `true` solo re-afirma el estilo. También
+        // re-muestra la ventana (SW_SHOW), coherente con el `ui.show()` que sigue.
+        naygo_platform::window::set_taskbar_visible(hwnd, true);
         let _ = ui.show();
         ui.window().set_minimized(false);
         naygo_platform::window::bring_to_front(hwnd);
@@ -6030,6 +6402,9 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
         .as_ref()
         .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
         .unwrap_or_default();
+    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
+    let meta = meta_fields_model(c);
+    let meta_loading = c.meta_loading();
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
@@ -6071,6 +6446,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 highlighted: is_hl,
                 hl_lines: ModelRc::from(Rc::new(VecModel::from(hl_lines))),
                 path,
+                meta,
+                meta_loading,
             }
         }
         Some(preview::ViewCache::Image {
@@ -6088,6 +6465,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 highlighted: false,
                 hl_lines: ModelRc::default(),
                 path,
+                meta,
+                meta_loading,
             }
         }
         Some(preview::ViewCache::Message(m)) => PreviewVm {
@@ -6099,6 +6478,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             highlighted: false,
             hl_lines: ModelRc::default(),
             path,
+            meta,
+            meta_loading,
         },
         None => PreviewVm {
             mode: 0,
@@ -6109,6 +6490,8 @@ fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             highlighted: false,
             hl_lines: ModelRc::default(),
             path: SharedString::new(),
+            meta,
+            meta_loading,
         },
     }
 }
@@ -6158,6 +6541,7 @@ fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         del_count: d.del_count,
         del_permanent: d.del_permanent,
         conflict_name: SharedString::from(d.conflict_name.as_str()),
+        op_kind: d.op_kind,
         conflict_from: SharedString::from(d.conflict_from.as_str()),
         conflict_to: SharedString::from(d.conflict_to.as_str()),
         existing_name: SharedString::from(d.existing_name.as_str()),
@@ -6200,6 +6584,8 @@ fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         eta: SharedString::from(r.eta.as_str()),
         elapsed: SharedString::from(r.elapsed.as_str()),
         kind: r.kind,
+        op_kind: r.op_kind,
+        when: SharedString::from(r.when.as_str()),
         files_summary: SharedString::from(r.files_summary.as_str()),
         has_file_list: r.has_file_list,
         files_done_count: r.files_done_count,
@@ -6376,5 +6762,38 @@ fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
         size: SharedString::from(i.size.as_str()),
         modified: SharedString::from(i.modified.as_str()),
         created: SharedString::from(i.created.as_str()),
+        is_dir: i.is_dir,
+        size_calc: SharedString::from(i.size_calc.as_str()),
+        // La metadata por tipo (dimensiones, versión) se puebla en `sync_rows` leyendo del worker
+        // (ahí está el ctrl con la traducción i18n); aquí van los valores por defecto.
+        meta: ModelRc::default(),
+        meta_loading: false,
+    }
+}
+
+/// Construye el modelo de campos de metadata para un VM, traduciendo cada clave i18n de etiqueta
+/// con `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
+fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
+    let fields: Vec<MetaFieldVm> = c
+        .meta_fields()
+        .iter()
+        .map(|(label_key, value)| MetaFieldVm {
+            label: SharedString::from(c.config.t(label_key)),
+            value: SharedString::from(value.as_str()),
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arranque_tray_oculta_salvo_ventana_abierta() {
+        assert!(!should_show_on_start(true, false)); // autostart-tray + estaba en bandeja → oculto
+        assert!(should_show_on_start(true, true)); // autostart-tray + estaba abierta → mostrar
+        assert!(should_show_on_start(false, false)); // arranque normal → mostrar
+        assert!(should_show_on_start(false, true)); // arranque normal → mostrar
     }
 }

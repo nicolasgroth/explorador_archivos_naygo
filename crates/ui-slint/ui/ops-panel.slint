@@ -97,39 +97,223 @@ component CancelIcon inherits Rectangle {
     }
 }
 
-// Botón compacto: ícono + etiqueta, fondo al pasar el mouse. Emite `pressed` al hacer clic.
+// --- Íconos de TIPO de operación (Path, sin glifos) ---
+// Identifican de un vistazo qué hace cada tarjeta. Mismo estilo que los íconos de botón: viewbox
+// 12×12, trazo de 1.4px, sin relleno. El color lo elige el chip contenedor (acento por defecto).
+
+// Copiar: dos hojas superpuestas.
+component CopyIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 4; y: 4; }
+        LineTo { x: 4; y: 1.5; }
+        LineTo { x: 10.5; y: 1.5; }
+        LineTo { x: 10.5; y: 8; }
+        LineTo { x: 8; y: 8; }
+        MoveTo { x: 1.5; y: 4; }
+        LineTo { x: 8; y: 4; }
+        LineTo { x: 8; y: 10.5; }
+        LineTo { x: 1.5; y: 10.5; }
+        Close { }
+    }
+}
+
+// Mover: flecha hacia la derecha.
+component MoveIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 1.5; y: 6; }
+        LineTo { x: 10.5; y: 6; }
+        MoveTo { x: 7; y: 2.5; }
+        LineTo { x: 10.5; y: 6; }
+        LineTo { x: 7; y: 9.5; }
+    }
+}
+
+// Borrar: papelera simple.
+component DeleteIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2.5; y: 3; }
+        LineTo { x: 9.5; y: 3; }
+        MoveTo { x: 3.5; y: 3; }
+        LineTo { x: 4; y: 10.5; }
+        LineTo { x: 8; y: 10.5; }
+        LineTo { x: 8.5; y: 3; }
+        MoveTo { x: 5; y: 3; }
+        LineTo { x: 5; y: 1.5; }
+        LineTo { x: 7; y: 1.5; }
+        LineTo { x: 7; y: 3; }
+    }
+}
+
+// Comprimir: caja con cremallera (una línea vertical punteada como trazos).
+component CompressIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2; y: 1.5; }
+        LineTo { x: 10; y: 1.5; }
+        LineTo { x: 10; y: 10.5; }
+        LineTo { x: 2; y: 10.5; }
+        Close { }
+        MoveTo { x: 6; y: 2; }
+        LineTo { x: 6; y: 4; }
+        MoveTo { x: 6; y: 5.5; }
+        LineTo { x: 6; y: 7.5; }
+    }
+}
+
+// Extraer: caja con flecha saliendo hacia arriba.
+component ExtractIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2; y: 6; }
+        LineTo { x: 2; y: 10.5; }
+        LineTo { x: 10; y: 10.5; }
+        LineTo { x: 10; y: 6; }
+        MoveTo { x: 6; y: 8; }
+        LineTo { x: 6; y: 1.5; }
+        MoveTo { x: 3.5; y: 4; }
+        LineTo { x: 6; y: 1.5; }
+        LineTo { x: 8.5; y: 4; }
+    }
+}
+
+// --- Íconos de RESULTADO (para el historial) ---
+
+// Hecho: un check. Se usa neutro en el historial (color `text-dim`): el VM no distingue hoy
+// éxito/fallo con un bool y no se parsea el `status` traducido, así que el ícono NO afirma resultado;
+// el detalle (hecho / con avisos) va en el propio `status`.
+component DoneIcon inherits Rectangle {
+    in property <color> tint: Theme.accent;
+    in property <length> size: 14px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        fill: transparent;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 2.5; y: 6.5; }
+        LineTo { x: 5; y: 9; }
+        LineTo { x: 9.5; y: 3; }
+    }
+}
+
+// Nota: no se declara un ícono de fallo (triángulo/!) porque el VM no expone hoy un `failed: bool`
+// y no se parsea el `status` traducido; el historial usa solo `DoneIcon` en tono neutro. Cuando el
+// VM distinga éxito/fallo se podrá añadir un ícono de aviso aquí.
+
+// Chip cuadrado-redondeado que envuelve el ícono del tipo de operación (identidad visual de la
+// tarjeta). Elige el ícono según `op-kind` (0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro).
+component OpKindChip inherits Rectangle {
+    in property <int> op-kind;
+    in property <length> box: 30px;
+    width: root.box;
+    height: root.box;
+    border-radius: 8px;
+    background: Theme.selection-bg;
+    if root.op-kind == 0: CopyIcon { tint: Theme.accent; }
+    if root.op-kind == 1: MoveIcon { tint: Theme.accent; }
+    if root.op-kind == 2: DeleteIcon { tint: Theme.accent; }
+    if root.op-kind == 3: CompressIcon { tint: Theme.accent; }
+    if root.op-kind == 4: ExtractIcon { tint: Theme.accent; }
+    if root.op-kind == 5: CopyIcon { tint: Theme.text-dim; }
+}
+
+// Botón de control sin caja (sin borde). `variant`: 0=primario (chip con fondo tenue), 1=secundario
+// (solo texto, fondo únicamente en hover), 2=solo-ícono (para Cancelar; `label` se ignora, sirve de
+// tooltip fuera). Emite `pressed` al hacer clic. Mantiene todas las properties previas.
 component OpButton inherits Rectangle {
     in property <string> label;
     in property <bool> danger: false;
+    in property <int> variant: 0;
     callback pressed();
-    in property <length> icon-size: 12px;
-    // Slot para el ícono (un hijo único que el llamador pasa).
+    in property <length> icon-size: 13px;
     in property <bool> show-pause: false;
     in property <bool> show-play: false;
     in property <bool> show-skip: false;
     in property <bool> show-cancel: false;
 
-    height: 24px;
-    border-radius: 4px;
-    background: btn-touch.has-hover
-        ? (root.danger ? Theme.error : Theme.selection-bg)
-        : Theme.row-bg;
-    border-width: 1px;
-    border-color: root.danger ? Theme.error : Theme.border;
+    height: 30px;
+    border-radius: 8px;
+    // El botón se ajusta a su CONTENIDO (ícono + texto), no se estira: dentro de un
+    // HorizontalLayout, un Rectangle se estiraría por defecto y "Pausar"/"Saltar" saldrían anchos
+    // y descuadrados. `horizontal-stretch: 0` lo evita; el ancho lo fija el layout interno.
+    horizontal-stretch: 0;
+    width: content-layout.preferred-width;
+    // Primario: chip de fondo tenue que se oscurece en hover. Secundario/solo-ícono: transparente en
+    // reposo, fondo tenue al pasar el mouse.
+    background: root.variant == 0
+        ? (btn-touch.has-hover ? Theme.selection-bg.darker(15%) : Theme.selection-bg)
+        : (btn-touch.has-hover ? Theme.selection-bg : transparent);
 
-    HorizontalLayout {
-        padding-left: 7px;
-        padding-right: 9px;
-        spacing: 5px;
+    content-layout := HorizontalLayout {
+        padding-left: root.variant == 2 ? 6px : 12px;
+        padding-right: root.variant == 2 ? 6px : 12px;
+        spacing: 6px;
         alignment: center;
         if root.show-pause: PauseIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text; }
         if root.show-play: PlayIcon { width: root.icon-size; height: root.icon-size; tint: Theme.accent; }
-        if root.show-skip: SkipIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text; }
-        if root.show-cancel: CancelIcon { width: root.icon-size; height: root.icon-size; tint: root.danger && btn-touch.has-hover ? white : Theme.error; }
-        Text {
+        if root.show-skip: SkipIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text-dim; }
+        if root.show-cancel: CancelIcon { width: root.icon-size; height: root.icon-size; tint: Theme.error; }
+        if root.variant != 2 && root.label != "": Text {
             text: root.label;
-            color: root.danger && btn-touch.has-hover ? white : Theme.text;
-            font-size: 11px;
+            color: root.variant == 1 ? Theme.text-dim : Theme.text;
+            font-size: 12px;
             vertical-alignment: center;
         }
     }
@@ -151,128 +335,203 @@ component ScanDot inherits Rectangle {
     background: Theme.accent;
 }
 
-// Barra de progreso (track + relleno proporcional). `percent` en 0..100.
+// Barra de progreso estilo píldora (sin borde). `percent` en 0..100. `glow` enciende el brillo
+// continuo (solo si el usuario activó animaciones; lo decide el llamador). El relleno se ANIMA al
+// cambiar el % (transición barata: se desliza, no salta; en reposo, 0 costo).
 component ProgressBar inherits Rectangle {
     in property <float> percent;
     in property <color> fill: Theme.accent;
-    height: 7px;
+    in property <bool> glow: false;
+    height: 6px;
     background: Theme.panel-bg;
-    border-radius: 3px;
-    border-width: 1px;
-    border-color: Theme.border;
-    Rectangle {
+    border-radius: self.height / 2;
+    clip: true;
+    fill-rect := Rectangle {
         x: 0;
         y: 0;
-        width: parent.width * (root.percent / 100);
+        width: parent.width * (max(0, min(100, root.percent)) / 100);
         height: parent.height;
         background: root.fill;
-        border-radius: 3px;
+        border-radius: self.height / 2;
+        // Transición barata: al cambiar el % la barra se desliza suave (no salta). Solo redibuja
+        // durante la animación; en reposo, 0 costo.
+        animate width {
+            duration: 200ms;
+            easing: ease-out;
+        }
+    }
+
+    // Brillo continuo OPCIONAL: un reflejo claro que recorre el relleno de ida y vuelta. Solo existe
+    // cuando `glow` está encendido (el usuario activó animaciones). CRÍTICO para el bajo consumo:
+    // con `glow == false` (default), el Timer tiene `running: false` (no dispara) y el `if root.glow`
+    // NO instancia el reflejo → cero costo de CPU en reposo.
+    property <bool> glow-phase: false;
+    glow-timer := Timer {
+        interval: 1200ms;
+        running: root.glow;
+        triggered => {
+            root.glow-phase = !root.glow-phase;
+        }
+    }
+    if root.glow: Rectangle {
+        width: 40px;
+        height: parent.height;
+        y: 0;
+        x: root.glow-phase ? (fill-rect.width - self.width) : 0px;
+        background: Theme.accent.brighter(40%);
+        opacity: 0.35;
+        border-radius: self.height / 2;
+        animate x {
+            duration: 1200ms;
+            easing: ease-in-out;
+        }
     }
 }
 
-// Par etiqueta:valor en una línea (para los datos de la op).
-component DataLine inherits HorizontalLayout {
+// Mini-tarjeta de un dato: etiqueta arriba-izquierda (tenue) + valor abajo-derecha (destacado). La
+// unidad va en `unit` (tenue, inline tras el valor). Fondo derivado del panel para separarse de la
+// tarjeta contenedora.
+component DataCell inherits Rectangle {
     in property <string> caption;
     in property <string> value;
-    spacing: 4px;
-    Text {
-        text: root.caption;
-        color: Theme.text-dim;
-        font-size: 11px;
-        vertical-alignment: center;
-    }
-    Text {
-        text: root.value;
-        color: Theme.text;
-        font-size: 11px;
-        font-weight: 600;
-        vertical-alignment: center;
-        overflow: elide;
-        horizontal-stretch: 1;
+    in property <string> unit;
+    background: Theme.panel-bg;
+    border-radius: 8px;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 3px;
+        Text {
+            text: root.caption;
+            color: Theme.text-dim;
+            font-size: 11px;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.value;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 500;
+                vertical-alignment: center;
+            }
+            if root.unit != "": Text {
+                text: " " + root.unit;
+                color: Theme.text-dim;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
     }
 }
 
 // Tarjeta de una operación EN CURSO.
 component OpCard inherits Rectangle {
     in property <OpRowVm> op;
+    in property <bool> animations-enabled: false;
     callback pause(int);
     callback resume(int);
     callback skip(int);
     callback cancel(int);
 
     background: Theme.row-bg;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 12px;
 
     VerticalLayout {
-        padding: 9px;
-        spacing: 5px;
+        padding: 14px;
+        spacing: 12px;
 
-        // Encabezado: etiqueta de la op + archivo en curso.
+        // Cabecera: chip de tipo + verbo/archivo + % grande.
         HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: root.op.label;
-                color: Theme.text;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
-                overflow: elide;
+            spacing: 9px;
+            OpKindChip {
+                op-kind: root.op.op-kind;
+                y: (parent.height - self.height) / 2;
             }
-            Rectangle { horizontal-stretch: 1; }
-            Text {
-                text: round(root.op.percent) + "%";
-                color: Theme.accent;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                Text {
+                    text: root.op.op-kind == 0 ? Tr.ops-verb-copy : root.op.op-kind == 1 ? Tr.ops-verb-move : root.op.op-kind == 2 ? Tr.ops-verb-delete : root.op.op-kind == 3 ? Tr.ops-verb-compress : root.op.op-kind == 4 ? Tr.ops-verb-extract : Tr.ops-verb-other;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 500;
+                    overflow: elide;
+                }
+                if root.op.current-file != "": Text {
+                    text: root.op.current-file;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    overflow: elide;
+                }
             }
-        }
-        if root.op.current-file != "": Text {
-            text: root.op.current-file;
-            color: Theme.text-dim;
-            font-size: 11px;
-            overflow: elide;
+            HorizontalLayout {
+                spacing: 1px;
+                y: (parent.height - self.height) / 2;
+                Text {
+                    text: round(root.op.percent);
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "%";
+                    color: Theme.text-dim;
+                    font-size: 13px;
+                    vertical-alignment: bottom;
+                }
+            }
         }
 
-        // Barra de progreso (amarilla si está pausada, acento si avanza).
+        // Barra de progreso (amarilla si pausada, acento si avanza). `glow` solo si el usuario activó
+        // animaciones (brillo continuo — Task 7) y la op no está pausada.
         ProgressBar {
             percent: root.op.percent;
             fill: root.op.paused ? Theme.highlight : Theme.accent;
+            glow: root.animations-enabled && !root.op.paused;
         }
 
-        // Datos: copiado, velocidad, tiempos.
-        DataLine {
-            caption: Tr.ops-copied + ":";
-            value: root.op.bytes-done + " / " + root.op.bytes-total;
-        }
-        DataLine {
-            caption: Tr.ops-speed + ":";
-            value: root.op.speed != ""
-                ? root.op.speed + "  (" + Tr.ops-peak + " " + root.op.speed-peak + ")"
-                : "—";
-        }
+        // Datos en grilla 3+2. Fila de 3: transferido · velocidad · pico.
         HorizontalLayout {
-            spacing: 14px;
-            DataLine {
+            spacing: 8px;
+            DataCell {
                 horizontal-stretch: 1;
-                caption: Tr.ops-elapsed + ":";
+                caption: Tr.ops-copied;
+                value: root.op.bytes-done;
+                unit: "/ " + root.op.bytes-total;
+            }
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-speed;
+                value: root.op.speed != "" ? root.op.speed : "—";
+            }
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-peak;
+                value: root.op.speed-peak != "" ? root.op.speed-peak : "—";
+            }
+        }
+        // Fila de 2: transcurrido · restante.
+        HorizontalLayout {
+            spacing: 8px;
+            DataCell {
+                horizontal-stretch: 1;
+                caption: Tr.ops-elapsed;
                 value: root.op.elapsed != "" ? root.op.elapsed : "—";
             }
-            DataLine {
+            DataCell {
                 horizontal-stretch: 1;
-                caption: Tr.ops-remaining + ":";
+                caption: Tr.ops-remaining;
                 value: root.op.eta != "" ? root.op.eta : "—";
             }
         }
 
-        // Botones de control.
+        // Controles: Pausar (chip) · Saltar (texto) · espaciador · X cancelar (solo ícono).
         HorizontalLayout {
-            spacing: 6px;
-            padding-top: 2px;
-            // Pausar / Reanudar según el estado.
+            spacing: 8px;
             OpButton {
+                variant: 0;
                 label: root.op.paused ? Tr.ops-resume : Tr.ops-pause;
                 show-pause: !root.op.paused;
                 show-play: root.op.paused;
@@ -285,13 +544,14 @@ component OpCard inherits Rectangle {
                 }
             }
             OpButton {
+                variant: 1;
                 label: Tr.ops-skip;
                 show-skip: true;
                 pressed => { root.skip(root.op.index); }
             }
             Rectangle { horizontal-stretch: 1; }
-            OpButton {
-                label: Tr.ops-cancel;
+            cancel-btn := OpButton {
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel(root.op.index); }
@@ -308,53 +568,59 @@ component PlanningCard inherits Rectangle {
     callback cancel(int);
 
     background: Theme.row-bg;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 12px;
 
     VerticalLayout {
-        padding: 9px;
-        spacing: 5px;
+        padding: 14px;
+        spacing: 12px;
 
-        // Encabezado: etiqueta de la op + estado "Calculando…" con el punto de acento.
+        // Cabecera: chip de tipo + verbo + a la derecha el punto de escaneo + "Calculando…".
         HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: root.op.label;
-                color: Theme.text;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Rectangle { horizontal-stretch: 1; }
-            ScanDot {
+            spacing: 9px;
+            OpKindChip {
+                op-kind: root.op.op-kind;
                 y: (parent.height - self.height) / 2;
             }
-            Text {
-                text: Tr.ops-calculating;
-                color: Theme.accent;
-                font-size: 12px;
-                font-weight: 700;
-                vertical-alignment: center;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                Text {
+                    text: root.op.op-kind == 0 ? Tr.ops-verb-copy : root.op.op-kind == 1 ? Tr.ops-verb-move : root.op.op-kind == 2 ? Tr.ops-verb-delete : root.op.op-kind == 3 ? Tr.ops-verb-compress : root.op.op-kind == 4 ? Tr.ops-verb-extract : Tr.ops-verb-other;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 500;
+                    overflow: elide;
+                }
+                // Contadores del escaneo (suben en vivo). Si aún no llegó el primer Progress, "—".
+                Text {
+                    text: root.op.status != "" ? root.op.status : "—";
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                y: (parent.height - self.height) / 2;
+                ScanDot {
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: Tr.ops-calculating;
+                    color: Theme.accent;
+                    font-size: 13px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
             }
         }
 
-        // Contadores del escaneo (suben en vivo). Si aún no llegó el primer Progress, "—".
-        Text {
-            text: root.op.status != "" ? root.op.status : "—";
-            color: Theme.text-dim;
-            font-size: 11px;
-            overflow: elide;
-        }
-
-        // Botón Cancelar (aborta el escaneo: el worker ve el token y corta).
+        // Controles: espaciador + X cancelar (aborta el escaneo; el worker ve el token y corta).
         HorizontalLayout {
-            spacing: 6px;
-            padding-top: 2px;
+            spacing: 8px;
             Rectangle { horizontal-stretch: 1; }
             OpButton {
-                label: Tr.ops-cancel;
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel(root.op.index); }
@@ -363,35 +629,39 @@ component PlanningCard inherits Rectangle {
     }
 }
 
-// Fila compacta de una op EN COLA.
+// Fila compacta de una op EN COLA: chip de tipo pequeño + etiqueta + "en espera" + X cancelar.
 component QueuedRow inherits Rectangle {
     in property <OpRowVm> op;
     callback cancel(int);
-    height: 30px;
+    height: 34px;
     background: Theme.row-bg;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-radius: 8px;
+
     HorizontalLayout {
-        padding-left: 9px;
+        padding-left: 8px;
         padding-right: 6px;
         spacing: 8px;
+        alignment: center;
+        OpKindChip {
+            op-kind: root.op.op-kind;
+            box: 22px;
+        }
         Text {
             text: root.op.label;
             color: Theme.text;
-            font-size: 11px;
+            font-size: 12px;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
             text: "— " + Tr.ops-waiting;
             color: Theme.text-dim;
-            font-size: 11px;
+            font-size: 12px;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
         OpButton {
-            label: Tr.ops-cancel;
+            variant: 2;
             danger: true;
             show-cancel: true;
             pressed => { root.cancel(root.op.index); }
@@ -414,7 +684,14 @@ component HistoryRow inherits Rectangle {
         padding-bottom: 4px;
         spacing: 1px;
         HorizontalLayout {
-            spacing: 8px;
+            spacing: 6px;
+            // Íconito neutro de "hecho" (no afirma éxito/fallo: ver nota junto a DoneIcon).
+            DoneIcon {
+                width: 14px;
+                height: 14px;
+                tint: Theme.text-dim;
+                y: (parent.height - self.height) / 2;
+            }
             Text {
                 text: root.op.label;
                 color: Theme.text-dim;
@@ -430,6 +707,16 @@ component HistoryRow inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
                 overflow: elide;
+            }
+            // Fecha de fin del registro, alineada a la derecha en la MISMA primera línea (no rompe
+            // el alto adaptable 28/44). `status` tiene el stretch, así que empuja la fecha al borde.
+            Text {
+                text: root.op.when;
+                color: Theme.text-dim;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                horizontal-stretch: 0;
             }
         }
         // Segunda línea: nombres inline (1-2) o el enlace "Ver N archivos" (3+).
@@ -482,6 +769,9 @@ export component OpsPanel inherits Rectangle {
     in property <int> queued-count: 0;
     in property <int> history-count: 0;
     in property <int> planning-count: 0;
+    // Activa las animaciones costosas del panel (brillo continuo de la barra). Lo gobierna el flag
+    // global `animations_enabled` de config (default false). Se propaga a cada OpCard.
+    in property <bool> animations-enabled: false;
     callback pause(int);
     callback resume(int);
     callback skip(int);
@@ -498,7 +788,7 @@ export component OpsPanel inherits Rectangle {
         padding: 8px;
         spacing: 6px;
 
-        // Encabezado del panel + botón "Cancelar todo" + resumen.
+        // Encabezado del panel: título + chip-contador con el resumen + X "cancelar todo".
         HorizontalLayout {
             spacing: 8px;
             Text {
@@ -508,26 +798,33 @@ export component OpsPanel inherits Rectangle {
                 font-weight: 800;
                 vertical-alignment: center;
             }
+            // Chip-contador: resumen compacto "[K calculando · ]N en curso · M en cola". El tramo
+            // "calculando" solo aparece si hay alguna op escaneando su plan.
+            Rectangle {
+                background: Theme.selection-bg;
+                border-radius: 20px;
+                height: 22px;
+                horizontal-stretch: 0;
+                y: (parent.height - self.height) / 2;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    Text {
+                        text: (root.planning-count > 0 ? root.planning-count + " " + Tr.ops-calculating + " · " : "") + root.running-count + " " + Tr.ops-in-progress + " · " + root.queued-count + " " + Tr.ops-queued;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
             Rectangle { horizontal-stretch: 1; }
             // "Cancelar todo": visible solo cuando hay ALGO activo (calculando / en curso / en cola).
             // La confirmación la abre Rust (modal MessageModal de 2 botones) antes de cancelar.
             if (root.planning-count + root.running-count + root.queued-count) > 0: OpButton {
-                label: Tr.ops-cancel-all;
+                variant: 2;
                 danger: true;
                 show-cancel: true;
                 pressed => { root.cancel-all(); }
-            }
-            Text {
-                // Resumen: "[K calculando · ]N en curso · M en cola". El tramo "calculando" solo
-                // aparece si hay alguna op escaneando su plan.
-                text: (root.planning-count > 0
-                        ? root.planning-count + " " + Tr.ops-calculating + " · "
-                        : "")
-                    + root.running-count + " " + Tr.ops-in-progress
-                    + " · " + root.queued-count + " " + Tr.ops-queued;
-                color: Theme.text-dim;
-                font-size: 11px;
-                vertical-alignment: center;
             }
         }
 
@@ -547,6 +844,7 @@ export component OpsPanel inherits Rectangle {
                 if root.running-count > 0: SectionHeader { text: Tr.ops-in-progress; }
                 for r in root.running-rows: OpCard {
                     op: r;
+                    animations-enabled: root.animations-enabled;
                     pause(i) => { root.pause(i); }
                     resume(i) => { root.resume(i); }
                     skip(i) => { root.skip(i); }

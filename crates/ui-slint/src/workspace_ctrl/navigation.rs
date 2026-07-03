@@ -155,6 +155,44 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Clic con el botón central (rueda) sobre la fila `pos` del panel `id`: si es una CARPETA,
+    /// la abre SIEMPRE en un PANEL NUEVO (divide por el lado más largo, vía
+    /// `open_dir_in_new_pane`); si es un archivo, no hace nada (el clic-medio no abre archivos).
+    /// Mismo patrón deep/no-deep que `on_row_double_clicked` para resolver la entrada en `pos`.
+    pub fn on_row_middle_clicked(&mut self, id: PaneId, pos: usize) -> bool {
+        self.ws.set_active(id);
+
+        // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
+        if self.is_deep_active(id) {
+            let target = self
+                .deep_job
+                .as_ref()
+                .and_then(|d| d.items.get(pos))
+                .map(|(e, _depth)| e.clone());
+            let Some(e) = target else { return false };
+            if e.kind != naygo_core::fs_model::EntryKind::Directory {
+                return false;
+            }
+            return self.open_dir_in_new_pane(e.path, self.last_area);
+        }
+
+        let target = {
+            let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
+                return false;
+            };
+            let view = f.view_indices();
+            let Some(&real) = view.get(pos) else {
+                return false;
+            };
+            f.entries.get(real).cloned()
+        };
+        let Some(e) = target else { return false };
+        if e.kind != EntryKind::Directory {
+            return false;
+        }
+        self.open_dir_in_new_pane(e.path, self.last_area)
+    }
+
     /// Subir al padre en el panel activo (y arranca su listado).
     pub fn on_go_up(&mut self) -> bool {
         let active = match self.ws.active_id() {
@@ -321,7 +359,7 @@ impl WorkspaceCtrl {
     }
 
     /// Fragmento de barra de estado del cálculo de tamaño en curso/terminado (vacío si no hay).
-    pub(super) fn size_status(&self) -> Option<String> {
+    pub fn size_status(&self) -> Option<String> {
         let job = self.size_job.as_ref()?;
         let name = job
             .target
@@ -338,6 +376,17 @@ impl WorkspaceCtrl {
         } else {
             format!("«{name}»: {size}")
         })
+    }
+
+    /// Status del cálculo de tamaño SOLO si el job en curso/terminado corresponde a `folder`. Lo usa
+    /// el Inspector: si el usuario cambió el foco a OTRA carpeta, el resultado viejo no debe pegarse
+    /// a la nueva; devolviendo `None` en ese caso, el Inspector vuelve a mostrar el botón «Calcular».
+    pub fn size_status_for(&self, folder: &std::path::Path) -> Option<String> {
+        let job = self.size_job.as_ref()?;
+        if job.target != folder {
+            return None;
+        }
+        self.size_status()
     }
 
     // ----- Búsqueda recursiva (Ctrl+F / lupa) ----------------------------------------------

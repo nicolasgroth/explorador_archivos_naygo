@@ -134,6 +134,90 @@ pub fn is_foreground(_hwnd: isize) -> bool {
     false
 }
 
+/// Marca `hwnd` como "siempre encima" (topmost) sin moverla, redimensionarla ni robarle el foco.
+/// Se usa para el splash de arranque: la ventana principal se muestra casi a la vez y, sin esto, el
+/// splash quedaba DETRÁS y no se veía. Tolerante (hwnd nulo → no-op; resultado Win32 ignorado).
+#[cfg(windows)]
+pub fn set_topmost(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Stub no-Windows: "topmost" es específico de Win32.
+#[cfg(not(windows))]
+pub fn set_topmost(_hwnd: isize) {}
+
+/// Oculta o muestra el botón de la ventana en la BARRA DE TAREAS (no la bandeja del reloj). Se usa
+/// para el arranque en bandeja por autostart: la ventana existe pero no debe tener botón en la
+/// barra de tareas ni "flashear" al arrancar. Se logra alternando el estilo extendido
+/// `WS_EX_TOOLWINDOW` (una *tool window* no aparece en la barra de tareas) frente a
+/// `WS_EX_APPWINDOW` (fuerza la presencia normal). Cambiar el estilo extendido requiere ocultar y
+/// re-mostrar la ventana para que el SO re-evalúe su presencia en la barra de tareas.
+///
+/// - `visible == false`: quita el botón y deja la ventana OCULTA (`SW_HIDE`) — el arranque en
+///   bandeja quiere exactamente eso; la app sigue viva por el ícono del tray.
+/// - `visible == true`: devuelve el botón y RE-MUESTRA la ventana (`SW_SHOW`). Idempotente: llamar
+///   con `true` cuando ya era una ventana normal no rompe nada (solo re-afirma el estilo y muestra).
+///
+/// Tolerante por diseño (el SO es hostil): `hwnd` nulo → no-op; todos los resultados de las
+/// llamadas Win32 se ignoran a propósito, nunca paniquea. En no-Windows es un stub no-op.
+#[cfg(windows)]
+pub fn set_taskbar_visible(hwnd: isize, visible: bool) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOW,
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe {
+        // Ocultar antes de cambiar el estilo: el SO solo re-evalúa la presencia en la barra de
+        // tareas al re-mostrar, así que hay que ocultar y (si procede) volver a mostrar.
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        let mut ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if visible {
+            // Ventana normal: fuera el flag de tool-window, dentro el de app-window.
+            ex &= !(WS_EX_TOOLWINDOW.0 as isize);
+            ex |= WS_EX_APPWINDOW.0 as isize;
+        } else {
+            // Tool-window (sin botón en la barra de tareas).
+            ex |= WS_EX_TOOLWINDOW.0 as isize;
+            ex &= !(WS_EX_APPWINDOW.0 as isize);
+        }
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+        // Solo re-mostrar si queremos que sea visible; si la ocultamos para la bandeja, la dejamos
+        // oculta (el SW_HIDE de arriba ya la escondió).
+        if visible {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+    }
+}
+
+/// Stub no-Windows: mostrar/ocultar el botón de la barra de tareas es específico de Win32.
+#[cfg(not(windows))]
+pub fn set_taskbar_visible(_hwnd: isize, _visible: bool) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

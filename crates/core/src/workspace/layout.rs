@@ -19,6 +19,17 @@ pub enum SplitDir {
     Vertical,
 }
 
+/// Elige la orientación del split para aprovechar el lado más largo del panel: si es más ancho
+/// que alto, divide en columnas (`Horizontal` = hijos lado a lado); si es más alto que ancho,
+/// en filas (`Vertical`); en empate, `Horizontal` (el default histórico). Puro y testeable.
+pub fn pick_split_dir(rect: Rect) -> SplitDir {
+    if rect.h > rect.w {
+        SplitDir::Vertical
+    } else {
+        SplitDir::Horizontal
+    }
+}
+
 /// Un nodo del árbol de disposición: una hoja (un panel), un grupo de pestañas
 /// (varios paneles apilados en el mismo rect) o un split de N hijos con pesos.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -847,6 +858,37 @@ fn collect_groups(node: &DockNode, out: &mut Vec<(Vec<PaneId>, usize)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_split_dir_por_lado_largo() {
+        assert_eq!(
+            pick_split_dir(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 800.0,
+                h: 300.0
+            }),
+            SplitDir::Horizontal
+        );
+        assert_eq!(
+            pick_split_dir(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 300.0,
+                h: 800.0
+            }),
+            SplitDir::Vertical
+        );
+        assert_eq!(
+            pick_split_dir(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 500.0,
+                h: 500.0
+            }),
+            SplitDir::Horizontal
+        );
+    }
 
     #[test]
     fn vacio_no_tiene_paneles() {

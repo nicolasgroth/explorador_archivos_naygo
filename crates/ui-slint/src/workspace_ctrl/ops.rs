@@ -175,7 +175,8 @@ impl WorkspaceCtrl {
         &mut self,
         dest: PaneId,
         sources: Vec<std::path::PathBuf>,
-        move_: bool,
+        move_hint: bool,
+        copy_forced: bool,
     ) -> bool {
         if sources.is_empty() {
             return false;
@@ -188,6 +189,16 @@ impl WorkspaceCtrl {
         else {
             return false;
         };
+        // Misma decisión que `drop_at`: usar las señales FIABLES del OLE (Shift=`move_hint`,
+        // Ctrl=`copy_forced`) + mismo disco, vía `decide_drop`. Antes este fallback decidía solo por
+        // `move_` (Shift), así que un Ctrl+arrastre que cayera aquí (drop fuera de un panel Files
+        // concreto) movía en vez de copiar en el mismo disco — la misma pérdida de datos que se
+        // arregló en `drop_at`. `is_move` alimenta ejecución y label por igual (el label no miente).
+        let same = naygo_core::dnd::same_drive(&sources[0], &dir);
+        let move_ = matches!(
+            naygo_core::dnd::decide_drop(move_hint, copy_forced, same),
+            naygo_core::dnd::DropAction::Move
+        );
         let label = if move_ {
             self.config.t("ops.file_kind_move")
         } else {
@@ -210,9 +221,10 @@ impl WorkspaceCtrl {
 
     /// Recibe un drop OLE en el PUNTO `(content_x, content_y)` (coordenadas de contenido, el
     /// mismo sistema que usa `pane_rects`/`drop_hit`): enruta al panel Files que está BAJO el
-    /// cursor, no al panel activo. Decide mover/copiar con las reglas del Explorador
-    /// (`decide_drop_action`: Shift→mover, Ctrl→copiar, si no según mismo disco); el `move_hint`
-    /// del OLE es secundario (Ctrl/Shift + mismo disco mandan, igual que en `drop_external`).
+    /// cursor, no al panel activo. Decide mover/copiar con `decide_drop`, usando SOLO las señales
+    /// fiables del OLE: `move_hint` (Shift real) y `copy_forced` (Ctrl real), ambas leídas del
+    /// `grfKeyState` al soltar. Los flags de teclado de la app NO se usan aquí: durante el bucle
+    /// modal de `DoDragDrop` llegan stale. Prioridad: Shift→mover, Ctrl→copiar, si no según disco.
     ///
     /// No-op (devuelve false) si: no hay rutas, el punto no cae sobre ningún panel, el panel
     /// destino no es Files, o el destino ES la misma carpeta de origen de las rutas (soltar
@@ -221,12 +233,11 @@ impl WorkspaceCtrl {
         &mut self,
         content_x: f32,
         content_y: f32,
-        ctrl: bool,
-        shift: bool,
-        paths: Vec<std::path::PathBuf>,
         move_hint: bool,
+        copy_forced: bool,
+        paths: Vec<std::path::PathBuf>,
     ) -> bool {
-        use naygo_core::dnd::{decide_drop_action, same_drive, DropAction};
+        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
         if paths.is_empty() {
             crate::logging::breadcrumb("drop_at: sin rutas, no-op");
@@ -277,15 +288,14 @@ impl WorkspaceCtrl {
             crate::logging::breadcrumb("drop_at: soltado sobre la propia carpeta, no-op");
             return false;
         }
-        // Acción según modificadores + mismo disco. CLAVE: el `move_hint` del OLE viene del
-        // grfKeyState que Windows entrega al SOLTAR (refleja el Shift REAL en ese instante).
-        // Los flags `ctrl`/`shift` de la app NO sirven aquí: durante el bucle modal de
-        // DoDragDrop la app no recibe eventos de teclado, así que llegan desactualizados (false)
-        // aunque el usuario tenga Shift presionado. Por eso, si el OLE reporta Shift
-        // (`move_hint`), MOVEMOS; si no, caemos a decide_drop_action (default por disco + Ctrl).
+        // Acción según las señales del OLE + mismo disco. CLAVE: `move_hint` (Shift) y
+        // `copy_forced` (Ctrl) vienen del grfKeyState que Windows entrega al SOLTAR, así que
+        // reflejan las teclas REALES en ese instante. Los flags de teclado de la app NO sirven
+        // aquí: durante el bucle modal de DoDragDrop la app no recibe eventos de teclado y llegan
+        // stale (false) aunque el usuario tenga Ctrl/Shift presionado. `decide_drop` prioriza
+        // Shift→mover, Ctrl→copiar, si no según disco (mismo→mover, distinto→copiar).
         let same = same_drive(&paths[0], &dest_dir);
-        let is_move =
-            move_hint || matches!(decide_drop_action(ctrl, shift, same), DropAction::Move);
+        let is_move = matches!(decide_drop(move_hint, copy_forced, same), DropAction::Move);
         let label = if is_move {
             self.config.t("ops.file_kind_move")
         } else {
@@ -576,6 +586,72 @@ impl WorkspaceCtrl {
         }
         self.rename_requested = Some((id, next, 0));
         Some(next)
+    }
+
+    /// Arma el texto de PREVISUALIZACIÓN del deshacer para el popup de confirmación (antes de
+    /// ejecutar). Devuelve `None` si la entrada no existe, ya se deshizo, o el inverso ya no aplica
+    /// (`validate`). Todo se compone con `config.t(...)` (i18n) para respetar el idioma activo.
+    ///
+    /// El resultado `(resumen, lineas)`:
+    /// - `resumen`: una frase con el verbo y el conteo, p. ej. "Deshacer «Copiar»: se borrarán 2
+    ///   archivo(s)" o "Deshacer «Mover»: se devolverán 3 archivo(s) a su origen". El verbo se deriva
+    ///   de las `actions` (predominancia de `TrashCreated` vs `MoveBack`); el conteo es la cantidad
+    ///   de acciones.
+    /// - `lineas`: una por acción — el nombre del archivo + a dónde va (papelera / carpeta origen).
+    pub fn undo_preview(&self, id: u64) -> Option<(String, Vec<String>)> {
+        let idx = self.ops.undo_history.iter().position(|e| e.id == id)?;
+        let entry = &self.ops.undo_history[idx];
+        if entry.undone || naygo_core::ops::undo::validate(&entry.actions).is_err() {
+            return None;
+        }
+        let n = entry.actions.len();
+        // ¿Es un deshacer de COPIAR/CREAR (trashea) o de MOVER/RENOMBRAR (devuelve)? Se decide por
+        // el tipo predominante de acción: si hay al menos un MoveBack, el verbo es "devolver"; si
+        // todas son TrashCreated, es "borrar". (Una entrada mezcla un solo tipo en la práctica, pero
+        // el criterio es robusto ante cualquier combinación.)
+        let has_move = entry
+            .actions
+            .iter()
+            .any(|a| matches!(a, naygo_core::ops::undo::UndoAction::MoveBack { .. }));
+        // Resumen: "Deshacer «<label>»: se {borrarán|devolverán} N archivo(s) [a su origen]".
+        let phrase_key = if has_move {
+            "slint.undo.will_move_back"
+        } else {
+            "slint.undo.will_delete"
+        };
+        let phrase = self.config.t(phrase_key).replace("{n}", &n.to_string());
+        let summary = self
+            .config
+            .t("slint.undo.summary")
+            .replace("{label}", &entry.label)
+            .replace("{detail}", &phrase);
+        // Lista: una línea por acción. TrashCreated → "<nombre> → Papelera"; MoveBack → "<nombre> →
+        // <carpeta destino>". Los nombres/carpetas se derivan de las rutas de cada acción.
+        let to_trash = self.config.t("slint.undo.to_trash");
+        let to_arrow = self.config.t("slint.undo.to_arrow");
+        let file_name = |p: &std::path::Path| -> String {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string_lossy().into_owned())
+        };
+        let folder_of = |p: &std::path::Path| -> String {
+            p.parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let lines: Vec<String> = entry
+            .actions
+            .iter()
+            .map(|a| match a {
+                naygo_core::ops::undo::UndoAction::TrashCreated { path } => {
+                    format!("{} {} {}", file_name(path), to_arrow, to_trash)
+                }
+                naygo_core::ops::undo::UndoAction::MoveBack { now, back_to } => {
+                    format!("{} {} {}", file_name(now), to_arrow, folder_of(back_to))
+                }
+            })
+            .collect();
+        Some((summary, lines))
     }
 
     /// Deshace la entrada del historial con `id` (botón "Deshacer" del panel Historial).

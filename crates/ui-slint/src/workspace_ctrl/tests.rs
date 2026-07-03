@@ -266,7 +266,7 @@ fn plantilla_de_tabla_por_defecto_se_aplica_a_paneles_nuevos() {
     c.save_default_table_from_active();
     assert!(c.config.settings.default_table.is_some());
     // Un panel nuevo (split) hereda la plantilla: Extensión oculta.
-    c.add_pane_split();
+    c.add_pane_split(area());
     let new_id = *c.ws.files_panes().last().unwrap();
     let ext_visible =
         c.ws.pane(new_id)
@@ -301,7 +301,7 @@ fn cerrar_panel_quita_uno_y_protege_el_ultimo() {
     let first = *c.ws.files_panes().first().unwrap();
     assert!(!c.can_close_pane(first));
     // Agregar un segundo panel y cerrarlo: vuelve a quedar uno.
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let second = *c.ws.files_panes().last().unwrap();
     assert!(c.can_close_pane(second));
@@ -348,6 +348,48 @@ fn calcular_tamano_de_carpeta() {
         "el resultado del cálculo aparece en el status: {}",
         c.status_line()
     );
+}
+
+/// El worker de metadata lee las dimensiones de un PNG enfocado: `request_metadata` lanza el
+/// job, se drena con `pump_meta` hasta terminar, y `meta_fields()` trae la clave i18n + el valor.
+#[test]
+fn metadata_de_imagen_reporta_dimensiones() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // PNG 4x2 mínimo (el proveedor de imágenes de core lee solo la cabecera).
+    let png = work.path().join("pic.png");
+    image::RgbaImage::new(4, 2).save(&png).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    // Pedir la metadata del PNG y drenar el worker hasta que responda.
+    c.request_metadata(png.clone());
+    assert!(c.meta_loading(), "el job arranca en estado de lectura");
+    let mut done = false;
+    for _ in 0..3000 {
+        if c.pump_meta() {
+            done = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(done, "el worker de metadata debe terminar");
+    assert!(!c.meta_loading(), "ya no está leyendo");
+    // Se compara contra la CLAVE i18n (la traducción ocurre al construir el VM), no contra el
+    // literal: el runner de CI corre en inglés y no debe romper por el idioma.
+    assert!(
+        c.meta_fields()
+            .iter()
+            .any(|(key, value)| key == "meta.dimensions" && value == "4 × 2"),
+        "debe reportar las dimensiones 4 × 2: {:?}",
+        c.meta_fields()
+    );
+    // Enfocar el mismo path no relanza (el job sigue siendo el mismo, ya terminado).
+    c.request_metadata(png.clone());
+    assert!(!c.meta_loading(), "no relanza para el mismo archivo");
+    // Limpiar cancela el job y deja los campos vacíos.
+    c.clear_metadata();
+    assert!(c.meta_fields().is_empty());
+    assert!(!c.meta_loading());
 }
 
 /// Navegación por teclado del árbol: ↓ mueve el cursor, → expande, Enter navega el panel
@@ -575,14 +617,13 @@ fn drop_at_enruta_al_panel_bajo_el_cursor_no_al_activo() {
     // mismo disco MUEVE (regla del Explorador), y `a`/`b` viven en el mismo disco temporal.
     // `move_hint=false` (sin Shift del OLE), si no el move_hint forzaría Mover y rompería el
     // aserto de copia. Lo que prueba este test es el RUTEO (que el archivo aterriza en `b`,
-    // bajo el cursor), no la elección mover/copiar (eso ya lo cubre dnd::decide_drop_action).
+    // bajo el cursor), no la elección mover/copiar (eso ya lo cubre dnd::decide_drop).
     let routed = c.drop_at(
         cx,
         cy,
-        true,  // ctrl → copiar
-        false, // shift
-        vec![a.path().join("doc.txt")],
         false, // move_hint del OLE (sin Shift al soltar)
+        true,  // copy_forced (Ctrl del OLE) → copiar
+        vec![a.path().join("doc.txt")],
     );
     assert!(routed, "drop_at debe enrutar (no caer al fallback)");
     // CONFIRMAR AL SOLTAR: `drop_at` ya no ejecuta; deja el drop pendiente. La op real arranca
@@ -865,9 +906,9 @@ fn drop_at_move_hint_del_ole_fuerza_mover() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // ctrl=false, shift=false (estado de la app stale durante el modal), PERO move_hint=true
-    // (Shift REAL al soltar, reportado por el OLE). Debe MOVER → el original desaparece.
-    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], true);
+    // copy_forced=false, PERO move_hint=true (Shift REAL al soltar, reportado por el OLE). Debe
+    // MOVER → el original desaparece. (El estado de teclado de la app ya no se pasa: llega stale.)
+    let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     // El drop queda pendiente: debe ser MOVER (el move_hint del OLE manda).
     assert_eq!(
@@ -925,8 +966,8 @@ fn drop_at_mismo_disco_sin_modificadores_mueve_por_defecto() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // ctrl=false, shift=false, move_hint=false → la decisión depende del disco. Mismo disco → Mover.
-    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")], false);
+    // move_hint=false, copy_forced=false → la decisión depende del disco. Mismo disco → Mover.
+    let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     assert!(c.confirm_pending_drop(), "confirmar arranca la op");
     for _ in 0..2000 {
@@ -973,8 +1014,8 @@ fn drop_at_no_ejecuta_hasta_confirmar_y_cancelar_descarta() {
         .expect("el panel destino tiene rect");
     let cx = dest_rect.x + dest_rect.w / 2.0;
     let cy = dest_rect.y + dest_rect.h / 2.0;
-    // Soltar (Ctrl=copia para que el dato sea determinista).
-    let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")], false);
+    // Soltar (copy_forced=Ctrl=copia para que el dato sea determinista).
+    let routed = c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
     // NADA se ejecutó todavía: el drop está pendiente y no hay op alguna.
     let pd = c.pending_drop.as_ref().expect("drop pendiente");
@@ -1229,7 +1270,7 @@ fn sesion_guarda_y_restaura_dos_paneles() {
     // el panel activo (el nuevo) a la subcarpeta.
     let mut c1 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     assert!(drain(&mut c1));
-    c1.add_pane_split();
+    c1.add_pane_split(area());
     assert_eq!(c1.ws.panes().len(), 2, "tras dividir hay dos paneles");
     assert!(drain(&mut c1));
     c1.navigate_active_to(sub.clone());
@@ -1445,11 +1486,11 @@ fn navega_al_ultimo_files_activo_no_al_primero() {
     let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let first = c.active_id().unwrap(); // primer Files
-    c.add_pane_split(); // segundo Files, queda activo
+    c.add_pane_split(area()); // segundo Files, queda activo
     let second = c.active_id().unwrap();
     assert_ne!(first, second);
     // Agregar un Árbol y activarlo (simula clic en el panel Carpetas).
-    c.add_pane_of(PanePurpose::Tree);
+    c.add_pane_of(PanePurpose::Tree, area());
     let tree = c.active_id().unwrap();
     c.set_active(tree);
     // Navegar desde el árbol → debe ir al SEGUNDO Files (el último activo), no al primero.
@@ -1596,6 +1637,96 @@ fn doble_clic_en_rust_navega() {
     assert!(rows.iter().any(|r| r.name == "dentro.txt"));
 }
 
+/// Clic-medio sobre una fila-CARPETA la abre en un panel NUEVO (siempre divide, aunque ya haya
+/// otro panel disponible): a diferencia de Shift+Enter/Ctrl+doble-clic, nunca reusa un panel
+/// existente.
+#[test]
+fn clic_medio_en_carpeta_abre_panel_nuevo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "sub").expect("'sub' visible");
+    c.set_area(area());
+
+    assert!(
+        c.on_row_middle_clicked(origin, pos),
+        "clic-medio en carpeta abre panel nuevo"
+    );
+    assert!(drain(&mut c));
+
+    // Ahora hay DOS paneles Files: el origen sigue en tmp, el nuevo quedó activo en sub.
+    assert_eq!(c.ws.files_panes().len(), 2, "se creó un panel nuevo");
+    let new_id = c.active_id().unwrap();
+    assert_ne!(new_id, origin, "el panel nuevo quedó activo, no el origen");
+    assert_eq!(c.path_of(origin), tmp.path().display().to_string());
+    assert_eq!(c.path_of(new_id), sub.display().to_string());
+}
+
+/// Clic-medio sobre una fila-ARCHIVO no hace nada: no abre el archivo ni crea un panel.
+#[test]
+fn clic_medio_en_archivo_no_hace_nada() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "a.txt").expect("'a.txt' visible");
+    c.set_area(area());
+
+    assert!(
+        !c.on_row_middle_clicked(origin, pos),
+        "clic-medio sobre un archivo no hace nada"
+    );
+    assert_eq!(c.ws.files_panes().len(), 1, "no se creó ningún panel");
+}
+
+/// Shift+Enter sobre la carpeta enfocada la abre en OTRO panel (el origen NO navega), vía
+/// `run_action(Action::OpenFocusedOtherPane)`. Con un solo panel, divide y usa el nuevo.
+#[test]
+fn shift_enter_abre_carpeta_enfocada_en_otro_panel() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let origin = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "sub").expect("'sub' visible");
+    c.with_active(|f| f.select_single(pos));
+    c.set_area(area());
+
+    assert!(
+        c.run_action(naygo_core::keymap::Action::OpenFocusedOtherPane),
+        "Shift+Enter abre en otro panel"
+    );
+    assert!(drain(&mut c));
+
+    let panes = c.ws.files_panes();
+    assert_eq!(panes.len(), 2, "se dividió (no había otro panel)");
+    // El origen NO navegó (ni pierde el foco: split_for_target lo deja activo): sigue en tmp.
+    assert_eq!(c.path_of(origin), tmp.path().display().to_string());
+    assert_eq!(c.active_id(), Some(origin), "el foco se queda en el origen");
+    let new_id = panes.into_iter().find(|&p| p != origin).unwrap();
+    assert_eq!(c.path_of(new_id), sub.display().to_string());
+}
+
+/// Shift+Enter sin nada enfocado (o enfocado un archivo) no hace nada.
+#[test]
+fn shift_enter_sin_carpeta_enfocada_no_hace_nada() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pos = active_pos_of(&c, "a.txt").expect("'a.txt' visible");
+    c.with_active(|f| f.select_single(pos));
+    c.set_area(area());
+
+    assert!(!c.run_action(naygo_core::keymap::Action::OpenFocusedOtherPane));
+    assert_eq!(c.ws.files_panes().len(), 1, "no se creó ningún panel");
+}
+
 /// Agregar un panel divide el layout y deja DOS paneles Files; el nuevo queda activo.
 #[test]
 fn agregar_panel_divide_y_deja_dos() {
@@ -1604,7 +1735,7 @@ fn agregar_panel_divide_y_deja_dos() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let first = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     // Dos paneles Files en el layout, y el activo es el nuevo (distinto del primero).
     assert_eq!(c.ws.files_panes().len(), 2);
@@ -1631,7 +1762,7 @@ fn agregar_panel_especial_no_lista_archivos() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let files_listings_antes = c.listings.len();
-    c.add_pane_of(PanePurpose::Tree);
+    c.add_pane_of(PanePurpose::Tree, area());
     // Se agregó un panel Tree y no aumentaron los listados de archivos.
     assert!(c.ws.panes().iter().any(|p| p.purpose == PanePurpose::Tree));
     assert_eq!(
@@ -1864,12 +1995,12 @@ fn resolve_target_segun_cantidad_de_paneles() {
     // Un solo panel → hay que dividir.
     assert_eq!(c.resolve_target(a, area()), PaneTarget::NeedsSplit);
     // Dos paneles → destino directo (el otro).
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     assert_eq!(c.resolve_target(b, area()), PaneTarget::Direct(a));
     // Tres paneles → selector (Pick con 2 candidatos).
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let third = c.active_id().unwrap();
     match c.resolve_target(third, area()) {
@@ -1887,7 +2018,7 @@ fn swap_intercambia_carpetas() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Mandar b a la subcarpeta.
@@ -1908,9 +2039,9 @@ fn selector_pendiente_y_resolucion() {
     std::fs::create_dir(&sub).unwrap();
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let origin = c.active_id().unwrap();
     // Clonar desde el origen: 3 paneles → queda pendiente el selector con 2 candidatos.
@@ -1933,7 +2064,7 @@ fn apilar_crea_un_grupo_de_pestanas() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Apilar b sobre a: quedan en un grupo de 2.
@@ -1954,7 +2085,7 @@ fn cambiar_pestana_activa() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     c.stack_into(b, a);
@@ -1972,7 +2103,7 @@ fn cerrar_pestana_colapsa_el_grupo() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     c.stack_into(b, a);
@@ -1991,7 +2122,7 @@ fn drop_en_el_centro_apila() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Layout: [a | b] en 800x600. Soltar a en el centro de b.
@@ -2026,7 +2157,7 @@ fn drop_en_borde_divide() {
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let a = c.active_id().unwrap();
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let b = c.active_id().unwrap();
     // Apilar primero a+b para tener un grupo, luego sacar 'a' soltándolo en un borde.
@@ -2049,9 +2180,9 @@ fn cancelar_selector() {
     let tmp = tempfile::tempdir().unwrap();
     let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
-    c.add_pane_split();
+    c.add_pane_split(area());
     assert!(drain(&mut c));
     let origin = c.active_id().unwrap();
     c.request_action(PaneAction::Clone, origin, area());

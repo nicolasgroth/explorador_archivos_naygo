@@ -296,6 +296,12 @@ pub struct Settings {
     /// `#[serde(default)]` retro-compat (settings viejo → true).
     #[serde(default = "default_auto_highlight_code")]
     pub auto_highlight_code: bool,
+    /// Activa animaciones adicionales de mayor costo (p. ej. el brillo continuo de la barra del
+    /// panel de operaciones). Flag GLOBAL: pensado para gobernar cualquier animación costosa
+    /// futura de la app. Las transiciones baratas (interpolar un valor que cambió) NO dependen de
+    /// esto: son siempre activas y no cuestan CPU en reposo. Default false (prioridad: bajo consumo).
+    #[serde(default = "default_animations_enabled")]
+    pub animations_enabled: bool,
     /// Carpeta de inicio (botón Home). Vacío = carpeta personal del usuario. `#[serde(default)]`.
     #[serde(default)]
     pub home_dir: String,
@@ -318,6 +324,13 @@ pub struct Settings {
     /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
     #[serde(default)]
     pub window: Option<WindowGeometry>,
+    /// ¿La ventana estaba ABIERTA (visible, no en la bandeja) la última vez que se cerró la
+    /// app? Lo usa el arranque por autostart-a-bandeja (`--tray`): si la última vez estaba en
+    /// bandeja, al reiniciar Windows Naygo vuelve a la bandeja sin mostrar la ventana; si estaba
+    /// abierta, se restaura la ventana. Default `true` (conservador: sin dato previo, mostrar).
+    /// Es estado de ventana, por eso vive aquí junto a `window`. `#[serde(default)]` retro-compat.
+    #[serde(default = "default_window_was_open_on_exit")]
+    pub window_was_open_on_exit: bool,
     /// Atajo GLOBAL del sistema para mostrar/ocultar Naygo (funciona desde cualquier app).
     /// Activado de fábrica. `#[serde(default)]` retro-compat.
     #[serde(default = "default_global_hotkey_enabled")]
@@ -361,6 +374,11 @@ fn default_auto_highlight_code() -> bool {
     true
 }
 
+/// Default de `animations_enabled`: false (las animaciones costosas vienen apagadas por consumo).
+fn default_animations_enabled() -> bool {
+    false
+}
+
 /// Default de `preview_rules`: las reglas semilla (texto + imagen, habilitadas).
 fn default_preview_rules_cfg() -> Vec<crate::preview::PreviewRule> {
     crate::preview::default_preview_rules()
@@ -388,6 +406,11 @@ fn default_close_to_tray() -> bool {
 
 /// Default de `autostart_minimized`: true.
 fn default_autostart_minimized() -> bool {
+    true
+}
+
+/// Default de `window_was_open_on_exit`: true (conservador: sin dato previo, mostrar la ventana).
+fn default_window_was_open_on_exit() -> bool {
     true
 }
 
@@ -546,12 +569,14 @@ impl Default for Settings {
             footer_preset: crate::footer::FooterPreset::Compact,
             footer_custom_template: String::new(),
             auto_highlight_code: true,
+            animations_enabled: false,
             home_dir: String::new(),
             show_hidden: true,
             show_system: true,
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
             window: None,
+            window_was_open_on_exit: true,
             global_hotkey_enabled: true,
             global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
         }
@@ -855,6 +880,7 @@ mod tests {
             footer_preset: crate::footer::FooterPreset::Full,
             footer_custom_template: "{sel}/{total}".into(),
             auto_highlight_code: false,
+            animations_enabled: true,
             home_dir: "D:\\Trabajo".into(),
             show_hidden: false,
             show_system: false,
@@ -867,6 +893,7 @@ mod tests {
                 y: 60,
                 maximized: true,
             }),
+            window_was_open_on_exit: false,
             global_hotkey_enabled: false,
             global_hotkey: crate::keymap::Chord::alt(crate::keymap::KeyCode::Char('z')),
         };
@@ -1206,6 +1233,15 @@ mod tests {
     }
 
     #[test]
+    fn animations_enabled_default_es_false() {
+        let s = Settings::default();
+        assert!(
+            !s.animations_enabled,
+            "las animaciones costosas vienen apagadas"
+        );
+    }
+
+    #[test]
     fn settings_viejo_sin_campos_nuevos_migra_a_defaults() {
         // Un JSON v1 mínimo SIN los campos nuevos debe cargar con defaults (serde default).
         let json = r#"{"version":1,"bar_position":"Top","icon_only":false}"#;
@@ -1384,6 +1420,16 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(s.window.is_none());
+    }
+
+    #[test]
+    fn window_was_open_on_exit_default_es_true() {
+        // Por defecto y para un settings.json previo (sin el campo) → true (conservador:
+        // sin dato previo, mostrar la ventana al arrancar).
+        assert!(Settings::default().window_was_open_on_exit);
+        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.window_was_open_on_exit);
     }
 
     #[test]
