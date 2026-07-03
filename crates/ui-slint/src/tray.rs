@@ -29,8 +29,18 @@ pub enum TrayMsg {
 
 pub struct Tray {
     /// Mantiene vivo el ícono (drop = desaparece de la bandeja).
-    _icon: TrayIcon,
+    icon: TrayIcon,
     pub rx: Receiver<TrayMsg>,
+}
+
+impl Tray {
+    /// Quita el ícono de la bandeja de forma INMEDIATA (Shell_NotifyIcon NIM_DELETE síncrono, vía
+    /// `set_visible(false)` del crate). Se llama al SALIR de verdad, ANTES de `quit_event_loop`:
+    /// si solo se dejara caer el `Drop` al terminar el proceso, Windows deja el ícono "fantasma"
+    /// en la barra hasta que el usuario pasa el mouse por encima y el SO lo repinta. Tolerante.
+    pub fn hide_icon(&self) {
+        let _ = self.icon.set_visible(false);
+    }
 }
 
 /// Crea el ícono de bandeja con su menú. Tolerante: `None` si algo falla (la app sigue normal,
@@ -109,7 +119,7 @@ pub fn create(
         }
     }));
 
-    Some(Tray { _icon: tray, rx })
+    Some(Tray { icon: tray, rx })
 }
 
 /// Decodifica el `.ico` embebido y lo reescala a 32×32 RGBA para la bandeja.

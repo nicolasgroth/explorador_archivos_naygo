@@ -134,6 +134,37 @@ pub fn is_foreground(_hwnd: isize) -> bool {
     false
 }
 
+/// Marca `hwnd` como "siempre encima" (topmost) sin moverla, redimensionarla ni robarle el foco.
+/// Se usa para el splash de arranque: la ventana principal se muestra casi a la vez y, sin esto, el
+/// splash quedaba DETRÁS y no se veía. Tolerante (hwnd nulo → no-op; resultado Win32 ignorado).
+#[cfg(windows)]
+pub fn set_topmost(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Stub no-Windows: "topmost" es específico de Win32.
+#[cfg(not(windows))]
+pub fn set_topmost(_hwnd: isize) {}
+
 /// Oculta o muestra el botón de la ventana en la BARRA DE TAREAS (no la bandeja del reloj). Se usa
 /// para el arranque en bandeja por autostart: la ventana existe pero no debe tener botón en la
 /// barra de tareas ni "flashear" al arrancar. Se logra alternando el estilo extendido

@@ -422,6 +422,28 @@ fn main() -> Result<(), slint::PlatformError> {
             splash.set_build_version(naygo_full_version().into());
             let _ = splash.show();
             let splash = Rc::new(splash);
+            // El splash debe quedar ENCIMA de la ventana principal, que se muestra casi a la vez.
+            // `set_topmost` (SetWindowPos HWND_TOPMOST) lo eleva sin robarle el foco ni moverlo. El
+            // detalle clave: ANTES de `ui.run()` la ventana del splash NO está realizada por winit y
+            // NO tiene HWND todavía (medido: `splash_hwnd` devuelve `None` hasta ~1 s después de
+            // entrar al event loop). Por eso el topmost se aplica desde un `Timer` que corre en el
+            // hilo de UI YA con el loop andando: sondea cada 100 ms y, en cuanto obtiene el HWND, lo
+            // eleva UNA vez y se auto-detiene (`topmost_timer.stop()`). Es robusto ante equipos
+            // lentos (una VM podría tardar más en realizar la ventana): sigue reintentando hasta
+            // lograrlo, sin costo perceptible (el splash vive solo ~1.8 s).
+            let splash_topmost = splash.clone();
+            let topmost_timer = Rc::new(slint::Timer::default());
+            let topmost_timer_self = topmost_timer.clone();
+            topmost_timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(100),
+                move || {
+                    if let Some(hwnd) = splash_hwnd(&splash_topmost) {
+                        naygo_platform::window::set_topmost(hwnd);
+                        topmost_timer_self.stop();
+                    }
+                },
+            );
             let splash_for_timer = splash.clone();
             let timer = slint::Timer::default();
             timer.start(
@@ -431,7 +453,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let _ = splash_for_timer.hide();
                 },
             );
-            Some((splash, timer))
+            Some((splash, timer, topmost_timer))
         }
         Err(_) => None,
     };
@@ -1636,6 +1658,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                                 tray::TrayMsg::Exit => {
                                     ctrl.borrow().save_session();
+                                    // Quitar el ícono de la bandeja ANTES de salir, para que no
+                                    // quede "fantasma" hasta que Windows lo repinte al pasar el
+                                    // mouse. `Drop` al terminar el proceso no basta (no es síncrono).
+                                    if let Some(t) = tray.as_ref() {
+                                        t.hide_icon();
+                                    }
                                     let _ = slint::quit_event_loop();
                                 }
                             }
@@ -6285,6 +6313,19 @@ fn should_show_on_start(tray_flag: bool, window_was_open_on_exit: bool) -> bool 
 fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = ui.window().window_handle();
+    match handle.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
+        _ => None,
+    }
+}
+
+/// El HWND de la ventana de splash (backend winit), para poder elevarla al frente (topmost). Mismo
+/// mecanismo que `naygo_hwnd` pero sobre la ventana `Splash`. Solo se usa en release (el splash está
+/// tras `cfg(not(debug_assertions))`); `#[allow(dead_code)]` evita el warning en builds debug.
+#[allow(dead_code)]
+fn splash_hwnd(splash: &Splash) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = splash.window().window_handle();
     match handle.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
         _ => None,
