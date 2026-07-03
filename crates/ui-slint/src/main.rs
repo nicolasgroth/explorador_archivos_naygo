@@ -1611,15 +1611,13 @@ fn main() -> Result<(), slint::PlatformError> {
                             match msg {
                                 tray::TrayMsg::Open => {
                                     if let Some(ui) = ui_weak.upgrade() {
-                                        let _ = ui.show();
-                                        ui.window().set_minimized(false);
+                                        restore_window(&ui);
                                     }
                                 }
                                 tray::TrayMsg::NewPane => {
                                     // Traer al frente y abrir un panel nuevo (divide el activo).
                                     let area = if let Some(ui) = ui_weak.upgrade() {
-                                        let _ = ui.show();
-                                        ui.window().set_minimized(false);
+                                        restore_window(&ui);
                                         Rect {
                                             x: 0.0,
                                             y: 0.0,
@@ -1641,17 +1639,16 @@ fn main() -> Result<(), slint::PlatformError> {
                                     // Reusa el handler del engranaje de la toolbar (refresca el VM
                                     // y muestra la ventana de config), así no duplicamos lógica.
                                     if let Some(ui) = ui_weak.upgrade() {
-                                        let _ = ui.show();
-                                        ui.window().set_minimized(false);
+                                        restore_window(&ui);
                                         ui.invoke_open_config();
                                     }
                                 }
                                 tray::TrayMsg::CenterWindow => {
-                                    // Rescatar una ventana "perdida": mostrar, des-minimizar y
-                                    // reposicionar a una esquina segura siempre visible (80,80).
+                                    // Rescatar una ventana "perdida": restaurar (mostrar, devolver
+                                    // botón de barra, des-minimizar, al frente) y reposicionar a una
+                                    // esquina segura siempre visible (80,80).
                                     if let Some(ui) = ui_weak.upgrade() {
-                                        let _ = ui.show();
-                                        ui.window().set_minimized(false);
+                                        restore_window(&ui);
                                         ui.window()
                                             .set_position(slint::LogicalPosition::new(80.0, 80.0));
                                     }
@@ -5970,10 +5967,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Ir a la BANDEJA sin matar la app. CLAVE: NO se puede responder `HideWindow` — al
                 // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y TERMINA
                 // el event loop (el proceso muere). Por eso se responde `KeepWindowShown` (mantiene
-                // la app viva) y se minimiza la ventana a mano con `set_minimized(true)`, que NO toca
-                // ese contador (mismo mecanismo que el toggle del hotkey global). Así la X esconde la
-                // ventana y el proceso sigue corriendo en la bandeja.
+                // la app viva). Para esconderla DE VERDAD (que no quede en la barra de tareas, solo en
+                // la bandeja del reloj) se hace en dos pasos: `set_taskbar_visible(false)` quita el
+                // botón de la barra de tareas (WS_EX_TOOLWINDOW) y hace `SW_HIDE`, y `set_minimized`
+                // asegura el estado minimizado sin tocar el contador de ventanas de Slint. El botón se
+                // devuelve al restaurar (por el ícono de la bandeja, "Abrir" del menú o el atajo global,
+                // que llaman `set_taskbar_visible(true)`). Antes solo se minimizaba y el botón quedaba
+                // en la barra de tareas.
                 if let Some(ui) = ui_weak_close.upgrade() {
+                    #[cfg(windows)]
+                    if let Some(hwnd) = naygo_hwnd(&ui) {
+                        naygo_platform::window::set_taskbar_visible(hwnd, false);
+                    }
                     ui.window().set_minimized(true);
                 }
                 slint::CloseRequestResponse::KeepWindowShown
@@ -6332,35 +6337,41 @@ fn splash_hwnd(splash: &Splash) -> Option<isize> {
     }
 }
 
-/// Alterna la visibilidad de Naygo para el hotkey global: si Naygo NO es la ventana activa
-/// (minimizada o detrás de otras) la muestra + trae al frente; si YA es la ventana activa, la
-/// minimiza (solo si el tray está activo — si no, no la esconde, para no dejarla inalcanzable:
-/// sin tray no hay otro punto de acceso). Coherente con `should_quit_on_close`.
+/// Restaura y trae al frente la ventana de Naygo desde la bandeja o desde minimizado. Es la
+/// contraparte de cerrar-a-bandeja: devuelve el botón de la barra de tareas (que el cierre-a-bandeja
+/// o el autostart le habían quitado con `set_taskbar_visible(false)`), re-muestra la ventana,
+/// la des-minimiza y la trae al foreground. Idempotente: si el botón ya estaba, `true` solo re-afirma
+/// el estilo. La usan el atajo global y todas las rutas del tray que "abren" la ventana, para que
+/// restaurar por cualquier vía deje la ventana en un estado consistente (visible, con botón, al frente).
 ///
-/// Se usa `set_minimized(true)` y NO `window().hide()` a propósito: `hide()` decrementa el
-/// contador interno de ventanas visibles de Slint y, si esta es la única ventana visible (el
-/// caso normal: la ventana de Config solo se muestra al abrirla), dispara `quit_event_loop()` —
-/// terminaría la app en vez de dejarla en bandeja. Es el mismo motivo por el que el arranque
-/// minimizado (`start_in_tray`, más arriba) usa `set_minimized` en vez de `hide()`.
+/// Nota: para ESCONDER se usa `set_minimized(true)` (+ `set_taskbar_visible(false)`) y NO
+/// `window().hide()`: `hide()` decrementa el contador interno de ventanas visibles de Slint y, si es
+/// la única visible, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en bandeja.
 #[cfg(windows)]
-fn toggle_window_visibility(ui: &AppWindow, tray_active: bool) {
-    let Some(hwnd) = naygo_hwnd(ui) else {
-        let _ = ui.show();
-        return;
-    };
-    let is_foreground = naygo_platform::window::is_foreground(hwnd);
-    if is_foreground && tray_active {
-        ui.window().set_minimized(true);
-    } else {
-        // Devolver el botón de la barra de tareas ANTES de mostrar: si arrancamos directo en
-        // bandeja (autostart), le habíamos quitado el botón con `set_taskbar_visible(false)`. Es
-        // idempotente: si ya era una ventana normal, `true` solo re-afirma el estilo. También
-        // re-muestra la ventana (SW_SHOW), coherente con el `ui.show()` que sigue.
+fn restore_window(ui: &AppWindow) {
+    if let Some(hwnd) = naygo_hwnd(ui) {
         naygo_platform::window::set_taskbar_visible(hwnd, true);
         let _ = ui.show();
         ui.window().set_minimized(false);
         naygo_platform::window::bring_to_front(hwnd);
+    } else {
+        let _ = ui.show();
+        ui.window().set_minimized(false);
     }
+}
+#[cfg(not(windows))]
+fn restore_window(ui: &AppWindow) {
+    let _ = ui.show();
+    ui.window().set_minimized(false);
+}
+
+/// Acción del atajo global: SIEMPRE muestra y trae Naygo al frente (no minimiza). El usuario quiere
+/// "invocar Naygo desde cualquier lado", no un toggle: aunque la ventana ya esté al frente, re-afirmar
+/// mostrar/traer-al-frente es inofensivo (y rescata el caso de estar tapada por otra app pero técnicamente
+/// "foreground"). Antes esto minimizaba si la ventana ya era la foreground; se cambió a mostrar siempre.
+#[cfg(windows)]
+fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
+    restore_window(ui);
 }
 #[cfg(not(windows))]
 fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
