@@ -78,16 +78,25 @@ pub fn create(
 
     let (tx, rx): (Sender<TrayMsg>, Receiver<TrayMsg>) = channel();
 
-    // Clic IZQUIERDO (al soltar) sobre el ícono → abrir/enfocar.
+    // Clic IZQUIERDO (al soltar) o DOBLE-CLIC izquierdo sobre el ícono → abrir/enfocar. El
+    // doble-clic se maneja aparte porque Windows lo entrega como evento propio (tras el segundo
+    // clic llega `DoubleClick`, no otro `Click`): sin este brazo, el segundo clic del usuario
+    // se perdería. Ambos gestos hacen lo mismo (abrir), como Steam/Teams/OneDrive.
     let tx_click = tx.clone();
     let waker_click = waker.clone();
     TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        } = event
-        {
+        let open = matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            }
+        );
+        if open {
             let _ = tx_click.send(TrayMsg::Open);
             waker_click();
         }
@@ -141,8 +150,9 @@ fn load_icon() -> Option<tray_icon::Icon> {
 /// Si sí lo pidió (`close_to_tray`), la ventana se oculta y la app sigue viva, AUNQUE el tray no se
 /// haya podido crear: matar el proceso porque el ícono de bandeja falló al cargar sería la peor
 /// opción (el usuario perdería la app sin querer). Con la ventana oculta y sin tray, la app sigue
-/// recuperable por el hotkey global (Ctrl+Alt+Q) que restaura la ventana. Antes esta decisión
-/// dependía de `tray_active`, y si la creación del tray fallaba en silencio, la X cerraba la app.
+/// recuperable por el hotkey global (Ctrl+Alt+Z por defecto) que restaura la ventana. Antes esta
+/// decisión dependía de `tray_active`, y si la creación del tray fallaba en silencio, la X cerraba
+/// la app.
 /// `tray_active` se conserva en la firma solo para el diagnóstico del llamador (loguearlo), no
 /// decide el cierre.
 pub fn should_quit_on_close(close_to_tray: bool, _tray_active: bool) -> bool {

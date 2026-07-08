@@ -13,7 +13,7 @@ incluidos, temas y sets de íconos personalizables.
 > expulsión segura de USB, drag & drop (interno y con el sistema), abrir una terminal en
 > la carpeta, configuración completa (incluido Acerca de + Avanzado), diez idiomas, sets
 > de íconos personalizables, bandeja del sistema (la X esconde a la bandeja), atajo
-> global Ctrl+Alt+Q para mostrar/ocultar, iniciar con Windows (opcionalmente minimizado)
+> global Ctrl+Alt+Z para invocarlo, iniciar con Windows (directo a la bandeja)
 > y navegación por teclado. La ventana recuerda su tamaño y posición.
 >
 > **Guía de uso:** [`docs/GUIA-DE-USUARIO.md`](docs/GUIA-DE-USUARIO.md) (o **F1** en la app).
@@ -53,8 +53,8 @@ incluidos, temas y sets de íconos personalizables.
   dispositivos, drag & drop, bandeja del sistema y arranque opcional con el sistema.
 - Sets de íconos: cinco de fábrica (Lucide, Mono, Tabler, Material, Flat Color), cambio de
   ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
-- Atajo global **Ctrl+Alt+Q** (configurable) que muestra u oculta Naygo desde cualquier
-  aplicación.
+- Atajo global **Ctrl+Alt+Z** (configurable) que muestra Naygo y lo trae al frente desde
+  cualquier aplicación.
 - La **X** esconde a la bandeja del sistema (salir de verdad: menú de la bandeja); la
   ventana recuerda tamaño, posición y maximizado entre sesiones.
 - Configuración completa: apariencia, atajos, previsualización, plantilla de tabla, opciones

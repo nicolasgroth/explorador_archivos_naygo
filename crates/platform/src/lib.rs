@@ -21,6 +21,7 @@ pub mod exe_meta;
 pub mod global_hotkey;
 pub mod locale;
 pub mod open;
+pub mod single_instance;
 pub mod time;
 pub mod trash;
 pub mod window;

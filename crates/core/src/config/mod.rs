@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
 /// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
 /// UI hardcodeaba `version: 1` y, al subir esta constante, la sesión dejaba de restaurarse.
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,19 +324,13 @@ pub struct Settings {
     /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
     #[serde(default)]
     pub window: Option<WindowGeometry>,
-    /// ¿La ventana estaba ABIERTA (visible, no en la bandeja) la última vez que se cerró la
-    /// app? Lo usa el arranque por autostart-a-bandeja (`--tray`): si la última vez estaba en
-    /// bandeja, al reiniciar Windows Naygo vuelve a la bandeja sin mostrar la ventana; si estaba
-    /// abierta, se restaura la ventana. Default `true` (conservador: sin dato previo, mostrar).
-    /// Es estado de ventana, por eso vive aquí junto a `window`. `#[serde(default)]` retro-compat.
-    #[serde(default = "default_window_was_open_on_exit")]
-    pub window_was_open_on_exit: bool,
     /// Atajo GLOBAL del sistema para mostrar/ocultar Naygo (funciona desde cualquier app).
     /// Activado de fábrica. `#[serde(default)]` retro-compat.
     #[serde(default = "default_global_hotkey_enabled")]
     pub global_hotkey_enabled: bool,
-    /// Combinación del atajo global. Default Ctrl+Alt+Q. La tecla Win NO se soporta
-    /// (`RegisterHotKey` la reserva el sistema). `#[serde(default)]` retro-compat.
+    /// Combinación del atajo global. Default Ctrl+Alt+Z (ver `default_global_hotkey` por qué
+    /// no Q). La tecla Win NO se soporta (`RegisterHotKey` la reserva el sistema).
+    /// `#[serde(default)]` retro-compat.
     #[serde(default = "default_global_hotkey")]
     pub global_hotkey: crate::keymap::Chord,
 }
@@ -406,11 +400,6 @@ fn default_close_to_tray() -> bool {
 
 /// Default de `autostart_minimized`: true.
 fn default_autostart_minimized() -> bool {
-    true
-}
-
-/// Default de `window_was_open_on_exit`: true (conservador: sin dato previo, mostrar la ventana).
-fn default_window_was_open_on_exit() -> bool {
     true
 }
 
@@ -520,9 +509,27 @@ fn default_global_hotkey_enabled() -> bool {
     true
 }
 
-/// Default de `global_hotkey`: Ctrl+Alt+Q.
+/// Default de `global_hotkey`: Ctrl+Alt+Z.
+///
+/// Por qué Z y no Q: en el teclado latinoamericano `@` se escribe con AltGr+Q, y Windows trata
+/// AltGr como Ctrl+Alt — un atajo global Ctrl+Alt+Q le ROBA la tecla `@` a todo el sistema
+/// (el usuario no puede escribir arrobas mientras Naygo corre). Z no produce ningún carácter
+/// con AltGr en los layouts español/latinoamericano. Ver también `migrate_legacy_hotkey`.
 fn default_global_hotkey() -> crate::keymap::Chord {
-    crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+    crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('z'))
+}
+
+/// Migra el atajo global viejo: si la config guardada tiene el default histórico Ctrl+Alt+Q
+/// (que rompía la tecla `@` en teclados latinoamericanos, ver `default_global_hotkey`), lo
+/// reemplaza por el default nuevo. Solo toca ese valor exacto: cualquier otra combinación
+/// elegida por el usuario se respeta. Devuelve `true` si migró (el llamador decide re-guardar).
+fn migrate_legacy_hotkey(s: &mut Settings) -> bool {
+    let legacy = crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'));
+    if s.global_hotkey == legacy {
+        s.global_hotkey = default_global_hotkey();
+        return true;
+    }
+    false
 }
 
 impl Default for Settings {
@@ -576,9 +583,8 @@ impl Default for Settings {
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
             window: None,
-            window_was_open_on_exit: true,
             global_hotkey_enabled: true,
-            global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
+            global_hotkey: default_global_hotkey(),
         }
     }
 }
@@ -663,34 +669,26 @@ pub fn load_settings(dir: &Path) -> Settings {
 pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
     let (read, recovered) = read_json_recovering::<Settings>(&dir.join("settings.json"));
     let settings = match read {
-        Some(mut s) if s.version == 1 => {
+        // Un settings de versión menor o igual se acepta y se migra por etapas (v1→v2→v3…);
+        // uno de versión MAYOR (downgrade de la app) se descarta a defaults (brazo de abajo).
+        Some(mut s) if s.version <= CONFIG_VERSION => {
             // Migración v1 → v2: forzar close_to_tray=true una vez (la X esconde a bandeja por
             // defecto). Se hace explícita para que instalaciones existentes adopten el nuevo
             // comportamiento sin que el usuario toque nada.
-            s.close_to_tray = true;
+            if s.version == 1 {
+                s.close_to_tray = true;
+            }
+            // Migración v2 → v3: el atajo global default histórico Ctrl+Alt+Q rompía la tecla
+            // `@` (AltGr+Q) en teclados latinoamericanos → pasa a Ctrl+Alt+Z. Solo hasta v2:
+            // en v3+ una elección deliberada de Ctrl+Alt+Q por el usuario se respeta.
+            if s.version <= 2 && migrate_legacy_hotkey(&mut s) {
+                tracing::info!("atajo global migrado de Ctrl+Alt+Q a Ctrl+Alt+Z (Q rompía la @)");
+            }
             s.version = CONFIG_VERSION;
-            // Mismas normalizaciones que el brazo de la versión actual (ver abajo): migra el
-            // formato viejo y luego coacciona contra el catálogo: un id de pack suelto que ya
-            // no existe en disco (carpeta borrada) cae a "lucide" en vez de quedar como
-            // selección colgada con la toolbar rota.
-            let normalized = normalize_icon_set_id(&s.icon_set);
-            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
-            // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
-            // hay reglas explícitas (settings anterior al lote 3). Si tras eso siguen
-            // vacías (settings raro), caer a las reglas por defecto.
-            if !s.preview_text_exts_legacy.is_empty() && s.preview_rules.is_empty() {
-                s.preview_rules = crate::preview::rules_from_csv(&s.preview_text_exts_legacy);
-            }
-            if s.preview_rules.is_empty() {
-                s.preview_rules = crate::preview::default_preview_rules();
-            }
-            s.preview_text_exts_legacy.clear();
-            s
-        }
-        Some(mut s) if s.version == CONFIG_VERSION => {
-            // Migra el formato viejo y luego coacciona contra el catálogo: un id de pack
-            // suelto que ya no existe en disco (carpeta borrada) cae a "lucide" en vez de
-            // quedar como selección colgada con la toolbar rota.
+            // Normalizaciones comunes a toda carga: migra el formato viejo de icon_set y luego
+            // coacciona contra el catálogo: un id de pack suelto que ya no existe en disco
+            // (carpeta borrada) cae a "lucide" en vez de quedar como selección colgada con la
+            // toolbar rota.
             let normalized = normalize_icon_set_id(&s.icon_set);
             s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
             // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
@@ -893,7 +891,6 @@ mod tests {
                 y: 60,
                 maximized: true,
             }),
-            window_was_open_on_exit: false,
             global_hotkey_enabled: false,
             global_hotkey: crate::keymap::Chord::alt(crate::keymap::KeyCode::Char('z')),
         };
@@ -1423,13 +1420,13 @@ mod tests {
     }
 
     #[test]
-    fn window_was_open_on_exit_default_es_true() {
-        // Por defecto y para un settings.json previo (sin el campo) → true (conservador:
-        // sin dato previo, mostrar la ventana al arrancar).
-        assert!(Settings::default().window_was_open_on_exit);
-        let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
+    fn settings_viejo_con_window_was_open_se_ignora() {
+        // El campo `window_was_open_on_exit` se eliminó (el autostart-a-bandeja ahora SIEMPRE
+        // arranca escondido). Un settings.json viejo que aún lo trae debe deserializar sin
+        // error (serde ignora claves desconocidas).
+        let json = r#"{"version":2,"bar_position":"Top","icon_only":true,"window_was_open_on_exit":false}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
-        assert!(s.window_was_open_on_exit);
+        assert!(s.window.is_none());
     }
 
     #[test]
@@ -1468,9 +1465,11 @@ mod tests {
             s.global_hotkey_enabled,
             "el hotkey global viene activado de fábrica"
         );
+        // Ctrl+Alt+Z, NO Q: AltGr+Q escribe `@` en teclado latinoamericano y el atajo global
+        // se la robaría al sistema entero (ver default_global_hotkey).
         assert_eq!(
             s.global_hotkey,
-            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('z'))
         );
     }
 
@@ -1481,7 +1480,60 @@ mod tests {
         assert!(s.global_hotkey_enabled);
         assert_eq!(
             s.global_hotkey,
-            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q'))
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('z'))
+        );
+    }
+
+    #[test]
+    fn migracion_hotkey_ctrl_alt_q_pasa_a_z() {
+        // El default histórico Ctrl+Alt+Q rompía la tecla @ (AltGr+Q) en teclados
+        // latinoamericanos: al cargar una config guardada con ese valor exacto, se migra al
+        // default nuevo. Cualquier otra combinación elegida por el usuario se respeta.
+        let dir = tempfile::tempdir().unwrap();
+        // Config v2 guardada con el default viejo → migra a Z.
+        let s = Settings {
+            version: 2,
+            global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &s);
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.global_hotkey,
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('z')),
+            "Ctrl+Alt+Q guardado en v2 migra a Ctrl+Alt+Z"
+        );
+        assert_eq!(
+            loaded.version, CONFIG_VERSION,
+            "y la versión sube a la actual"
+        );
+
+        // Una combinación personalizada distinta NO se toca (ni en v2).
+        let custom = Settings {
+            version: 2,
+            global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('m')),
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &custom);
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.global_hotkey,
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('m')),
+            "una combinación elegida por el usuario se respeta"
+        );
+
+        // En v3+ (versión actual) NI SIQUIERA Ctrl+Alt+Q se migra: si el usuario lo eligió a
+        // propósito después de la migración, se respeta.
+        let deliberate = Settings {
+            global_hotkey: crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &deliberate);
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.global_hotkey,
+            crate::keymap::Chord::ctrl_alt(crate::keymap::KeyCode::Char('q')),
+            "en v3 una elección deliberada de Ctrl+Alt+Q se respeta"
         );
     }
 }

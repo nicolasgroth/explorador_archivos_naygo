@@ -237,6 +237,23 @@ fn main() -> Result<(), slint::PlatformError> {
         return Ok(());
     }
 
+    // INSTANCIA ÚNICA: si Naygo ya corre en esta sesión, NO se abre un segundo proceso — se le
+    // avisa a la instancia viva que se muestre (y que abra la carpeta pedida, si venía una en la
+    // línea de comandos) y este proceso termina en silencio. Es el comportamiento estándar de
+    // las apps de bandeja (Steam/Teams/OneDrive): el ícono anclado, el acceso directo o el menú
+    // "Abrir en Naygo" reutilizan la instancia viva en vez de duplicar procesos. Va ANTES de
+    // crear cualquier ventana (ni el splash ni la AppWindow deben llegar a parpadear). El guard
+    // vive hasta el final de main(); su hilo vigilante se arranca más abajo, cuando existe el
+    // waker del loop de UI (`si_guard.watch`).
+    let si_guard = match naygo_platform::single_instance::acquire() {
+        naygo_platform::single_instance::Instance::AlreadyRunning => {
+            logging::log_line("instancia única: ya hay un Naygo corriendo; se le avisa y salimos");
+            naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
+            return Ok(());
+        }
+        naygo_platform::single_instance::Instance::Primary(guard) => guard,
+    };
+
     let ui = AppWindow::new()?;
     // Título de la ventana limpio: solo "Naygo". El id de build (p. ej. "0.3.0+build.202607021614")
     // se muestra en el Acerca de (vía `set_app_version`) y en el splash de arranque, no en la barra
@@ -410,52 +427,58 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // Splash de arranque (Fase 5F): solo en release. Ventana breve de bienvenida que se cierra
-    // sola a ~1.8s. La ventana principal se construye por detrás (el splash no la bloquea). En
-    // debug se omite (arranque directo). Se mantiene vivo en una variable de la función `main`.
+    // Splash de arranque (Fase 5F): solo en release, y NUNCA en un arranque por autostart a la
+    // bandeja (`--tray`): al iniciar sesión de Windows no debe aparecer NADA de Naygo, ni
+    // siquiera el splash — solo el ícono junto al reloj. Ventana breve de bienvenida que se
+    // cierra sola a ~1.8s. La ventana principal se construye por detrás (el splash no la
+    // bloquea). En debug se omite (arranque directo). Se mantiene vivo en una variable de main.
     // Nota: el Splash usa los colores POR DEFECTO del global Theme (azul marino), que coinciden
     // con el tema default — no hace falta aplicarle el tema activo (es una pantalla efímera).
     #[cfg(not(debug_assertions))]
-    let _splash_keepalive = match Splash::new() {
-        Ok(splash) => {
-            // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
-            splash.set_build_version(naygo_full_version().into());
-            let _ = splash.show();
-            let splash = Rc::new(splash);
-            // El splash debe quedar ENCIMA de la ventana principal, que se muestra casi a la vez.
-            // `set_topmost` (SetWindowPos HWND_TOPMOST) lo eleva sin robarle el foco ni moverlo. El
-            // detalle clave: ANTES de `ui.run()` la ventana del splash NO está realizada por winit y
-            // NO tiene HWND todavía (medido: `splash_hwnd` devuelve `None` hasta ~1 s después de
-            // entrar al event loop). Por eso el topmost se aplica desde un `Timer` que corre en el
-            // hilo de UI YA con el loop andando: sondea cada 100 ms y, en cuanto obtiene el HWND, lo
-            // eleva UNA vez y se auto-detiene (`topmost_timer.stop()`). Es robusto ante equipos
-            // lentos (una VM podría tardar más en realizar la ventana): sigue reintentando hasta
-            // lograrlo, sin costo perceptible (el splash vive solo ~1.8 s).
-            let splash_topmost = splash.clone();
-            let topmost_timer = Rc::new(slint::Timer::default());
-            let topmost_timer_self = topmost_timer.clone();
-            topmost_timer.start(
-                slint::TimerMode::Repeated,
-                std::time::Duration::from_millis(100),
-                move || {
-                    if let Some(hwnd) = splash_hwnd(&splash_topmost) {
-                        naygo_platform::window::set_topmost(hwnd);
-                        topmost_timer_self.stop();
-                    }
-                },
-            );
-            let splash_for_timer = splash.clone();
-            let timer = slint::Timer::default();
-            timer.start(
-                slint::TimerMode::SingleShot,
-                std::time::Duration::from_millis(1800),
-                move || {
-                    let _ = splash_for_timer.hide();
-                },
-            );
-            Some((splash, timer, topmost_timer))
+    let _splash_keepalive = if cli_args.tray {
+        None
+    } else {
+        match Splash::new() {
+            Ok(splash) => {
+                // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
+                splash.set_build_version(naygo_full_version().into());
+                let _ = splash.show();
+                let splash = Rc::new(splash);
+                // El splash debe quedar ENCIMA de la ventana principal, que se muestra casi a la vez.
+                // `set_topmost` (SetWindowPos HWND_TOPMOST) lo eleva sin robarle el foco ni moverlo. El
+                // detalle clave: ANTES de `ui.run()` la ventana del splash NO está realizada por winit y
+                // NO tiene HWND todavía (medido: `splash_hwnd` devuelve `None` hasta ~1 s después de
+                // entrar al event loop). Por eso el topmost se aplica desde un `Timer` que corre en el
+                // hilo de UI YA con el loop andando: sondea cada 100 ms y, en cuanto obtiene el HWND, lo
+                // eleva UNA vez y se auto-detiene (`topmost_timer.stop()`). Es robusto ante equipos
+                // lentos (una VM podría tardar más en realizar la ventana): sigue reintentando hasta
+                // lograrlo, sin costo perceptible (el splash vive solo ~1.8 s).
+                let splash_topmost = splash.clone();
+                let topmost_timer = Rc::new(slint::Timer::default());
+                let topmost_timer_self = topmost_timer.clone();
+                topmost_timer.start(
+                    slint::TimerMode::Repeated,
+                    std::time::Duration::from_millis(100),
+                    move || {
+                        if let Some(hwnd) = splash_hwnd(&splash_topmost) {
+                            naygo_platform::window::set_topmost(hwnd);
+                            topmost_timer_self.stop();
+                        }
+                    },
+                );
+                let splash_for_timer = splash.clone();
+                let timer = slint::Timer::default();
+                timer.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(1800),
+                    move || {
+                        let _ = splash_for_timer.hide();
+                    },
+                );
+                Some((splash, timer, topmost_timer))
+            }
+            Err(_) => None,
         }
-        Err(_) => None,
     };
 
     let models = Rc::new(RefCell::new(Models::new()));
@@ -1190,6 +1213,26 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
 
+    // Instancia única: hilo vigilante del evento "muéstrate" que disparan las instancias
+    // secundarias (segundo lanzamiento del exe). Marca el flag y despierta el loop; el tick lo
+    // drena: restaura la ventana y, si la secundaria dejó una carpeta en el spool ("Abrir en
+    // Naygo" con la app ya corriendo), la abre en un panel nuevo.
+    let si_show_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    si_guard.watch(si_show_requested.clone(), waker.clone());
+
+    // Hotkey global: handler que despierta el loop de UI en cada pulsación. Sin esto, con la app
+    // dormida (reposo/bajo consumo) la pulsación quedaba encolada hasta el próximo wake por otra
+    // causa y el atajo "no respondía". Se instala UNA vez; el re-registro por cambio de
+    // combinación en Config no lo invalida (el handler no filtra por id).
+    naygo_platform::global_hotkey::install_wake_handler(waker.clone());
+
+    // One-shot de la restauración de geometría guardada: la aplica `try_restore_saved_geometry`
+    // en el PRIMER momento en que la ventana está VISIBLE (ver esa función por el porqué del
+    // gate). Se intenta desde el tick (≤30 ms tras cualquier show) y desde `on_wake` — el
+    // primero que la encuentre visible la aplica y consume el flag.
+    #[cfg(windows)]
+    let geometry_restored = std::rc::Rc::new(std::cell::Cell::new(false));
+
     // Watcher de dispositivos (Fase 5B): detecta USB enchufado/quitado. Vive toda la sesión.
     let devices = Rc::new(devices::Devices::start(waker.clone()));
     // HOME para reubicar paneles cuya unidad desapareció.
@@ -1337,6 +1380,10 @@ fn main() -> Result<(), slint::PlatformError> {
         // mantiene vivo el binding `global_hotkey_slot` del scope de `main`, no este closure.
         #[cfg(windows)]
         let hotkey_id = hotkey_id.clone();
+        // Clone propio para esta factory: el original del scope de `main` lo necesita también
+        // el bloque de `on_wake` (mismo one-shot compartido).
+        #[cfg(windows)]
+        let geometry_restored = geometry_restored.clone();
         Rc::new(move || {
             let ctrl = ctrl.clone();
             let sync_rows = sync_rows.clone();
@@ -1351,11 +1398,18 @@ fn main() -> Result<(), slint::PlatformError> {
             let drag_rx = drag_rx.clone();
             let drop_guard = drop_guard.clone();
             let tray = tray.clone();
-            // Solo se clona `hotkey_id` para LEER el id en el tick (bajo cfg windows). El registro
-            // lo mantiene vivo el binding `global_hotkey_slot` del scope de `main` (vive hasta
-            // después de `ui.run()`, toda la sesión), NO este closure.
+            // Solo se clona `hotkey_id` para LEER si hay registro vivo en el tick (bajo cfg
+            // windows). El registro lo mantiene vivo el binding `global_hotkey_slot` del scope de
+            // `main` (vive hasta después de `ui.run()`, toda la sesión), NO este closure.
             #[cfg(windows)]
             let hotkey_id = hotkey_id.clone();
+            // Flag "muéstrate" de la instancia única (lo marca el hilo vigilante cuando otra
+            // instancia del exe avisó antes de salir).
+            let si_show_requested = si_show_requested.clone();
+            // One-shot de geometría guardada (se intenta en cada tick hasta aplicarla; barata:
+            // un get() de Cell una vez consumida).
+            #[cfg(windows)]
+            let geometry_restored = geometry_restored.clone();
             timer.start(
                 TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
@@ -1666,14 +1720,47 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
-                    // Hotkey global: ¿se presionó? Alterna mostrar/ocultar Naygo.
+                    // Hotkey global: ¿se presionó? Muestra y trae Naygo al frente. El flag lo
+                    // marca el handler del crate (que además despertó este loop). Se CONSUME
+                    // SIEMPRE (aunque el atajo esté desactivado): un press residual no debe
+                    // quedar pendiente y disparar la ventana al re-activar el atajo en Config.
+                    // `hotkey_id` confirma que hay un registro vivo antes de actuar.
                     #[cfg(windows)]
-                    if let Some(id) = hotkey_id.get() {
-                        if naygo_platform::global_hotkey::was_pressed(id) {
+                    {
+                        let pressed = naygo_platform::global_hotkey::was_pressed();
+                        if pressed && hotkey_id.get().is_some() {
                             if let Some(ui) = ui_weak.upgrade() {
                                 toggle_window_visibility(&ui, tray_active);
                             }
                         }
+                    }
+                    // Instancia única: ¿otra instancia del exe pidió "muéstrate"? (el usuario
+                    // volvió a lanzar Naygo desde el ícono anclado o con "Abrir en Naygo").
+                    // Restaurar la ventana y, si dejó una carpeta en el spool, abrirla en un
+                    // panel NUEVO (split del activo), sin perder lo que el usuario tenía.
+                    if si_show_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            restore_window(&ui);
+                            if let Some(dir) = naygo_platform::single_instance::take_open_request()
+                            {
+                                let area = Rect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    w: ui.get_content_w().max(0.0),
+                                    h: ui.get_content_h().max(0.0),
+                                };
+                                ctrl.borrow_mut().open_dir_in_new_pane(dir, area);
+                                sync_layout();
+                            }
+                        }
+                    }
+                    // Geometría guardada: aplicarla apenas la ventana esté visible (una vez por
+                    // sesión). Intentarlo desde el tick garantiza ≤30 ms tras cualquier
+                    // restauración/show — el salto a la posición guardada es imperceptible (el
+                    // on_wake solo lo disparan los watchers y puede tardar minutos).
+                    #[cfg(windows)]
+                    if let Some(ui) = ui_weak.upgrade() {
+                        try_restore_saved_geometry(&ui, &ctrl, &geometry_restored);
                     }
                     // Watcher de dispositivos (F5B): si cambiaron las unidades (USB), reubicar
                     // los paneles cuya carpeta desapareció, re-listarlos y refrescar la tira de
@@ -1767,24 +1854,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let start_timer = start_timer.clone();
         let apply_device_change = apply_device_change.clone();
         let ui_weak_wake = ui.as_weak();
+        #[cfg(windows)]
         let ctrl_wake = ctrl.clone();
         let logged_first_wake = std::rc::Rc::new(std::cell::Cell::new(false));
-        // Arranque minimizado (autostart --tray): solo si vinimos de la entrada Run con --tray
-        // Y el usuario quiere arrancar en bandeja Y el tray está activo. Si no hubiera tray, NO
-        // escondemos la ventana (se perdería el único punto de acceso a la app).
-        let start_in_tray =
-            cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
-        // ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si venimos
-        // por autostart con `--tray` Y la última vez la ventana NO estaba abierta (estaba en
-        // bandeja). Si estaba abierta al cerrar, se restaura la ventana. Ver `should_show_on_start`.
-        let window_was_open_on_exit = ctrl.borrow().config.settings.window_was_open_on_exit;
-        let show_on_start = should_show_on_start(cli_args.tray, window_was_open_on_exit);
+        #[cfg(windows)]
+        let geometry_restored = geometry_restored.clone();
         ui.on_wake(move || {
             // Diagnóstico: en el PRIMER wake la ventana ya entró al event loop y debería tener
             // tamaño real. Si aquí sigue 0x0, el SO/compositor (típico en VM) no la dimensionó.
-            // Se loguea una sola vez. Barato y no depende de símbolos de depuración. Aprovechamos
-            // la misma guarda de una-sola-vez para restaurar la geometría guardada: recién aquí
-            // el HWND existe de verdad (antes de entrar al loop, Slint/winit puede no tenerlo).
+            // Se loguea una sola vez. Barato y no depende de símbolos de depuración.
             if !logged_first_wake.replace(true) {
                 if let Some(ui) = ui_weak_wake.upgrade() {
                     let size = ui.window().size();
@@ -1794,68 +1872,16 @@ fn main() -> Result<(), slint::PlatformError> {
                         size.width, size.height, scale
                     ));
                 }
-                // Restaurar la geometría guardada (una sola vez, en el primer wake, cuando el
-                // HWND ya existe). Si el rect guardado no cae en ningún monitor conectado
-                // (monitor desconectado, coords viejas), centramos en el principal conservando
-                // el tamaño guardado en vez de descartarlo.
-                #[cfg(windows)]
-                if let Some(ui) = ui_weak_wake.upgrade() {
-                    let saved = ctrl_wake.borrow().config.settings.window;
-                    if let (Some(g), Some(hwnd)) = (saved, naygo_hwnd(&ui)) {
-                        let mons = naygo_platform::window_geometry::monitors();
-                        let placement = if g.is_visible_on(&mons) {
-                            naygo_platform::window_geometry::Placement {
-                                width: g.width,
-                                height: g.height,
-                                x: g.x,
-                                y: g.y,
-                                maximized: g.maximized,
-                            }
-                        } else {
-                            // Fuera de pantalla (monitor desconectado / coords inválidas):
-                            // centrar en el monitor principal conservando el tamaño guardado.
-                            let (mx, my, mw, mh) =
-                                mons.first().copied().unwrap_or((0, 0, 1920, 1080));
-                            // Clamp del tamaño restaurado a algo sano: un settings.json corrupto
-                            // puede traer width/height 0 o u32::MAX; sin clamp la resta de centrado
-                            // haría overflow y podría quedar una ventana 0x0 o gigante. Mínimo
-                            // 200px, máximo el tamaño del monitor.
-                            let cw = (g.width).clamp(200, mw.max(200));
-                            let ch = (g.height).clamp(200, mh.max(200));
-                            let x = mx + ((mw as i32 - cw as i32) / 2).max(0);
-                            let y = my + ((mh as i32 - ch as i32) / 2).max(0);
-                            naygo_platform::window_geometry::Placement {
-                                width: cw,
-                                height: ch,
-                                x,
-                                y,
-                                maximized: g.maximized,
-                            }
-                        };
-                        naygo_platform::window_geometry::set(hwnd, placement);
-                    }
-                }
-                // Arranque DIRECTO en bandeja: si venimos de autostart con --tray, el usuario
-                // quiere arrancar en bandeja (`start_in_tray`) Y NO hay que mostrar la ventana
-                // (`!show_on_start`: la última vez estaba en bandeja, no abierta), quitamos el botón
-                // de la barra de tareas y dejamos la ventana oculta — sin "flash" ni botón. El
-                // proceso sigue vivo por el ícono de tray; el clic en el ícono (o el hotkey global)
-                // la restaura devolviendo el botón (ver `toggle_window_visibility`).
-                //
-                // `set_taskbar_visible(hwnd, false)` ya hace `ShowWindow(SW_HIDE)`, así que la
-                // ventana queda oculta. El `set_minimized(true)` posterior es defensa por si el
-                // cambio de estilo no bastó en algún backend. NO se usa `window().hide()` de Slint:
-                // decrementa el contador interno de ventanas visibles y, si esta es la única,
-                // dispara `quit_event_loop()` — terminaría la app en vez de dejarla en bandeja.
-                if start_in_tray && !show_on_start {
-                    if let Some(ui) = ui_weak_wake.upgrade() {
-                        #[cfg(windows)]
-                        if let Some(hwnd) = naygo_hwnd(&ui) {
-                            naygo_platform::window::set_taskbar_visible(hwnd, false);
-                        }
-                        ui.window().set_minimized(true);
-                    }
-                }
+            }
+            // Geometría guardada: mismo one-shot que en el tick (el primero que encuentre la
+            // ventana visible la aplica). Nota histórica: aquí vivía también el "esconder la
+            // ventana si venimos de autostart --tray"; se eliminó porque el wake se dispara
+            // recién con la actividad de los watchers (puede tardar minutos) — el arranque a
+            // bandeja ahora directamente NO muestra la ventana (ver el show condicional antes
+            // de `run_event_loop_until_quit`).
+            #[cfg(windows)]
+            if let Some(ui) = ui_weak_wake.upgrade() {
+                try_restore_saved_geometry(&ui, &ctrl_wake, &geometry_restored);
             }
             apply_device_change();
             start_timer();
@@ -5913,26 +5939,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let ctrl = ctrl.clone();
         let ui_weak_close = ui.as_weak();
         ui.window().on_close_requested(move || {
-            // ¿La ventana estaba ABIERTA (visible, no minimizada/en bandeja) en el momento del
-            // cierre? Se persiste para que el próximo arranque por autostart-a-bandeja decida si
-            // restaurar la ventana o volver a la bandeja (ver `should_show_on_start`). Heurística
-            // simple y correcta en el caso común: si NO está minimizada, estaba abierta. Al cerrar
-            // a bandeja con la X la ventana ya está minimizada/oculta, así que quedará `false`.
-            let window_was_open = ui_weak_close
-                .upgrade()
-                .map(|ui| !ui.window().is_minimized())
-                .unwrap_or(true);
-            // Capturar y persistir la geometría + el flag "ventana abierta al cerrar" ANTES de
-            // save_session/salir. Va en su propio scope para que el borrow_mut() suelte `c` antes
-            // de los ctrl.borrow() que siguen.
+            // Capturar y persistir la geometría de la ventana ANTES de save_session/salir. Va en
+            // su propio scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que
+            // siguen.
             #[cfg(windows)]
             {
                 let mut c = ctrl.borrow_mut();
-                // El flag "ventana abierta al cerrar" se persiste SIEMPRE, aunque la captura de
-                // geometría falle: si dependiera del `if let` de la geometría, un fallo al leerla
-                // dejaría el flag stale del arranque anterior y el próximo autostart podría decidir
-                // mal entre mostrar la ventana o ir a la bandeja.
-                c.config.settings.window_was_open_on_exit = window_was_open;
                 if let Some(ui) = ui_weak_close.upgrade() {
                     if let Some(hwnd) = naygo_hwnd(&ui) {
                         if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
@@ -5948,14 +5960,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 c.config.save();
             }
-            // En no-Windows no hay geometría que capturar, pero igual persistimos el flag para no
-            // dejar un valor obsoleto (mantiene coherente el arranque en cualquier plataforma).
-            #[cfg(not(windows))]
-            {
-                let mut c = ctrl.borrow_mut();
-                c.config.settings.window_was_open_on_exit = window_was_open;
-                c.config.save();
-            }
             ctrl.borrow().save_session();
             let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
             let quit = tray::should_quit_on_close(close_to_tray, tray_active);
@@ -5965,20 +5969,25 @@ fn main() -> Result<(), slint::PlatformError> {
                 slint::CloseRequestResponse::HideWindow
             } else {
                 // Ir a la BANDEJA sin matar la app. CLAVE: NO se puede responder `HideWindow` — al
-                // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y TERMINA
-                // el event loop (el proceso muere). Por eso se responde `KeepWindowShown` (mantiene
-                // la app viva). Para esconderla DE VERDAD (que no quede en la barra de tareas, solo en
-                // la bandeja del reloj) se hace en dos pasos: `set_taskbar_visible(false)` quita el
-                // botón de la barra de tareas (WS_EX_TOOLWINDOW) y hace `SW_HIDE`, y `set_minimized`
-                // asegura el estado minimizado sin tocar el contador de ventanas de Slint. El botón se
-                // devuelve al restaurar (por el ícono de la bandeja, "Abrir" del menú o el atajo global,
-                // que llaman `set_taskbar_visible(true)`). Antes solo se minimizaba y el botón quedaba
-                // en la barra de tareas.
+                // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y
+                // TERMINA el event loop (el proceso muere). Por eso se responde `KeepWindowShown`
+                // (mantiene la app viva) y se esconde a mano por Win32:
+                // `set_taskbar_visible(false)` quita el botón de la barra de tareas
+                // (WS_EX_TOOLWINDOW) y hace `SW_HIDE` — la ventana desaparece del todo y queda
+                // solo el ícono de la bandeja del reloj. OJO: NO llamar `set_minimized(true)`
+                // encima — minimizar una ventana WS_EX_TOOLWINDOW la RE-MUESTRA como un
+                // mini-título flotante pegado a la barra de tareas (estilo Win 3.x): era el
+                // "cuadrito" fantasma arrastrable y con doble-clic que restauraba una ventana
+                // sin botones Max/Min. El botón de barra se devuelve al restaurar (ícono de la
+                // bandeja, atajo global o relanzar el exe → `restore_window`).
                 if let Some(ui) = ui_weak_close.upgrade() {
                     #[cfg(windows)]
                     if let Some(hwnd) = naygo_hwnd(&ui) {
                         naygo_platform::window::set_taskbar_visible(hwnd, false);
                     }
+                    // En no-Windows no existe set_taskbar_visible: minimizar es el mejor esfuerzo
+                    // (y ahí minimizar NO produce el mini-título de Win32).
+                    #[cfg(not(windows))]
                     ui.window().set_minimized(true);
                 }
                 slint::CloseRequestResponse::KeepWindowShown
@@ -6006,7 +6015,25 @@ fn main() -> Result<(), slint::PlatformError> {
             size.width, size.height
         ));
     }
-    ui.run()
+    // Arranque a BANDEJA (autostart --tray + la opción activada + tray vivo): la ventana NO se
+    // muestra en absoluto — ni flash, ni botón de barra de tareas, ni nada; solo el ícono junto
+    // al reloj (como Steam/Teams/OneDrive). Antes se mostraba y se intentaba esconder en el
+    // primer `on_wake`, pero ese wake se dispara recién con la PRIMERA INTERACCIÓN del usuario
+    // (medido: minutos después), así que la ventana quedaba visible. La clave es
+    // `run_event_loop_until_quit()`: a diferencia de `ui.run()` (que muestra la ventana y
+    // termina el loop cuando la última visible se cierra), corre el loop AUNQUE no haya ninguna
+    // ventana visible, hasta `quit_event_loop()`. La ventana se materializa recién cuando el
+    // usuario la pide (ícono de bandeja, atajo global o relanzar el exe → `restore_window`).
+    // Si NO hay tray activo, `start_in_tray` es false y se muestra normal (sin tray, una ventana
+    // oculta sería irrecuperable con el mouse).
+    let start_in_tray =
+        cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
+    if !start_in_tray {
+        ui.show()?;
+    } else {
+        crate::logging::log_line("arranque directo a bandeja: ventana sin mostrar");
+    }
+    slint::run_event_loop_until_quit()
 }
 
 /// Devuelve el RGB que deben usar los íconos tintables: el color de texto del tema activo,
@@ -6304,14 +6331,6 @@ fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
     }
 }
 
-/// ¿Mostrar la ventana al arrancar? Se OCULTA (arranque directo en bandeja) solo si es un arranque
-/// por autostart-a-bandeja (`tray_flag`) Y la última vez la ventana NO estaba abierta (estaba en
-/// bandeja). En cualquier otro caso, mostrar (arranque normal, o autostart con la ventana abierta
-/// al cerrar la última vez). Pura y testeable.
-fn should_show_on_start(tray_flag: bool, window_was_open_on_exit: bool) -> bool {
-    !tray_flag || window_was_open_on_exit
-}
-
 /// El HWND de la ventana de Naygo (backend winit), para el menú contextual del Shell.
 /// `None` si no se puede obtener (otro backend) — entonces se oculta "Más opciones de
 /// Windows…". Usa raw-window-handle vía el feature `raw-window-handle-06` de slint.
@@ -6321,6 +6340,62 @@ fn naygo_hwnd(ui: &AppWindow) -> Option<isize> {
     match handle.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(isize::from(h.hwnd)),
         _ => None,
+    }
+}
+
+/// Aplica la geometría de ventana guardada (tamaño/posición/maximizado) UNA vez por sesión, en
+/// el primer momento en que la ventana está VISIBLE. El gate de visibilidad es la clave: en el
+/// arranque directo a bandeja la ventana no se muestra al inicio, y aplicar la geometría antes
+/// de tiempo o bien se pierde (sin HWND todavía) o bien LA MUESTRA sola (`SetWindowPlacement`
+/// usa SW_SHOWNORMAL/SW_MAXIMIZE). Se llama desde el tick (≤30 ms tras cualquier show, salto
+/// imperceptible) y desde `on_wake`; `done` es el one-shot compartido — se consume recién con
+/// la ventana visible (haya o no geometría guardada: si no hay nada guardado, tampoco habrá
+/// después dentro de la misma sesión).
+///
+/// Si el rect guardado no cae en ningún monitor conectado (monitor desconectado, coords viejas),
+/// centra en el principal conservando el tamaño guardado en vez de descartarlo.
+#[cfg(windows)]
+fn try_restore_saved_geometry(
+    ui: &AppWindow,
+    ctrl: &Rc<RefCell<WorkspaceCtrl>>,
+    done: &std::cell::Cell<bool>,
+) {
+    if done.get() || !ui.window().is_visible() {
+        return;
+    }
+    done.set(true);
+    let saved = ctrl.borrow().config.settings.window;
+    if let (Some(g), Some(hwnd)) = (saved, naygo_hwnd(ui)) {
+        let mons = naygo_platform::window_geometry::monitors();
+        let placement = if g.is_visible_on(&mons) {
+            naygo_platform::window_geometry::Placement {
+                width: g.width,
+                height: g.height,
+                x: g.x,
+                y: g.y,
+                maximized: g.maximized,
+            }
+        } else {
+            // Fuera de pantalla (monitor desconectado / coords inválidas): centrar en el
+            // monitor principal conservando el tamaño guardado.
+            let (mx, my, mw, mh) = mons.first().copied().unwrap_or((0, 0, 1920, 1080));
+            // Clamp del tamaño restaurado a algo sano: un settings.json corrupto puede traer
+            // width/height 0 o u32::MAX; sin clamp la resta de centrado haría overflow y podría
+            // quedar una ventana 0x0 o gigante. Mínimo 200px, máximo el tamaño del monitor.
+            let cw = (g.width).clamp(200, mw.max(200));
+            let ch = (g.height).clamp(200, mh.max(200));
+            let x = mx + ((mw as i32 - cw as i32) / 2).max(0);
+            let y = my + ((mh as i32 - ch as i32) / 2).max(0);
+            naygo_platform::window_geometry::Placement {
+                width: cw,
+                height: ch,
+                x,
+                y,
+                maximized: g.maximized,
+            }
+        };
+        naygo_platform::window_geometry::set(hwnd, placement);
+        crate::logging::log_line("geometría de ventana restaurada");
     }
 }
 
@@ -6337,26 +6412,30 @@ fn splash_hwnd(splash: &Splash) -> Option<isize> {
     }
 }
 
-/// Restaura y trae al frente la ventana de Naygo desde la bandeja o desde minimizado. Es la
-/// contraparte de cerrar-a-bandeja: devuelve el botón de la barra de tareas (que el cierre-a-bandeja
-/// o el autostart le habían quitado con `set_taskbar_visible(false)`), re-muestra la ventana,
-/// la des-minimiza y la trae al foreground. Idempotente: si el botón ya estaba, `true` solo re-afirma
-/// el estilo. La usan el atajo global y todas las rutas del tray que "abren" la ventana, para que
-/// restaurar por cualquier vía deje la ventana en un estado consistente (visible, con botón, al frente).
+/// Restaura y trae al frente la ventana de Naygo: desde la bandeja (escondida por el
+/// cierre-a-bandeja con `set_taskbar_visible(false)`), desde minimizada, o incluso NUNCA mostrada
+/// (arranque directo a bandeja, donde main() no llama `ui.show()`). Devuelve el botón de la barra
+/// de tareas, re-muestra la ventana, la des-minimiza y la trae al foreground. Idempotente: si el
+/// botón ya estaba, `true` solo re-afirma el estilo. La usan el atajo global, la activación por
+/// instancia única y todas las rutas del tray que "abren" la ventana, para que restaurar por
+/// cualquier vía deje la ventana en un estado consistente (visible, con botón, al frente).
 ///
-/// Nota: para ESCONDER se usa `set_minimized(true)` (+ `set_taskbar_visible(false)`) y NO
+/// Nota: para ESCONDER se usa `set_taskbar_visible(false)` (SW_HIDE + WS_EX_TOOLWINDOW) y NO
 /// `window().hide()`: `hide()` decrementa el contador interno de ventanas visibles de Slint y, si es
 /// la única visible, dispara `quit_event_loop()` — terminaría la app en vez de dejarla en bandeja.
 #[cfg(windows)]
 fn restore_window(ui: &AppWindow) {
+    // Devolver el botón de la barra ANTES de mostrar, si ya hay HWND (idempotente).
     if let Some(hwnd) = naygo_hwnd(ui) {
         naygo_platform::window::set_taskbar_visible(hwnd, true);
-        let _ = ui.show();
-        ui.window().set_minimized(false);
+    }
+    let _ = ui.show();
+    ui.window().set_minimized(false);
+    // El HWND puede haber NACIDO recién con el `show()` (ventana nunca mostrada: arranque directo
+    // a bandeja, donde main() no llama `ui.show()`) — se re-consulta después de mostrar para
+    // traerla al frente igual en ese primer despliegue.
+    if let Some(hwnd) = naygo_hwnd(ui) {
         naygo_platform::window::bring_to_front(hwnd);
-    } else {
-        let _ = ui.show();
-        ui.window().set_minimized(false);
     }
 }
 #[cfg(not(windows))]
@@ -6794,17 +6873,4 @@ fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(fields)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn arranque_tray_oculta_salvo_ventana_abierta() {
-        assert!(!should_show_on_start(true, false)); // autostart-tray + estaba en bandeja → oculto
-        assert!(should_show_on_start(true, true)); // autostart-tray + estaba abierta → mostrar
-        assert!(should_show_on_start(false, false)); // arranque normal → mostrar
-        assert!(should_show_on_start(false, true)); // arranque normal → mostrar
-    }
 }

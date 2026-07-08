@@ -38,10 +38,10 @@ puede desactivar en *Configuración → Avanzado → "Cerrar a la bandeja (no
 salir)"*, y en ese caso la X vuelve a cerrar la aplicación como cualquier
 programa.
 
-**Atajo global (Ctrl+Alt+Q):** funciona **desde cualquier aplicación**, no
-solo con Naygo en primer plano: muestra la ventana y la trae al frente; si
-Naygo ya está al frente, la esconde (esconder requiere que el ícono de
-bandeja esté activo). La combinación se puede cambiar o desactivar en
+**Atajo global (Ctrl+Alt+Z):** funciona **desde cualquier aplicación**, no
+solo con Naygo en primer plano: siempre muestra la ventana y la trae al
+frente (para esconderla, cierra con la X con «cerrar a la bandeja» activo).
+La combinación se puede cambiar o desactivar en
 *Configuración → Avanzado*. La tecla Windows no se puede usar (la reserva el
 sistema); si al capturar una combinación nueva Windows la rechaza —por
 ejemplo porque otra aplicación ya la tiene tomada—, Naygo te avisa y conserva
@@ -435,7 +435,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Ctrl+L, F4 | Editar la ruta |
 | Ctrl+Z | Deshacer |
 | Ctrl+1..9 | Ir al favorito N |
-| Ctrl+Alt+Q (global) | Mostrar u ocultar Naygo desde cualquier aplicación (se configura en Avanzado, no en Atajos) |
+| Ctrl+Alt+Z (global) | Mostrar Naygo y traerlo al frente desde cualquier aplicación (se configura en Avanzado, no en Atajos) |
 
 ---
 
