@@ -1235,6 +1235,9 @@ export component AppWindow inherits Window {
                         columns: p.columns;
                         col-menu: p.col-menu;
                         row-h: root.settings-vm.row-h;
+                        // Clave de navegación: resetea el scroll a arriba SOLO al cambiar de
+                        // carpeta (Rust actualiza `p.path` únicamente cuando la ruta difiere).
+                        nav-key: p.path;
                         segments: p.segments;
                         editing: root.edit-pane == p.id;
                         edit-text: root.edit-pane == p.id ? root.edit-text : "";

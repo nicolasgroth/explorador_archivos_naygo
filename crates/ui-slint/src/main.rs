@@ -624,7 +624,27 @@ fn main() -> Result<(), slint::PlatformError> {
                                 .map(to_row_data)
                                 .collect();
                             let pm = m.models_for(id);
-                            pm.rows.set_vec(rows);
+                            // Actualización POR FILA cuando el largo no cambió. `set_vec`
+                            // resetea el modelo ENTERO y el ListView re-crea todas sus filas;
+                            // en una carpeta "en movimiento" (Dropbox sincronizando → eventos
+                            // del watcher → resaltado fresco activo → la firma no cachea) eso
+                            // ocurría en CADA tick de 30 ms: la cadena de hover del puntero se
+                            // invalidaba constantemente y los eventos de RUEDA dejaban de
+                            // llegar al panel (scroll "muerto" justo en esas carpetas), además
+                            // de reconstruir cientos de ítems por tick. Con `set_row_data`
+                            // solo se notifican las filas que de verdad cambiaron: los ítems
+                            // del ListView sobreviven, el hover queda válido y la rueda sigue
+                            // viva. Si el LARGO cambió (alta/baja real de archivos), sí se
+                            // resetea entero — es el caso raro y ahí sí cambia la estructura.
+                            if pm.rows.row_count() == rows.len() {
+                                for (i, row) in rows.into_iter().enumerate() {
+                                    if pm.rows.row_data(i).as_ref() != Some(&row) {
+                                        pm.rows.set_row_data(i, row);
+                                    }
+                                }
+                            } else {
+                                pm.rows.set_vec(rows);
+                            }
                             pm.columns.set_vec(cols);
                             pm.col_menu.set_vec(col_menu);
                         } else {

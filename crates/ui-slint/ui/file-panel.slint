@@ -215,7 +215,11 @@ export component FilePanel inherits FocusScope {
     in property <[ColumnVm]> columns;        // columnas visibles (orden/ancho/alineación) (6C)
     in property <[ColumnToggleVm]> col-menu; // TODAS las columnas para el menú agregar/quitar (6C)
     in property <length> row-h: 22px;        // alto de fila (densidad configurable)
-    in property <length> scroll-y;
+    // Clave de NAVEGACIÓN del panel: la carpeta actual (PaneVm.path). Cambia SOLO al navegar —
+    // Rust la actualiza únicamente cuando la ruta difiere — y es lo que resetea el scroll a
+    // arriba (ver `changed nav-key`). No confundir con un refresco de contenido (watcher/F5),
+    // que NO debe mover el scroll del usuario.
+    in property <string> nav-key;
     // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`. Al
     // cambiar, el cuerpo ajusta `wheel-scroll` para REVELAR esa fila (ver `changed focused-row`):
     // así navegar con ↑↓/Re-Av Pág/Inicio-Fin/typeahead/paleta vuelve a arrastrar la vista tras
@@ -232,9 +236,13 @@ export component FilePanel inherits FocusScope {
     // Fila bajo el cursor según el TouchArea exterior (-1 = ninguna/zona vacía). La pinta el
     // fondo de cada fila para el efecto hover (antes lo daba el `has-hover` del row-touch).
     property <int> hover-row: -1;
-    // Al cambiar el contenido (navegar / refrescar), el scroll por rueda vuelve a arriba: si no,
-    // una carpeta nueva quedaría desplazada con el offset de la anterior.
-    changed rows => { root.wheel-scroll = 0; }
+    // Al NAVEGAR (cambia la carpeta del panel), el scroll vuelve a arriba: si no, la carpeta
+    // nueva quedaría desplazada con el offset de la anterior.
+    changed nav-key => { root.wheel-scroll = 0; }
+    // NOTA (medido en vivo): un `changed rows` aquí NO dispara con `set_vec` (mutar el
+    // contenido del VecModel no cambia el valor de la propiedad-modelo), así que el reset del
+    // scroll debe colgarse de `nav-key` (arriba) y NO de `rows` — el reset-en-rows que había
+    // antes era código muerto y la carpeta nueva heredaba el scroll de la anterior.
     // Auto-scroll por teclado (C1): cuando el foco se mueve, ajusta `wheel-scroll` lo mínimo para
     // que la fila enfocada quede completamente visible dentro del viewport del ListView.
     //   · ventana visible = [wheel-scroll, wheel-scroll + visible-height]
@@ -624,7 +632,7 @@ export component FilePanel inherits FocusScope {
                 // ENCIMA en z-order, agarra el puntero antes que el Flickable y le quita los
                 // eventos. El scroll lo maneja `body-touch` por la rueda; `viewport-y` lee
                 // `wheel-scroll` de una sola vía (0 arriba, NEGATIVO al bajar) sin ciclo de binding.
-                viewport-y: -(root.scroll-y + root.wheel-scroll);
+                viewport-y: -root.wheel-scroll;
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
                     // Fondo de la cebra para un panel NO activo. Tres casos:
