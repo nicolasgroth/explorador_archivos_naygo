@@ -209,6 +209,183 @@ pub fn all_keys() -> Vec<IconKey> {
     v
 }
 
+/// Íconos EXACTOS por tipo de archivo (vscode-icons, MIT) para las extensiones más comunes.
+/// Capa global: la consulta `filetype_bytes` va ANTES que el ícono por categoría; los sets
+/// siguen mandando en carpetas, acciones y categorías sin ícono exacto. No tintar: traen
+/// su propio color. Los PNG se generan con `gen_icons filetypes` (ver el bin gen_icons).
+static FILETYPE_PNGS: &[(&str, &[u8])] = &[
+    (
+        "pdf",
+        include_bytes!("../../../../assets/icons/filetypes/pdf.png") as &'static [u8],
+    ),
+    (
+        "docx",
+        include_bytes!("../../../../assets/icons/filetypes/docx.png") as &'static [u8],
+    ),
+    (
+        "doc",
+        include_bytes!("../../../../assets/icons/filetypes/doc.png") as &'static [u8],
+    ),
+    (
+        "xlsx",
+        include_bytes!("../../../../assets/icons/filetypes/xlsx.png") as &'static [u8],
+    ),
+    (
+        "xls",
+        include_bytes!("../../../../assets/icons/filetypes/xls.png") as &'static [u8],
+    ),
+    (
+        "csv",
+        include_bytes!("../../../../assets/icons/filetypes/csv.png") as &'static [u8],
+    ),
+    (
+        "pptx",
+        include_bytes!("../../../../assets/icons/filetypes/pptx.png") as &'static [u8],
+    ),
+    (
+        "ppt",
+        include_bytes!("../../../../assets/icons/filetypes/ppt.png") as &'static [u8],
+    ),
+    (
+        "txt",
+        include_bytes!("../../../../assets/icons/filetypes/txt.png") as &'static [u8],
+    ),
+    (
+        "md",
+        include_bytes!("../../../../assets/icons/filetypes/md.png") as &'static [u8],
+    ),
+    (
+        "json",
+        include_bytes!("../../../../assets/icons/filetypes/json.png") as &'static [u8],
+    ),
+    (
+        "xml",
+        include_bytes!("../../../../assets/icons/filetypes/xml.png") as &'static [u8],
+    ),
+    (
+        "sql",
+        include_bytes!("../../../../assets/icons/filetypes/sql.png") as &'static [u8],
+    ),
+    (
+        "ini",
+        include_bytes!("../../../../assets/icons/filetypes/ini.png") as &'static [u8],
+    ),
+    (
+        "log",
+        include_bytes!("../../../../assets/icons/filetypes/log.png") as &'static [u8],
+    ),
+    (
+        "mp3",
+        include_bytes!("../../../../assets/icons/filetypes/mp3.png") as &'static [u8],
+    ),
+    (
+        "wav",
+        include_bytes!("../../../../assets/icons/filetypes/wav.png") as &'static [u8],
+    ),
+    (
+        "flac",
+        include_bytes!("../../../../assets/icons/filetypes/flac.png") as &'static [u8],
+    ),
+    (
+        "ogg",
+        include_bytes!("../../../../assets/icons/filetypes/ogg.png") as &'static [u8],
+    ),
+    (
+        "m4a",
+        include_bytes!("../../../../assets/icons/filetypes/m4a.png") as &'static [u8],
+    ),
+    (
+        "mp4",
+        include_bytes!("../../../../assets/icons/filetypes/mp4.png") as &'static [u8],
+    ),
+    (
+        "mkv",
+        include_bytes!("../../../../assets/icons/filetypes/mkv.png") as &'static [u8],
+    ),
+    (
+        "avi",
+        include_bytes!("../../../../assets/icons/filetypes/avi.png") as &'static [u8],
+    ),
+    (
+        "mov",
+        include_bytes!("../../../../assets/icons/filetypes/mov.png") as &'static [u8],
+    ),
+    (
+        "wmv",
+        include_bytes!("../../../../assets/icons/filetypes/wmv.png") as &'static [u8],
+    ),
+    (
+        "jpg",
+        include_bytes!("../../../../assets/icons/filetypes/jpg.png") as &'static [u8],
+    ),
+    (
+        "jpeg",
+        include_bytes!("../../../../assets/icons/filetypes/jpeg.png") as &'static [u8],
+    ),
+    (
+        "png",
+        include_bytes!("../../../../assets/icons/filetypes/png.png") as &'static [u8],
+    ),
+    (
+        "gif",
+        include_bytes!("../../../../assets/icons/filetypes/gif.png") as &'static [u8],
+    ),
+    (
+        "bmp",
+        include_bytes!("../../../../assets/icons/filetypes/bmp.png") as &'static [u8],
+    ),
+    (
+        "webp",
+        include_bytes!("../../../../assets/icons/filetypes/webp.png") as &'static [u8],
+    ),
+    (
+        "zip",
+        include_bytes!("../../../../assets/icons/filetypes/zip.png") as &'static [u8],
+    ),
+    (
+        "rar",
+        include_bytes!("../../../../assets/icons/filetypes/rar.png") as &'static [u8],
+    ),
+    (
+        "7z",
+        include_bytes!("../../../../assets/icons/filetypes/7z.png") as &'static [u8],
+    ),
+    (
+        "gz",
+        include_bytes!("../../../../assets/icons/filetypes/gz.png") as &'static [u8],
+    ),
+    (
+        "bat",
+        include_bytes!("../../../../assets/icons/filetypes/bat.png") as &'static [u8],
+    ),
+    (
+        "cmd",
+        include_bytes!("../../../../assets/icons/filetypes/cmd.png") as &'static [u8],
+    ),
+    (
+        "ps1",
+        include_bytes!("../../../../assets/icons/filetypes/ps1.png") as &'static [u8],
+    ),
+];
+
+/// Bytes PNG del ícono exacto para la extensión `ext` (sin punto), o None si no hay ícono
+/// específico para ella (el llamador cae al ícono de categoría). Case-insensitive; el caso
+/// común (ext ya en minúscula) no aloca.
+pub fn filetype_bytes(ext: &str) -> Option<&'static [u8]> {
+    let ext = ext.strip_prefix('.').unwrap_or(ext);
+    if ext.bytes().any(|b| b.is_ascii_uppercase()) {
+        let lower = ext.to_ascii_lowercase();
+        return FILETYPE_PNGS
+            .iter()
+            .find(|(e, _)| *e == lower)
+            .map(|(_, b)| *b);
+    }
+    FILETYPE_PNGS
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, b)| *b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

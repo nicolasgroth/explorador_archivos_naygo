@@ -921,10 +921,171 @@ const FLUENT: &[Map] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Tipos de archivo exactos (vscode-icons, https://github.com/vscode-icons/vscode-icons, MIT).
+// Estructura: vscode-icons-master/icons/file_type_<nombre>.svg
+// No es un "set": es la capa global de íconos exactos por extensión (carpetas,
+// acciones y categorías siguen viniendo del set activo).
+// ---------------------------------------------------------------------------
+const FILETYPES: &[Map] = &[
+    Map {
+        key: "pdf",
+        svg: "file_type_pdf",
+    },
+    Map {
+        key: "docx",
+        svg: "file_type_word",
+    },
+    Map {
+        key: "doc",
+        svg: "file_type_word",
+    },
+    Map {
+        key: "xlsx",
+        svg: "file_type_excel",
+    },
+    Map {
+        key: "xls",
+        svg: "file_type_excel",
+    },
+    Map {
+        key: "csv",
+        svg: "file_type_excel",
+    },
+    Map {
+        key: "pptx",
+        svg: "file_type_powerpoint",
+    },
+    Map {
+        key: "ppt",
+        svg: "file_type_powerpoint",
+    },
+    Map {
+        key: "txt",
+        svg: "file_type_text",
+    },
+    Map {
+        key: "md",
+        svg: "file_type_markdown",
+    },
+    Map {
+        key: "json",
+        svg: "file_type_json",
+    },
+    Map {
+        key: "xml",
+        svg: "file_type_xml",
+    },
+    Map {
+        key: "sql",
+        svg: "file_type_sql",
+    },
+    Map {
+        key: "ini",
+        svg: "file_type_ini",
+    },
+    Map {
+        key: "log",
+        svg: "file_type_log",
+    },
+    Map {
+        key: "mp3",
+        svg: "file_type_audio",
+    },
+    Map {
+        key: "wav",
+        svg: "file_type_audio",
+    },
+    Map {
+        key: "flac",
+        svg: "file_type_audio",
+    },
+    Map {
+        key: "ogg",
+        svg: "file_type_audio",
+    },
+    Map {
+        key: "m4a",
+        svg: "file_type_audio",
+    },
+    Map {
+        key: "mp4",
+        svg: "file_type_video",
+    },
+    Map {
+        key: "mkv",
+        svg: "file_type_video",
+    },
+    Map {
+        key: "avi",
+        svg: "file_type_video",
+    },
+    Map {
+        key: "mov",
+        svg: "file_type_video",
+    },
+    Map {
+        key: "wmv",
+        svg: "file_type_video",
+    },
+    Map {
+        key: "jpg",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "jpeg",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "png",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "gif",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "bmp",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "webp",
+        svg: "file_type_image",
+    },
+    Map {
+        key: "zip",
+        svg: "file_type_zip",
+    },
+    Map {
+        key: "rar",
+        svg: "file_type_zip",
+    },
+    Map {
+        key: "7z",
+        svg: "file_type_zip",
+    },
+    Map {
+        key: "gz",
+        svg: "file_type_zip",
+    },
+    Map {
+        key: "bat",
+        svg: "file_type_bat",
+    },
+    Map {
+        key: "cmd",
+        svg: "file_type_bat",
+    },
+    Map {
+        key: "ps1",
+        svg: "file_type_powershell",
+    },
+];
+
+// ---------------------------------------------------------------------------
 // Declaración de los 6 sets
 // ---------------------------------------------------------------------------
 
-const fn all_specs() -> [SetSpec; 6] {
+const fn all_specs() -> [SetSpec; 7] {
     [
         SetSpec {
             id: "lucide",
@@ -958,6 +1119,14 @@ const fn all_specs() -> [SetSpec; 6] {
             tintable: false,
             gray: false,
             maps: FLAT_COLOR,
+        },
+        SetSpec {
+            id: "filetypes",
+            zip: "assets/icons/vscode-icons-master.zip",
+            prefix: "vscode-icons-master/icons/",
+            tintable: false,
+            gray: false,
+            maps: FILETYPES,
         },
         SetSpec {
             id: "fluent",

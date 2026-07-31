@@ -23,6 +23,8 @@ pub struct IconCache {
     /// Clave: (set_activo, clave_ícono, color_tinte, tintable). Incluye el tinte para
     /// que al cambiar el color del tema se fuerce re-decodificación sin limpiar el cache.
     map: HashMap<CacheKey, Image>,
+    /// Caché de íconos EXACTOS por extensión (capa global, sin tinte): ext → imagen.
+    ft_map: HashMap<String, Image>,
     /// Id del set activo (el que devuelve `get`). La UI lo cambia con `set_active`.
     active: String,
     /// Directorio de configuración portable: contiene `icons/<id>/` de los packs del usuario.
@@ -39,6 +41,7 @@ impl IconCache {
     pub fn new(active: impl Into<String>, config_dir: PathBuf) -> IconCache {
         IconCache {
             map: HashMap::new(),
+            ft_map: HashMap::new(),
             active: active.into(),
             config_dir,
             overrides: std::collections::BTreeMap::new(),
@@ -136,6 +139,27 @@ impl IconCache {
         let img = decode(&bytes);
         self.map.insert(ck, img.clone());
         img
+    }
+
+    /// Ícono para un `Entry` de archivo/carpeta: si su extensión tiene ícono EXACTO por
+    /// tipo (capa global vscode-icons: pdf, docx, xlsx, mp3, zip…), usa ese (sin tintar,
+    /// trae su color); si no, el ícono de categoría del set activo (comportamiento de
+    /// siempre). Los exactos se cachean aparte por extensión (no dependen del set/tinte).
+    pub fn get_for_entry(&mut self, e: &naygo_core::fs_model::Entry) -> Image {
+        if e.kind == naygo_core::fs_model::EntryKind::File {
+            if let Some(ext) = e.path.extension().and_then(|x| x.to_str()) {
+                if let Some(bytes) = naygo_core::icons::filetype_bytes(ext) {
+                    let key = ext.to_ascii_lowercase();
+                    if let Some(img) = self.ft_map.get(&key) {
+                        return img.clone();
+                    }
+                    let img = decode(bytes);
+                    self.ft_map.insert(key, img.clone());
+                    return img;
+                }
+            }
+        }
+        self.get(naygo_core::icon_kind::icon_key_for(e))
     }
 }
 

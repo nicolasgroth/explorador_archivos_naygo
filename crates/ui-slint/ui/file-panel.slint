@@ -851,8 +851,10 @@ export component FilePanel inherits FocusScope {
                             }
                             // Celda Name CON match del filtro: el tramo que coincide se pinta
                             // en acento + negrita (pre/match/post), el resto con su color normal.
-                            // spacing/padding en 0: sin huecos entre tramos (parecía un espacio
-                            // tipeado y confundía visualmente).
+                            // spacing/padding en 0 y stretch 0 en los Text: cada tramo mide
+                            // EXACTAMENTE su texto, así el resaltado no mueve ni un píxel el
+                            // layout del nombre (con stretch 1 cada caja tomaba un tercio del
+                            // ancho y quedaban "espacios" alrededor del match).
                             if col.kind == 0 && row.filter-match && root.rename-pos != i: HorizontalLayout {
                                 horizontal-stretch: 1;
                                 spacing: 0;
@@ -861,6 +863,7 @@ export component FilePanel inherits FocusScope {
                                     text: row.match-pre;
                                     color: row.is-dir ? Theme.highlight : Theme.text;
                                     vertical-alignment: center;
+                                    horizontal-stretch: 0;
                                     overflow: elide;
                                 }
                                 Text {
@@ -868,11 +871,13 @@ export component FilePanel inherits FocusScope {
                                     color: Theme.accent;
                                     font-weight: 700;
                                     vertical-alignment: center;
+                                    horizontal-stretch: 0;
                                 }
                                 Text {
                                     text: row.match-post;
                                     color: row.is-dir ? Theme.highlight : Theme.text;
                                     vertical-alignment: center;
+                                    horizontal-stretch: 0;
                                     overflow: elide;
                                 }
                             }

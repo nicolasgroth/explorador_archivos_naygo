@@ -521,7 +521,7 @@ impl WorkspaceCtrl {
                             match_pre,
                             match_mid,
                             match_post,
-                            icon: icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                            icon: icons.get_for_entry(e),
                             depth: *depth,
                         }
                     })
@@ -547,7 +547,7 @@ impl WorkspaceCtrl {
                     f,
                     &|p| ops.is_cut(p),
                     &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
-                    &mut |e| icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                    &mut |e| icons.get_for_entry(e),
                     size_format,
                     date_format,
                     tz,
