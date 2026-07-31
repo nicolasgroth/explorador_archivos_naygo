@@ -167,7 +167,9 @@ impl JournalWriter {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(txt) = serde_json::to_string(&self.journal) {
-            let _ = std::fs::write(&path, txt);
+            // Atómico (tmp + rename): el journal ES la recuperación ante crashes;
+            // no puede quedar truncado por un crash a media escritura. Best-effort igual.
+            let _ = crate::fs_util::write_atomic(&path, &txt);
         }
     }
 }
@@ -346,6 +348,25 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(journal_path(dir.path(), "w3")).unwrap())
                 .unwrap();
         assert_eq!(back.done_through, 2);
+    }
+
+    #[test]
+    fn persist_es_atomico_y_no_deja_tmp() {
+        // El journal se escribe con tmp + rename: el contenido queda correcto y NO
+        // queda .tmp huérfano (un crash a media escritura no puede truncarlo).
+        let dir = tempfile::tempdir().unwrap();
+        let (plan, _s) = sample_plan(dir.path());
+        let j = OpJournal::new("at1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
+        let mut w = JournalWriter::new(dir.path(), j);
+        w.record(1, Instant::now());
+        w.flush();
+        let path = journal_path(dir.path(), "at1");
+        let back: OpJournal = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back.done_through, 1);
+        assert!(
+            !dir.path().join("ops-journal").join("at1.json.tmp").exists(),
+            "la escritura atómica del journal no debe dejar .tmp"
+        );
     }
 
     #[test]

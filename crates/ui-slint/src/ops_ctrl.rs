@@ -14,9 +14,9 @@ use naygo_core::ops::undo::{self, UndoAction, UndoEntry};
 use naygo_core::ops::{
     apply_folder_decision, folder_conflicts, ConflictAction, ConflictDecision, ConflictPolicy,
     ConflictPrompt, FolderConflict, FolderDecision, OpItem, OpKind, OpMsg, OpOutcome, OpPlan,
-    OpProgress, OpRequest, OpSummary, PlanMsg,
+    OpProgress, OpRequest, OpSummary, PlanError, PlanMsg,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -176,6 +176,21 @@ pub struct ActiveOp {
     /// fecha del registro en el historial del panel y para ordenar las filas terminadas por
     /// recencia (más nuevas arriba).
     pub finished_epoch_secs: Option<u64>,
+    /// Tamaños (bytes) de cada paso del plan, indexados por ORIGEN (`step.from`, que es el
+    /// `src` que el motor reporta en cada `OpItem`). El plan ya conoce los bytes de cada archivo
+    /// al copiar/mover: el popup "archivos de la operación" los lee de aquí en vez de hacer un
+    /// `fs::metadata` por ítem en el hilo de UI (potencialmente miles al abrir el detalle).
+    /// Vacío en ops sin plan (zip, planning sin promover aún).
+    pub size_map: HashMap<PathBuf, u64>,
+}
+
+/// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño).
+fn size_map_of(plan: &OpPlan) -> HashMap<PathBuf, u64> {
+    plan.steps
+        .iter()
+        .filter(|s| !s.is_dir)
+        .filter_map(|s| s.from.clone().map(|from| (from, s.bytes)))
+        .collect()
 }
 
 impl ActiveOp {
@@ -211,6 +226,16 @@ pub struct OpsCtrl {
     /// posición en `active_ops`, este id no cambia al reordenar el vector, así que es la clave
     /// segura para que los botones del panel afecten siempre la op correcta.
     next_op_id: u64,
+    /// Último error al preparar una operación, pendiente de ser anunciado por la UI. Tanto la
+    /// planificación O(1) como el worker de Copy/Move escriben aquí en vez de fallar en silencio.
+    pending_plan_error: Option<PlanError>,
+    /// Canal de UNA muestra para la escritura ASYNC del pegado de texto/imagen. El `fs::write`
+    /// corre en un hilo worker (un disco lento/lleno o un share de red no congelan la UI) y el
+    /// resultado llega por aquí: `Ok(path)` si escribió, `Err((path, error))` si falló — antes
+    /// el fallo se tragaba en silencio y el usuario creía haber pegado. `pump_ops` lo drena.
+    paste_write_rx: Option<Receiver<Result<PathBuf, (PathBuf, String)>>>,
+    /// Error de la escritura de un pegado, pendiente de ser anunciado por la UI (toast).
+    pending_paste_error: Option<(PathBuf, String)>,
 }
 
 impl OpsCtrl {
@@ -225,7 +250,55 @@ impl OpsCtrl {
             config_dir,
             next_journal_seq: 1,
             next_op_id: 1,
+            pending_plan_error: None,
+            paste_write_rx: None,
+            pending_paste_error: None,
         }
+    }
+
+    /// Escribe el archivo de un pegado de texto/imagen en un hilo worker (el `fs::write` puede
+    /// tardar en un disco lento o colgar en un share de red: jamás en la UI). El resultado lo
+    /// recoge `pump_ops`; si falla, queda en `pending_paste_error` para que la UI avise con un
+    /// toast (antes el error se descartaba y el pegado parecía exitoso).
+    pub fn spawn_paste_write(&mut self, path: PathBuf, bytes: Vec<u8>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::fs::write(&path, &bytes)
+                .map(|()| path.clone())
+                .map_err(|e| (path, e.to_string()));
+            let _ = tx.send(result);
+        });
+        self.paste_write_rx = Some(rx);
+    }
+
+    /// Drena la escritura async del pegado (sin bloquear). Un fallo queda en
+    /// `pending_paste_error`; un éxito no avisa (el watcher de la carpeta muestra el archivo).
+    fn pump_paste_write(&mut self) {
+        let Some(rx) = self.paste_write_rx.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(_path)) => {
+                self.paste_write_rx = None;
+            }
+            Ok(Err((path, err))) => {
+                crate::logging::log_line(&format!(
+                    "pegar texto/imagen: no se pudo escribir {}: {err}",
+                    path.display()
+                ));
+                self.pending_paste_error = Some((path, err));
+                self.paste_write_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.paste_write_rx = None;
+            }
+        }
+    }
+
+    /// Consume el error de escritura de un pegado, si lo hay, para que la UI lo anuncie.
+    pub fn take_paste_error(&mut self) -> Option<(PathBuf, String)> {
+        self.pending_paste_error.take()
     }
 
     /// Reserva el próximo id estable de operación (monótono, único en la sesión).
@@ -330,7 +403,13 @@ impl OpsCtrl {
         // Resto (Delete-permanente/Rename/Create/BatchRename): plan O(1) síncrono, no congela.
         let plan = match naygo_core::ops::plan(&req) {
             Ok(p) => p,
-            Err(_) => return, // error de planificación: se ignora discreto (TODO: avisar)
+            Err(error) => {
+                crate::logging::log_line(&format!(
+                    "operación no iniciada; error de planificación: {error:?}"
+                ));
+                self.pending_plan_error = Some(error);
+                return;
+            }
         };
         let conflict = if self.first_collision(&req) {
             ConflictPolicy::Ask
@@ -392,6 +471,7 @@ impl OpsCtrl {
             pending_req: None,
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map: HashMap::new(),
         });
     }
 
@@ -432,6 +512,7 @@ impl OpsCtrl {
             pending_req: None,
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map: HashMap::new(),
         });
     }
 
@@ -466,6 +547,7 @@ impl OpsCtrl {
             pending_req: Some((req, record_undo)),
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map: HashMap::new(),
         });
     }
 
@@ -486,6 +568,9 @@ impl OpsCtrl {
     ) {
         let token = CancellationToken::new();
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
+        // Tamaños por origen para el popup "archivos de la operación" (se calcula ANTES de
+        // mover el plan al motor).
+        let size_map = size_map_of(&plan);
         // Journal solo para operaciones largas y deshacibles-por-retomar.
         let (journal, journal_id) = if Self::journalable(&kind) {
             let id = format!("op-{}", self.next_journal_seq);
@@ -522,6 +607,7 @@ impl OpsCtrl {
             pending_req: None,
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map,
         });
     }
 
@@ -588,6 +674,7 @@ impl OpsCtrl {
             pending_req: None,
             zip_undo_rx: record_undo.then_some(undo_rx),
             finished_epoch_secs: None,
+            size_map: HashMap::new(),
         });
 
         std::thread::spawn(move || {
@@ -686,7 +773,16 @@ impl OpsCtrl {
                     }
                     r
                 }
-                _ => unreachable!("spawn_zip_op solo recibe Compress/Extract"),
+                // Invariante: spawn_zip_op solo se llama con Compress/Extract (lo garantiza
+                // `start_op`). Si el invariante se rompe, NO paniquear: un panic en el worker
+                // dejaría la op colgada para siempre (su `rx` jamás recibiría el terminal).
+                // Reportar el fallo por el canal, igual que cualquier otro error de la op.
+                other => {
+                    let _ = tx.send(OpMsg::Failed(format!(
+                        "worker de zip recibió un tipo de operación no soportado: {other:?}"
+                    )));
+                    return;
+                }
             };
             match result {
                 Ok(items) => {
@@ -724,18 +820,19 @@ impl OpsCtrl {
         } else {
             (None, None)
         };
+        let size_map = size_map_of(&plan);
         let (rx, _h) = engine::spawn(plan, kind, conflict, token, conflict_rx, journal);
         let op = &mut self.active_ops[idx];
         op.rx = Some(rx);
         op.conflict_tx = conflict_tx;
         op.journal_id = journal_id;
         op.request = request;
+        op.size_map = size_map;
         // Salir de la fase Planning: limpiar el canal de plan y los contadores de escaneo.
         op.plan_rx = None;
         op.scan_files = 0;
         op.scan_bytes = 0;
     }
-
     /// ¿La operación amerita journal (es larga y se puede retomar)?
     fn journalable(kind: &OpKind) -> bool {
         matches!(
@@ -766,7 +863,7 @@ impl OpsCtrl {
             let mut last_scan: Option<(u64, u64)> = None;
             let mut done_plan: Option<OpPlan> = None;
             let mut cancelled = false;
-            let mut failed = false;
+            let mut failed: Option<PlanError> = None;
             if let Some(rx) = self.active_ops[i].plan_rx.as_ref() {
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
@@ -779,8 +876,8 @@ impl OpsCtrl {
                             cancelled = true;
                             break;
                         }
-                        PlanMsg::Failed(_) => {
-                            failed = true;
+                        PlanMsg::Failed(error) => {
+                            failed = Some(error);
                             break;
                         }
                     }
@@ -791,9 +888,15 @@ impl OpsCtrl {
                 self.active_ops[i].scan_bytes = bytes;
             }
 
-            if cancelled || failed {
+            if cancelled || failed.is_some() {
                 // El escaneo se canceló o falló: cerrar la op (va a historial). Sin journal aún
                 // (no se creó hasta arrancar el motor) ni undo (no se copió nada).
+                if let Some(error) = failed {
+                    crate::logging::log_line(&format!(
+                        "operación no iniciada; error de planificación async: {error:?}"
+                    ));
+                    self.pending_plan_error = Some(error);
+                }
                 let op = &mut self.active_ops[i];
                 op.plan_rx = None;
                 op.request = None;
@@ -863,6 +966,8 @@ impl OpsCtrl {
     pub fn pump_ops(&mut self) -> bool {
         // Primero, la fase "Calculando…": recoger planes terminados y arrancar/encolar.
         self.pump_planning();
+        // La escritura async del pegado de texto/imagen (canal de una muestra).
+        self.pump_paste_write();
         for i in 0..self.active_ops.len() {
             if self.active_ops[i].rx.is_none() {
                 continue;
@@ -975,23 +1080,26 @@ impl OpsCtrl {
                 .position(|o| o.awaiting_folders.is_some())
             {
                 let op_id = self.active_ops[idx].id;
-                let pf = self.active_ops[idx].awaiting_folders.as_ref().unwrap();
-                if let Some(first) = pf.conflicts.first() {
-                    let name = first.name.clone();
-                    // Carpetas de origen y destino para mostrar "de dónde a dónde". `source` es la
-                    // carpeta de origen MISMA (la que se copia/mueve); `dest_root` es el destino
-                    // exacto que ya existe (`dest_dir.join(name)`).
-                    let source = first.source.clone();
-                    let dest_root = first.dest_root.clone();
-                    // "restantes" = cuántas carpetas MÁS hay después de esta (para el checkbox).
-                    let remaining = pf.conflicts.len().saturating_sub(1);
-                    self.pending_dialog = Some(OpDialog::FolderConflict {
-                        op_id,
-                        name,
-                        remaining,
-                        source,
-                        dest_root,
-                    });
+                // El `position` de arriba garantiza el Some; si el invariante se rompe, no
+                // abrir modal en vez de paniquear.
+                if let Some(pf) = self.active_ops[idx].awaiting_folders.as_ref() {
+                    if let Some(first) = pf.conflicts.first() {
+                        let name = first.name.clone();
+                        // Carpetas de origen y destino para mostrar "de dónde a dónde". `source` es la
+                        // carpeta de origen MISMA (la que se copia/mueve); `dest_root` es el destino
+                        // exacto que ya existe (`dest_dir.join(name)`).
+                        let source = first.source.clone();
+                        let dest_root = first.dest_root.clone();
+                        // "restantes" = cuántas carpetas MÁS hay después de esta (para el checkbox).
+                        let remaining = pf.conflicts.len().saturating_sub(1);
+                        self.pending_dialog = Some(OpDialog::FolderConflict {
+                            op_id,
+                            name,
+                            remaining,
+                            source,
+                            dest_root,
+                        });
+                    }
                 }
             }
         }
@@ -1003,9 +1111,11 @@ impl OpsCtrl {
                 .iter()
                 .position(|o| o.awaiting_conflict.is_some())
             {
-                let prompt = self.active_ops[idx].awaiting_conflict.clone().unwrap();
-                let op_id = self.active_ops[idx].id;
-                self.pending_dialog = Some(OpDialog::Conflict { op_id, prompt });
+                // El `position` garantiza el Some; si el invariante se rompe, no abrir modal.
+                if let Some(prompt) = self.active_ops[idx].awaiting_conflict.clone() {
+                    let op_id = self.active_ops[idx].id;
+                    self.pending_dialog = Some(OpDialog::Conflict { op_id, prompt });
+                }
             }
         }
 
@@ -1036,8 +1146,10 @@ impl OpsCtrl {
                     op.plan_record_undo = record_undo;
                     op.scan_files = 0;
                     op.scan_bytes = 0;
-                } else {
-                    let (plan, kind, conflict) = self.active_ops[idx].pending.take().unwrap();
+                } else if let Some((plan, kind, conflict)) = self.active_ops[idx].pending.take() {
+                    // El `position` garantiza que `pending` o `pending_req` es Some; como
+                    // `pending_req` era None (rama else), corresponde `pending`. Si el
+                    // invariante se rompe, no arrancar nada en vez de paniquear.
                     let request = self.active_ops[idx].request.take();
                     // Quitar el placeholder en cola y spawnear de verdad.
                     self.active_ops.remove(idx);
@@ -1050,10 +1162,19 @@ impl OpsCtrl {
         // ni de planificación (`plan_rx`), NI está parada esperando una decisión de carpeta
         // (`awaiting_folders`). Una op "Calculando…" mantiene el timer encendido para que
         // `pump_planning` siga drenando; una op parada en el conflicto de carpeta lo mantiene para
-        // que el modal siga vivo y la decisión se procese al volver.
-        self.active_ops
-            .iter()
-            .all(|o| o.rx.is_none() && o.plan_rx.is_none() && o.awaiting_folders.is_none())
+        // que el modal siga vivo y la decisión se procese al volver. La escritura async de un
+        // pegado (`paste_write_rx`) también mantiene el timer hasta entregar su resultado.
+        self.paste_write_rx.is_none()
+            && self
+                .active_ops
+                .iter()
+                .all(|o| o.rx.is_none() && o.plan_rx.is_none() && o.awaiting_folders.is_none())
+    }
+
+    /// Consume el error de planificación pendiente para mostrar un aviso localizado. Se conserva
+    /// tipado hasta aquí para el log y las pruebas; la UI decide el texto visible.
+    pub fn take_plan_error(&mut self) -> Option<PlanError> {
+        self.pending_plan_error.take()
     }
 
     /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
@@ -1647,10 +1768,18 @@ impl OpsCtrl {
                 // Ruta relativa al destino: ".git/config" en vez de solo "config". Si no comparte
                 // prefijo (otra unidad, ruta rara) o no hay destino, cae al nombre.
                 let rel_path = rel_to_root(path, dest_root).unwrap_or_else(|| name.clone());
-                // Tamaño: solo para archivos que existen en disco (los Done). Para saltados/fallidos
-                // el destino puede no existir; se deja vacío. Carpeta → vacío.
-                let size = match std::fs::metadata(path) {
-                    Ok(m) if m.is_file() => format_size(m.len(), SizeFormat::Auto),
+                // Tamaño: se lee del mapa que el PLAN ya conocía al copiar/mover (origen →
+                // bytes), NO del disco: un `fs::metadata` por ítem en el hilo de UI con archivos
+                // de miles era una ráfaga de syscalls bloqueantes al abrir el popup. Solo los
+                // Done con tamaño conocido muestran; saltados/fallidos/carpetas/ops de zip (sin
+                // plan) quedan vacíos.
+                let size = match (
+                    &item.outcome,
+                    item.src.as_ref().and_then(|s| op.size_map.get(s)),
+                ) {
+                    (naygo_core::ops::OpOutcome::Done, Some(bytes)) => {
+                        format_size(*bytes, SizeFormat::Auto)
+                    }
                     _ => String::new(),
                 };
                 // 0=hecho 1=saltado 2=fallido (la UI lo pinta con color).
@@ -1743,10 +1872,12 @@ impl OpsCtrl {
             NamePurpose::NewFile { label } => (naygo_core::ops::create(dir, buf, false), label),
             NamePurpose::NewDir { label } => (naygo_core::ops::create(dir, buf, true), label),
             NamePurpose::Paste { ext, bytes } => {
-                // El pegado escribe el archivo directo (escritura chica y local), igual que el
-                // camino sin confirmación. No pasa por el engine de ops.
+                // El pegado escribe el archivo en un hilo worker (un disco lento/lleno o un
+                // share de red no congelan la UI), igual que el camino sin confirmación. Si la
+                // escritura falla, `pump_ops` deja el error para que la UI lo anuncie con un
+                // toast (antes se tragaba en silencio). No pasa por el engine de ops.
                 let path = dir.join(format!("{buf}.{ext}"));
-                let _ = std::fs::write(&path, &bytes);
+                self.spawn_paste_write(path, bytes);
                 return true;
             }
             NamePurpose::ConflictRename { op_id, .. } => {
@@ -1872,6 +2003,7 @@ impl OpsCtrl {
                 resume.plan.clone(),
             ),
         );
+        let size_map = size_map_of(&resume.plan);
         let (rx, _h) = engine::spawn(
             resume.plan,
             journal.kind.clone(),
@@ -1907,6 +2039,7 @@ impl OpsCtrl {
             pending_req: None,
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map,
         });
         self.drop_resume_item(id);
         true
@@ -2273,6 +2406,22 @@ mod tests {
     }
 
     #[test]
+    fn error_de_planificacion_queda_pendiente_para_la_ui() {
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        let req = naygo_core::ops::rename(PathBuf::from("C:/origen.txt"), "nombre?.txt".into());
+        c.start_op(req, "Renombrar".into(), true);
+        assert!(c.active_ops.is_empty(), "la operación inválida no arranca");
+        assert!(matches!(
+            c.take_plan_error(),
+            Some(PlanError::InvalidName(_))
+        ));
+        assert!(
+            c.take_plan_error().is_none(),
+            "el aviso se consume una sola vez"
+        );
+    }
+
+    #[test]
     fn map_action_to_extract_colapsa_las_acciones() {
         use naygo_core::archive_ops::ExtractConflict;
         assert_eq!(
@@ -2492,7 +2641,14 @@ mod tests {
         // El usuario edita el nombre y confirma.
         c.name_changed("mi_nota".into());
         assert!(c.name_confirm("Comprimir"), "el confirm escribe el archivo");
+        // La escritura es ASYNC (worker): drenar hasta que termine antes de verificar.
         let dest = tmp.path().join("mi_nota.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while c.paste_write_rx.is_some() {
+            c.pump_ops();
+            assert!(std::time::Instant::now() < deadline, "timeout");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(
             dest.exists(),
             "se creó con el nombre elegido + la extensión"
@@ -3052,6 +3208,7 @@ mod tests {
             pending_req: None,
             zip_undo_rx: None,
             finished_epoch_secs: None,
+            size_map: HashMap::new(),
         }
     }
 
@@ -3640,5 +3797,105 @@ mod tests {
         assert!(ctx.done >= 1, "al menos un archivo hecho");
         assert_eq!(ctx.failed, 0);
         assert!(!ctx.total_size.is_empty(), "tamaño total formateado");
+    }
+
+    #[test]
+    fn op_file_list_toma_el_tamano_del_plan_sin_tocar_el_disco() {
+        use naygo_core::ops::{OpItem, OpOutcome, OpSummary};
+        // El tamaño de un ítem Done se lee del `size_map` (origen → bytes, que el plan ya
+        // conocía al copiar), NO de un `fs::metadata`: aquí el archivo destino NO existe en
+        // disco y aun así la fila muestra el tamaño.
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        let src = PathBuf::from("Z:/no/existe/origen.bin");
+        let mut op = fake_active_op(42);
+        op.summary = Some(OpSummary {
+            items: vec![OpItem {
+                dest: PathBuf::from("Z:/no/existe/destino.bin"),
+                outcome: OpOutcome::Done,
+                src: Some(src.clone()),
+            }],
+            bytes_done: 4096,
+            elapsed_secs: 0.0,
+        });
+        op.size_map.insert(src, 4096);
+        c.active_ops.push(op);
+        let list = c.op_file_list(42);
+        assert_eq!(list.len(), 1);
+        assert!(
+            !list[0].size.is_empty(),
+            "el tamaño viene del plan, no del disco (la ruta no existe)"
+        );
+        // Un ítem sin entrada en el mapa (p. ej. op de zip, sin plan) queda sin tamaño.
+        let mut op2 = fake_active_op(43);
+        op2.summary = Some(OpSummary {
+            items: vec![OpItem {
+                dest: PathBuf::from("Z:/no/existe/otro.bin"),
+                outcome: OpOutcome::Done,
+                src: None,
+            }],
+            bytes_done: 0,
+            elapsed_secs: 0.0,
+        });
+        c.active_ops.push(op2);
+        let list2 = c.op_file_list(43);
+        assert!(list2[0].size.is_empty(), "sin plan no hay tamaño");
+    }
+
+    #[test]
+    fn size_map_of_solo_archivos_indexados_por_origen() {
+        let plan = OpPlan {
+            steps: vec![
+                naygo_core::ops::OpStep {
+                    from: Some(PathBuf::from("D:/src/a.txt")),
+                    to: PathBuf::from("D:/dst/a.txt"),
+                    bytes: 10,
+                    is_dir: false,
+                },
+                naygo_core::ops::OpStep {
+                    from: None,
+                    to: PathBuf::from("D:/dst/sub"),
+                    bytes: 0,
+                    is_dir: true,
+                },
+            ],
+            total_bytes: 10,
+            total_files: 1,
+            pre_delete: Vec::new(),
+        };
+        let map = size_map_of(&plan);
+        assert_eq!(map.get(Path::new("D:/src/a.txt")), Some(&10));
+        assert_eq!(map.len(), 1, "las carpetas no entran al mapa");
+    }
+
+    #[test]
+    fn pegar_escribe_en_worker_y_reporta_el_fallo() {
+        // Éxito: el worker escribe el archivo y el drenaje no deja error pendiente.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("pegado.png");
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.spawn_paste_write(dest.clone(), vec![1, 2, 3]);
+        assert!(c.paste_write_rx.is_some(), "worker en vuelo");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while c.paste_write_rx.is_some() {
+            c.pump_ops();
+            assert!(std::time::Instant::now() < deadline, "timeout");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(std::fs::read(&dest).unwrap(), vec![1, 2, 3]);
+        assert!(c.take_paste_error().is_none(), "sin error que anunciar");
+
+        // Fallo: escribir bajo una ruta imposible deja el error pendiente para el toast
+        // (antes se tragaba en silencio).
+        let imposible = tmp.path().join("no_existe/sub/pegado.png");
+        c.spawn_paste_write(imposible.clone(), vec![9]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while c.paste_write_rx.is_some() {
+            c.pump_ops();
+            assert!(std::time::Instant::now() < deadline, "timeout");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let (path, err) = c.take_paste_error().expect("el fallo se reporta");
+        assert_eq!(path, imposible);
+        assert!(!err.is_empty());
     }
 }

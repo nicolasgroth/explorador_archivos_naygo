@@ -220,6 +220,11 @@ mod windows_impl {
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
+            // Tras un Drop el SO NO envía DragLeave: limpiamos el resaltado del panel al
+            // ENTRAR al método, así los early-returns de abajo (dataobject nulo, GetData
+            // fallido) no dejan el borde resaltado pegado.
+            self.emit_leave();
+
             // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
             // usa para enrutar el drop al panel bajo el cursor.
             let (screen_x, screen_y) = (pt.x, pt.y);
@@ -280,9 +285,6 @@ mod windows_impl {
             unsafe {
                 ReleaseStgMedium(&mut medium);
             }
-
-            // El arrastre terminó (soltó): limpiar el resaltado del panel bajo el cursor.
-            self.emit_leave();
 
             Ok(())
         }

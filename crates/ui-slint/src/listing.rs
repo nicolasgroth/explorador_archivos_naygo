@@ -61,19 +61,28 @@ impl Listing {
     }
 
     /// Drena TODO lo acumulado en el canal AHORA (sin bloquear). Devuelve las entries
-    /// nuevas del lote y si el listado TERMINO (Done/Error/Cancelled).
-    pub fn poll(&self) -> (Vec<Entry>, bool) {
+    /// nuevas del lote, si el listado TERMINÓ (Done/Error/Cancelled) y si terminó con
+    /// ÉXITO (Done; no Error ni Cancelled). El flag de éxito permite derivar efectos del
+    /// resultado real del listado (p. ej. registrar en recientes solo si la carpeta se
+    /// pudo listar) sin hacer I/O extra en el hilo de UI.
+    pub fn poll(&self) -> (Vec<Entry>, bool, bool) {
         let mut batch = Vec::new();
         let mut done = false;
+        let mut succeeded = false;
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 ListingMsg::Entry(e) => batch.push(e),
-                ListingMsg::Done | ListingMsg::Cancelled | ListingMsg::Error(_) => {
+                ListingMsg::Done => {
+                    done = true;
+                    succeeded = true;
+                    break;
+                }
+                ListingMsg::Cancelled | ListingMsg::Error(_) => {
                     done = true;
                     break;
                 }
             }
         }
-        (batch, done)
+        (batch, done, succeeded)
     }
 }

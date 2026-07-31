@@ -4,14 +4,18 @@
 
 use super::*;
 
-impl WorkspaceCtrl {
-    /// ¿Se puede navegar a `dir`? Existe Y se puede abrir para listar (permiso). `read_dir` es la
-    /// prueba real: `exists()` puede mentir en rutas de red/permiso. Si no es navegable, el panel
-    /// muestra el aviso in-place tras navegar ahí.
-    pub(super) fn dir_is_navigable(dir: &std::path::Path) -> bool {
-        std::fs::read_dir(dir).is_ok()
-    }
+/// Resultado del probe async de "carpeta no encontrada" para UN panel. Lo calcula un hilo
+/// worker (el `read_dir` puede colgar SEGUNDOS sobre un share de red caído: jamás en la UI).
+/// Guarda la carpeta evaluada para descartar resultados obsoletos (el panel navegó mientras
+/// el probe corría).
+pub(super) struct MissingProbeHit {
+    pane: u64,
+    dir: PathBuf,
+    missing: bool,
+    has_ancestor: bool,
+}
 
+impl WorkspaceCtrl {
     /// El ancestro existente más cercano de `path` (sube hasta encontrar uno que exista; si
     /// ninguno —p. ej. la unidad entera se fue—, devuelve None).
     fn nearest_existing_ancestor(path: &std::path::Path) -> Option<PathBuf> {
@@ -47,30 +51,40 @@ impl WorkspaceCtrl {
     }
 
     /// ¿La carpeta del panel `id` dejó de existir / es ilegible? Lee del CACHÉ (sin I/O), que
-    /// se recalcula en eventos reales (`refresh_missing_cache`). Antes hacía un `read_dir`
-    /// síncrono en el hilo de UI en cada tick, lo que congelaba la app sobre un share de red
-    /// caído. Lo consulta el builder del PaneVm para el aviso in-place.
+    /// se recalcula async en eventos reales (`refresh_missing_cache` + `pump_missing_probe`).
+    /// Antes hacía un `read_dir` síncrono en el hilo de UI en cada tick, lo que congelaba la
+    /// app sobre un share de red caído. Lo consulta el builder del PaneVm para el aviso in-place.
+    /// La entrada cacheada guarda la carpeta evaluada: si el panel ya navegó a otra, la entrada
+    /// obsoleta NO cuenta (evita mostrar el aviso sobre una carpeta recién navegada mientras el
+    /// probe nuevo está en vuelo).
     pub fn pane_dir_missing(&self, id: PaneId) -> bool {
-        self.missing_cache
-            .get(&id.0)
-            .map(|(m, _)| *m)
-            .unwrap_or(false)
+        match self.missing_cache.get(&id.0) {
+            Some((dir, missing, _)) => {
+                *missing && self.pane_current_dir(id).as_deref() == Some(dir.as_path())
+            }
+            None => false,
+        }
     }
 
     /// ¿El panel `id` (en estado "carpeta no encontrada") tiene un ancestro existente real al
-    /// que subir? Falso si la unidad entera se desconectó. Lee del CACHÉ (sin I/O).
+    /// que subir? Falso si la unidad entera se desconectó. Lee del CACHÉ (sin I/O), con la misma
+    /// invalidación por carpeta obsoleta que `pane_dir_missing`.
     pub fn pane_has_existing_ancestor(&self, id: PaneId) -> bool {
-        self.missing_cache
-            .get(&id.0)
-            .map(|(_, a)| *a)
-            .unwrap_or(false)
+        match self.missing_cache.get(&id.0) {
+            Some((dir, _, has_anc)) => {
+                *has_anc && self.pane_current_dir(id).as_deref() == Some(dir.as_path())
+            }
+            None => false,
+        }
     }
 
-    /// Recalcula el caché del estado "carpeta no encontrada" de TODOS los paneles Files (hace el
-    /// I/O real: `read_dir` + búsqueda de ancestro). Se llama ante eventos que pueden cambiarlo
-    /// (navegar, reintentar, expulsar, conectar/desconectar disco), NUNCA en el tick de render.
-    /// El `read_dir` solo se evalúa si la carpeta podría estar perdida; en disco local sano es
-    /// instantáneo, y al sacarlo del tick un share caído ya no bloquea la UI repetidamente.
+    /// Recalcula el caché del estado "carpeta no encontrada" de TODOS los paneles Files. Se
+    /// llama ante eventos que pueden cambiarlo (navegar, reintentar, expulsar, conectar/
+    /// desconectar disco), NUNCA en el tick de render. NO hace I/O en el hilo de UI: solo
+    /// fotografía las carpetas actuales y lanza UN worker que hace el `read_dir` + búsqueda de
+    /// ancestro por panel; el tick aplica los resultados con `pump_missing_probe`. Un share de
+    /// red caído puede colgar el worker segundos sin congelar la app. Un refresh nuevo
+    /// reemplaza al anterior (sus resultados se descartan por carpeta obsoleta si llegan).
     pub fn refresh_missing_cache(&mut self) {
         // Solo paneles de archivos (los demás no tienen "carpeta no encontrada").
         let ids: Vec<PaneId> = self
@@ -82,17 +96,59 @@ impl WorkspaceCtrl {
             .collect();
         self.missing_cache
             .retain(|k, _| ids.iter().any(|id| id.0 == *k));
-        for id in ids {
-            let (missing, has_anc) = match self.pane_current_dir(id) {
-                Some(dir) => {
+        let targets: Vec<(u64, PathBuf)> = ids
+            .iter()
+            .filter_map(|id| self.pane_current_dir(*id).map(|dir| (id.0, dir)))
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let hits: Vec<MissingProbeHit> = targets
+                .into_iter()
+                .map(|(pane, dir)| {
                     let missing = std::fs::read_dir(&dir).is_err();
-                    let has_anc = missing && Self::nearest_existing_ancestor(&dir).is_some();
-                    (missing, has_anc)
+                    let has_ancestor =
+                        missing && WorkspaceCtrl::nearest_existing_ancestor(&dir).is_some();
+                    MissingProbeHit {
+                        pane,
+                        dir,
+                        missing,
+                        has_ancestor,
+                    }
+                })
+                .collect();
+            // Si el receptor se reemplazó (refresh más nuevo) o se cayó, descartar en silencio.
+            let _ = tx.send(hits);
+        });
+        self.missing_probe = Some(rx);
+    }
+
+    /// Drena el probe async de "carpeta no encontrada" (sin bloquear) y aplica los resultados
+    /// al caché. Un resultado se aplica SOLO si el panel sigue en la misma carpeta que se
+    /// evaluó (si navegó mientras el probe corría, el resultado es obsoleto y se descarta:
+    /// el refresh de ESA navegación trae el suyo). Devuelve true si NO hay probe en vuelo
+    /// (para que el timer pueda dormir).
+    pub fn pump_missing_probe(&mut self) -> bool {
+        let Some(rx) = self.missing_probe.as_ref() else {
+            return true;
+        };
+        match rx.try_recv() {
+            Ok(hits) => {
+                for hit in hits {
+                    let still_there = self.pane_current_dir(PaneId(hit.pane)).as_deref()
+                        == Some(hit.dir.as_path());
+                    if still_there {
+                        self.missing_cache
+                            .insert(hit.pane, (hit.dir, hit.missing, hit.has_ancestor));
+                    }
                 }
-                None => (false, false),
-            };
-            self.missing_cache.insert(id.0, (missing, has_anc));
+                self.missing_probe = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.missing_probe = None;
+            }
         }
+        self.missing_probe.is_none()
     }
 
     /// Reintentar en el panel `id`: si su carpeta volvió a existir (USB reconectado), re-listar; si
@@ -170,6 +226,21 @@ impl WorkspaceCtrl {
         if let Some(l) = self.listings.get(&id) {
             l.cancel();
         }
+        // Navegar a OTRA carpeta limpia el filtro visual por tipeo (decisión de diseño:
+        // persiste hasta Esc o navegar). Un refresh de la MISMA carpeta (F5) lo conserva.
+        // La referencia es `last_listing_dirs` (lo último PEDIDO para el panel), NO
+        // `f.current_dir`: hay caminos que la mutan antes de llamar aquí (navigate_pane_to).
+        let cambia_carpeta = self.last_listing_dirs.get(&id) != Some(&dir);
+        if cambia_carpeta {
+            self.clear_filter();
+            // El caché de índices de matching (text_match) guarda nombres de ESTA carpeta;
+            // navegar lo invalida para no arrastrar nombres viejos ni crecer sin límite.
+            naygo_core::text_match::clear_index_cache();
+        }
+        self.last_listing_dirs.insert(id, dir.clone());
+        // Un listado nuevo reemplaza al anterior: su reciente diferido (si lo había) ya no
+        // aplica — el camino que navega decide si registra uno para el listado NUEVO.
+        self.pending_recents.remove(&id);
         // Navegar (o refrescar) puede cambiar de unidad: invalida la caché de disco del footer
         // para que el espacio libre/total se relea. Es pequeña; se repuebla a demanda por tick.
         self.footer_disk_cache.clear();
@@ -249,7 +320,31 @@ impl WorkspaceCtrl {
             ..data_no_disk
         };
         let preset = self.footer_preset_resolved();
-        naygo_core::footer::render(&preset, &data, self.config.settings.size_format)
+        let base = naygo_core::footer::render(&preset, &data, self.config.settings.size_format);
+        // Sufijo del filtro visual por tipeo (solo en el panel ACTIVO, que es donde se
+        // tipea): ` · filtro: "texto" · N coincidencias`. Hace el filtro visible (el buffer
+        // de tipeo no se ve en ninguna otra parte) y da feedback de cuánto matchea.
+        let suffix = self.filter_label_of(id);
+        if suffix.is_empty() {
+            base
+        } else {
+            format!("{base} · {suffix}")
+        }
+    }
+
+    /// Etiqueta del filtro visual por tipeo para el panel `id` (`filtro: "texto" · N
+    /// coincidencias`, ya traducida), o vacío si no aplica (sin filtro o panel inactivo).
+    /// La usan el footer y la mini-barra del panel (misma composición, una sola fuente).
+    pub fn filter_label_of(&self, id: PaneId) -> String {
+        if self.ws.active_id() != Some(id) || !self.filter_active() {
+            return String::new();
+        }
+        let label = self.config.t("status.filter_label");
+        let matches = self
+            .config
+            .t("status.filter_matches")
+            .replace("{n}", &self.filter_match_count.to_string());
+        format!("{label}: \"{}\" · {matches}", self.typeahead)
     }
 
     /// Drena los lotes de TODOS los listados activos. Devuelve true si TODOS terminaron
@@ -268,15 +363,15 @@ impl WorkspaceCtrl {
             // entries, o el listado TERMINÓ (carpeta vacía → done sin lotes). Un tick que poll-ea
             // vacío y sin terminar NO lo consume, así el reemplazo de filas se aplica recién con
             // el primer avance real. `take_fresh()` solo devuelve `true` una vez por listado.
-            let (batch, done, fresh) = match self.listings.get_mut(&id) {
+            let (batch, done, fresh, succeeded) = match self.listings.get_mut(&id) {
                 Some(l) => {
-                    let (b, d) = l.poll();
+                    let (b, d, ok) = l.poll();
                     let fresh = if b.is_empty() && !d {
                         false
                     } else {
                         l.take_fresh()
                     };
-                    (b, d, fresh)
+                    (b, d, fresh, ok)
                 }
                 None => continue,
             };
@@ -309,6 +404,16 @@ impl WorkspaceCtrl {
             }
             if done {
                 self.listings.remove(&id);
+                // Reciente diferido (navegación sin chequeo síncrono de `dir_is_navigable`):
+                // se registra SOLO si el listado terminó con éxito, así una ruta muerta (red
+                // caída, favorito viejo) no ensucia recientes — el aviso in-place ya informa.
+                if succeeded {
+                    if let Some(dir) = self.pending_recents.remove(&id) {
+                        self.push_recent(dir);
+                    }
+                } else {
+                    self.pending_recents.remove(&id);
+                }
             }
         }
         self.listings.is_empty()
@@ -348,6 +453,9 @@ impl WorkspaceCtrl {
         let size_format = self.config.settings.size_format;
         let vis = self.visibility_flags();
         let tz = naygo_platform::time::local_utc_offset_secs();
+        // Aguja del filtro visual por tipeo (ya plegada): SOLO para el panel activo
+        // (None para los demás paneles o sin filtro → todo filter_match = false).
+        let filter_needle = self.active_filter_needle(id);
 
         // Vista profunda activa: construir filas desde deep_items con depth real.
         // Las columnas visibles (orden/formato) se leen del FilePaneState normal.
@@ -364,64 +472,94 @@ impl WorkspaceCtrl {
             // en streaming corre muchas veces por segundo). Igual que el camino normal de abajo,
             // se destructura `self` en préstamos disjuntos: `deep_job`, `ops` e `icons` son campos
             // distintos, así que sus `&` no se solapan y el borrow checker los acepta.
-            let WorkspaceCtrl {
-                deep_job,
-                ops,
-                icons,
-                ..
-            } = self;
-            let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
-                deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
-            return deep_items
-                .iter()
-                .filter(|(e, _)| {
-                    naygo_core::filter::is_visible(
-                        e,
-                        vis.show_hidden,
-                        vis.show_system,
-                        vis.hide_dotfiles,
-                    )
-                })
-                .map(|(e, depth)| {
-                    let cells = cell_kinds
-                        .iter()
-                        .map(|k| crate::bridge::cell_value(e, *k, size_format, date_format, tz))
-                        .collect();
-                    PlainRow {
-                        name: e.name.clone(),
-                        cells,
-                        is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
-                        selected: false,
-                        focused: false,
-                        cut: ops.is_cut(&e.path),
-                        highlight: false,
-                        icon: icons.get(naygo_core::icon_kind::icon_key_for(e)),
-                        depth: *depth,
-                    }
-                })
-                .collect();
+            let rows: Vec<PlainRow> = {
+                let WorkspaceCtrl {
+                    deep_job,
+                    ops,
+                    icons,
+                    ..
+                } = self;
+                let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
+                    deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
+                deep_items
+                    .iter()
+                    .filter(|(e, _)| {
+                        naygo_core::filter::is_visible(
+                            e,
+                            vis.show_hidden,
+                            vis.show_system,
+                            vis.hide_dotfiles,
+                        )
+                    })
+                    .map(|(e, depth)| {
+                        let cells = cell_kinds
+                            .iter()
+                            .map(|k| crate::bridge::cell_value(e, *k, size_format, date_format, tz))
+                            .collect();
+                        // Mismo criterio que la vista normal: el rango del match entrega el
+                        // flag y los tramos para pintar (un solo fold por ítem).
+                        let (filter_match, match_pre, match_mid, match_post) = match filter_needle
+                            .as_deref()
+                            .and_then(|n| naygo_core::text_match::match_char_range(&e.name, n))
+                        {
+                            Some((s, en)) => {
+                                let (pre, mid, post) =
+                                    naygo_core::text_match::split_at_char_range(&e.name, s, en);
+                                (true, pre, mid, post)
+                            }
+                            None => (false, String::new(), String::new(), String::new()),
+                        };
+                        PlainRow {
+                            name: e.name.clone(),
+                            cells,
+                            is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
+                            selected: false,
+                            focused: false,
+                            cut: ops.is_cut(&e.path),
+                            highlight: false,
+                            filter_match,
+                            match_pre,
+                            match_mid,
+                            match_post,
+                            icon: icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                            depth: *depth,
+                        }
+                    })
+                    .collect()
+            };
+            if filter_needle.is_some() {
+                self.filter_match_count = rows.iter().filter(|r| r.filter_match).count();
+            }
+            return rows;
         }
 
         // Vista normal: préstamos disjuntos para ops/watchers/icons.
-        let WorkspaceCtrl {
-            ws,
-            ops,
-            watchers,
-            icons,
-            ..
-        } = self;
-        match ws.pane(id).and_then(|p| p.files.as_ref()) {
-            Some(f) => rows_from_view(
-                f,
-                &|p| ops.is_cut(p),
-                &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
-                &mut |e| icons.get(naygo_core::icon_kind::icon_key_for(e)),
-                size_format,
-                date_format,
-                tz,
-            ),
-            None => Vec::new(),
+        let rows = {
+            let WorkspaceCtrl {
+                ws,
+                ops,
+                watchers,
+                icons,
+                ..
+            } = self;
+            match ws.pane(id).and_then(|p| p.files.as_ref()) {
+                Some(f) => rows_from_view(
+                    f,
+                    &|p| ops.is_cut(p),
+                    &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                    &mut |e| icons.get(naygo_core::icon_kind::icon_key_for(e)),
+                    size_format,
+                    date_format,
+                    tz,
+                    filter_needle.as_deref(),
+                ),
+                None => Vec::new(),
+            }
+        };
+        if filter_needle.is_some() {
+            self.filter_match_count = rows.iter().filter(|r| r.filter_match).count();
         }
+        rows
     }
 
     /// Firma O(n) SIN allocs de TODO lo que determina las filas pintadas del panel `id` (O-1).
@@ -488,6 +626,15 @@ impl WorkspaceCtrl {
 
         // --- Foco (cambia el flag `focused` de una fila) ---
         f.focused.hash(&mut h);
+
+        // --- Filtro visual por tipeo: cambia el flag `filter_match` de las filas. Se hashea
+        // el buffer CRUDO (la aguja plegada se deriva de él); solo el panel activo se tiñe.
+        // Al cambiar de panel activo, ambos paneles recomputan (uno gana tinte, otro lo pierde).
+        if self.ws.active_id() == Some(id) {
+            self.typeahead.hash(&mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
         // --- Selección. Orden-independiente (la vista la consulta como conjunto). ---
         let mut sel_acc: u64 = 0;
         for &pos in &f.selected {

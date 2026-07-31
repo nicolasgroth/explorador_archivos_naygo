@@ -3,11 +3,18 @@
 # Uso: python scripts/check_i18n_lang.py <code>   (p. ej. fr, de, zh)
 import json, re, sys
 
+if len(sys.argv) != 2:
+    print("Uso: python scripts/check_i18n_lang.py <code>   (p. ej. fr, de, zh)")
+    sys.exit(2)
+
 base = "crates/core/src/i18n"
 code = sys.argv[1]
 es = json.load(open(f"{base}/es.json", encoding="utf-8"))
 try:
     lang = json.load(open(f"{base}/{code}.json", encoding="utf-8"))
+except FileNotFoundError:
+    print(f"[{code}] NO EXISTE {base}/{code}.json")
+    sys.exit(1)
 except json.JSONDecodeError as e:
     print(f"[{code}] JSON INVÁLIDO: {e}")
     sys.exit(1)

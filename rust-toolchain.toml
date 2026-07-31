@@ -1,0 +1,5 @@
+# Naygo — toolchain fijado para todo el equipo/CI: stable + rustfmt + clippy.
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

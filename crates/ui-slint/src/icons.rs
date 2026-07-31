@@ -5,9 +5,6 @@
 // del usuario bajo `<config_dir>/icons/<id>/<name>.png` (6E). Ver `naygo_core::icons`.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
-// El IconCache se cablea por partes en las tareas 3 y 4 de 6A (filas, combo de set). Hasta
-// entonces, algunos métodos quedan sin usar; el allow evita el ruido de clippy mientras tanto.
-#![allow(dead_code)]
 use naygo_core::icon_kind::IconKey;
 use slint::{Image, SharedPixelBuffer};
 use std::collections::HashMap;
@@ -85,10 +82,6 @@ impl IconCache {
             self.map.clear();
             self.active = new;
         }
-    }
-
-    pub fn active(&self) -> &str {
-        &self.active
     }
 
     /// Firma O(k) (k = nº de overrides, normalmente 0) del estado que determina el `slint::Image`

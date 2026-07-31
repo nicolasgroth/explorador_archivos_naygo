@@ -106,8 +106,11 @@ impl I18n {
                     if let Some(code) = path.file_stem().and_then(|s| s.to_str()) {
                         if let Ok(text) = std::fs::read_to_string(&path) {
                             let cat = Catalog::from_json(code, &text);
-                            catalogs.entry(code.to_string()).or_default().merge(&cat);
-                            catalogs.get_mut(code).unwrap().lang = code.to_string();
+                            // entry/or_default garantiza que el catálogo existe:
+                            // una sola lookup, sin unwrap.
+                            let slot = catalogs.entry(code.to_string()).or_default();
+                            slot.merge(&cat);
+                            slot.lang = code.to_string();
                         }
                     }
                 }

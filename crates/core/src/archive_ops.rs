@@ -327,6 +327,11 @@ pub fn extract_zip(
                 let mut fail_msg: Option<String> = None;
                 loop {
                     if token.is_cancelled() {
+                        // Cancelado a media entrada: borrar el parcial (consistente con el
+                        // motor de copia); el undo nunca lo limpiaría. Se suelta el handle
+                        // ANTES de borrar (Windows no deja borrar un archivo abierto).
+                        drop(out);
+                        let _ = std::fs::remove_file(&final_target);
                         return Err(ArchiveError::Cancelled);
                     }
                     let n = match entry.read(&mut buf) {
@@ -345,6 +350,13 @@ pub fn extract_zip(
                     // Acota a `total`: un zip con `size` declarado menor al real haría done > total
                     // (barra >100%). Nunca reportamos progreso por encima del total.
                     on_progress(done.min(total), total);
+                }
+                if fail_msg.is_some() {
+                    // Falló a media entrada: el parcial queda inútil en disco y el undo solo
+                    // trashea los Done → borrarlo, consistente con el motor de copia (que sí
+                    // limpia sus parciales). Handle soltado antes de borrar (Windows).
+                    drop(out);
+                    let _ = std::fs::remove_file(&final_target);
                 }
                 items.push(ArchiveOpItem {
                     path: final_target,
@@ -757,6 +769,43 @@ mod tests {
                 .any(|i| matches!(i.outcome, ArchiveOutcome::Failed(_))),
             "la entrada corrupta debe quedar Failed: {items:?}"
         );
+        // El PARCIAL de la entrada fallida NO queda en disco (consistente con el motor
+        // de copia, que borra sus parciales; el undo nunca limpiaría un Failed).
+        assert!(
+            !dest.join("malo.txt").exists(),
+            "el parcial de la entrada fallida se borró"
+        );
+    }
+
+    #[test]
+    fn extract_cancelado_a_media_entrada_borra_el_parcial() {
+        // Entrada grande (8 MB > 64KB de buffer) + cancelación desde otro hilo a ~1ms:
+        // puede alcanzar a terminar (disco rápido) o cancelar a media entrada. Si
+        // canceló, el parcial NO debe quedar en disco.
+        let dir = tempfile::tempdir().unwrap();
+        let big = vec![9u8; 8 * 1024 * 1024];
+        let zip_path = make_zip(dir.path(), "in.zip", &[("big.bin", &big)]);
+        let dest = dir.path().join("salida");
+        let token = CancellationToken::new();
+        let t2 = token.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            t2.cancel();
+        });
+        let r = extract_zip(
+            &zip_path,
+            &dest,
+            &mut always_overwrite(),
+            &mut noop_progress(),
+            &token,
+        );
+        h.join().unwrap();
+        if matches!(r, Err(ArchiveError::Cancelled)) {
+            assert!(
+                !dest.join("big.bin").exists(),
+                "cancelado a media entrada: el parcial se borró"
+            );
+        }
     }
 
     // --- Regresión: el flag `created` para el undo seguro (no perder datos) ---

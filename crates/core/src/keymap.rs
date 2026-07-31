@@ -140,6 +140,9 @@ pub enum Action {
     Find,
     /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing).
     ComputeSize,
+    /// Coincidencia ANTERIOR del filtro visual por tipeo (Shift+F3). La siguiente es F3
+    /// con filtro activo (contexto sobre ComputeSize; sin filtro, F3 calcula tamaño).
+    FilterPrevMatch,
     /// Seleccionar todos los ítems de la vista (fase multi-selección).
     SelectAll,
     /// Extender la selección hacia arriba desde el ancla (Shift+↑).
@@ -238,6 +241,7 @@ impl Action {
             Refresh,
             Find,
             ComputeSize,
+            FilterPrevMatch,
             SelectAll,
             ExtendUp,
             ExtendDown,
@@ -306,6 +310,7 @@ impl Action {
             Refresh => "action.refresh",
             Find => "action.find",
             ComputeSize => "action.compute_size",
+            FilterPrevMatch => "action.filter_prev_match",
             SelectAll => "action.select_all",
             ExtendUp => "action.extend_up",
             ExtendDown => "action.extend_down",
@@ -403,6 +408,7 @@ impl KeyMap {
             (Refresh, vec![Chord::plain(F5)]),
             (Find, vec![Chord::ctrl(Char('f'))]),
             (ComputeSize, vec![Chord::plain(F3)]),
+            (FilterPrevMatch, vec![Chord::shift(F3)]),
             (SelectAll, vec![Chord::ctrl(Char('a'))]),
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
             (ExtendDown, vec![Chord::shift(ArrowDown)]),
@@ -476,7 +482,12 @@ impl KeyMap {
             &mut self.bindings[pos].1
         } else {
             self.bindings.push((action, Vec::new()));
-            &mut self.bindings.last_mut().unwrap().1
+            // Recién insertado: el último SIEMPRE existe; el let-else fija la
+            // invariante en vez de un unwrap (la rama None es inalcanzable).
+            let Some((_, chords)) = self.bindings.last_mut() else {
+                unreachable!("acabamos de hacer push: bindings no puede estar vacío");
+            };
+            chords
         }
     }
 
@@ -568,13 +579,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_61_acciones_con_clave_i18n_unica() {
+    fn all_tiene_62_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 61);
+        assert_eq!(all.len(), 62);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 61, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 62, "cada acción tiene una clave i18n única");
     }
 
     #[test]

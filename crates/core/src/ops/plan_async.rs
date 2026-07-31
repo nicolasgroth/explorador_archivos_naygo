@@ -208,4 +208,139 @@ mod tests {
         let msgs = drain(rx);
         assert!(msgs.iter().any(|m| matches!(m, PlanMsg::Done(_))));
     }
+
+    #[test]
+    fn move_tambien_recorre_arbol_y_emite_progress() {
+        // Move es transfer: pasa por el camino con recorrido y progreso (no por el O(1)).
+        let (_dir, src, dest) = arbol();
+        let req = transfer(true, vec![src], dest);
+        let token = CancellationToken::new();
+        let (rx, _h) = spawn_plan(req, token);
+        let msgs = drain(rx);
+        let done = msgs
+            .iter()
+            .find_map(|m| match m {
+                PlanMsg::Done(p) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("emite Done");
+        assert_eq!(done.total_files, 4);
+        assert!(
+            msgs.iter().any(|m| matches!(m, PlanMsg::Progress { .. })),
+            "Move recorre el árbol y emite Progress: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn destino_dentro_de_origen_emite_failed() {
+        let (_dir, src, _dest) = arbol();
+        let dest_dentro = src.join("sub"); // copiar una carpeta DENTRO de sí misma
+        let req = transfer(false, vec![src], dest_dentro);
+        let token = CancellationToken::new();
+        let (rx, _h) = spawn_plan(req, token);
+        let msgs = drain(rx);
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, PlanMsg::Failed(PlanError::DestInsideSource))),
+            "destino dentro del origen → Failed(DestInsideSource): {msgs:?}"
+        );
+        assert!(!msgs.iter().any(|m| matches!(m, PlanMsg::Done(_))));
+    }
+
+    #[test]
+    fn rename_con_nombre_invalido_emite_failed() {
+        // Op O(1) que falla: el worker emite Failed (no Done) por el camino directo.
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"x").unwrap();
+        let req = OpRequest {
+            kind: OpKind::Rename {
+                new_name: "no/vale".to_string(),
+            },
+            sources: vec![f],
+            dest_dir: None,
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let token = CancellationToken::new();
+        let (rx, _h) = spawn_plan(req, token);
+        let msgs = drain(rx);
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, PlanMsg::Failed(PlanError::InvalidName(_)))),
+            "nombre inválido → Failed(InvalidName): {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn receptor_caido_no_paniquea_y_worker_termina() {
+        // La UI puede morir/cerrarse sin drenar el canal: todos los `send` fallan, pero el
+        // worker NO debe paniquear y el JoinHandle debe terminar limpio.
+        let (_dir, src, dest) = arbol();
+        let req = transfer(false, vec![src], dest);
+        let token = CancellationToken::new();
+        let (rx, handle) = spawn_plan(req, token);
+        drop(rx); // receptor caído de inmediato
+        assert!(
+            handle.join().is_ok(),
+            "el worker debe terminar sin panic aunque el receptor esté caído"
+        );
+    }
+
+    #[test]
+    fn receptor_caido_en_camino_o1_tampoco_paniquea() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"x").unwrap();
+        let req = OpRequest {
+            kind: OpKind::Delete { to_trash: false },
+            sources: vec![f],
+            dest_dir: None,
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let token = CancellationToken::new();
+        let (rx, handle) = spawn_plan(req, token);
+        drop(rx);
+        assert!(handle.join().is_ok());
+    }
+
+    #[test]
+    fn cancelar_a_mitad_de_planificacion_termina_limpio() {
+        // Cancelación MIENTRAS el worker recorre el árbol (no antes de empezar): el worker
+        // debe terminar siempre con un mensaje terminal (Cancelled o Done si ganó la carrera)
+        // y el JoinHandle debe cerrar limpio. El assert es laxo a propósito: la carrera es
+        // inherente, lo exigible es que nunca se cuelgue ni paniquee.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("grande");
+        fs::create_dir(&src).unwrap();
+        for i in 0..500 {
+            fs::write(src.join(format!("f{i:04}.txt")), b"datos").unwrap();
+        }
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let req = transfer(false, vec![src], dest);
+        let token = CancellationToken::new();
+        let (rx, handle) = spawn_plan(req, token.clone());
+
+        // Espera el primer Progress (garantiza que el escaneo ya arrancó) y cancela ahí.
+        loop {
+            match rx.recv() {
+                Ok(PlanMsg::Progress { .. }) => {
+                    token.cancel();
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break, // el worker terminó antes de emitir Progress (no esperado)
+            }
+        }
+        let cola: Vec<PlanMsg> = rx.iter().collect();
+        assert!(
+            handle.join().is_ok(),
+            "el worker debe terminar limpio tras cancelar a mitad"
+        );
+        let ultimo = cola.last();
+        assert!(
+            matches!(ultimo, Some(PlanMsg::Cancelled) | Some(PlanMsg::Done(_))),
+            "el último mensaje es terminal (Cancelled o Done): {ultimo:?}"
+        );
+    }
 }

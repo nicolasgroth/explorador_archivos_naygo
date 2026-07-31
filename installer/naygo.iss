@@ -102,6 +102,8 @@ Name: "ctxmenu"; Description: "{cm:CtxMenuFolders}"; Flags: unchecked
 [Files]
 ; Único ejecutable (CRT estático + assets embebidos), licencia y readme.
 Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; Símbolos de depuración: el PDB permite backtraces simbolizados en el log de panic.
+Source: "..\target\release\naygo.pdb"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion

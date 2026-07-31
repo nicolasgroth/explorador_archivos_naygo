@@ -32,6 +32,19 @@ jobs:
       - name: Formato
         run: cargo fmt --all -- --check
 
+      # Paridad de i18n: cada idioma debe tener las mismas claves y placeholders
+      # que es.json (fuente de verdad). Falla el gate si hay drift.
+      - name: i18n parity (todos los idiomas contra es.json)
+        shell: bash
+        run: |
+          rc=0
+          for f in crates/core/src/i18n/*.json; do
+            code=$(basename "$f" .json)
+            [ "$code" = "es" ] && continue
+            python scripts/check_i18n_lang.py "$code" || rc=1
+          done
+          exit $rc
+
       - name: Tests
         run: cargo test --workspace
 

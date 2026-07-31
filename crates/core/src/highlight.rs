@@ -121,4 +121,65 @@ mod tests {
         let lines = highlight("esto no es rust válido <<<", CodeLang::Rust);
         assert_eq!(lines.len(), 1);
     }
+
+    #[test]
+    fn todos_los_lenguajes_resaltan_sin_panic() {
+        // Cada variante debe encontrar su gramática (o degradar a texto plano) sin caerse.
+        let langs = [
+            CodeLang::Xml,
+            CodeLang::Json,
+            CodeLang::Html,
+            CodeLang::Css,
+            CodeLang::JavaScript,
+            CodeLang::C,
+            CodeLang::Cpp,
+            CodeLang::Java,
+            CodeLang::Python,
+            CodeLang::Rust,
+            CodeLang::Sql,
+            CodeLang::Bash,
+            CodeLang::Markdown,
+            CodeLang::Yaml,
+            CodeLang::Toml,
+            CodeLang::Ini,
+        ];
+        for lang in langs {
+            let lines = highlight("línea de prueba\nsegunda línea", lang);
+            assert_eq!(lines.len(), 2, "{lang:?} debe devolver 2 líneas");
+        }
+    }
+
+    #[test]
+    fn rust_colorea_con_mas_de_un_color() {
+        // "fn" es keyword: con el tema embebido debe haber al menos dos colores distintos.
+        let lines = highlight("fn main() { let x = 1; }", CodeLang::Rust);
+        let colores: std::collections::HashSet<(u8, u8, u8)> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.color))
+            .collect();
+        assert!(
+            colores.len() >= 2,
+            "el resaltado de Rust debe usar más de un color: {colores:?}"
+        );
+    }
+
+    #[test]
+    fn unicode_y_emoji_no_panican_ni_se_pierden() {
+        let src = "fn 🚀() -> &'static str { \"canción\" }";
+        let lines = highlight(src, CodeLang::Rust);
+        assert_eq!(lines.len(), 1);
+        let rejoined: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(rejoined, src, "el texto unicode se conserva íntegro");
+    }
+
+    #[test]
+    fn ultima_linea_sin_salto_cuenta_igual() {
+        // "a\nb" (sin \n final) son 2 líneas; "a\nb\n" también (LinesWithEndings no agrega
+        // una línea vacía extra por el salto terminal).
+        assert_eq!(highlight("a\nb", CodeLang::Json).len(), 2);
+        assert_eq!(highlight("a\nb\n", CodeLang::Json).len(), 2);
+        // Líneas vacías intermedias se conservan como líneas (posiblemente sin spans).
+        let lines = highlight("a\n\nb", CodeLang::Json);
+        assert_eq!(lines.len(), 3);
+    }
 }

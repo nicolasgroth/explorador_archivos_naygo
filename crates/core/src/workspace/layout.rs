@@ -81,13 +81,23 @@ enum DockNodeWire {
 /// Colapsa un split recién deserializado a su forma canónica: 1 hijo → ese hijo; ≥2 → Split.
 /// Solo se llama con `children` no vacío (el caso de 0 hijos se resuelve antes, en
 /// `dock_from_wire`, porque un split sin contenido no puede representarse como `DockNode`).
-fn make_split(dir: SplitDir, mut children: Vec<DockNode>, mut weights: Vec<f32>) -> DockNode {
+fn make_split(dir: SplitDir, children: Vec<DockNode>, mut weights: Vec<f32>) -> DockNode {
     // Defensa: pesos de largo distinto (p. ej. `workspace.json` editado a mano) → uniformes.
     if weights.len() != children.len() {
         weights = vec![1.0; children.len()];
     }
     if children.len() == 1 {
-        return children.pop().unwrap();
+        // len == 1 ⇒ `next()` siempre es Some; el let-else deja la invariante al
+        // compilador en vez de un unwrap. La rama vacía es inalcanzable (defensiva).
+        let Some(only) = children.into_iter().next() else {
+            debug_assert!(false, "children.len() == 1 pero no hay elemento");
+            return DockNode::Split {
+                dir,
+                children: Vec::new(),
+                weights: Vec::new(),
+            };
+        };
+        return only;
     }
     DockNode::Split {
         dir,
@@ -779,7 +789,15 @@ fn remove_in(node: DockNode, id: PaneId) -> Option<DockNode> {
             }
             match kept.len() {
                 0 => None,
-                1 => Some(kept.into_iter().next().unwrap()),
+                1 => {
+                    // len == 1 ⇒ `next()` siempre es Some (let-else, sin unwrap);
+                    // la rama None es inalcanzable y defensiva.
+                    let Some(only) = kept.into_iter().next() else {
+                        debug_assert!(false, "kept.len() == 1 pero no hay elemento");
+                        return None;
+                    };
+                    Some(only)
+                }
                 _ => Some(DockNode::Split {
                     dir,
                     children: kept,

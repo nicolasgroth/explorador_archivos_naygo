@@ -235,9 +235,10 @@ impl Theme {
     }
 }
 
-/// Los ids de los 5 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
+/// Los ids de los 6 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
 pub const BUILTIN_THEME_IDS: &[&str] = &[
     "dark-blue",
+    "commander",
     "winxp",
     "green-on-blue",
     "high-contrast",
@@ -278,6 +279,7 @@ pub struct ThemeCatalog {
 }
 
 const DARK_BLUE_JSON: &str = include_str!("builtin/dark-blue.json");
+const COMMANDER_JSON: &str = include_str!("builtin/commander.json");
 const HIGH_CONTRAST_JSON: &str = include_str!("builtin/high-contrast.json");
 const NEON_RETRO_JSON: &str = include_str!("builtin/neon-retro.json");
 const WINXP_JSON: &str = include_str!("builtin/winxp.json");
@@ -295,6 +297,7 @@ impl ThemeCatalog {
         let mut themes: HashMap<String, Theme> = HashMap::new();
         for (id, json) in [
             ("dark-blue", DARK_BLUE_JSON),
+            ("commander", COMMANDER_JSON),
             ("winxp", WINXP_JSON),
             ("green-on-blue", GREEN_ON_BLUE_JSON),
             ("high-contrast", HIGH_CONTRAST_JSON),
@@ -329,13 +332,23 @@ impl ThemeCatalog {
         &self.available
     }
 
-    /// Tema por id; si no existe, el default (dark-blue). Nunca panic.
+    /// Tema por id; si no existe, el default (dark-blue); si ni el default está en
+    /// el catálogo (build con JSON embebido inválido), un fallback hardcoded.
+    /// NUNCA panic.
     pub fn get(&self, id: &ThemeId) -> &Theme {
         self.themes
             .get(id.as_str())
             .or_else(|| self.themes.get(Self::default_id().as_str()))
-            .expect("el tema default embebido siempre existe")
+            .unwrap_or_else(|| fallback_theme())
     }
+}
+
+/// Tema de último recurso para `ThemeCatalog::get`: paleta oscura hardcoded (la misma
+/// base de los defaults dark), para que el "nunca panic" sea verdadero aunque el
+/// catálogo quede vacío. Se construye una sola vez.
+fn fallback_theme() -> &'static Theme {
+    static FALLBACK: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+    FALLBACK.get_or_init(|| Theme::defaults_for(ThemeBase::Dark, "fallback".to_string()))
 }
 
 #[cfg(test)]
@@ -516,6 +529,7 @@ mod tests {
         let ids: Vec<&str> = cat.available().iter().map(|i| i.as_str()).collect();
         for id in [
             "dark-blue",
+            "commander",
             "winxp",
             "green-on-blue",
             "high-contrast",
@@ -523,7 +537,7 @@ mod tests {
         ] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
         }
-        assert_eq!(ids.len(), 5, "el catálogo de fábrica debe tener 5 temas");
+        assert_eq!(ids.len(), 6, "el catálogo de fábrica debe tener 6 temas");
     }
 
     #[test]
@@ -539,6 +553,20 @@ mod tests {
         );
         let t = cat.get(&ThemeId::new("no-existe"));
         assert_eq!(t.name, "Dark Blue");
+    }
+
+    #[test]
+    fn catalog_vacio_nunca_paniquea_y_cae_al_fallback() {
+        // Catálogo totalmente vacío (ni siquiera el default embebido, p. ej. un build
+        // con JSON corrupto): get debe devolver el fallback hardcoded SIN panic.
+        let cat = ThemeCatalog {
+            themes: HashMap::new(),
+            available: Vec::new(),
+        };
+        let t = cat.get(&ThemeId::new("cualquiera"));
+        assert_eq!(t.base, ThemeBase::Dark);
+        // También pidiendo explícitamente el id default ausente.
+        let _ = cat.get(&ThemeCatalog::default_id());
     }
 
     #[test]

@@ -479,10 +479,22 @@ export component AppWindow inherits Window {
     in-out property <int> rename-pane: -1;
     in-out property <int> rename-pos: -1;
     in property <string> rename-text;          // texto inicial del editor (lo fija Rust)
-    callback rename-commit(int, int, string);  // (pane, pos, nombre) Enter → renombrar y cerrar
-    callback rename-chain(int, int, string, int); // (pane, pos, nombre, dir) ↑/↓ → encadenar
+    // Texto VIVO del editor de rename (bidireccional con el panel): Rust lo siembra con el
+    // nombre original al abrir; el editor lo edita. Si el delegate se re-monta, el editor
+    // vuelve con lo tipeado, no con el nombre original (bug del "_" que borraba todo).
+    in-out property <string> rename-draft: "";
+    // Cursor a restaurar tras un re-montaje del editor (lo fija Rust con el largo del draft).
+    in property <int> rename-cursor: 0;
+    callback rename-edited(string);           // texto vivo del editor (para el largo del cursor)
+    in property <int> rename-session: 0;
+    in property <int> rename-selection-start: 0;
+    in property <int> rename-selection-end: 0;
+    callback rename-commit(int, int, int, string); // (pane, sesión, pos, nombre)
+    callback rename-chain(int, int, int, string, int); // (pane, sesión, pos, nombre, dir)
+    callback rename-cycle();                    // F2 dentro del editor: ciclar la selección
     callback rename-cancel();                   // Esc → cerrar sin renombrar
     callback path-segment-clicked(int, string);
+    callback filter-clear(int);             // (pane-id) limpiar el filtro visual (✕ de la mini-barra)
     callback path-edit-start(int);
     callback path-edit-changed(int, string);
     callback path-edit-commit(int, string);
@@ -808,7 +820,7 @@ export component AppWindow inherits Window {
     // dibuja justo debajo de ahí, de modo que el tooltip salga JUNTO al ícono y no en una Y fija.
     property <length> hovered-tip-y: 0;
     // Toast transitorio (aviso breve, p. ej. "Ruta copiada"). `show-toast(texto)` lo muestra y un
-    // Timer lo apaga a los ~1.5s. Reusable para otras confirmaciones.
+    // Timer lo apaga a los ~6 s (tiempo de leerlo con calma; antes 1.5 s y pasaba volando).
     property <string> toast-text: "";
     public function show-toast(msg: string) {
         root.toast-text = msg;
@@ -816,7 +828,7 @@ export component AppWindow inherits Window {
         toast-timer.running = true;
     }
     toast-timer := Timer {
-        interval: 1500ms;
+        interval: 6000ms;
         running: false;
         triggered => { root.toast-text = ""; self.running = false; }
     }
@@ -1234,6 +1246,9 @@ export component AppWindow inherits Window {
                         rows: p.rows;
                         columns: p.columns;
                         col-menu: p.col-menu;
+                        // Fila enfocada: Rust la actualiza en sync (teclado/typeahead/paleta);
+                        // el panel observa su cambio para arrastrar el scroll y revelarla (C1).
+                        focused-row: p.focused-row;
                         row-h: root.settings-vm.row-h;
                         // Clave de navegación: resetea el scroll a arriba SOLO al cambiar de
                         // carpeta (Rust actualiza `p.path` únicamente cuando la ruta difiere).
@@ -1250,6 +1265,8 @@ export component AppWindow inherits Window {
                         missing-ejected: p.missing-ejected;
                         deep-active: p.deep-active;
                         footer-text: p.footer-text;
+                        filter-label: p.filter-label;
+                        filter-clear(id) => { root.filter-clear(id); }
                         toggle-deep(id) => { root.toggle-deep(id); }
                         missing-retry(id) => { root.missing-retry(id); }
                         missing-ancestor(id) => { root.missing-ancestor(id); }
@@ -1260,8 +1277,19 @@ export component AppWindow inherits Window {
                         hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
                         rename-text: root.rename-pane == p.id ? root.rename-text : "";
-                        rename-commit(pos, name) => { root.rename-commit(p.id, pos, name); }
-                        rename-chain(pos, name, dir) => { root.rename-chain(p.id, pos, name, dir); }
+                        rename-draft <=> root.rename-draft;
+                        rename-cursor: root.rename-cursor;
+                        rename-edited(t) => { root.rename-edited(t); }
+                        rename-session: root.rename-session;
+                        rename-selection-start: root.rename-selection-start;
+                        rename-selection-end: root.rename-selection-end;
+                        rename-commit(session, pos, name) => {
+                            root.rename-commit(p.id, session, pos, name);
+                        }
+                        rename-chain(session, pos, name, dir) => {
+                            root.rename-chain(p.id, session, pos, name, dir);
+                        }
+                        rename-cycle() => { root.rename-cycle(); }
                         rename-cancel() => { root.rename-cancel(); }
                         segment-clicked(id, path) => { root.path-segment-clicked(id, path); }
                         path-edit-start(id) => { root.path-edit-start(id); }
@@ -1501,11 +1529,11 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Toast transitorio (aviso breve, p. ej. "Ruta copiada"): centrado abajo, sobre la barra de
-    // estado. Aparece al copiar y se apaga solo (toast-timer).
+    // Toast transitorio (aviso breve, p. ej. "Ruta copiada"): centrado en la ventana, sobre
+    // todo lo demás. Aparece al copiar/pegar/expulsar y se apaga solo (toast-timer, ~6 s).
     if root.toast-text != "": Rectangle {
         x: (root.width - self.width) / 2;
-        y: root.height - 56px;
+        y: (root.height - self.height) / 2;
         width: toast-label.preferred-width + 24px;
         height: 28px;
         background: Theme.accent;
@@ -1970,10 +1998,21 @@ export component AppWindow inherits Window {
                 padding: 16px;
                 spacing: 10px;
                 Text { text: Tr.layout-save-title; color: Theme.text; font-weight: 700; }
+                // Foco diferido con Timer de 0 ms: `focus()` en `init` paniquea con
+                // "Recursion detected" si el montaje ocurre dentro de la evaluación de
+                // layout (mismo bug que el crash de F2 del editor de rename). Un Timer
+                // no es ítem visual: no afecta el layout.
+                Timer {
+                    interval: 0ms;
+                    running: true;
+                    triggered => {
+                        self.running = false;
+                        name-edit.focus();
+                    }
+                }
                 name-edit := LineEdit {
                     placeholder-text: Tr.layout-save-placeholder;
                     text: root.layout-save-name;
-                    init => { self.focus(); }
                     edited(t) => { root.layout-save-name = t; }
                     accepted(t) => {
                         root.save-layout(t);

@@ -96,24 +96,26 @@ impl NavHistory {
 
     /// Mueve el cursor un paso atrás y devuelve la ruta nueva, o `None` si no se puede.
     pub fn back(&mut self) -> Option<&Path> {
-        if self.can_back() {
-            let i = self.cursor.unwrap() - 1;
-            self.cursor = Some(i);
-            Some(self.stack[i].as_path())
-        } else {
-            None
+        // `?` fija que hay cursor (sin unwrap); `can_back` garantiza que es > 0.
+        let cursor = self.cursor?;
+        if !self.can_back() {
+            return None;
         }
+        let i = cursor - 1;
+        self.cursor = Some(i);
+        Some(self.stack[i].as_path())
     }
 
     /// Mueve el cursor un paso adelante y devuelve la ruta nueva, o `None`.
     pub fn forward(&mut self) -> Option<&Path> {
-        if self.can_forward() {
-            let i = self.cursor.unwrap() + 1;
-            self.cursor = Some(i);
-            Some(self.stack[i].as_path())
-        } else {
-            None
+        // `?` fija que hay cursor (sin unwrap); `can_forward` garantiza que hay siguiente.
+        let cursor = self.cursor?;
+        if !self.can_forward() {
+            return None;
         }
+        let i = cursor + 1;
+        self.cursor = Some(i);
+        Some(self.stack[i].as_path())
     }
 }
 

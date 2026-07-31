@@ -12,6 +12,15 @@ export struct RowData {
     cut: bool,
     // Apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     highlight: bool,
+    // Matchea el filtro visual por tipeo ("contiene", sin caso/tildes): se pinta
+    // con un tinte de acento mientras el filtro esté activo (persiste hasta Esc
+    // o navegar). Sin filtro activo siempre es false.
+    filter-match: bool,
+    // Tramos del nombre alrededor del match (vacíos si no hay): la celda Name pinta
+    // match-pre + match-mid (resaltado) + match-post cuando filter-match es true.
+    match-pre: string,
+    match-mid: string,
+    match-post: string,
     // Ícono de color por tipo, ya decodificado y cacheado en Rust (6A).
     icon: image,
     // Profundidad en la vista profunda (recursiva): 0 = nivel raíz, >0 sangra la fila.
@@ -465,6 +474,7 @@ export struct SettingsVm {
     icon-only: bool,
     show-parent: bool,
     ops-mode: int,            // 0=cola 1=paralelo
+    window-title-mode: int,   // 0=solo app 1=app+ruta del panel 2=solo ruta
     confirm-trash: bool,
     confirm-drop-between-panes: bool,
     show-op-summary: bool,
@@ -578,6 +588,9 @@ export struct PaneVm {
     missing-ejected: bool,
     deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
     footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
+    // Files: etiqueta del filtro visual por tipeo activo en este panel (p. ej. `filtro: "beta"
+    // · 2 coincidencias`), ya traducida. Vacío = sin filtro → la mini-barra no se muestra.
+    filter-label: string,
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos — sin usar; reemplazado por fav-tree)

@@ -36,6 +36,19 @@ export component CommandPalette inherits Rectangle {
         // Tragar los clics dentro de la tarjeta (no propagar al velo).
         TouchArea {}
 
+        // El foco del campo de búsqueda se difiere con un Timer de 0 ms: en `init` el
+        // componente se monta dentro de la evaluación de propiedades/layout y `focus()`
+        // paniquea con "Recursion detected" (mismo bug que el crash de F2 del editor de
+        // rename). Un Timer no es ítem visual: no afecta el layout.
+        Timer {
+            interval: 0ms;
+            running: true;
+            triggered => {
+                self.running = false;
+                search.focus();
+            }
+        }
+
         VerticalLayout {
             padding: 0px;
 
@@ -44,7 +57,6 @@ export component CommandPalette inherits Rectangle {
             search := LineEdit {
                 placeholder-text: Tr.palette-placeholder;
                 text <=> root.query;
-                init => { self.focus(); }
                 edited => { root.query-changed(self.text); }
                 accepted => { root.run(root.selected); }
                 key-pressed(ev) => {

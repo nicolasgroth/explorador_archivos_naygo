@@ -64,6 +64,19 @@ pub enum OpsMode {
     Parallel,
 }
 
+/// Qué muestra el título de la ventana principal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowTitleMode {
+    /// Solo "Naygo" (default histórico).
+    #[default]
+    AppOnly,
+    /// "Naygo — <ruta del panel activo>".
+    AppAndPath,
+    /// Solo la ruta del panel activo (el nombre de la app se esconde).
+    PathOnly,
+}
+
 /// Cómo se muestra el progreso de operaciones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpsDisplay {
@@ -184,6 +197,10 @@ pub struct Settings {
     /// Modo de ejecución de operaciones múltiples. `#[serde(default)]` por retro-compat.
     #[serde(default = "default_ops_mode")]
     pub ops_mode: OpsMode,
+    /// Qué muestra el título de la ventana (solo app / app + ruta del panel / solo ruta).
+    /// `#[serde(default)]` por retro-compat (configs viejas sin la clave → solo app).
+    #[serde(default)]
+    pub window_title_mode: WindowTitleMode,
     /// Cómo se muestra el progreso de operaciones. `#[serde(default)]` por retro-compat.
     #[serde(default = "default_ops_display")]
     pub ops_display: OpsDisplay,
@@ -546,6 +563,7 @@ impl Default for Settings {
             language: default_language(),
             theme: default_theme(),
             ops_mode: OpsMode::Queue,
+            window_title_mode: WindowTitleMode::AppOnly,
             ops_display: OpsDisplay::Panel,
             confirm_trash: false,
             show_op_summary: true,
@@ -635,11 +653,12 @@ fn read_json_recovering<T: for<'de> Deserialize<'de>>(path: &Path) -> (Option<T>
     }
 }
 
-/// Escribe un valor como JSON (pretty). Loguea y traga el error (nunca crashea).
+/// Escribe un valor como JSON (pretty) de forma ATÓMICA (tmp + rename: un crash a
+/// media escritura no corrompe el archivo real). Loguea y traga el error (nunca crashea).
 fn write_json<T: Serialize>(path: &Path, value: &T) {
     match serde_json::to_string_pretty(value) {
         Ok(text) => {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = crate::fs_util::write_atomic(path, &text) {
                 tracing::warn!("no se pudo guardar {}: {e}", path.display());
             }
         }
@@ -832,6 +851,7 @@ mod tests {
             language: default_language(),
             theme: default_theme(),
             ops_mode: OpsMode::Parallel,
+            window_title_mode: WindowTitleMode::AppAndPath,
             ops_display: OpsDisplay::Modal,
             confirm_trash: true,
             show_op_summary: false,
@@ -943,9 +963,29 @@ mod tests {
             ..Settings::default()
         };
         save_settings(dir.path(), &s);
+        assert_eq!(load_settings(dir.path()).language, s.language);
+    }
+
+    #[test]
+    fn save_settings_es_atomico_y_no_deja_tmp() {
+        // write_json escribe con tmp + rename: el settings.json queda íntegro y NO
+        // queda .tmp huérfano (un crash a media escritura no puede truncarlo).
+        let dir = tempfile::tempdir().unwrap();
+        let s = Settings {
+            language: crate::i18n::LangId::new("es"),
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &s);
+        let path = dir.path().join("settings.json");
+        assert!(path.exists());
         assert_eq!(
             load_settings(dir.path()).language,
-            crate::i18n::LangId::new("es")
+            crate::i18n::LangId::new("es"),
+            "el contenido escrito es correcto"
+        );
+        assert!(
+            !dir.path().join("settings.json.tmp").exists(),
+            "la escritura atómica no debe dejar .tmp"
         );
     }
 

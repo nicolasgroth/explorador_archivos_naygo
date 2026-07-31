@@ -29,8 +29,8 @@ pub struct WatchHandle {
 /// Waker para despertar la UI tras enviar eventos: la UI normalmente está DORMIDA (no
 /// repinta en reposo, clave para el bajo consumo en VMs sin GPU). El watcher corre en su
 /// propio hilo, así que necesita un `Fn() + Send + Sync` (típicamente
-/// `egui::Context::request_repaint`) para sacar a la UI del sueño cuando hay un evento
-/// real. `platform` no depende de egui: recibe el waker como trait object.
+/// `slint::invoke_from_event_loop`) para sacar a la UI del sueño cuando hay un evento
+/// real. `platform` no depende de Slint: recibe el waker como trait object.
 pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 pub fn watch(dir: &Path, tx: Sender<Vec<DirEvent>>, waker: Waker) -> WatchHandle {

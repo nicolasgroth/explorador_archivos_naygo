@@ -343,6 +343,7 @@ export component ConfigWindow inherits Window {
 
     // Settings (toggles/combos/text):
     callback set-ops-mode(int);
+    callback set-window-title-mode(int);
     callback set-confirm-trash(bool);
     callback set-confirm-drop-between-panes(bool);
     callback set-show-op-summary(bool);
@@ -577,6 +578,16 @@ export component ConfigWindow inherits Window {
                                         model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
                                         current-index: root.vm.bar-position;
                                         selected => { root.set-bar-position(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-window-title;
+                                    tip: Tr.cfg-tip-window-title;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-title-app, Tr.cfg-title-app-path, Tr.cfg-title-path];
+                                        current-index: root.vm.window-title-mode;
+                                        selected => { root.set-window-title-mode(self.current-index); }
                                     }
                                 }
                                 Field {

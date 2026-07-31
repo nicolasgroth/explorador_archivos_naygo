@@ -291,8 +291,28 @@ export component FilePanel inherits FocusScope {
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
     in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
     in property <string> rename-text;        // nombre inicial del editor
-    callback rename-commit(int, string);     // (pos, nombre) Enter → renombrar
-    callback rename-chain(int, string, int); // (pos, nombre, dir) ↑/↓ → encadenar
+    in property <int> rename-session: 0;      // identidad estable; invalida callbacks tardíos
+    in property <int> rename-selection-start: 0; // offsets UTF-8 para el ciclo de selección F2
+    in property <int> rename-selection-end: 0;
+    // Texto VIVO del editor de rename (bidireccional con la ventana). El editor edita ESTA
+    // propiedad, no `rename-text`: si el delegate de la fila se re-monta (rebuild de filas
+    // por watcher/listado), el editor vuelve con lo que el usuario ya tipeó y NO con el
+    // nombre original seleccionado (bug: tipear "_" al final reemplazaba todo el texto).
+    in-out property <string> rename-draft: "";
+    // Posición del cursor a restaurar tras un RE-MONTAJE del delegate (offset UTF-8). La
+    // fija Rust al recibir `rename-edited` (= fin del texto tipeado: LineEdit no expone
+    // cursor-position en Slint 1.16, y al tipear el cursor va al final). Sin esto el cursor
+    // saltaba al inicio y la siguiente tecla insertaba ahí (el "_" "al principio del nombre").
+    in property <int> rename-cursor: 0;
+    callback rename-edited(string);           // texto vivo del editor → Rust guarda el largo
+    // true una vez aplicada la selección inicial del ciclo F2 en ESTA sesión: un re-montaje
+    // posterior solo retoma el foco, NO re-selecciona (re-seleccionar haría que la siguiente
+    // tecla reemplace todo el draft).
+    property <bool> rename-seeded: false;
+    callback rename-commit(int, int, string);     // (sesión, pos, nombre) Enter → renombrar
+    callback rename-chain(int, int, string, int); // (sesión, pos, nombre, dir) ↑/↓
+    callback rename-cycle();                   // F2 dentro del editor: ciclar la selección
+                                               // (nombre → extensión → todo → nombre)
     callback rename-cancel();                // Esc → cerrar
     callback segment-clicked(int, string);   // (pane-id, ruta) clic en un breadcrumb → navegar
     callback path-edit-start(int);           // (pane-id) entrar a modo edición
@@ -331,11 +351,24 @@ export component FilePanel inherits FocusScope {
     callback toggle-deep(int);               // (pane-id)
     // Barra inferior (footer): texto de selección/espacio de disco. Vacío = barra oculta.
     in property <string> footer-text;
+    // Etiqueta del filtro visual por tipeo activo en ESTE panel (`filtro: "x" · N`, ya
+    // traducida). Vacío = sin filtro → la mini-barra no se muestra.
+    in property <string> filter-label;
+    callback filter-clear(int);              // (pane-id) clic en la ✕ de la mini-barra de filtro
 
     key-pressed(event) => {
         root.activate(root.pane-id);
-        root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
-        accept
+        // Mientras un editor de texto tiene el foco (rename inline o edición de ruta), las
+        // teclas son de ESE editor: hay que RECHAZAR el evento para que el LineEdit aplique
+        // su manejo por defecto (mover el caret con flechas/Home/End, borrar con
+        // Backspace/Delete). Un `accept` aquí se COMÍA esas teclas (bug: no se podía editar
+        // a mitad del nombre; el caret quedaba pegado). Rechazar NO reenvía nada a Rust,
+        // así que el typeahead/atajos tampoco se gatillan con el editor abierto.
+        if (root.rename-pos == -1 && !root.editing) {
+            root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
+            return accept;
+        }
+        reject
     }
 
     // Al soltar una tecla, reportamos el estado vigente de los modificadores. Cuando se suelta
@@ -349,8 +382,28 @@ export component FilePanel inherits FocusScope {
     // C2: al entrar a rename el `body-touch` se desmonta y `hover-row` se queda congelado en la
     // última fila bajo el cursor → quedaría una fila con el fondo de hover pegado. Lo limpiamos al
     // empezar a editar (y también al salir, por simetría: el puntero pudo moverse con el editor
-    // tapando el cuerpo).
-    changed rename-pos => { root.hover-row = -1; }
+    // tapando el cuerpo). Además, al CERRAR el editor (pos vuelve a -1) hay que devolver el foco
+    // de teclado al panel: el LineEdit destruido se lo llevaba y el panel quedaba muerto al
+    // teclado (F2/flechas) hasta el próximo clic. Se difiere con un Timer de 0 ms por la misma
+    // razón que el foco del propio editor (llamar `focus()` durante la actualización de
+    // propiedades/layout paniquea con "Recursion detected").
+    changed rename-pos => {
+        root.hover-row = -1;
+        // Sesión NUEVA (o cierre): la selección inicial del ciclo F2 vuelve a estar pendiente.
+        // (rename-cursor NO se resetea aquí: es `in` desde la ventana y Rust lo siembra al abrir.)
+        root.rename-seeded = false;
+        if (root.rename-pos == -1) {
+            refocus-after-rename.running = true;
+        }
+    }
+    refocus-after-rename := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.focus();
+        }
+    }
 
     // Mismo motivo que arriba para el arrastre OLE: mientras dura el drag el `body-touch` está
     // desmontado y `hover-row` se quedaría congelado en la fila que estaba bajo el cursor al empezar
@@ -517,14 +570,26 @@ export component FilePanel inherits FocusScope {
                 // de un LineEdit suelto sin layout.
                 if root.editing: HorizontalLayout {
                     padding-left: 4px;
+                    // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca
+                    // el LineEdit y el "perder foco" nunca tendría foco que perder). Además
+                    // selecciona todo el texto para que escribir reemplace la ruta completa.
+                    // Se difiere con un Timer de 0 ms: en `init` el editor aún se está montando
+                    // dentro de la evaluación de layout y `focus()` paniquea con "Recursion
+                    // detected" (mismo bug que el crash de F2 del editor de rename). Un Timer
+                    // no es ítem visual: no afecta el layout.
+                    Timer {
+                        interval: 0ms;
+                        running: true;
+                        triggered => {
+                            self.running = false;
+                            path-edit.focus();
+                            path-edit.select-all();
+                        }
+                    }
                     path-edit := LineEdit {
                         horizontal-stretch: 1;
                         text: root.edit-text;
                         placeholder-text: "C:\\…";
-                        // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca
-                        // el LineEdit y el "perder foco" nunca tendría foco que perder). Además
-                        // selecciona todo el texto para que escribir reemplace la ruta completa.
-                        init => { self.focus(); self.select-all(); }
                         edited(t) => { root.path-edit-changed(root.pane-id, t); }
                         accepted(t) => { root.path-edit-commit(root.pane-id, t); }
                         // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
@@ -644,19 +709,23 @@ export component FilePanel inherits FocusScope {
                     property <brush> inactive-zebra: Theme.flat-inactive-panels
                         ? Theme.row-inactive-bg
                         : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : Theme.row-inactive-bg);
-                    // Fondo: selección > resaltado (recién aparecido) > hover > cebra de base. La
-                    // selección, el resaltado y el hover MANDAN por encima de activo/inactivo. La cebra
-                    // de base depende de si el panel está activo: activo = cebra clásica (par transparente
-                    // sobre el panel); inactivo = `inactive-zebra` (atenuable o plana).
+                    // Fondo: selección > filtro por tipeo > resaltado (recién aparecido) > hover
+                    // > cebra de base. La selección, el filtro, el resaltado y el hover MANDAN por
+                    // encima de activo/inactivo. La cebra de base depende de si el panel está
+                    // activo: activo = cebra clásica (par transparente sobre el panel); inactivo =
+                    // `inactive-zebra` (atenuable o plana). El tinte del filtro es discreto (alfa
+                    // bajo) para no pelear con la selección ni con el texto.
                     background: row.selected
                         ? Theme.selection-bg
-                        : (row.highlight
-                            ? Theme.highlight.with-alpha(0.22)
-                            : (i == root.hover-row
-                                ? Theme.row-alt-bg
-                                : (root.active
-                                    ? (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)
-                                    : self.inactive-zebra)));
+                        : (row.filter-match
+                            ? Theme.accent.with-alpha(0.18)
+                            : (row.highlight
+                                ? Theme.highlight.with-alpha(0.22)
+                                : (i == root.hover-row
+                                    ? Theme.row-alt-bg
+                                    : (root.active
+                                        ? (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)
+                                        : self.inactive-zebra))));
                     border-width: row.focused ? 1px : 0px;
                     border-color: Theme.accent;
                     border-radius: 3px;
@@ -681,39 +750,133 @@ export component FilePanel inherits FocusScope {
                             }
                             // Editor inline de rename (6D): en la celda Name de la fila en edición.
                             // Enter confirma; ↑/↓ encadenan al anterior/siguiente; Esc cancela.
-                            if col.kind == 0 && root.rename-pos == i: rename-edit := LineEdit {
-                                text: root.rename-text;
+                            // El Rectangle solo existe para alojar el Timer de foco (un LineEdit
+                            // no admite hijos); ocupa exactamente el mismo espacio de layout.
+                            if col.kind == 0 && root.rename-pos == i: Rectangle {
                                 horizontal-stretch: 1;
+                                // El foco NO se puede tomar en `init`: este editor se monta DENTRO
+                                // de la evaluación de layout (el `if` se crea al resolver el
+                                // layout de la celda) y `focus()` consulta la geometría del ítem
+                                // (posición del IME) → re-evalúa el mismo layout → Slint paniquea
+                                // con "Recursion detected" (crash histórico de F2). El Timer de
+                                // 0 ms difiere el foco a la siguiente vuelta del event loop, ya
+                                // fuera de toda evaluación de propiedades.
+                                Timer {
+                                    interval: 0ms;
+                                    running: true;
+                                    triggered => {
+                                        self.running = false;
+                                        // La sesión se CAPTURA por valor al montar el editor. Si se
+                                        // leyera `root.rename-session` en vivo al disparar el
+                                        // callback, un commit tardío (pérdida de foco al destruirse
+                                        // este editor) llevaría la sesión del editor SIGUIENTE: el
+                                        // guard del controlador la aceptaría, consumiría esa sesión
+                                        // y cerraría el editor recién abierto por el chain (o peor:
+                                        // renombraría el archivo equivocado).
+                                        rename-edit.session = root.rename-session;
+                                        // El text se fija SOLO aquí, al montar: nombre original
+                                        // (primera vez) o draft recuperado (re-montaje). Nunca por
+                                        // binding (eso reseteaba el cursor en cada tecla).
+                                        rename-edit.text = root.rename-draft;
+                                        rename-edit.focus();
+                                        // La selección inicial (ciclo F2: nombre → ext → todo) SOLO
+                                        // se aplica en el PRIMER montaje de la sesión. Si el delegate
+                                        // se re-monta (rebuild de filas), el draft ya trae lo tipeado
+                                        // y re-seleccionar haría que la próxima tecla lo borre todo:
+                                        // se restaura solo la POSICIÓN DEL CURSOR guardada.
+                                        if (!root.rename-seeded) {
+                                            root.rename-seeded = true;
+                                            rename-edit.set-selection-offsets(
+                                                root.rename-selection-start,
+                                                root.rename-selection-end);
+                                        } else {
+                                            rename-edit.set-selection-offsets(
+                                                root.rename-cursor,
+                                                root.rename-cursor);
+                                        }
+                                    }
+                                }
+                                rename-edit := LineEdit {
+                                width: 100%;
+                                height: 100%;
+                                // `text` NO es un binding: se fija UNA vez al montar (Timer,
+                                // desde rename-draft). Un binding `text: rename-draft` reescribe
+                                // el text en CADA tecla (edited → draft → binding) y Slint
+                                // resetea el cursor al FINAL en cada escritura: por eso el "_"
+                                // "se iba al final del nombre" y no se podía insertar a mitad.
                                 font-size: 13px;
-                                init => { self.focus(); self.select-all(); }
-                                accepted => { root.rename-commit(i, self.text); }
-                                // I5: perder el foco (clic fuera del editor) CONFIRMA el rename con
-                                // el texto actual, igual que el editor de la path-bar. `rename-commit`
-                                // es idempotente (nombre igual/ inválido = no-op), así que esto es
-                                // seguro incluso cuando el cierre lo provoca Esc (cancel) o ↑/↓
-                                // (chain, que ya commiteó): no dispara renames duplicados ni ops vacías.
+                                // El draft se actualiza por tecla, SIN binding de vuelta al text:
+                                // solo sirve para recuperar el contenido si el delegate se re-monta.
+                                edited(t) => {
+                                    root.rename-draft = t;
+                                    root.rename-edited(t);
+                                }
+                                // Sesión de ESTE editor, capturada por el Timer al montarlo.
+                                // -1 = aún no inicializada: ningún callback puede pasar el guard.
+                                property <int> session: -1;
+                                accepted => {
+                                    root.rename-commit(self.session, i, self.text);
+                                }
+                                // Perder el foco confirma. La sesión viaja con el callback para que
+                                // Enter/Esc/chain puedan destruir este editor sin confirmar dos veces.
                                 changed has-focus => {
                                     if (!self.has-focus) {
-                                        root.rename-commit(i, self.text);
+                                        root.rename-commit(self.session, i, self.text);
                                     }
                                 }
                                 key-pressed(ev) => {
+                                    // F2 DENTRO del editor: cicla la selección (nombre →
+                                    // extensión → todo → nombre). El gate del panel no deja
+                                    // llegar F2 a Rust con el rename abierto, así que lo
+                                    // maneja el propio editor.
+                                    if (ev.text == Key.F2) {
+                                        root.rename-cycle();
+                                        return accept;
+                                    }
                                     if (ev.text == Key.Escape) {
                                         root.rename-cancel();
                                         return accept;
                                     }
                                     if (ev.text == Key.UpArrow) {
-                                        root.rename-chain(i, self.text, -1);
+                                        root.rename-chain(self.session, i, self.text, -1);
                                         return accept;
                                     }
                                     if (ev.text == Key.DownArrow) {
-                                        root.rename-chain(i, self.text, 1);
+                                        root.rename-chain(self.session, i, self.text, 1);
                                         return accept;
                                     }
                                     reject
                                 }
+                                }
                             }
-                            if !(col.kind == 0 && root.rename-pos == i): Text {
+                            // Celda Name CON match del filtro: el tramo que coincide se pinta
+                            // en acento + negrita (pre/match/post), el resto con su color normal.
+                            // spacing/padding en 0: sin huecos entre tramos (parecía un espacio
+                            // tipeado y confundía visualmente).
+                            if col.kind == 0 && row.filter-match && root.rename-pos != i: HorizontalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 0;
+                                padding: 0;
+                                Text {
+                                    text: row.match-pre;
+                                    color: row.is-dir ? Theme.highlight : Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: row.match-mid;
+                                    color: Theme.accent;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.match-post;
+                                    color: row.is-dir ? Theme.highlight : Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            if !(col.kind == 0 && root.rename-pos == i) && !(col.kind == 0 && row.filter-match): Text {
                                 text: row.cells[ci];
                                 color: col.kind == 0
                                     ? (row.is-dir ? Theme.highlight : Theme.text)
@@ -877,6 +1040,82 @@ export component FilePanel inherits FocusScope {
                             0px,
                             max(0px, root.rows.length * root.row-h - list.visible-height));
                         return accept;
+                    }
+                }
+                // Barra de scroll del cuerpo: pista + manija arrastrable, visible solo cuando el
+                // contenido excede lo visible. Da idea del tamaño de la carpeta y de la posición
+                // en ella. Va como ÚLTIMO hijo (por encima del body-touch, que si no se traga el
+                // arrastre). La manija refleja `wheel-scroll` (una sola fuente de verdad: rueda,
+                // teclado y arrastre convergen ahí).
+                if root.rows.length * root.row-h > list.visible-height: Rectangle {
+                    x: parent.width - 7px;
+                    y: 0;
+                    width: 7px;
+                    height: parent.height;
+                    background: Theme.row-alt-bg.with-alpha(0.35);
+                    property <length> total: root.rows.length * root.row-h;
+                    property <length> visible-h: list.visible-height;
+                    property <length> handle-h: max(24px, parent.height * (visible-h / total));
+                    property <length> handle-y: root.wheel-scroll / (total - visible-h) * (parent.height - handle-h);
+                    handle := Rectangle {
+                        x: 1px;
+                        y: handle-y;
+                        width: 5px;
+                        height: handle-h;
+                        border-radius: 3px;
+                        background: scroll-touch.has-hover || scroll-touch.pressed
+                            ? Theme.accent
+                            : Theme.text-dim.with-alpha(0.6);
+                    }
+                    scroll-touch := TouchArea {
+                        property <length> grab-y;
+                        property <length> grab-scroll;
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) {
+                                grab-y = self.mouse-y;
+                                grab-scroll = root.wheel-scroll;
+                            }
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                root.wheel-scroll = clamp(
+                                    grab-scroll + (self.mouse-y - grab-y) * (total / parent.height),
+                                    0px,
+                                    total - visible-h);
+                            }
+                        }
+                    }
+                }
+            }
+            // Mini-barra del filtro visual por tipeo: visible mientras hay filtro activo en
+            // este panel (hace el buffer de tipeo descubrible: no solo vive en el footer).
+            // La ✕ lo limpia (mismo efecto que Esc). Va justo sobre el footer.
+            if root.filter-label != "": Rectangle {
+                height: 22px;
+                background: Theme.accent.with-alpha(0.12);
+                // Borde superior fino que la separa del contenido (igual que el footer).
+                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.border; }
+                Text {
+                    x: 8px;
+                    width: parent.width - 40px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: root.filter-label;
+                    color: Theme.text;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+                clear-touch := TouchArea {
+                    x: parent.width - 26px;
+                    width: 26px;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.filter-clear(root.pane-id); }
+                    Text {
+                        text: "✕";
+                        color: clear-touch.has-hover ? Theme.accent : Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
             }

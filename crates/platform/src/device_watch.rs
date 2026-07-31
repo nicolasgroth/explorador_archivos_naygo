@@ -4,8 +4,9 @@
 
 //! Crea, EN SU PROPIO HILO, una ventana oculta `HWND_MESSAGE` que escucha
 //! `WM_DEVICECHANGE` (llegada/quita de volúmenes) y emite `DeviceEvent::DrivesChanged`.
-//! NO toca el HWND de eframe (aislamiento): la ventana es message-only, sin pintar nada,
-//! y corre su propio bucle de mensajes en un hilo dedicado. Al dropear el handle, postea
+//! NO toca el HWND de la ventana principal de Slint (aislamiento): la ventana es
+//! message-only, sin pintar nada, y corre su propio bucle de mensajes en un hilo
+//! dedicado. Al dropear el handle, postea
 //! `WM_CLOSE` y une el hilo. Tolerante: si la ventana no se crea, el handle queda inerte.
 
 use std::sync::mpsc::Sender;
@@ -13,7 +14,7 @@ use std::sync::mpsc::Sender;
 /// Waker para despertar la UI tras enviar un evento: la UI está DORMIDA en reposo (no
 /// repinta sin motivo, clave para el bajo consumo en VMs sin GPU). Esta vigilancia corre
 /// en su propio hilo, así que necesita un `Fn() + Send + Sync` (típicamente
-/// `egui::Context::request_repaint`) para sacarla del sueño. `platform` no depende de egui.
+/// `slint::invoke_from_event_loop`) para sacarla del sueño. `platform` no depende de Slint.
 pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 /// Evento de cambio de dispositivos. Por ahora un único caso: el conjunto de
@@ -240,7 +241,7 @@ mod windows_impl {
                 let create_params = Box::into_raw(payload_box) as *const c_void;
 
                 // SAFETY: clase ya registrada (o se reporta su falla); HWND_MESSAGE crea una
-                // ventana message-only (sin UI, aislada del HWND de eframe). hinstance del módulo.
+                // ventana message-only (sin UI, aislada del HWND principal de Slint). hinstance del módulo.
                 let hwnd = unsafe {
                     let hinstance = GetModuleHandleW(None).ok().map(|h| h.into());
                     CreateWindowExW(

@@ -75,6 +75,22 @@ pub struct PanePick {
     pub candidates: Vec<PaneId>,
 }
 
+/// Estado estable de una sesión de renombrado inline.
+///
+/// `pos` solo decide dónde pintar el editor. La operación usa siempre `source`, porque el índice
+/// visual puede cambiar mientras el watcher incorpora, filtra o reordena entradas.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenameRequest {
+    pub session: u32,
+    pub pane: PaneId,
+    pub pos: usize,
+    pub source: PathBuf,
+    pub name: String,
+    pub stage: u8,
+    /// Offsets UTF-8 (bytes), que es la unidad exigida por `LineEdit::set-selection-offsets`.
+    pub selection: (usize, usize),
+}
+
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
     /// Configuración de la app (settings + i18n + temas + atajos), cargada del core y
@@ -137,6 +153,15 @@ pub struct WorkspaceCtrl {
     /// Instante del último carácter de typeahead: si pasan >500ms entre teclas, el buffer se
     /// reinicia (escribir "in", pausa, "for" busca "for", no "infor"). Estilo Explorer.
     pub typeahead_at: Option<std::time::Instant>,
+    /// Nº de filas que matchean el filtro visual por tipeo en el panel activo (lo refresca
+    /// `rows_of` al reconstruir las filas; el footer lo muestra como "{n} coincidencias").
+    pub filter_match_count: usize,
+    /// Última carpeta PEDIDA para listar por panel (incluye las que ya terminaron: el mapa
+    /// `listings` las olvida al drenar). Es la referencia fiable para saber si un
+    /// `start_listing` es NAVEGACIÓN (cambia la carpeta → limpiar el filtro por tipeo) o
+    /// REFRESH de la misma (lo conserva). `f.current_dir` no sirve: hay caminos que la
+    /// mutan ANTES de llamar a `start_listing` (navigate_pane_to).
+    pub last_listing_dirs: HashMap<PaneId, std::path::PathBuf>,
     pub ctrl_down: bool,
     pub shift_down: bool,
     /// Menú contextual abierto (clic derecho): posición (x,y en la ventana) y rutas objetivo.
@@ -180,10 +205,15 @@ pub struct WorkspaceCtrl {
     /// El atajo "editar ruta" (Ctrl+L / F4) pidió editar este panel. La UI lo lee con
     /// `take_edit_path_request` para abrir el editor de la path-bar.
     pub edit_path_requested: Option<PaneId>,
-    /// El rename inline (F2 / menú) pidió editar la fila `pos` del panel, con la etapa de
-    /// selección del ciclo F2. La UI lo lee con `take_rename_request` para abrir el editor en
-    /// la celda Name. (pane, posición de vista, etapa). Ver 6D.
-    pub rename_requested: Option<(PaneId, usize, u8)>,
+    /// Pedido pendiente de mostrar el editor inline. Se separa de `rename_active`: consumir el
+    /// pedido no debe perder la identidad estable del archivo que se está editando.
+    pub rename_requested: Option<RenameRequest>,
+    /// Sesión de rename actualmente abierta. Conserva la ruta original para que un refresh,
+    /// filtro o reordenamiento del watcher nunca haga que el commit opere sobre otra fila.
+    pub rename_active: Option<RenameRequest>,
+    /// Secuencia monotónica para distinguir callbacks tardíos de editores ya cerrados. Slint
+    /// puede emitir `has-focus = false` al destruir un LineEdit; el id evita un segundo commit.
+    next_rename_session: u32,
     /// La paleta de comandos (Ctrl+P) pidió abrirse. La UI lo lee con `take_open_palette_request`
     /// para mostrar el overlay. Se setea desde `run_action(Action::CommandPalette)`. (Task 6/7)
     pub open_palette_requested: bool,
@@ -212,11 +242,24 @@ pub struct WorkspaceCtrl {
     /// Cambia solo el TEXTO del aviso in-place ("disco expulsado" vs "carpeta no encontrada").
     /// Se limpia cuando el panel navega a una carpeta válida.
     pub ejected_panes: std::collections::HashSet<u64>,
-    /// Caché del estado "carpeta no encontrada" por panel: `(missing, has_existing_ancestor)`.
-    /// Evita el `read_dir`/`exists` SÍNCRONO en el hilo de UI en CADA tick de `sync_rows` (un
-    /// share de red caído podía bloquear la UI segundos). Se recalcula solo ante eventos reales
-    /// (navegar, reintentar, expulsar, cambio de discos) vía `refresh_missing_cache`.
-    missing_cache: std::collections::HashMap<u64, (bool, bool)>,
+    /// Caché del estado "carpeta no encontrada" por panel: `(carpeta evaluada, missing,
+    /// has_existing_ancestor)`. Evita el `read_dir`/`exists` SÍNCRONO en el hilo de UI en CADA
+    /// tick de `sync_rows` (un share de red caído podía bloquear la UI segundos). Se recalcula
+    /// solo ante eventos reales (navegar, reintentar, expulsar, cambio de discos) vía
+    /// `refresh_missing_cache`, que lanza un worker (el I/O tampoco corre en la UI al navegar).
+    /// La carpeta evaluada invalida entradas obsoletas al navegar (ver `pane_dir_missing`).
+    missing_cache: std::collections::HashMap<u64, (PathBuf, bool, bool)>,
+    /// Probe async de "carpeta no encontrada" en vuelo (uno a lo sumo; un refresh nuevo lo
+    /// reemplaza). El tick lo drena con `pump_missing_probe`.
+    missing_probe: Option<std::sync::mpsc::Receiver<Vec<listing::MissingProbeHit>>>,
+    /// Recientes DIFERIDOS al resultado del listado, por panel. `navigate_active_to` navega sin
+    /// chequeo síncrono de navegabilidad (un `read_dir` en la UI congela contra un share caído);
+    /// en su lugar registra aquí la carpeta y `pump_listings` la empuja a recientes SOLO si el
+    /// listado terminó con éxito.
+    pending_recents: HashMap<PaneId, PathBuf>,
+    /// Autocompletado async del editor de ruta (path-bar): worker con debounce, para que tipear
+    /// no haga un `read_dir` por tecla en el hilo de UI. Ver `input.rs`.
+    autocomplete: input::AutocompleteState,
 }
 
 /// Petición de un atajo de teclado que necesita que la UI abra un menú/acción de la toolbar cuyos
@@ -517,6 +560,8 @@ impl WorkspaceCtrl {
             last_open: None,
             typeahead: String::new(),
             typeahead_at: None,
+            filter_match_count: 0,
+            last_listing_dirs: HashMap::new(),
             ctrl_down: false,
             shift_down: false,
             context_menu: None,
@@ -534,6 +579,8 @@ impl WorkspaceCtrl {
             last_active_files: Some(id),
             edit_path_requested: None,
             rename_requested: None,
+            rename_active: None,
+            next_rename_session: 1,
             open_palette_requested: false,
             palette_theme_requested: None,
             open_config_requested: false,
@@ -542,6 +589,9 @@ impl WorkspaceCtrl {
             footer_disk_cache: std::collections::HashMap::new(),
             ejected_panes: std::collections::HashSet::new(),
             missing_cache: std::collections::HashMap::new(),
+            missing_probe: None,
+            pending_recents: HashMap::new(),
+            autocomplete: input::AutocompleteState::new(),
         };
         c.push_recent(start.clone());
         c.start_listing(id, start);

@@ -165,6 +165,29 @@ pub fn set_topmost(hwnd: isize) {
 #[cfg(not(windows))]
 pub fn set_topmost(_hwnd: isize) {}
 
+/// Tamaño en píxeles físicos de la pantalla primaria: (ancho, alto). Se usa para centrar
+/// ventanas auxiliares (p. ej. el splash) — sin él, Win32 las coloca por defecto arriba a la
+/// izquierda. Tolerante: ante cualquier fallo devuelve (1920, 1080).
+#[cfg(windows)]
+pub fn primary_screen_size() -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    unsafe {
+        let w = GetSystemMetrics(SM_CXSCREEN);
+        let h = GetSystemMetrics(SM_CYSCREEN);
+        if w > 0 && h > 0 {
+            (w, h)
+        } else {
+            (1920, 1080)
+        }
+    }
+}
+
+/// Stub no-Windows.
+#[cfg(not(windows))]
+pub fn primary_screen_size() -> (i32, i32) {
+    (1920, 1080)
+}
+
 /// Oculta o muestra el botón de la ventana en la BARRA DE TAREAS (no la bandeja del reloj). Se usa
 /// para el arranque en bandeja por autostart: la ventana existe pero no debe tener botón en la
 /// barra de tareas ni "flashear" al arrancar. Se logra alternando el estilo extendido

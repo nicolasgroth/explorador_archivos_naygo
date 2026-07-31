@@ -1,0 +1,15 @@
+{
+  "name": "Commander",
+  "base": "dark",
+  "accent": "#3fa7ff",
+  "panel_bg": "#000000",
+  "row_bg": "#000000",
+  "row_alt_bg": "#101018",
+  "text": "#e8e8e8",
+  "text_dim": "#4fc3f7",
+  "selection_bg": "#1a3a66",
+  "active_bar": "#3fa7ff",
+  "error": "#e05555",
+  "highlight": "#00d5ff",
+  "border": "#2a2a35"
+}

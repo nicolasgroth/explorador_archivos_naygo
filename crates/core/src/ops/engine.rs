@@ -138,13 +138,17 @@ pub fn run_plan(
             continue;
         }
         // Solo borrar si existe; si ya no está, no es un error (objetivo cumplido).
+        // El borrado es CANCELABLE por entrada: si se cancela a mitad, se aborta limpio
+        // (queda lo no alcanzado) y se corta el pre_delete completo.
         if target.exists() {
-            if let Err(e) = std::fs::remove_dir_all(target) {
-                summary.items.push(OpItem {
+            match remove_dir_all_cancelable(target, token) {
+                Ok(true) => {}
+                Ok(false) => break, // cancelado a mitad del borrado
+                Err(e) => summary.items.push(OpItem {
                     dest: target.clone(),
                     outcome: OpOutcome::Failed(e.to_string()),
                     src: None,
-                });
+                }),
             }
         }
     }
@@ -271,7 +275,7 @@ fn exec_step(
                     !step.is_dir,
                 )
             } else {
-                let outcome = exec_delete(step);
+                let outcome = exec_delete(step, token);
                 (step.to.clone(), outcome, 0, !step.is_dir)
             }
         }
@@ -583,19 +587,117 @@ fn copy_buffered(
     Ok(true)
 }
 
-/// Borra (permanente) un archivo o carpeta del paso.
-fn exec_delete(step: &OpStep) -> OpOutcome {
+/// Borra (permanente) un archivo o carpeta del paso. El borrado de carpetas es
+/// CANCELABLE por entrada (un `remove_dir_all` crudo no se puede interrumpir: una
+/// carpeta grande congelaría el worker hasta terminar). Cancelar a mitad deja lo no
+/// alcanzado en disco y reporta el paso como Skipped (la op entera sale como Cancelled).
+fn exec_delete(step: &OpStep, token: &CancellationToken) -> OpOutcome {
     let target = step.from.as_ref().unwrap_or(&step.to);
-    let result = if step.is_dir {
-        std::fs::remove_dir_all(target)
+    if step.is_dir {
+        match remove_dir_all_cancelable(target, token) {
+            Ok(true) => OpOutcome::Done,
+            Ok(false) => OpOutcome::Skipped,
+            Err(e) => OpOutcome::Failed(e.to_string()),
+        }
     } else {
-        std::fs::remove_file(target)
-    };
-    match result {
-        Ok(()) => OpOutcome::Done,
-        Err(e) => OpOutcome::Failed(e.to_string()),
+        match std::fs::remove_file(target) {
+            Ok(()) => OpOutcome::Done,
+            Err(e) => OpOutcome::Failed(e.to_string()),
+        }
     }
 }
+
+/// Borrado recursivo CANCELABLE de un directorio: recorre el árbol con una pila
+/// propia (post-orden: primero el contenido, luego el dir vacío) y chequea `token`
+/// por entrada (mismo patrón que `sizing::dir_size_walk`). Devuelve `Ok(true)` si
+/// borró todo, `Ok(false)` si se canceló a mitad (queda en disco lo no alcanzado),
+/// `Err` ante un error de I/O (permiso denegado, archivo en uso). Una ruta que
+/// desaparece a mitad del recorrido NO es error (el objetivo —que no exista— ya se
+/// cumplió). No sigue symlinks: borra el enlace, nunca el destino del enlace.
+fn remove_dir_all_cancelable(root: &Path, token: &CancellationToken) -> std::io::Result<bool> {
+    // Contrato de `remove_dir_all`: la raíz debe ser un directorio; un archivo aquí
+    // es un error de planificación (no se borra un archivo suelto por esta vía).
+    let root_meta = std::fs::symlink_metadata(root)?;
+    if !root_meta.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("no es un directorio: {}", root.display()),
+        ));
+    }
+    // Pila de trabajo: (ruta, contenido_ya_borrado). El bool marca el pase de
+    // post-orden: al re-encontrar un dir con el flag en true, ya está vacío y se borra.
+    let mut stack: Vec<(std::path::PathBuf, bool)> = vec![(root.to_path_buf(), false)];
+    while let Some((path, emptied)) = stack.pop() {
+        if token.is_cancelled() {
+            return Ok(false);
+        }
+        if emptied {
+            remove_dir_tolerante(&path)?;
+            continue;
+        }
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            // Desapareció a mitad del borrado (otro proceso): objetivo cumplido.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            // Enlace: borrar el ENLACE, nunca seguirlo. En Windows un symlink a
+            // carpeta/junction solo se borra con remove_dir (remove_file falla).
+            if std::fs::remove_file(&path).is_err() {
+                remove_dir_tolerante(&path)?;
+            }
+        } else if ft.is_dir() {
+            stack.push((path.clone(), true));
+            for entry in std::fs::read_dir(&path)? {
+                let entry = entry?;
+                stack.push((entry.path(), false));
+            }
+        } else {
+            clear_readonly(&path);
+            remove_file_tolerante(&path)?;
+        }
+    }
+    Ok(true)
+}
+
+/// Borra un archivo tolerando que haya desaparecido (NotFound = objetivo cumplido).
+fn remove_file_tolerante(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Borra un directorio (vacío o enlace) tolerando que haya desaparecido.
+fn remove_dir_tolerante(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Quita el atributo de solo-lectura antes de borrar (Windows no deja borrar
+/// archivos readonly; el `remove_dir_all` de std hace esto internamente).
+// allow: el lint advierte por Unix (world-writable), pero esta fn es Windows-only.
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly(path: &Path) {
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+}
+
+/// En no-Windows el atributo readonly no bloquea el borrado: no-op.
+#[cfg(not(windows))]
+fn clear_readonly(_path: &Path) {}
 
 /// Renombra `from` → `to` (mismo directorio, nombre nuevo).
 fn exec_rename(step: &OpStep) -> OpOutcome {
@@ -1279,6 +1381,98 @@ mod tests {
         let (_m, summary) = run(req);
         assert!(!src.exists());
         assert_eq!(summary.count_done(), 1);
+    }
+
+    #[test]
+    fn remove_dir_all_cancelable_completo_borra_el_arbol() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("arbol");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), b"x").unwrap();
+        fs::write(root.join("sub").join("b.txt"), b"y").unwrap();
+        let token = CancellationToken::new();
+        let done = remove_dir_all_cancelable(&root, &token).unwrap();
+        assert!(done, "sin cancelar borra todo");
+        assert!(!root.exists(), "el árbol completo desapareció");
+    }
+
+    #[test]
+    fn remove_dir_all_cancelable_con_token_cancelado_no_toca_nada() {
+        // Token cancelado ANTES de empezar: el chequeo por entrada aborta limpio en
+        // la primera entrada y el árbol queda intacto.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("arbol");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), b"x").unwrap();
+        fs::write(root.join("sub").join("b.txt"), b"y").unwrap();
+        let token = CancellationToken::new();
+        token.cancel();
+        let done = remove_dir_all_cancelable(&root, &token).unwrap();
+        assert!(!done, "cancelado → no completó");
+        assert!(root.join("sub").join("b.txt").exists(), "no borró nada");
+    }
+
+    #[test]
+    fn remove_dir_all_cancelable_cancelado_a_mitad_aborta() {
+        // Árbol grande + cancelación desde otro hilo a ~1ms: puede alcanzar a
+        // terminar (disco rápido) o abortar a mitad. Si aborta, la raíz NO puede
+        // haber desaparecido (post-orden: la raíz se borra ÚLTIMA, solo si terminó).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("arbol");
+        for i in 0..50 {
+            let sub = root.join(format!("sub{i}"));
+            fs::create_dir_all(&sub).unwrap();
+            for j in 0..100 {
+                fs::write(sub.join(format!("f{j}.txt")), b"x").unwrap();
+            }
+        }
+        let token = CancellationToken::new();
+        let t2 = token.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            t2.cancel();
+        });
+        let done = remove_dir_all_cancelable(&root, &token).unwrap();
+        h.join().unwrap();
+        if !done {
+            assert!(root.exists(), "abortó a mitad: queda lo no alcanzado");
+        }
+    }
+
+    #[test]
+    fn remove_dir_all_cancelable_raiz_archivo_es_error() {
+        // Contrato de remove_dir_all: borrar un ARCHIVO por esta vía es error (no se
+        // borra un archivo suelto disfrazado de carpeta).
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"x").unwrap();
+        let token = CancellationToken::new();
+        assert!(remove_dir_all_cancelable(&f, &token).is_err());
+        assert!(f.exists(), "el archivo no se tocó");
+    }
+
+    #[test]
+    fn exec_delete_carpeta_cancelada_aborta_limpio() {
+        // exec_delete con token cancelado: el borrado recursivo aborta limpio, el paso
+        // queda Skipped (no Done) y la carpeta queda intacta en disco.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("carpeta");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("a.txt"), b"datos").unwrap();
+        let step = OpStep {
+            from: Some(target.clone()),
+            to: target.clone(),
+            bytes: 0,
+            is_dir: true,
+        };
+        let token = CancellationToken::new();
+        token.cancel();
+        let outcome = exec_delete(&step, &token);
+        assert!(
+            matches!(outcome, OpOutcome::Skipped),
+            "cancelado → Skipped, no Done ni Failed"
+        );
+        assert!(target.join("a.txt").exists(), "no borró nada");
     }
 
     // --- ops-B: conflicto interactivo por-ítem ---

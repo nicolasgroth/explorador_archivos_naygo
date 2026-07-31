@@ -5,12 +5,12 @@
 //! Interop OLE de arrastre con Windows. Este módulo cubre solo el lado de **SACAR**
 //! archivos de Naygo hacia el SO (Explorador, escritorio, correo…) vía `DoDragDrop`.
 //!
-//! **Recibir** drops del SO NO se maneja aquí: winit ya registra su propio `IDropTarget`
-//! en la ventana y egui expone las rutas soltadas en `ctx.input(|i| i.raw.dropped_files)`.
-//! La capa de UI lee de ahí. (Antes registrábamos nuestro propio `IDropTarget` con
-//! `RegisterDragDrop`, lo que colisionaba con el de winit —`DRAGDROP_E_ALREADYREGISTERED`—
-//! y la rotación de `OleInitialize`/`OleUninitialize` en el hilo de UI ya OLE-inicializado
-//! por winit desestabilizaba el arranque.)
+//! **Recibir** drops del SO NO se maneja aquí: vive en `drop_target.rs`, que registra un
+//! `IDropTarget` propio con `RegisterDragDrop` sobre el HWND de la ventana y entrega las
+//! rutas por un canal. (En la época de egui/eframe esto lo hacía winit con su propio
+//! `IDropTarget` y un registro nuestro colisionaba —`DRAGDROP_E_ALREADYREGISTERED`; con
+//! Slint no hay drop target ajeno, así que el registro propio volvió a ser el camino, sin
+//! rotación de `OleInitialize`/`OleUninitialize` en el hilo de UI.)
 //!
 //! ## La cadena COM (lado emisor)
 //!
@@ -281,9 +281,10 @@ mod windows_impl {
     /// Inicia un arrastre OLE de `paths` hacia el SO (Explorer, escritorio, correo…).
     ///
     /// **BLOQUEANTE**: `DoDragDrop` corre su propio bucle modal hasta que el usuario suelta
-    /// o cancela. Debe llamarse en el **hilo de UI** (apartamento STA), y FUERA del closure
-    /// de render de egui (el bucle modal toma el control del mouse mientras dura). Devuelve
-    /// el efecto resultante. Tolerante: nunca hace panic; cualquier fallo → `DndError`.
+    /// o cancela. Debe llamarse en el **hilo de UI** (apartamento STA), y diferido FUERA del
+    /// callback de Slint que lo originó (con `slint::invoke_from_event_loop`): el bucle modal
+    /// toma el control del mouse mientras dura. Devuelve el efecto resultante. Tolerante:
+    /// nunca hace panic; cualquier fallo → `DndError`.
     pub fn start_drag(paths: &[PathBuf]) -> Result<DragOutcome, DndError> {
         if paths.is_empty() {
             return Err(DndError::NoItems);

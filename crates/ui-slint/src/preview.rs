@@ -671,10 +671,32 @@ fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
     // Frase traducida con el nº de páginas (placeholder `{n}`). El código añade la puntuación
     // final (`.` sin texto, `:` con texto) y los saltos; así una sola clave i18n cubre ambas.
     let pages_phrase = |n: usize| msgs.pdf_pages.replace("{n}", &n.to_string());
-    // Texto vía pdf-extract (puede fallar en PDFs escaneados/protegidos → se avisa).
-    let text = match pdf_extract::extract_text(path) {
-        Ok(t) => t,
+    // `pdf-extract` 0.10 puede hacer panic ante streams sintácticamente válidos pero con
+    // operandos faltantes. El PDF es input hostil: lo convertimos en el mismo resultado discreto
+    // que un error normal y silenciamos el panic hook solo alrededor de esta llamada recuperable.
+    let extracted = crate::logging::catch_recoverable_panic(|| pdf_extract::extract_text(path));
+    let text = match extracted {
+        Ok(Ok(t)) => t,
+        Ok(Err(error)) => {
+            crate::logging::log_line(&format!(
+                "preview PDF: no se pudo extraer texto de {}: {error}",
+                path.display()
+            ));
+            let head = match pages {
+                Some(n) => format!("{}.\n\n", pages_phrase(n)),
+                None => String::new(),
+            };
+            return Payload::Text {
+                text: format!("{head}{}", msgs.pdf_no_text),
+                truncated: false,
+                highlighted: None,
+            };
+        }
         Err(_) => {
+            crate::logging::log_line(&format!(
+                "preview PDF: pdf-extract hizo panic controlado para {}",
+                path.display()
+            ));
             let head = match pages {
                 Some(n) => format!("{}.\n\n", pages_phrase(n)),
                 None => String::new(),
@@ -722,6 +744,53 @@ mod tests {
     /// Mensajes de error en español para los tests (valores por defecto del struct).
     fn msgs_es() -> PreviewMessages {
         PreviewMessages::default()
+    }
+
+    #[test]
+    fn pdf_con_operador_sin_operandos_no_panica() {
+        use lopdf::content::{Content, Operation};
+        use lopdf::{Dictionary, Document, Object, Stream};
+
+        // Regresión del panic real de pdf-extract: el operador `w` indexa operands[0] sin
+        // comprobarlo. El PDF sigue siendo parseable por lopdf, pero su stream es hostil.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operando-faltante.pdf");
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let content = Content {
+            operations: vec![Operation::new("w", Vec::new())],
+        }
+        .encode()
+        .unwrap();
+        let content_id = doc.add_object(Stream::new(Dictionary::new(), content));
+
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", Object::Reference(pages_id));
+        page.set(
+            "MediaBox",
+            Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        );
+        page.set("Resources", Object::Dictionary(Dictionary::new()));
+        page.set("Contents", Object::Reference(content_id));
+        let page_id = doc.add_object(page);
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
+        pages.set("Count", Object::Integer(1));
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference(pages_id));
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc.save(&path).unwrap();
+
+        match read_pdf(&path, &msgs_es()) {
+            Payload::Text { text, .. } => assert!(text.contains("No se pudo extraer")),
+            other => panic!("esperaba degradación a texto informativo, fue {other:?}"),
+        }
     }
 
     #[test]

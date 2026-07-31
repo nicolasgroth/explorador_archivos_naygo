@@ -431,6 +431,11 @@ where
     tr.set_cfg_ops_mode(c.t("slint.cfg.ops_mode").into());
     tr.set_cfg_ops_queue(c.t("slint.cfg.ops_queue").into());
     tr.set_cfg_ops_parallel(c.t("slint.cfg.ops_parallel").into());
+    tr.set_cfg_window_title(c.t("slint.cfg.window_title").into());
+    tr.set_cfg_tip_window_title(c.t("slint.cfg.tip.window_title").into());
+    tr.set_cfg_title_app(c.t("slint.cfg.title_app").into());
+    tr.set_cfg_title_app_path(c.t("slint.cfg.title_app_path").into());
+    tr.set_cfg_title_path(c.t("slint.cfg.title_path").into());
     tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
     tr.set_cfg_confirm_drop(c.t("slint.cfg.confirm_drop").into());
     tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());

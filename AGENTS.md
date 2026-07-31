@@ -1,0 +1,135 @@
+# Explorador de archivos — Contexto del proyecto
+
+> Proyecto **independiente**. No tiene relación con WinShelf ni con
+> `organiza_escritorio_ng`. No mezclar contexto, convenciones ni código entre
+> ambos.
+
+## Qué es
+
+Explorador de archivos para Windows 10/11, estilo **Commander** (inspirado en
+Directory Opus): paneles dinámicos dockables, navegación ultra-rápida por teclado,
+operaciones de archivo entre paneles. Gratuito, open source, propio.
+
+**Prioridad absoluta:** velocidad de navegación y bajo consumo. Lo visual importa,
+pero está **subordinado a la velocidad**.
+
+**Hace bien una cosa:** navegar, ver y operar archivos rápido. NO reproduce media,
+NO es editor, NO hace de todo. Abre el archivo con su programa por defecto cuando
+el usuario lo pide.
+
+## Autoría y licencia
+
+- Autor: **Nicolás Groth** (Chile)
+- Empresa: **ISGroth**
+- Año: 2026
+- Licencia: **MIT**
+
+Marcar la autoría visiblemente en: metadatos del `.exe`, ventana "About", headers
+de archivos clave, `README.md` y `LICENSE`. El objetivo del proyecto es que la
+gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth.
+
+## Stack
+
+- Lenguaje: **Rust**
+- UI: **Slint** (toolkit declarativo `.slint` + backend **winit** con **renderer por
+  software**: sin dependencia de GPU, clave para VMs y equipos modestos). La
+  migración egui→Slint terminó; la capa egui ya no existe.
+- Interop Windows: crate **`windows`** (oficial de Microsoft) para Shell32 / COM /
+  OLE
+- Serialización: **serde / serde_json**
+- Todas las dependencias **libres** (MIT/Apache/ISC/CC0) o royalty-free (Slint).
+  Cero regalías.
+- Build: `cargo` desde terminal.
+
+## Arquitectura (3 crates — ver spec)
+
+- **`core`** (`naygo-core`): lógica pura, sin UI ni Windows. Testeable al 100%.
+  Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
+  (copiar/mover/borrar), `archive_ops` / `archive_tree`, `search`, `metadata`,
+  `preview`, `batch_rename`, `i18n`, `theme`, `config`, `keymap`, `workspace`
+  (layout de paneles), entre otros.
+- **`platform`** (`naygo-platform`): TODO lo que toca Windows, aislado. `drives` /
+  `drive_space` / `eject` (discos), `dnd` + `drop_target` + `clipboard` (drag&drop
+  y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
+  `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
+  `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
+- **`ui-slint`** (`naygo-ui-slint`, binario **`naygo`**): la UI oficial en Slint,
+  sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
+  core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`
+  (controladores), `packs`, `preview`, `devices`, `keys` (atajos), `icons`,
+  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`.
+
+**Regla de oro:** el hilo de UI **nunca** hace I/O de disco. Todo lo pesado corre
+en workers que se comunican por canales. `core` no conoce Slint ni Windows.
+
+## Principios de diseño (críticos)
+
+- **Streaming incremental**: listar una carpeta nunca congela; los resultados
+  aparecen en vivo.
+- **Cancelación universal**: TODA operación larga (listar, copiar, mover, calcular
+  tamaño) es cancelable por el usuario, siempre. Cada una recibe un
+  `CancellationToken` y aborta limpio (una copia cancelada borra el parcial).
+- **El filesystem es hostil**: discos de red caídos, permisos denegados, rutas que
+  desaparecen son normales. La app NUNCA cae por eso: `Result` tipado, errores
+  comunicados de forma discreta, timeouts en I/O de red, panic handler.
+- **i18n y temas desde el día uno**: ningún texto hardcoded (todo por clave). Temas
+  + color sets intercambiables en caliente. ES + EN incluidos; agregar idioma =
+  soltar un archivo.
+
+## Convenciones de código
+
+- Nombres en inglés en el código. Comentarios y commits pueden ser en español.
+- Cada archivo lleva header (formato profesional con email del autor + SPDX):
+  ```
+  // Naygo — <descripción breve del archivo>
+  // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+  // SPDX-License-Identifier: MIT
+  ```
+  El tag `SPDX-License-Identifier` es el estándar de la industria (lo leen
+  escáneres de licencias como `reuse`/`cargo-license`). Para archivos `.slint`
+  el comentario también empieza con `//`.
+- Privilegiar legibilidad sobre brevedad. Un tercero debe poder leer y mantener.
+- Modular: una responsabilidad por módulo. Si un archivo crece demasiado, split.
+- Async para todo I/O. El hilo de UI no bloquea.
+- Logging básico a archivo desde el inicio. Sin telemetría.
+- Build limpio + tests pasando antes de cada commit.
+
+## Estrategia de construcción — faseado
+
+El **Build 1 (núcleo)** está especificado en
+`docs/superpowers/specs/2026-06-05-explorador-nucleo-design.md`. Empezar por ahí.
+
+**Capas posteriores** (cada una con su propio brainstorm → spec → build, NO en
+Build 1): miniaturas, visor de contenido (imágenes/texto/PDF), comprimir/
+descomprimir, batch-rename avanzado, caché de carpetas visitadas, paleta de
+comandos (Ctrl+P), animaciones de íconos, personalización fina de toolbar.
+
+**Nunca**: reproducción de media, edición de archivos.
+
+## Cómo trabajar conmigo (el usuario)
+
+- Soy Nicolás. Hablo español chileno, tuteo. Inglés técnico OK.
+- Ingeniero, base técnica fuerte. No me expliques lo obvio, pero si algo es
+  ambiguo, pregúntame antes de avanzar con supuestos.
+- Si una decisión técnica tiene trade-offs reales, explícamelos brevemente antes
+  de elegir.
+- Si no sabes algo o necesitas verificar, dilo. No inventes.
+- Trabajamos feature por feature. No saltes adelante sin que yo confirme.
+- Al terminar cada feature, sugiere el siguiente paso y espera mi visto bueno.
+- Tras cada fix que afecte la app, deja SIEMPRE actualizado el build de
+  distribución: corre `scripts/build-release.ps1` (genera
+  `dist/Naygo-<ver>-portable.zip` y `dist/Naygo-<ver>-setup.exe`, ambos con
+  `naygo.pdb` para backtraces simbolizados). El usuario prueba instalando desde
+  `dist/`, también en máquinas externas. Corre el build SOLO (sin otras tareas
+  pesadas en paralelo): el LTO con codegen-units=1 es el pico de memoria más
+  grande del proyecto.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

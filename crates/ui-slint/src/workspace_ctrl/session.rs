@@ -241,10 +241,52 @@ impl WorkspaceCtrl {
     ///   panel, de modo que `view_indices` agrupe las recién aparecidas al final de la vista en vez
     ///   de en su posición ordenada. Al refrescar (F5) o navegar, el resaltado se limpia y todo
     ///   vuelve a su orden normal.
+    ///
+    /// NOTA: esta versión resuelve la metadata leyendo el disco; la UI usa
+    /// `apply_watch_events_resolved`, que la recibe ya leída por el hilo del watcher. Por eso
+    /// solo vive para tests (en producción sería código muerto).
+    #[cfg(test)]
     pub fn apply_watch_events(
         &mut self,
         pane: PaneId,
         events: &[naygo_core::listing::DirEvent],
+    ) -> Vec<std::path::PathBuf> {
+        self.apply_watch_events_inner(pane, events, &|p| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
+        })
+    }
+
+    /// Versión con metadata PRE-RESUELTA en el hilo del watcher (`resolved`, ver
+    /// `watch::WatchBatch`): el `read_entry` consulta primero ese mapa y solo cae al disco
+    /// (defensivo) ante una ruta que no esté. Es la que usa el tick de la UI.
+    pub fn apply_watch_events_resolved(
+        &mut self,
+        pane: PaneId,
+        events: &[naygo_core::listing::DirEvent],
+        resolved: &std::collections::HashMap<
+            std::path::PathBuf,
+            Option<naygo_core::fs_model::Entry>,
+        >,
+    ) -> Vec<std::path::PathBuf> {
+        self.apply_watch_events_inner(pane, events, &|p| match resolved.get(p) {
+            Some(e) => e.clone(),
+            // Defensa: la ruta no vino pre-resuelta (no debería pasar con los lotes del
+            // watcher). Leer del disco como antes.
+            None => std::fs::metadata(p)
+                .ok()
+                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m))),
+        })
+    }
+
+    /// Núcleo común de `apply_watch_events` / `apply_watch_events_resolved`: aplica los eventos
+    /// con el `read_entry` dado. Ver `apply_watch_events` para el comportamiento completo.
+    fn apply_watch_events_inner(
+        &mut self,
+        pane: PaneId,
+        events: &[naygo_core::listing::DirEvent],
+        read_entry: &dyn Fn(&std::path::Path) -> Option<naygo_core::fs_model::Entry>,
     ) -> Vec<std::path::PathBuf> {
         // Espejo runtime del setting "agrupar al final" (se lee antes del préstamo mutable).
         let group_new_at_end = self.config.settings.new_items_at_end;
@@ -289,13 +331,9 @@ impl WorkspaceCtrl {
             })
             .cloned()
             .collect();
-        // `read_entry` debe devolver `Option<Entry>`: leemos metadata (puede fallar si la ruta
-        // ya desapareció) y armamos el Entry.
-        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &filtered, &|p| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
-        });
+        // `read_entry` produce el `Entry` de una ruta: con la metadata pre-resuelta por el
+        // hilo del watcher (producción) o leyendo el disco (versión síncrona / defensa).
+        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &filtered, read_entry);
         let spec = f.sort;
         naygo_core::sort::sort_entries(&mut f.entries, &spec);
         // Empujar el flag ANTES de calcular posiciones: si está activo, la vista pone los nuevos al

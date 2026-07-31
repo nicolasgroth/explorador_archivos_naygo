@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 # Decodificación de imágenes: PNG/JPEG (íconos) + BMP/GIF/WebP/ICO para la vista
 # previa liviana (todas puras-Rust, MIT/Apache, sin libs nativas).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp", "ico"] }
+image.workspace = true
 # Buscar/reemplazar con regex en el batch-rename. MIT/Apache, sin features extra.
 regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 # Resaltado de sintaxis para la vista previa de código. Gramáticas + temas embebidos por
@@ -27,17 +27,20 @@ regex = { version = "1", default-features = false, features = ["std", "unicode"]
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 # Empaquetado/desempaquetado de .naygoset. También lo usa el generador de íconos
 # (siempre disponible; no requiere feature).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip.workspace = true
 # Metadata de audio (mp3/flac/ogg/m4a/wav): duración, bitrate, sample rate, tags. Pura-Rust, MIT/Apache.
 lofty = "0.22"
 # Parseo de XML (docProps de los Office modernos). Puro-Rust, MIT.
 quick-xml = "0.39"
-# Metadata de PDF (páginas, autor, título). Puro-Rust, MIT.
-lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] }
+# Metadata de PDF (páginas, autor, título). Puro-Rust, MIT. Versión unificada en el workspace.
+lopdf.workspace = true
+# Fold Unicode para el filtro por tipeo (NFD + marcas combinantes). Pura-Rust, MIT/Apache;
+# ya venía transitivamente en el lock, se usa directo en `text_match`.
+unicode-normalization = "0.1"
 # Deps del generador de íconos (solo bajo feature gen-icons, no se incluyen en la app).
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }
 tiny-skia = { version = "0.12", optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

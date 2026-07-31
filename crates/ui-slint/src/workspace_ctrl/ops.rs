@@ -138,9 +138,11 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Escribe el archivo pegado en `path`, o —si `Settings.paste_confirm` está activo— abre el
+    /// Escribe el archivo pegado en `path` (en un hilo worker: el `fs::write` no bloquea la UI
+    /// y un fallo se reporta con toast), o —si `Settings.paste_confirm` está activo— abre el
     /// modal de confirmación de nombre (NameInput con purpose Paste) con el nombre propuesto
-    /// editable; al confirmar, `name_confirm` escribe los `bytes` con el nombre elegido.
+    /// editable; al confirmar, `name_confirm` escribe los `bytes` con el nombre elegido (también
+    /// en worker).
     fn paste_write_or_confirm(
         &mut self,
         dir: &std::path::Path,
@@ -163,7 +165,11 @@ impl WorkspaceCtrl {
             });
             true
         } else {
-            std::fs::write(path, &bytes).is_ok()
+            // Escritura en un hilo worker (un disco lento/lleno o un share de red no congelan
+            // la UI). Si falla, `pump_ops` deja el error para que la UI lo anuncie con un toast
+            // (antes `fs::write(...).is_ok()` lo tragaba en silencio).
+            self.ops.spawn_paste_write(path.to_path_buf(), bytes);
+            true
         }
     }
 
@@ -501,10 +507,8 @@ impl WorkspaceCtrl {
                 .unwrap_or(false)
     }
 
-    /// Renombrar el ítem enfocado: abre el modal de nombre con el nombre actual.
     /// Rename inline (F2 / menú): pide a la UI abrir el editor en la celda Name de la fila
-    /// enfocada del panel Files activo, con la etapa 0 del ciclo (nombre sin extensión). En vez
-    /// del modal, marca `rename_requested`; la UI lo consume con `take_rename_request`. (6D)
+    /// enfocada. F2 repetido sobre el mismo archivo recorre nombre → extensión → todo.
     pub fn op_rename(&mut self) {
         let Some(id) = self.active_files_id() else {
             return;
@@ -515,49 +519,100 @@ impl WorkspaceCtrl {
         let Some(pos) = f.focused else {
             return;
         };
-        self.rename_requested = Some((id, pos, 0));
+        let Some(entry) = f.view_entry_at(pos) else {
+            return;
+        };
+        let stage = self
+            .rename_active
+            .as_ref()
+            .filter(|r| r.pane == id && r.source == entry.path)
+            .map_or(0, |r| (r.stage + 1) % 3);
+        self.request_rename_at(id, pos, stage);
     }
 
-    /// La UI consume el pedido de rename inline (pane, posición de vista, etapa del ciclo F2).
-    pub fn take_rename_request(&mut self) -> Option<(PaneId, usize, u8)> {
+    /// La UI consume el pedido de mostrar/recrear el editor. `rename_active` se conserva hasta
+    /// confirmar o cancelar para validar callbacks tardíos e identificar el archivo por ruta.
+    pub fn take_rename_request(&mut self) -> Option<super::RenameRequest> {
         self.rename_requested.take()
     }
 
-    /// Nombre actual de la fila en la posición de vista `pos` del panel `id` (para precargar el
-    /// editor inline). Vacío si no existe.
-    pub fn rename_name_at(&self, id: PaneId, pos: usize) -> String {
-        self.ws
+    /// Comprueba que un callback pertenece al editor que sigue activo. La UI lo consulta antes de
+    /// cerrar sus propiedades: un callback tardío debe ser un no-op completo y no cerrar la sesión
+    /// nueva aunque la operación de filesystem ya esté protegida.
+    pub fn rename_session_is_active(&self, id: PaneId, session: u32) -> bool {
+        self.rename_active
+            .as_ref()
+            .is_some_and(|active| active.pane == id && active.session == session)
+    }
+
+    /// Crea una sesión de rename anclada a la ruta actual de la fila. Las carpetas se seleccionan
+    /// completas aunque contengan puntos; para archivos se aplica el ciclo F2.
+    fn request_rename_at(&mut self, id: PaneId, pos: usize, stage: u8) -> bool {
+        let Some(entry) = self
+            .ws
             .pane(id)
             .and_then(|p| p.files.as_ref())
             .and_then(|f| f.view_entry_at(pos))
-            .map(|e| e.name.clone())
-            .unwrap_or_default()
+        else {
+            return false;
+        };
+        let name = entry.name.clone();
+        let source = entry.path.clone();
+        let selection = if entry.is_dir() {
+            (0, name.len())
+        } else {
+            naygo_core::rename::rename_selection_byte_offsets(&name, stage)
+        };
+        let session = self.next_rename_session;
+        self.next_rename_session = self.next_rename_session.wrapping_add(1).max(1);
+        let request = super::RenameRequest {
+            session,
+            pane: id,
+            pos,
+            source,
+            name,
+            stage,
+            selection,
+        };
+        self.rename_active = Some(request.clone());
+        self.rename_requested = Some(request);
+        true
     }
 
-    /// Confirma el rename inline de la fila `pos` del panel `id` al nombre `new_name`. Arma la
-    /// op de rename (reusa el engine de F3, con su validación) y la lanza. Devuelve true si
-    /// arrancó algo (nombre válido y distinto del actual).
-    pub fn rename_commit(&mut self, id: PaneId, pos: usize, new_name: &str) -> bool {
+    /// Confirma una sesión de rename. El id de sesión vuelve idempotentes Enter + pérdida de
+    /// foco y evita que un callback tardío del editor anterior afecte al siguiente del chain.
+    pub fn rename_commit(&mut self, id: PaneId, session: u32, new_name: &str) -> bool {
         let new_name = new_name.trim();
-        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
+        let Some(active) = self.rename_active.as_ref() else {
             return false;
         };
-        let Some(e) = f.view_entry_at(pos) else {
+        if active.pane != id || active.session != session {
+            return false;
+        }
+        // La sesión se comprobó inmediatamente antes; si el invariante se rompe, no-op.
+        let Some(active) = self.rename_active.take() else {
             return false;
         };
+        self.rename_requested = None;
         // Sin cambio o nombre inválido → no hacer nada (evita una op vacía o un error del engine).
         if new_name.is_empty()
-            || new_name == e.name
+            || new_name == active.name
             || !naygo_core::ops::names::is_valid_name(new_name)
         {
             return false;
         }
         crate::logging::breadcrumb("renombrar");
-        let source = e.path.clone();
-        let req = naygo_core::ops::rename(source, new_name.to_string());
+        let req = naygo_core::ops::rename(active.source, new_name.to_string());
         let label = self.config.t("op.rename");
         self.ops.start_op(req, label, true);
         true
+    }
+
+    /// Cancela la sesión antes de destruir el editor. Así su notificación posterior de pérdida
+    /// de foco no puede convertir Esc en una confirmación accidental.
+    pub fn rename_cancel(&mut self) {
+        self.rename_active = None;
+        self.rename_requested = None;
     }
 
     /// Rename EN CADENA: confirma el rename actual y pide abrir el editor en la fila anterior
@@ -566,11 +621,26 @@ impl WorkspaceCtrl {
     pub fn rename_chain(
         &mut self,
         id: PaneId,
-        pos: usize,
+        session: u32,
         new_name: &str,
         dir: i32,
     ) -> Option<usize> {
-        self.rename_commit(id, pos, new_name);
+        let current_pos = {
+            let active = self.rename_active.as_ref()?;
+            if active.pane != id || active.session != session {
+                return None;
+            }
+            self.ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .and_then(|f| {
+                    f.view_indices().iter().position(|&real| {
+                        f.entries.get(real).is_some_and(|e| e.path == active.source)
+                    })
+                })
+                .unwrap_or(active.pos)
+        };
+        self.rename_commit(id, session, new_name);
         let count = self
             .ws
             .pane(id)
@@ -579,13 +649,12 @@ impl WorkspaceCtrl {
         if count == 0 {
             return None;
         }
-        let next = (pos as i32 + dir).clamp(0, count as i32 - 1) as usize;
+        let next = (current_pos as i32 + dir).clamp(0, count as i32 - 1) as usize;
         // Mover el foco/selección a la fila nueva, para que el scroll la acompañe.
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.select_single(next);
         }
-        self.rename_requested = Some((id, next, 0));
-        Some(next)
+        self.request_rename_at(id, next, 0).then_some(next)
     }
 
     /// Arma el texto de PREVISUALIZACIÓN del deshacer para el popup de confirmación (antes de

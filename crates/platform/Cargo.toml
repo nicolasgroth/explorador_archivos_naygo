@@ -44,4 +44,4 @@ notify = "8"
 notify-debouncer-full = "0.5"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

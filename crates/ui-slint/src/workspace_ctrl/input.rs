@@ -3,6 +3,125 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
+
+/// Debounce del autocompletado async de la path-bar: tipear rápido NO dispara un
+/// `read_dir` por tecla; el worker arranca recién cuando el usuario pausó 120 ms.
+pub const AUTOCOMPLETE_DEBOUNCE: Duration = Duration::from_millis(120);
+
+/// Estado del autocompletado ASYNC del editor de ruta (path-bar). Mismo patrón que
+/// `PreviewState` (debounce + worker con canal + descarte de resultados obsoletos):
+/// `request` solo guarda (buffer, instante); `drive` cumple el debounce y lanza el
+/// worker (thread que hace el `read_dir` FUERA del hilo de UI); `poll` drena el
+/// resultado descartando los de buffers que ya no son el último pedido. Así, tipear
+/// una ruta contra un share de red caído no congela la UI.
+#[derive(Default)]
+pub struct AutocompleteState {
+    /// Última petición del usuario: (buffer tecleado, cuándo). Ancla del debounce.
+    requested: Option<(String, Instant)>,
+    /// Buffer para el que YA se lanzó worker (no relanzar por la misma petición).
+    launched: Option<String>,
+    /// Worker en vuelo (envía una vez y termina): (buffer, sugerencias).
+    rx: Option<Receiver<(String, Vec<String>)>>,
+}
+
+impl AutocompleteState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registra el buffer tecleado y reinicia el debounce. NO lanza nada (eso es
+    /// trabajo de `drive`, llamado por el tick de la UI).
+    pub fn request(&mut self, buffer: String, now: Instant) {
+        self.requested = Some((buffer, now));
+    }
+
+    /// Vencido el debounce, lanza el worker para el último buffer pedido (si no hay
+    /// ya uno para ese buffer). Devuelve true si queda trabajo pendiente (debounce
+    /// sin vencer o worker en vuelo) para que el timer de la UI siga vivo.
+    pub fn drive(&mut self, now: Instant) -> bool {
+        let Some((buffer, since)) = &self.requested else {
+            return self.rx.is_some();
+        };
+        if self.launched.as_deref() == Some(buffer.as_str()) {
+            // Ya se lanzó para este buffer: solo resta esperar/drenar el resultado.
+            return self.rx.is_some();
+        }
+        if now.duration_since(*since) < AUTOCOMPLETE_DEBOUNCE {
+            return true;
+        }
+        if self.rx.is_some() {
+            // Un worker viejo sigue en vuelo (read_dir lento, p. ej. red): esperar a
+            // que drene (su resultado se descartará por buffer obsoleto en `poll`).
+            return true;
+        }
+        let buffer = buffer.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_buffer = buffer.clone();
+        std::thread::spawn(move || {
+            let sugg = complete_path(&worker_buffer);
+            let _ = tx.send((worker_buffer, sugg));
+        });
+        self.launched = Some(buffer);
+        self.rx = Some(rx);
+        true
+    }
+
+    /// Drena el worker (sin bloquear). Si el resultado corresponde al ÚLTIMO buffer
+    /// pedido, lo devuelve como (buffer, sugerencias); un resultado de un buffer
+    /// obsoleto (el usuario siguió tipeando) se descarta. None si nada listo/válido.
+    pub fn poll(&mut self) -> Option<(String, Vec<String>)> {
+        let rx = self.rx.as_ref()?;
+        match rx.try_recv() {
+            Ok((buffer, sugg)) => {
+                self.rx = None;
+                if self.requested.as_ref().map(|(b, _)| b) == Some(&buffer) {
+                    Some((buffer, sugg))
+                } else {
+                    None
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.rx = None;
+                None
+            }
+        }
+    }
+
+    /// Cancela todo: al cerrar el editor (Enter/Esc) nada de lo pendiente aplica.
+    /// El worker en vuelo (si lo hay) termina solo; su envío cae en canal cerrado.
+    pub fn cancel(&mut self) {
+        self.requested = None;
+        self.launched = None;
+        self.rx = None;
+    }
+}
+
+/// Lógica PURA de completado, compartida por el path síncrono (`path_autocomplete`)
+/// y el worker async (`AutocompleteState::drive`): dado el `buffer` tecleado, lista
+/// las subcarpetas de la carpeta padre que matchean el último segmento
+/// (case-insensitive). Lista superficial, acotada a 50.
+fn complete_path(buffer: &str) -> Vec<String> {
+    let (parent, prefix) = naygo_core::path_segments::split_edit_buffer(buffer);
+    if parent.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&parent) {
+        for entry in rd.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+                if names.len() >= 200 {
+                    break;
+                }
+            }
+        }
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    naygo_core::path_segments::filter_candidates(&names, &prefix, 50)
+}
 
 impl WorkspaceCtrl {
     /// Carpeta actual del panel `id` (para su path-bar).
@@ -33,24 +152,37 @@ impl WorkspaceCtrl {
     /// Autocompletado del editor de ruta: dado el `buffer` tecleado, lista las subcarpetas de la
     /// carpeta padre que matchean el último segmento (case-insensitive). Lista superficial,
     /// acotada a 50, en el hilo de UI (un read_dir somero es barato).
+    ///
+    /// Versión SÍNCRONA, solo para llamados puntuales (abrir el editor, clic en sugerencia):
+    /// la vía por-tecla es ASYNC (`request_path_autocomplete` + tick), para no bloquear la UI
+    /// contra un share de red caído. Ambas comparten `complete_path`.
     pub fn path_autocomplete(&self, buffer: &str) -> Vec<String> {
-        let (parent, prefix) = naygo_core::path_segments::split_edit_buffer(buffer);
-        if parent.is_empty() {
-            return Vec::new();
-        }
-        let mut names: Vec<String> = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&parent) {
-            for entry in rd.flatten() {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    names.push(entry.file_name().to_string_lossy().into_owned());
-                    if names.len() >= 200 {
-                        break;
-                    }
-                }
-            }
-        }
-        names.sort_by_key(|n| n.to_lowercase());
-        naygo_core::path_segments::filter_candidates(&names, &prefix, 50)
+        complete_path(buffer)
+    }
+
+    /// Pide el autocompletado ASYNC del buffer tecleado (por-tecla): solo guarda la petición
+    /// y reinicia el debounce; el tick la materializa con `drive_autocomplete` y entrega el
+    /// resultado con `poll_autocomplete`.
+    pub fn request_path_autocomplete(&mut self, buffer: String, now: Instant) {
+        self.autocomplete.request(buffer, now);
+    }
+
+    /// Vencido el debounce, lanza el worker de autocompletado para el último buffer pedido.
+    /// Devuelve true si queda trabajo pendiente (el timer de la UI debe seguir vivo).
+    pub fn drive_autocomplete(&mut self, now: Instant) -> bool {
+        self.autocomplete.drive(now)
+    }
+
+    /// Drena el resultado del worker (sin bloquear): (buffer, sugerencias) si corresponde al
+    /// último buffer pedido; los de buffers obsoletos se descartan. La UI lo aplica SOLO si
+    /// el editor sigue abierto con ese mismo buffer.
+    pub fn poll_autocomplete(&mut self) -> Option<(String, Vec<String>)> {
+        self.autocomplete.poll()
+    }
+
+    /// Cancela el autocompletado pendiente/en vuelo (al cerrar el editor con Enter/Esc).
+    pub fn cancel_path_autocomplete(&mut self) {
+        self.autocomplete.cancel();
     }
 
     /// Consume la petición de "editar ruta" (Ctrl+L / F4), si la hay. La UI la llama tras
@@ -116,6 +248,16 @@ impl WorkspaceCtrl {
         if self.ops.pending_dialog.is_some() {
             return false;
         }
+        // Con el editor de rename inline abierto, las teclas son del editor (Enter/Esc/flechas
+        // las maneja el .slint; el resto es tipeo). El FilePanel ya NO reenvía teclas durante
+        // el rename (file-panel.slint, handler `key-pressed`); esta guarda es la red de
+        // seguridad en Rust por si aparece otro camino de entrada: sin ella, una tecla filtrada
+        // gatillaría typeahead/atajos con el editor abierto (ese fue el bug del "_" que
+        // reseteaba el texto: la tecla filtrada movía la selección y el sync re-montaba el
+        // editor con el nombre original).
+        if self.rename_active.is_some() {
+            return false;
+        }
         // Si el selector de panel está activo, el teclado lo controla: 1..9 elige, Esc
         // cancela; cualquier otra tecla se ignora (input suspendido como en un modal).
         if self.pending_pick.is_some() {
@@ -130,14 +272,29 @@ impl WorkspaceCtrl {
             return false;
         }
         let Some(chord) = crate::keys::chord_from(text, ctrl, shift, alt) else {
-            self.typeahead(text);
-            return false;
+            // Typeahead/filtro visual: SÍ hubo cambios (buffer, salto de foco, tinte) → true,
+            // para que el callback despierte el timer y el sync empuje la selección y el
+            // auto-scroll (`focused-row`) a la primera coincidencia.
+            return self.typeahead(text);
         };
         let Some(action) = self.config.keymap.action_for(&chord) else {
-            self.typeahead(text);
-            return false;
+            return self.typeahead(text);
         };
-        self.typeahead.clear();
+        // OJO: aquí YA NO se limpia el typeahead. El filtro visual persiste hasta Esc o
+        // navegar (decisión de diseño); las acciones por atajo (flechas, copiar, etc.)
+        // conviven con el marcado activo. La limpieza ocurre en `clear_filter` (Esc) y en
+        // `start_listing` (toda navegación pasa por ahí).
+        // Breadcrumb de la acción RESUELTA (tecla → comando del keymap): si la app crashea,
+        // el "Última acción" del log dice qué atajo lo gatilló. Solo se loguea cuando la tecla
+        // efectivamente dispara una acción (no el tipeo libre de typeahead, por privacidad).
+        crate::logging::breadcrumb(&format!(
+            "tecla {}{}{}{:?} → {:?}",
+            if ctrl { "Ctrl+" } else { "" },
+            if shift { "Shift+" } else { "" },
+            if alt { "Alt+" } else { "" },
+            chord.key,
+            action
+        ));
         self.run_action(action)
     }
 
@@ -167,8 +324,22 @@ impl WorkspaceCtrl {
     pub fn run_action(&mut self, action: Action) -> bool {
         let active = self.ws.active_id();
         match action {
-            Action::MoveUp => self.with_active(|f| f.move_focus_extend(-1, false)),
-            Action::MoveDown => self.with_active(|f| f.move_focus_extend(1, false)),
+            // Con el filtro visual por tipeo activo, ↑/↓ NO se mueven de a una fila: saltan a
+            // la coincidencia anterior/siguiente (pedido del usuario; Tab sigue para paneles).
+            Action::MoveUp => {
+                if self.filter_active() {
+                    self.jump_filter_match(-1);
+                } else {
+                    self.with_active(|f| f.move_focus_extend(-1, false));
+                }
+            }
+            Action::MoveDown => {
+                if self.filter_active() {
+                    self.jump_filter_match(1);
+                } else {
+                    self.with_active(|f| f.move_focus_extend(1, false));
+                }
+            }
             Action::ExtendUp => self.with_active(|f| f.move_focus_extend(-1, true)),
             Action::ExtendDown => self.with_active(|f| f.move_focus_extend(1, true)),
             Action::FocusPageUp => self.with_active(|f| f.focus_page(-1, PAGE_ROWS, false)),
@@ -211,8 +382,28 @@ impl WorkspaceCtrl {
                     self.open_empty_search();
                 }
             }
-            Action::ComputeSize => self.compute_size_active(),
+            Action::ComputeSize => {
+                // F3 con filtro activo = "buscar siguiente" (estilo Notepad++); sin filtro,
+                // su rol clásico: calcular el tamaño de la carpeta enfocada/seleccionada.
+                if self.filter_active() {
+                    self.jump_filter_match(1);
+                } else {
+                    self.compute_size_active();
+                }
+            }
+            // Shift+F3: coincidencia anterior del filtro (no-op sin filtro).
+            Action::FilterPrevMatch => {
+                if self.filter_active() {
+                    self.jump_filter_match(-1);
+                }
+            }
             Action::CancelListing => {
+                // Esc limpia PRIMERO el filtro visual por tipeo si está activo (lo más
+                // superficial: es lo último que el usuario "abrió"). Refrescar para
+                // quitar el tinte de las filas.
+                if self.clear_filter() {
+                    return true;
+                }
                 // Esc cierra primero el panel de búsqueda si está abierto (caso más común).
                 if self.search_open() {
                     self.close_search();
@@ -485,12 +676,78 @@ impl WorkspaceCtrl {
         }
     }
 
-    fn typeahead(&mut self, text: &str) {
+    /// ¿Hay un filtro visual por tipeo activo? (buffer no vacío). El filtro PERSISTE
+    /// hasta Esc o navegar (decisión de diseño): el timeout de 500ms solo agrupa letras
+    /// en el buffer, no apaga el marcado.
+    pub fn filter_active(&self) -> bool {
+        !self.typeahead.is_empty()
+    }
+
+    /// Limpia el filtro visual por tipeo (buffer + conteo). Devuelve true si había algo
+    /// que limpiar (la UI debe refrescar para quitar el tinte de las filas).
+    pub fn clear_filter(&mut self) -> bool {
+        let had = self.filter_active();
+        self.typeahead.clear();
+        self.typeahead_at = None;
+        self.filter_match_count = 0;
+        had
+    }
+
+    /// Aguja del filtro YA PLEGADA (`text_match::fold_for_match`) para pintar las filas del
+    /// panel `id`, o None si no hay filtro activo. El filtro es global al tipeo pero se
+    /// aplica SOLO al panel ACTIVO (es donde el usuario está escribiendo); los demás
+    /// paneles no se tiñen.
+    pub(crate) fn active_filter_needle(&self, id: PaneId) -> Option<String> {
+        if self.ws.active_id() == Some(id) && self.filter_active() {
+            Some(naygo_core::text_match::fold_for_match(&self.typeahead))
+        } else {
+            None
+        }
+    }
+
+    /// Con el filtro visual activo, ↑/↓ saltan a la coincidencia anterior/siguiente del foco
+    /// (con wrap-around: pasar el final vuelve al inicio). Devuelve true si saltó (la UI
+    /// refresca); false si no hay matches (no hay a dónde saltar).
+    fn jump_filter_match(&mut self, dir: i32) -> bool {
+        let needle = naygo_core::text_match::fold_for_match(&self.typeahead);
+        let Some(f) = self.ws.active_files_mut() else {
+            return false;
+        };
+        let view = f.view_indices();
+        let n = view.len() as i32;
+        if n == 0 {
+            return false;
+        }
+        // Sin foco previo: ↓ parte desde antes del primero, ↑ desde después del último.
+        let start = f
+            .focused
+            .map(|p| p as i32)
+            .unwrap_or(if dir > 0 { -1 } else { n });
+        let mut pos = start;
+        for _ in 0..n {
+            pos = (pos + dir).rem_euclid(n);
+            let Some(e) = view.get(pos as usize).and_then(|&real| f.entries.get(real)) else {
+                continue;
+            };
+            if naygo_core::text_match::contains_folded(&e.name, &needle) {
+                f.select_single(pos as usize);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Typeahead/filtro visual: agrega el caracter al buffer y salta el foco a la primera
+    /// aparición. Devuelve true si la tecla se aceptó (hay que refrescar: tinte del filtro,
+    /// selección, auto-scroll a la coincidencia); false si era un caracter de control.
+    fn typeahead(&mut self, text: &str) -> bool {
         let Some(ch) = text.chars().next().filter(|c| !c.is_control()) else {
-            return;
+            return false;
         };
         // Reiniciar el buffer si pasaron más de 500ms desde la última tecla (salto por tipeo
-        // estilo Explorer: una pausa empieza una búsqueda nueva).
+        // estilo Explorer: una pausa empieza una búsqueda nueva). OJO: esto SOLO agrupa el
+        // tipeo en búsquedas; el MARCADO visual del filtro no se apaga por pausa (persiste
+        // hasta Esc o navegar).
         let now = std::time::Instant::now();
         if let Some(last) = self.typeahead_at {
             if now.duration_since(last) > std::time::Duration::from_millis(500) {
@@ -498,38 +755,122 @@ impl WorkspaceCtrl {
             }
         }
         self.typeahead_at = Some(now);
-        self.typeahead.push(ch.to_ascii_lowercase());
-        let needle = self.typeahead.clone();
+        self.typeahead.push(ch);
+        // Salto de foco: a la PRIMERA aparición en orden de vista que CONTIENE la aguja
+        // (prefijo incluido: es un "contiene" al inicio). Pedido del usuario: si los matches
+        // están más abajo, el foco va a la primera aparición. Las coincidencias siguientes
+        // se recorren con ↓/↑ (ver `jump_filter_match`). Case/acento-insensible.
         if let Some(f) = self.ws.active_files_mut() {
+            let needle = naygo_core::text_match::fold_for_match(&self.typeahead);
             let view = f.view_indices();
-            for (pos, &real) in view.iter().enumerate() {
-                if let Some(e) = f.entries.get(real) {
-                    // `needle` ya viene en minúsculas ASCII (se arma plegando cada char con
-                    // `to_ascii_lowercase`). Comparar el prefijo del nombre en minúsculas ASCII
-                    // SIN alocar (antes `e.name.to_lowercase()` alocaba un String Unicode por
-                    // entry en cada pulsación, sobre toda la vista de la carpeta).
-                    if name_starts_with_ascii_ci(&e.name, &needle) {
-                        f.select_single(pos);
-                        break;
-                    }
-                }
+            let target = (0..view.len()).find(|&pos| {
+                view.get(pos)
+                    .and_then(|&real| f.entries.get(real))
+                    .map(|e| naygo_core::text_match::contains_folded(&e.name, &needle))
+                    .unwrap_or(false)
+            });
+            if let Some(pos) = target {
+                f.select_single(pos);
             }
         }
+        true
     }
 }
 
-/// ¿`name` empieza por `needle` comparando case-insensitive SOLO en ASCII, sin alocar?
-/// `needle` ya viene plegado a minúsculas ASCII (los chars no-ASCII pasan tal cual, igual
-/// que hace `char::to_ascii_lowercase`), así que basta plegar cada char de `name` del mismo
-/// modo y comparar carácter a carácter mientras dure `needle`. Coincide con el comportamiento
-/// previo para el tipeo ASCII normal (Explorer-style), pero sin construir un String por entry.
-fn name_starts_with_ascii_ci(name: &str, needle: &str) -> bool {
-    let mut nc = name.chars();
-    for need in needle.chars() {
-        match nc.next() {
-            Some(c) if c.to_ascii_lowercase() == need => {}
-            _ => return false,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Espera (acotada) a que el worker en vuelo drene, llamando `poll` hasta que el
+    /// canal quede consumido. Devuelve el resultado entregado, si hubo uno válido.
+    fn drenar_worker(s: &mut AutocompleteState) -> Option<(String, Vec<String>)> {
+        let mut entregado = None;
+        for _ in 0..2000 {
+            if let Some(r) = s.poll() {
+                entregado = Some(r);
+            }
+            if s.rx.is_none() {
+                return entregado;
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
+        panic!("el worker de autocompletado no terminó en 2 s");
     }
-    true
+
+    #[test]
+    fn complete_path_matchea_subcarpetas_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Alpha")).unwrap();
+        std::fs::create_dir(tmp.path().join("alfajor")).unwrap();
+        std::fs::create_dir(tmp.path().join("Beta")).unwrap();
+        let buffer = format!("{}\\al", tmp.path().display());
+        let sugg = complete_path(&buffer);
+        assert!(sugg.iter().any(|s| s == "Alpha"), "matchea Alpha: {sugg:?}");
+        assert!(
+            sugg.iter().any(|s| s == "alfajor"),
+            "matchea alfajor (case-insensitive): {sugg:?}"
+        );
+        assert!(
+            !sugg.iter().any(|s| s == "Beta"),
+            "no matchea Beta: {sugg:?}"
+        );
+    }
+
+    #[test]
+    fn debounce_no_lanza_worker_antes_del_plazo() {
+        let mut s = AutocompleteState::new();
+        let t0 = Instant::now();
+        s.request("C:\\x".to_string(), t0);
+        // Recién pedido: el debounce no venció → busy (pendiente) pero SIN worker.
+        assert!(s.drive(t0));
+        assert!(s.rx.is_none(), "no debe lanzar worker dentro del debounce");
+        // Vencido el plazo, drive lanza el worker.
+        assert!(s.drive(t0 + AUTOCOMPLETE_DEBOUNCE));
+        assert!(s.rx.is_some(), "vencido el debounce debe lanzar worker");
+    }
+
+    #[test]
+    fn resultado_de_buffer_obsoleto_se_descarta() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Alpha")).unwrap();
+        let buf_a = format!("{}\\a", tmp.path().display());
+        let buf_b = format!("{}\\b", tmp.path().display());
+        let mut s = AutocompleteState::new();
+        let t0 = Instant::now();
+        // Pedir A y lanzar su worker; antes de que llegue, el usuario siguió tipeando (B).
+        s.request(buf_a, t0);
+        s.drive(t0 + AUTOCOMPLETE_DEBOUNCE);
+        assert!(s.rx.is_some());
+        s.request(buf_b, t0 + AUTOCOMPLETE_DEBOUNCE);
+        // El resultado del buffer A llega obsoleto: se drena pero NO se entrega.
+        let entregado = drenar_worker(&mut s);
+        assert!(
+            entregado.is_none(),
+            "un resultado de un buffer viejo no debe entregarse: {entregado:?}"
+        );
+    }
+
+    #[test]
+    fn entrega_sugerencias_del_buffer_vigente_y_deja_de_estar_busy() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Alpha")).unwrap();
+        let buffer = format!("{}\\al", tmp.path().display());
+        let mut s = AutocompleteState::new();
+        let t0 = Instant::now();
+        s.request(buffer.clone(), t0);
+        assert!(
+            s.drive(t0 + AUTOCOMPLETE_DEBOUNCE),
+            "worker en vuelo = busy"
+        );
+        let Some((buf, sugg)) = drenar_worker(&mut s) else {
+            panic!("el resultado del buffer vigente debe entregarse");
+        };
+        assert_eq!(buf, buffer);
+        assert!(sugg.iter().any(|x| x == "Alpha"), "sugerencias: {sugg:?}");
+        // Entregado el resultado, ya no queda trabajo pendiente.
+        assert!(
+            !s.drive(Instant::now()),
+            "sin pendientes no debe estar busy"
+        );
+    }
 }

@@ -30,23 +30,16 @@ slint = { version = "1.16", default-features = false, features = [
 i-slint-backend-winit = "1.16"
 raw-window-handle = "0.6"
 # Para serializar el nombre de una Action como clave estable en el editor de atajos.
-serde_json = "1"
+serde_json.workspace = true
 # Import/export de packs (idiomas/temas/config) como .zip + selector de archivo nativo.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip.workspace = true
 tar = "0.4"
 flate2 = "1"
 rfd = "0.15"
 # Ícono en la bandeja del sistema (mismo crate que usaba la capa egui).
 tray-icon = "0.24.1"
 # Decodificación de imágenes para el panel Preview (mismas familias que la capa egui).
-image = { version = "0.25", default-features = false, features = [
-    "png",
-    "jpeg",
-    "gif",
-    "bmp",
-    "webp",
-    "ico",
-] }
+image.workspace = true
 # Rasterización de SVG para el panel Preview (puro Rust, sin DLLs externas → sigue portable).
 # resvg pinta sobre un tiny_skia::Pixmap que convertimos a RGBA, igual que una imagen normal.
 # Con features por defecto (incluye `text`) para que los SVG con texto se vean bien.
@@ -56,7 +49,7 @@ tiny-skia = "0.12"
 # Extracción de TEXTO y metadatos de PDF (puro Rust, sin DLLs). Preview liviano: NO renderiza
 # la página, solo muestra el texto y el nº de páginas. Mantiene la app portable.
 pdf-extract = "0.10"
-lopdf = "0.41"
+lopdf.workspace = true
 
 [build-dependencies]
 slint-build = "1.16"
@@ -64,4 +57,4 @@ slint-build = "1.16"
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

@@ -31,11 +31,13 @@ impl WorkspaceCtrl {
         ));
         // Navegar cancela la vista profunda del panel (no es pegajosa).
         self.cancel_deep_if_navigating(active_files_id);
-        // Si la carpeta no existe/ilegible (favorito viejo, red caída, ruta tipeada), igual
-        // navegamos: el panel mostrará el aviso "carpeta no encontrada" IN-PLACE con sus
-        // opciones (reintentar/subir/elegir/cerrar), en vez de un popup global. No la metemos
-        // en recientes si no es navegable (evita ensuciar la lista con rutas muertas).
-        let navigable = Self::dir_is_navigable(&dir);
+        // Navegamos SIEMPRE, sin chequear antes si la carpeta es navegable: ese `read_dir`
+        // síncrono en el hilo de UI congelaba la app contra un share de red caído. Si la
+        // carpeta no existe/es ilegible (favorito viejo, red caída, ruta tipeada), el listado
+        // async reporta el error y el panel muestra el aviso "carpeta no encontrada" IN-PLACE
+        // con sus opciones (reintentar/subir/elegir/cerrar). El registro en recientes queda
+        // DIFERIDO al resultado del listado (`pending_recents`, lo drena `pump_listings`):
+        // solo entra si la carpeta se pudo listar, para no ensuciar la lista con rutas muertas.
         if let Some(f) = self
             .ws
             .pane_mut(active_files_id)
@@ -43,10 +45,8 @@ impl WorkspaceCtrl {
         {
             f.navigate_to(dir.clone());
         }
-        if navigable {
-            self.push_recent(dir.clone());
-        }
         self.start_listing(active_files_id, dir.clone());
+        self.pending_recents.insert(active_files_id, dir.clone());
         self.sync_trees_active(dir);
         true
     }
@@ -306,7 +306,12 @@ impl WorkspaceCtrl {
         let keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
         for key in keys {
             let (batch, done) = match self.tree_listings.get(&key) {
-                Some(l) => l.poll(),
+                // El tercer valor del poll (éxito) no aplica al árbol: una rama ilegible
+                // simplemente no muestra hijos.
+                Some(l) => {
+                    let (b, d, _ok) = l.poll();
+                    (b, d)
+                }
                 None => continue,
             };
             let (id, parent) = (key.0, &key.1);

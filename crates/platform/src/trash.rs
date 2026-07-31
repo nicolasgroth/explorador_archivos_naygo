@@ -39,7 +39,7 @@ pub fn move_to_trash(paths: &[PathBuf]) -> Result<(), TrashError> {
     // (RPC_E_CHANGED_MODE), NO debe llamarse CoUninitialize: sería un balance
     // incorrecto que decrementaría el refcount de COM de otro componente del hilo
     // (relevante porque esto puede llamarse desde el hilo de UI ya inicializado por
-    // eframe/winit). Los punteros (PCWSTR sobre buffers vivos) son válidos.
+    // Slint/winit). Los punteros (PCWSTR sobre buffers vivos) son válidos.
     unsafe {
         // En 0.62 devuelve HRESULT. `is_ok()` cubre S_OK y S_FALSE (ya inicializado en
         // este apartment); ambos requieren un CoUninitialize de cierre.

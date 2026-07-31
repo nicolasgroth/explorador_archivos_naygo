@@ -31,26 +31,36 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
 ## Stack
 
 - Lenguaje: **Rust**
-- UI: **egui / eframe** (UI inmediata, render GPU)
-- Docking: **egui_dock** (paneles dinámicos)
+- UI: **Slint** (toolkit declarativo `.slint` + backend **winit** con **renderer por
+  software**: sin dependencia de GPU, clave para VMs y equipos modestos). La
+  migración egui→Slint terminó; la capa egui ya no existe.
 - Interop Windows: crate **`windows`** (oficial de Microsoft) para Shell32 / COM /
   OLE
 - Serialización: **serde / serde_json**
-- Todas las dependencias **libres** (MIT/Apache/ISC/CC0). Cero regalías.
+- Todas las dependencias **libres** (MIT/Apache/ISC/CC0) o royalty-free (Slint).
+  Cero regalías.
 - Build: `cargo` desde terminal.
 
-## Arquitectura (3 capas — ver spec)
+## Arquitectura (3 crates — ver spec)
 
-- **`core`**: lógica pura, sin UI ni Windows. Testeable al 100%. Contiene
-  `fs_model`, `listing` (streaming incremental), `ops`, `sizing`, `i18n`, `theme`,
-  `config`.
-- **`platform`**: TODO lo que toca Windows, aislado. `shell` (íconos, ShellExecute,
-  papelera, discos), `dnd` (drag&drop COM/OLE), `watcher` (futuro).
-- **`ui`**: egui, sin lógica de negocio. `app`, `docking`, paneles, `theme_apply`,
-  `input`, `icons`, `progress`.
+- **`core`** (`naygo-core`): lógica pura, sin UI ni Windows. Testeable al 100%.
+  Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
+  (copiar/mover/borrar), `archive_ops` / `archive_tree`, `search`, `metadata`,
+  `preview`, `batch_rename`, `i18n`, `theme`, `config`, `keymap`, `workspace`
+  (layout de paneles), entre otros.
+- **`platform`** (`naygo-platform`): TODO lo que toca Windows, aislado. `drives` /
+  `drive_space` / `eject` (discos), `dnd` + `drop_target` + `clipboard` (drag&drop
+  y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
+  `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
+  `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
+- **`ui-slint`** (`naygo-ui-slint`, binario **`naygo`**): la UI oficial en Slint,
+  sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
+  core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`
+  (controladores), `packs`, `preview`, `devices`, `keys` (atajos), `icons`,
+  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`.
 
 **Regla de oro:** el hilo de UI **nunca** hace I/O de disco. Todo lo pesado corre
-en workers async que se comunican por canales. `core` no conoce egui ni Windows.
+en workers que se comunican por canales. `core` no conoce Slint ni Windows.
 
 ## Principios de diseño (críticos)
 

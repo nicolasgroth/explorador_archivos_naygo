@@ -403,7 +403,10 @@ impl ConfigCtrl {
             return;
         };
         let factory = self.themes.get(&ThemeId::new(&src_id)).clone();
-        let e = self.editing.as_mut().expect("editing recién comprobado");
+        // `editing` se comprobó arriba; si el invariante se rompe, no restaurar en vez de paniquear.
+        let Some(e) = self.editing.as_mut() else {
+            return;
+        };
         e.theme.accent = factory.accent;
         e.theme.panel_bg = factory.panel_bg;
         e.theme.row_bg = factory.row_bg;
@@ -447,6 +450,16 @@ impl ConfigCtrl {
             OpsMode::Parallel
         } else {
             OpsMode::Queue
+        };
+        self.save();
+    }
+
+    /// Título de la ventana: 0 = solo app, 1 = app + ruta del panel activo, 2 = solo ruta.
+    pub fn set_window_title_mode(&mut self, mode: i32) {
+        self.settings.window_title_mode = match mode {
+            1 => naygo_core::WindowTitleMode::AppAndPath,
+            2 => naygo_core::WindowTitleMode::PathOnly,
+            _ => naygo_core::WindowTitleMode::AppOnly,
         };
         self.save();
     }

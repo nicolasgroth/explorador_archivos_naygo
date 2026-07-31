@@ -16,6 +16,18 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
     false
 }
 
+/// Drena el probe async de "carpeta no encontrada" hasta que aplica sus resultados (con
+/// timeout), simulando los ticks del Timer. Devuelve true si no quedó probe en vuelo.
+fn drain_missing(c: &mut WorkspaceCtrl) -> bool {
+    for _ in 0..2000 {
+        if c.pump_missing_probe() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    false
+}
+
 fn active_pos_of(c: &WorkspaceCtrl, name: &str) -> Option<usize> {
     let f = c.ws.active_files()?;
     f.view_indices()
@@ -1402,11 +1414,12 @@ fn rename_inline_y_en_cadena() {
     let req = c
         .take_rename_request()
         .expect("F2 marcó el pedido de rename");
-    assert_eq!(req.0, id);
-    assert_eq!(req.1, pos);
-    assert_eq!(req.2, 0, "etapa inicial = nombre sin extensión");
+    assert_eq!(req.pane, id);
+    assert_eq!(req.pos, pos);
+    assert_eq!(req.stage, 0, "etapa inicial = nombre sin extensión");
+    assert_eq!(req.selection, (0, 1), "selecciona solo 'a'");
     // Confirmar el rename y bombear la op hasta completarla (mismo patrón que ops_ctrl).
-    assert!(c.rename_commit(id, pos, "renombrado.txt"));
+    assert!(c.rename_commit(id, req.session, "renombrado.txt"));
     for _ in 0..4000 {
         let done = c.ops.pump_ops();
         if done && !c.ops.active_ops.is_empty() {
@@ -1425,10 +1438,81 @@ fn rename_inline_y_en_cadena() {
     c.start_listing(id, tmp.path().to_path_buf());
     assert!(drain(&mut c));
     let pos_b = active_pos_of(&c, "b.txt").expect("b.txt visible");
-    let next = c.rename_chain(id, pos_b, "b.txt", 1);
+    c.ws.active_files_mut().unwrap().select_single(pos_b);
+    c.op_rename();
+    let chain_req = c.take_rename_request().expect("abre rename para chain");
+    let next = c.rename_chain(id, chain_req.session, "b.txt", 1);
     assert!(next.is_some(), "encadena a una fila válida");
     let req2 = c.take_rename_request().expect("chain reabre el editor");
-    assert_eq!(req2.2, 0, "el chain selecciona el nombre sin extensión");
+    assert_eq!(req2.stage, 0, "el chain selecciona el nombre sin extensión");
+}
+
+#[test]
+fn rename_usa_ruta_estable_y_commit_es_unico() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"a").unwrap();
+    std::fs::write(tmp.path().join("b.txt"), b"b").unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.active_id().unwrap();
+    let pos_a = active_pos_of(&c, "a.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos_a);
+    c.op_rename();
+    let req = c.take_rename_request().unwrap();
+
+    // El watcher/listado incorpora una fila que se ordena antes y desplaza el índice de a.txt.
+    std::fs::write(tmp.path().join("0.txt"), b"0").unwrap();
+    c.start_listing(id, tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    assert_ne!(active_pos_of(&c, "a.txt"), Some(req.pos));
+
+    assert!(c.rename_commit(id, req.session, "estable.txt"));
+    assert!(
+        !c.rename_commit(id, req.session, "duplicado.txt"),
+        "la pérdida de foco posterior no confirma por segunda vez"
+    );
+    for _ in 0..4000 {
+        if c.ops.pump_ops() && !c.ops.active_ops.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(tmp.path().join("estable.txt").exists());
+    assert!(
+        tmp.path().join("0.txt").exists(),
+        "no renombra la fila desplazada"
+    );
+    assert!(!tmp.path().join("duplicado.txt").exists());
+}
+
+#[test]
+fn f2_repetido_cicla_seleccion_y_carpeta_selecciona_todo() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("canción.txt"), b"x").unwrap();
+    std::fs::create_dir(tmp.path().join("carpeta.con.puntos")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+
+    let pos = active_pos_of(&c, "canción.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+    c.op_rename();
+    let first = c.take_rename_request().unwrap();
+    assert_eq!(first.selection, (0, 8));
+    c.op_rename();
+    let second = c.take_rename_request().unwrap();
+    assert_eq!(second.stage, 1);
+    assert_eq!(second.selection, (9, 12));
+    c.op_rename();
+    let third = c.take_rename_request().unwrap();
+    assert_eq!(third.stage, 2);
+    assert_eq!(third.selection, (0, 12));
+    c.rename_cancel();
+
+    let folder_pos = active_pos_of(&c, "carpeta.con.puntos").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(folder_pos);
+    c.op_rename();
+    let folder = c.take_rename_request().unwrap();
+    assert_eq!(folder.selection, (0, folder.name.len()));
 }
 
 /// 6F: rubber-band. select_rect_range selecciona el rango inclusivo de filas; aditivo (Ctrl)
@@ -1521,11 +1605,13 @@ fn carpeta_perdida_se_detecta_por_panel_y_sube_al_ancestro() {
     assert!(drain(&mut c));
     let id = c.ws.active_id().unwrap();
     c.refresh_missing_cache();
+    assert!(drain_missing(&mut c));
     assert!(!c.pane_dir_missing(id), "al inicio la carpeta existe");
     std::fs::remove_dir_all(&sub).unwrap(); // "sacar el USB"
-                                            // El estado "missing" se cachea y se recalcula en eventos reales (aquí simulamos el
-                                            // evento de cambio de discos / tick que dispara el refresco).
+                                            // El estado "missing" se cachea y se recalcula async en eventos reales (aquí
+                                            // simulamos el evento de cambio de discos + los ticks que drenan el probe).
     c.refresh_missing_cache();
+    assert!(drain_missing(&mut c));
     assert!(
         c.pane_dir_missing(id),
         "el panel detecta su carpeta perdida"
@@ -1533,6 +1619,8 @@ fn carpeta_perdida_se_detecta_por_panel_y_sube_al_ancestro() {
     assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
     // "Subir al ancestro existente": el panel queda en tmp (el padre que sigue vivo).
     c.missing_folder_go_ancestor(id);
+    // El aviso se limpia de inmediato: la entrada cacheada era de la carpeta VIEJA y queda
+    // invalidada al navegar (sin esperar al probe nuevo).
     assert!(!c.pane_dir_missing(id), "ya no está perdida tras subir");
     assert_eq!(c.ws.active_files().unwrap().current_dir, tmp.path());
 }
@@ -2401,5 +2489,271 @@ fn solo_vecinos_resto_fijo() {
     assert!(
         (w2 - w2_antes).abs() < 1.0,
         "el panel 2 (no vecino del divisor 0) conserva su ancho: {w2} vs {w2_antes}"
+    );
+}
+
+/// Navegación sin chequeo síncrono: el registro en recientes queda DIFERIDO al resultado del
+/// listado. Una carpeta buena entra a recientes cuando su listado termina OK; una ruta muerta
+/// (no existe) navega igual (el aviso in-place informa) pero NO ensucia recientes.
+#[test]
+fn reciente_se_deriva_del_resultado_del_listado() {
+    let tmp = tempfile::tempdir().unwrap();
+    let buena = tmp.path().join("buena");
+    std::fs::create_dir(&buena).unwrap();
+    let muerta = tmp.path().join("no_existe");
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let antes = c.recents.list().len();
+
+    // Navegar a la muerta: navega (devuelve true) pero tras el listado fallido NO es reciente.
+    assert!(c.navigate_active_to(muerta.clone()));
+    assert!(drain(&mut c));
+    assert_eq!(c.recents.list().len(), antes, "la ruta muerta no entra");
+    assert!(
+        !c.recents.list().contains(&muerta),
+        "la ruta muerta no ensucia recientes"
+    );
+
+    // Navegar a la buena: tras el listado exitoso SÍ queda registrada (al frente).
+    assert!(c.navigate_active_to(buena.clone()));
+    assert!(drain(&mut c));
+    assert_eq!(c.recents.list().first(), Some(&buena));
+}
+
+/// El aviso "carpeta no encontrada" se calcula en el probe async: navegar a una ruta muerta
+/// marca el panel como perdido SOLO tras drenar el probe (nunca con I/O en el hilo de UI).
+#[test]
+fn navegar_a_ruta_muerta_marca_missing_tras_el_probe() {
+    let tmp = tempfile::tempdir().unwrap();
+    let muerta = tmp.path().join("no_existe");
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.active_id().unwrap();
+    assert!(c.navigate_active_to(muerta));
+    assert!(drain_missing(&mut c));
+    assert!(
+        c.pane_dir_missing(id),
+        "el probe async marca la carpeta perdida"
+    );
+    // Tiene un ancestro existente (tmp) al que subir.
+    assert!(c.pane_has_existing_ancestor(id));
+}
+
+/// F5A + metadata pre-resuelta: `apply_watch_events_resolved` usa el Entry que el hilo del
+/// watcher ya leyó, en vez de volver a tocar el disco. Se prueba pre-cargando un Entry con un
+/// tamaño distinto del real: el panel debe quedar con el del mapa.
+#[test]
+fn watch_events_usa_la_metadata_preresuelta() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.active_id().unwrap();
+    let path = tmp.path().join("a.txt");
+    // Pre-resolver un Entry con tamaño marcador (999): el evento Modified debe aplicar ESTE,
+    // no el tamaño real del archivo (que es 1).
+    let mut prefetched = naygo_core::listing::entry_from_path(&path, None);
+    prefetched.size = Some(999);
+    let mut resolved = std::collections::HashMap::new();
+    resolved.insert(path.clone(), Some(prefetched));
+    c.apply_watch_events_resolved(
+        id,
+        &[naygo_core::listing::DirEvent::Modified(path.clone())],
+        &resolved,
+    );
+    let f = c.ws.active_files().unwrap();
+    let entry = f.entries.iter().find(|e| e.path == path).unwrap();
+    assert_eq!(entry.size, Some(999), "usa la metadata pre-resuelta");
+}
+
+/// Regresión del bug "tipear `_`/`!`/`#` en el editor de rename REEMPLAZA todo el texto":
+/// las teclas tipeadas en el editor inline se filtraban al despachador global (`on_key`),
+/// donde el typeahead movía la selección → el sync re-montaba la fila y el editor volvía
+/// con el nombre original seleccionado. La guarda: con `rename_active` abierto, `on_key`
+/// es no-op (la vía principal es el gate del FilePanel en .slint; esta es la red en Rust).
+#[test]
+fn on_key_con_rename_activo_es_noop_y_no_gatilla_typeahead() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for n in ["alpha.txt", "_zeta.txt"] {
+        std::fs::write(dir.path().join(n), b"x").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    // Enfocar/seleccionar la fila 0 y abrir la sesión de rename sobre ella.
+    c.on_row_clicked(id, 0, false, false, std::time::Instant::now());
+    c.op_rename();
+    assert!(
+        c.rename_active.is_some(),
+        "la sesión de rename quedó abierta"
+    );
+    // Teclear "_" con Shift (como en el layout latino): antes del fix esto corría el
+    // typeahead y seleccionaba "_zeta.txt". Ahora on_key es no-op durante el rename.
+    let handled = c.on_key("_", false, true, false);
+    assert!(
+        !handled,
+        "on_key ignora la tecla mientras el editor de rename está abierto"
+    );
+    assert!(
+        c.typeahead.is_empty(),
+        "el typeahead NO corrió durante el rename"
+    );
+    let f = c.ws.active_files().unwrap();
+    assert!(
+        f.selected.len() == 1 && f.selected.contains(&0),
+        "la selección no se movió: sigue solo la fila 0 (renombrada), {:?}",
+        f.selected
+    );
+    // Y la sesión sigue viva: nada la cerró por debajo.
+    assert!(c.rename_active.is_some());
+}
+
+/// Filtro visual por tipeo: tipear marca (solo visual) las filas que CONTIENEN el texto
+/// (case/acento-insensible), el salto de foco cae al primer "contiene" si no hay prefijo,
+/// el footer anuncia el filtro con el conteo, Esc lo limpia primero que nada, y navegar a
+/// otra carpeta también (un refresh de la misma carpeta lo conserva).
+#[test]
+fn filtro_por_tipeo_marca_salta_persiste_y_se_limpia() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("alpha.txt"), b"x").unwrap();
+    std::fs::write(dir.path().join("mi beta final.txt"), b"x").unwrap();
+    std::fs::create_dir(dir.path().join("betacam")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+
+    // Tipear "beta": ningún nombre EMPIEZA con "beta"... salvo la carpeta "betacam" (prefijo).
+    for ch in ["b", "e", "t", "a"] {
+        c.on_key(ch, false, false, false);
+    }
+    assert!(c.filter_active(), "el buffer de tipeo activó el filtro");
+    // Salto: gana el prefijo ("betacam"), no el "contiene" ("mi beta final.txt").
+    let f = c.ws.active_files().unwrap();
+    let focused_name = f
+        .focused
+        .and_then(|p| f.view_entry_at(p))
+        .map(|e| e.name.clone());
+    assert_eq!(focused_name.as_deref(), Some("betacam"));
+
+    // Marcado visual: rows_of marca los dos que contienen "beta" (archivo + carpeta).
+    let rows = c.rows_of(id, 0, std::time::Instant::now());
+    let marked: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.filter_match)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(marked.len(), 2, "marca archivo y carpeta: {marked:?}");
+    assert_eq!(c.filter_match_count, 2);
+
+    // Footer: anuncia el filtro con el buffer y el conteo (i18n es).
+    let footer = c.footer_text_of(id);
+    assert!(
+        footer.contains("filtro: \"beta\"") && footer.contains("2 coincidencias"),
+        "footer con filtro y conteo: {footer}"
+    );
+
+    // Un refresh de la MISMA carpeta CONSERVA el filtro.
+    c.refresh_active();
+    assert!(c.filter_active(), "refresh no limpia el filtro");
+    assert!(drain(&mut c));
+
+    // Esc limpia el filtro PRIMERO (antes que cerrar búsqueda o cancelar listado).
+    let esc = crate::keys::escape_char().to_string();
+    c.on_key(&esc, false, false, false);
+    assert!(!c.filter_active(), "Esc limpió el filtro");
+    let rows = c.rows_of(id, 0, std::time::Instant::now());
+    assert!(rows.iter().all(|r| !r.filter_match), "sin tinte tras Esc");
+
+    // Navegar a OTRA carpeta limpia el filtro.
+    for ch in ["a", "l"] {
+        c.on_key(ch, false, false, false);
+    }
+    assert!(c.filter_active());
+    let sub = dir.path().join("betacam");
+    c.navigate_pane_to(id, sub);
+    assert!(!c.filter_active(), "navegar limpió el filtro");
+}
+
+/// El salto de foco del typeahead: si ningún nombre empieza con la aguja, cae al primer
+/// nombre que la CONTIENE (en orden de vista). Case/acento-insensible.
+#[test]
+fn typeahead_salta_por_contiene_si_no_hay_prefijo() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("alpha.txt"), b"x").unwrap();
+    std::fs::write(dir.path().join("mi canción favorita.mp3"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    // "cancion" sin tilde: ningún nombre empieza así; "mi canción favorita.mp3" la contiene.
+    for ch in ["c", "a", "n", "c", "i", "o", "n"] {
+        c.on_key(ch, false, false, false);
+    }
+    let f = c.ws.active_files().unwrap();
+    let focused_name = f
+        .focused
+        .and_then(|p| f.view_entry_at(p))
+        .map(|e| e.name.clone());
+    assert_eq!(
+        focused_name.as_deref(),
+        Some("mi canción favorita.mp3"),
+        "salta al contiene, sin tilde y sin prefijo"
+    );
+}
+
+/// Char unicode de una tecla especial de Slint como String (mismo helper que tests_simular).
+fn key_str(k: slint::platform::Key) -> String {
+    let s: slint::SharedString = k.into();
+    s.to_string()
+}
+
+/// Con el filtro visual activo, ↓/↑ recorren las COINCIDENCIAS (no de a una fila), con
+/// wrap-around. Pedido del usuario: Tab sigue para paneles; las flechas ciclan matches.
+#[test]
+fn flechas_ciclan_coincidencias_del_filtro() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // Solo archivos (sin carpetas) para un orden de vista alfabético predecible:
+    // "aa match uno", "bb", "cc match dos", "dd".
+    std::fs::write(dir.path().join("aa match uno.txt"), b"x").unwrap();
+    std::fs::write(dir.path().join("bb.txt"), b"x").unwrap();
+    std::fs::write(dir.path().join("cc match dos.txt"), b"x").unwrap();
+    std::fs::write(dir.path().join("dd.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    for ch in ["m", "a", "t", "c", "h"] {
+        c.on_key(ch, false, false, false);
+    }
+    assert!(c.filter_active());
+    let focused_name = |c: &WorkspaceCtrl| -> String {
+        let f = c.ws.active_files().unwrap();
+        f.focused
+            .and_then(|p| f.view_entry_at(p))
+            .map(|e| e.name.clone())
+            .unwrap_or_default()
+    };
+    // El salto inicial va a la PRIMERA aparición en la vista.
+    assert_eq!(focused_name(&c), "aa match uno.txt");
+    let down = key_str(slint::platform::Key::DownArrow);
+    let up = key_str(slint::platform::Key::UpArrow);
+    // ↓ salta a la siguiente coincidencia (se salta "bb.txt").
+    c.on_key(&down, false, false, false);
+    assert_eq!(focused_name(&c), "cc match dos.txt");
+    // ↓ desde la última envuelve a la primera.
+    c.on_key(&down, false, false, false);
+    assert_eq!(focused_name(&c), "aa match uno.txt");
+    // ↑ vuelve a la anterior (también con wrap).
+    c.on_key(&up, false, false, false);
+    assert_eq!(focused_name(&c), "cc match dos.txt");
+    // Sin filtro, ↓ vuelve a moverse de a una fila.
+    let esc = crate::keys::escape_char().to_string();
+    c.on_key(&esc, false, false, false);
+    assert!(!c.filter_active());
+    c.on_key(&down, false, false, false);
+    assert_eq!(
+        focused_name(&c),
+        "dd.txt",
+        "sin filtro, ↓ avanza una fila normal"
     );
 }

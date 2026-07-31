@@ -275,4 +275,145 @@ mod tests {
             .read(std::path::Path::new(r"C:\no\existe.xlsx"))
             .is_empty());
     }
+
+    #[test]
+    fn zip_truncado_da_vacio_sin_panic() {
+        // Un docx válido cortado a la mitad: el directorio central del zip queda incompleto.
+        let dir = tempfile::tempdir().unwrap();
+        let core_xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Nicolás</dc:creator></cp:coreProperties>"#;
+        let ok = write_zip(dir.path(), "ok.docx", &[("docProps/core.xml", core_xml)]);
+        let bytes = std::fs::read(&ok).unwrap();
+        let p = dir.path().join("mitad.docx");
+        std::fs::write(&p, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(OfficeMeta.read(&p).is_empty());
+    }
+
+    #[test]
+    fn zip_sin_docprops_da_vacio() {
+        // Zip válido pero sin las entradas esperadas (falta docProps/core.xml y app.xml).
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_zip(dir.path(), "x.docx", &[("otra/cosa.txt", "hola")]);
+        assert!(OfficeMeta.read(&p).is_empty());
+    }
+
+    #[test]
+    fn xml_malformado_no_paniquea_y_rescata_lo_legible() {
+        // XML cortado a mitad de un TAG después del autor: el parseo por eventos devuelve lo
+        // hallado antes del error y no paniquea. (Si el corte fuera a mitad del TEXTO de un
+        // elemento, quick-xml igual entrega ese texto parcial antes del EOF: es tolerante.)
+        let dir = tempfile::tempdir().unwrap();
+        let core_xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Nicolás</dc:creator><dc:tit"#;
+        let p = write_zip(dir.path(), "x.docx", &[("docProps/core.xml", core_xml)]);
+        let fields = OfficeMeta.read(&p);
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.label_key == "meta.author" && f.value == "Nicolás"),
+            "debe rescatar el autor aunque el XML esté cortado: {fields:?}"
+        );
+        assert!(
+            !fields.iter().any(|f| f.label_key == "meta.title"),
+            "el tag del título quedó incompleto y no se reporta: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn xml_basura_no_reporta_campos_ni_paniquea() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_zip(
+            dir.path(),
+            "x.docx",
+            &[("docProps/core.xml", "<<<no xml>>>")],
+        );
+        let fields = OfficeMeta.read(&p);
+        assert!(
+            !fields
+                .iter()
+                .any(|f| f.label_key == "meta.author" || f.label_key == "meta.title"),
+            "XML basura no produce campos: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn entrada_core_xml_no_utf8_da_vacio_sin_panic() {
+        // docProps/core.xml existe pero con bytes que no son UTF-8 válido.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.docx");
+        let f = std::fs::File::create(&p).unwrap();
+        let mut zip = zip::ZipWriter::new(f);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("docProps/core.xml", opts).unwrap();
+        zip.write_all(&[0xFF, 0xFE, 0x00, 0x80, 0x81]).unwrap();
+        zip.finish().unwrap();
+        assert!(OfficeMeta.read(&p).is_empty());
+    }
+
+    #[test]
+    fn campos_vacios_no_se_reportan() {
+        let dir = tempfile::tempdir().unwrap();
+        let core_xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>   </dc:creator><dc:title></dc:title></cp:coreProperties>"#;
+        let p = write_zip(dir.path(), "x.docx", &[("docProps/core.xml", core_xml)]);
+        let fields = OfficeMeta.read(&p);
+        assert!(
+            fields.is_empty(),
+            "campos vacíos o de solo espacios no se reportan: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn docx_sin_app_xml_reporta_core_pero_no_palabras() {
+        let dir = tempfile::tempdir().unwrap();
+        let core_xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Nicolás</dc:creator></cp:coreProperties>"#;
+        let p = write_zip(dir.path(), "x.docx", &[("docProps/core.xml", core_xml)]);
+        let fields = OfficeMeta.read(&p);
+        assert!(fields.iter().any(|f| f.label_key == "meta.author"));
+        assert!(
+            !fields.iter().any(|f| f.label_key == "meta.word_count"),
+            "sin app.xml no hay conteo de palabras: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn xlsx_sin_hojas_no_reporta_sheet_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let workbook = r#"<?xml version="1.0"?><workbook><sheets></sheets></workbook>"#;
+        let p = write_zip(dir.path(), "x.xlsx", &[("xl/workbook.xml", workbook)]);
+        let fields = OfficeMeta.read(&p);
+        assert!(
+            !fields.iter().any(|f| f.label_key == "meta.sheet_count"),
+            "un libro sin hojas no reporta sheet_count: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn extension_en_mayusculas_funciona() {
+        // El match de extensión se hace en lowercase: "X.DOCX" debe comportarse como docx.
+        let dir = tempfile::tempdir().unwrap();
+        let app_xml = r#"<?xml version="1.0"?><Properties><Words>42</Words></Properties>"#;
+        let p = write_zip(dir.path(), "X.DOCX", &[("docProps/app.xml", app_xml)]);
+        let fields = OfficeMeta.read(&p);
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.label_key == "meta.word_count" && f.value == "42"),
+            "extensión en mayúsculas sigue siendo docx: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn archivo_sin_extension_da_vacio() {
+        let dir = tempfile::tempdir().unwrap();
+        let core_xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Nicolás</dc:creator></cp:coreProperties>"#;
+        let p = write_zip(
+            dir.path(),
+            "sin_extension",
+            &[("docProps/core.xml", core_xml)],
+        );
+        assert!(OfficeMeta.read(&p).is_empty());
+    }
+
+    #[test]
+    fn extensiones_declaradas() {
+        assert_eq!(OfficeMeta.extensions(), &["docx", "xlsx", "pptx"]);
+    }
 }

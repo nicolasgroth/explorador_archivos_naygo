@@ -85,5 +85,27 @@ mod tests {
             rgba: vec![0, 0, 0],
         };
         assert!(encode_image(&bad, ImageFmt::Png, 90).is_err());
+        // El chequeo de buffer es previo al formato: JPG también falla.
+        assert!(encode_image(&bad, ImageFmt::Jpg, 90).is_err());
+    }
+
+    #[test]
+    fn jpg_quality_fuera_de_rango_se_clampea_sin_panic() {
+        let img = sample(4, 4);
+        // 0 y 255 están fuera de 1..=100: se clampean y codifican igual.
+        for q in [0u8, 255] {
+            let bytes = encode_image(&img, ImageFmt::Jpg, q).unwrap();
+            let decoded = image::load_from_memory(&bytes).unwrap();
+            assert_eq!(decoded.to_rgba8().dimensions(), (4, 4));
+        }
+    }
+
+    #[test]
+    fn png_un_pixel_round_trip() {
+        let img = sample(1, 1);
+        let bytes = encode_image(&img, ImageFmt::Png, 90).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (1, 1));
+        assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
     }
 }

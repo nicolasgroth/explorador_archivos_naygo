@@ -13,9 +13,9 @@
 ## Compilar (desarrollo)
 
 ```
-cargo build            # debug
-cargo run -p naygo-ui  # corre Naygo
-cargo test --workspace # tests
+cargo build                    # debug
+cargo run -p naygo-ui-slint    # corre Naygo (binario `naygo`)
+cargo test --workspace         # tests
 ```
 
 ## Compilar release + empaquetar
@@ -29,8 +29,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 Qué hace, en orden:
 
 1. Lee la versión del `Cargo.toml` raíz (fuente única de verdad).
-2. `cargo build --release` → `target\release\naygo.exe` (con ícono, metadatos de
-   autoría y CRT estático).
+2. `cargo build --release -p naygo-ui-slint` → `target\release\naygo.exe` (con ícono,
+   metadatos de autoría y CRT estático).
 3. Genera `dist\Naygo-<versión>-portable.zip` (`naygo.exe` + `LICENSE` + `LEEME.txt` +
    `THIRD-PARTY-NOTICES.md`).
 4. Genera las imágenes del asistente del instalador (`installer\wizard-*.bmp`) desde
@@ -49,8 +49,9 @@ Qué hace, en orden:
 
 - **"ISCC.exe no encontrado"**: Inno Setup no está instalado o no está en el `PATH`.
   Instálalo (link arriba) y vuelve a ejecutar el script; el ZIP portable se genera igual sin Inno.
-- **El `.exe` no muestra el ícono**: vuelve a ejecutar `cargo build --release` (el ícono se
-  embebe vía `crates/ui/app.rc`). Explorer cachea íconos; prueba en otra carpeta.
+- **El `.exe` no muestra el ícono**: vuelve a ejecutar `cargo build --release
+  -p naygo-ui-slint` (el ícono se embebe vía `winresource` en
+  `crates/ui-slint/build.rs`). Explorer cachea íconos; prueba en otra carpeta.
 - **Error al generar las BMP del asistente**: el script usa `System.Drawing` de .NET;
   en Windows 10/11 normal está disponible. En ediciones recortadas (Server Core),
   genera las BMP a mano y vuelve a correr.

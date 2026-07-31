@@ -99,6 +99,24 @@ impl WorkspaceCtrl {
         self.ws.pane(id).map(|p| p.purpose)
     }
 
+    /// Título de la ventana principal según `Settings.window_title_mode`: solo la app,
+    /// la app con la ruta del panel activo, o solo la ruta. Sin panel Files activo
+    /// (p. ej. solo árbol/ayuda), cae a "Naygo" para no quedar vacío.
+    pub fn window_title(&self) -> String {
+        let path = self
+            .ws
+            .active_files()
+            .map(|f| f.current_dir.display().to_string());
+        match self.config.settings.window_title_mode {
+            naygo_core::WindowTitleMode::AppOnly => "Naygo".to_string(),
+            naygo_core::WindowTitleMode::AppAndPath => match path {
+                Some(p) => format!("Naygo — {p}"),
+                None => "Naygo".to_string(),
+            },
+            naygo_core::WindowTitleMode::PathOnly => path.unwrap_or_else(|| "Naygo".to_string()),
+        }
+    }
+
     /// Texto de la barra de estado: carpeta activa + recuento de ítems y de selección.
     pub fn status_line(&self) -> String {
         let Some(f) = self.ws.active_files() else {

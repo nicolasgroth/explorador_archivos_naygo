@@ -63,13 +63,17 @@ impl CancellationToken {
         if !self.is_paused() || self.is_cancelled() {
             return;
         }
-        let mut guard = self.waker.0.lock().unwrap();
+        // `into_inner` recupera el guard aunque otro hilo haya paniqueado con el lock
+        // tomado: el estado protegido es solo una barrera de condvar (sin invariantes
+        // que romper) y un panic ajeno no debe tumbar en cascada a todos los workers.
+        let mut guard = self.waker.0.lock().unwrap_or_else(|e| e.into_inner());
         while self.is_paused() && !self.is_cancelled() {
             let (g, _timeout) = self
                 .waker
                 .1
                 .wait_timeout(guard, std::time::Duration::from_millis(200))
-                .unwrap();
+                // Mismo criterio: ignorar el poisoning, el estado sigue siendo válido.
+                .unwrap_or_else(|e| e.into_inner());
             guard = g;
         }
     }
@@ -119,5 +123,30 @@ mod tests {
         // No debe colgar: si está pausado pero cancelado, wait_if_paused retorna en seguida.
         t.wait_if_paused();
         assert!(t.is_cancelled());
+    }
+
+    #[test]
+    fn mutex_envenenado_no_tumba_al_worker() {
+        // Si un hilo paniquea con el lock tomado (mutex envenenado), wait_if_paused
+        // NO debe paniquear en cascada: recupera el guard con into_inner.
+        let t = CancellationToken::new();
+        let c = t.clone();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _g = c.waker.0.lock().unwrap();
+            panic!("boom con el lock tomado");
+        }));
+        assert!(
+            r.is_err(),
+            "el hilo efectivamente paniqueó (lock envenenado)"
+        );
+        // Pausar y esperar en otro hilo: toma el lock envenenado y espera en la condvar.
+        t.pause();
+        let t2 = t.clone();
+        let h = std::thread::spawn(move || t2.wait_if_paused());
+        // Dar tiempo a que tome el lock; luego reanudar para que despierte y salga.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        t.resume();
+        // Si wait_if_paused hubiera paniqueado por el poisoning, join devuelve Err.
+        assert!(h.join().is_ok(), "el worker sobrevivió al mutex envenenado");
     }
 }

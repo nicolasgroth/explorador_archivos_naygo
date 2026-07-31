@@ -103,4 +103,77 @@ mod tests {
         std::fs::write(&p, b"nada").unwrap();
         assert!(metadata_for(&p).is_empty());
     }
+
+    #[test]
+    fn archivo_sin_extension_devuelve_vacio() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sin_extension");
+        std::fs::write(&p, b"nada").unwrap();
+        assert!(metadata_for(&p).is_empty());
+    }
+
+    #[test]
+    fn imagen_corrupta_devuelve_vacio_sin_panic() {
+        // Hay proveedor para .png, pero el contenido no es una imagen: el dispatcher
+        // devuelve vacío (la caída de un proveedor nunca se propaga).
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("roto.png");
+        std::fs::write(&p, b"no soy un png").unwrap();
+        assert!(metadata_for(&p).is_empty());
+    }
+
+    #[test]
+    fn extension_en_mayusculas_encuentra_proveedor() {
+        // El dispatcher normaliza a lowercase antes de buscar el proveedor.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.PNG");
+        image::RgbaImage::new(3, 5).save(&p).unwrap();
+        let fields = metadata_for(&p);
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.label_key == "meta.dimensions" && f.value == "3 × 5"),
+            "extensión en mayúsculas debe encontrar el proveedor: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn proveedor_registrado_en_runtime_se_usa_y_hay_fallback() {
+        // Proveedores falsos sobre una extensión única (no interfiere con otros tests):
+        // el primero devuelve vacío, el segundo datos. El dispatcher debe saltar al segundo.
+        struct Vacio;
+        impl MetadataProvider for Vacio {
+            fn extensions(&self) -> &'static [&'static str] {
+                &["zzfake"]
+            }
+            fn read(&self, _path: &Path) -> Vec<MetadataField> {
+                Vec::new()
+            }
+        }
+        struct ConDatos;
+        impl MetadataProvider for ConDatos {
+            fn extensions(&self) -> &'static [&'static str] {
+                &["zzfake"]
+            }
+            fn read(&self, _path: &Path) -> Vec<MetadataField> {
+                vec![MetadataField {
+                    label_key: "meta.fake",
+                    value: "dato".to_string(),
+                }]
+            }
+        }
+        register_provider(Box::new(Vacio));
+        register_provider(Box::new(ConDatos));
+
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.zzfake");
+        std::fs::write(&p, b"nada").unwrap();
+        let fields = metadata_for(&p);
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.label_key == "meta.fake" && f.value == "dato"),
+            "debe usar el proveedor registrado en runtime, saltando el que devuelve vacío: {fields:?}"
+        );
+    }
 }

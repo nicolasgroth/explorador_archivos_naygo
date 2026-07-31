@@ -13,6 +13,38 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
+thread_local! {
+    /// Profundidad de bloques que contienen panics recuperables de dependencias hostiles. El panic
+    /// hook consulta este flag para no anunciar que Naygo se cerró cuando `catch_unwind` lo contiene.
+    static RECOVERABLE_PANIC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct RecoverablePanicGuard;
+
+impl RecoverablePanicGuard {
+    fn enter() -> Self {
+        RECOVERABLE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for RecoverablePanicGuard {
+    fn drop(&mut self) {
+        RECOVERABLE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Ejecuta una llamada de terceros cuyo contrato real puede incluir `panic` ante datos corruptos.
+/// Solo silencia el hook en ESTE hilo y durante ESTE bloque; el resultado conserva el payload para
+/// que el caller degrade a un error normal. No usar para esconder invariantes propias de Naygo.
+pub fn catch_recoverable_panic<F, R>(f: F) -> std::thread::Result<R>
+where
+    F: FnOnce() -> R,
+{
+    let _guard = RecoverablePanicGuard::enter();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+}
+
 /// Prefijo del archivo de log. El nombre real lleva la fecha local del día:
 /// `naygo-YYYY-MM-DD.log` (junto a naygo.exe), para separar las corridas por día y no
 /// mezclar diagnósticos de sesiones distintas.
@@ -195,6 +227,9 @@ fn build_context_block(env: &str, snap: &DiagSnapshot, crumbs: &[String]) -> Str
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if RECOVERABLE_PANIC_DEPTH.with(|depth| depth.get() > 0) {
+            return;
+        }
         let mut report = String::new();
         let _ = writeln!(report, "*** PANIC ***");
         // Bloque de contexto: entorno + estado + migas. Se lee con try_lock para NO colgar ni
@@ -288,5 +323,12 @@ mod tests {
             .back()
             .unwrap()
             .contains(&format!("evento {}", BREADCRUMB_CAP + 49)));
+    }
+
+    #[test]
+    fn panic_recuperable_se_convierte_en_resultado() {
+        let result = catch_recoverable_panic(|| panic!("dependencia hostil"));
+        assert!(result.is_err());
+        assert_eq!(RECOVERABLE_PANIC_DEPTH.with(|depth| depth.get()), 0);
     }
 }

@@ -30,7 +30,7 @@
 //!
 //! ## Sutileza del apartamento (apartment threading)
 //!
-//! Esto corre en el **hilo de UI**, que eframe/winit ya inicializó como STA. Por
+//! Esto corre en el **hilo de UI**, que Slint/winit ya inicializó como STA. Por
 //! eso replicamos el patrón de `trash.rs`: `CoInitializeEx` con
 //! `COINIT_APARTMENTTHREADED` y `CoUninitialize` **solo** si realmente
 //! inicializamos COM en este hilo (`hr.is_ok()`). Si el hilo ya estaba en otro
@@ -104,7 +104,7 @@ pub fn show_native_context_menu(
     // CoUninitialize SOLO se llama si CoInitializeEx inicializó COM en este hilo;
     // si el hilo ya estaba en otro apartamento (RPC_E_CHANGED_MODE) NO se llama
     // para no desbalancear el refcount (esto puede correr en el hilo de UI ya
-    // inicializado por eframe). Mismo patrón que `trash.rs`.
+    // inicializado por Slint/winit). Mismo patrón que `trash.rs`.
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let needs_uninit = hr.is_ok();

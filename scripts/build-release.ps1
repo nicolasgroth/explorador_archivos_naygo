@@ -19,9 +19,9 @@ if ($cargoToml -notmatch '(?m)^\s*version\s*=\s*"([^"]+)"') {
 $version = $Matches[1]
 Write-Host "Naygo version $version"
 
-# --- 2. Compilar release ---
+# --- 2. Compilar release (solo el binario del producto, no todo el workspace) ---
 Write-Host "Compilando release..."
-& cargo build --release
+& cargo build --release -p naygo-ui-slint
 if ($LASTEXITCODE -ne 0) { throw "cargo build --release fallo." }
 $exe = Join-Path $repo "target\release\naygo.exe"
 if (-not (Test-Path $exe)) { throw "No se encontro $exe tras compilar." }
@@ -29,12 +29,20 @@ if (-not (Test-Path $exe)) { throw "No se encontro $exe tras compilar." }
 # --- 3. Preparar dist/ ---
 if (-not (Test-Path $dist)) { New-Item -ItemType Directory -Path $dist | Out-Null }
 
-# --- 4. ZIP portable: naygo.exe + LICENSE + LEEME.txt ---
+# --- 4. ZIP portable: naygo.exe + naygo.pdb + LICENSE + LEEME.txt ---
 Write-Host "Armando ZIP portable..."
 $stage = Join-Path $dist "portable-stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item $exe (Join-Path $stage "naygo.exe")
+# Simbolos de depuracion: el PDB permite backtraces simbolizados en el log de panic.
+$pdb = Join-Path $repo "target\release\naygo.pdb"
+if (Test-Path $pdb) {
+    Copy-Item $pdb (Join-Path $stage "naygo.pdb")
+    Write-Host "Incluyendo naygo.pdb (simbolos para backtraces del log de panic)."
+} else {
+    Write-Warning "No se encontro $pdb; el ZIP queda sin simbolos de depuracion."
+}
 Copy-Item (Join-Path $repo "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $repo "installer\LEEME.txt") (Join-Path $stage "LEEME.txt")
 Copy-Item (Join-Path $repo "THIRD-PARTY-NOTICES.md") (Join-Path $stage "THIRD-PARTY-NOTICES.md")

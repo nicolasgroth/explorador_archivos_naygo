@@ -24,6 +24,14 @@ pub struct PlainRow {
     pub cut: bool,
     /// El ítem apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     pub highlight: bool,
+    /// Matchea el filtro visual por tipeo ("contiene"): se pinta con tinte de acento.
+    pub filter_match: bool,
+    /// Tramos del nombre alrededor del match del filtro (vacíos si no hay match): la UI
+    /// pinta `match_mid` resaltado dentro del nombre (`match_pre`+`match_mid`+`match_post`
+    /// == `name` cuando hay match).
+    pub match_pre: String,
+    pub match_mid: String,
+    pub match_post: String,
     /// Ícono de color por tipo, ya decodificado y cacheado (6A). Lo resuelve el `icon_of`
     /// que pasa el controlador (consulta el `IconCache` por la clave del entry).
     pub icon: slint::Image,
@@ -72,6 +80,8 @@ pub fn cell_value(
 /// por POSICIÓN DE VISTA (consistente con `FilePaneState.selected`/`focused`). No clona las
 /// entries completas: lee por índice. `is_cut` consulta si una ruta está marcada como cortada.
 /// Las celdas siguen el orden de las columnas visibles del `TableState` (sin Name).
+/// `filter_needle` es la aguja del filtro visual por tipeo YA PLEGADA
+/// (`text_match::fold_for_match`); `None` = sin filtro (todo `filter_match = false`).
 ///
 /// IMPORTANTE: aquí NO se re-filtra por visibilidad. El core ya aplica `is_visible` dentro de
 /// `compute_view_indices`, así que las filas que llegan corresponden 1:1 con las posiciones de
@@ -85,6 +95,7 @@ pub fn rows_from_view(
     size_format: naygo_core::format::SizeFormat,
     date_format: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
+    filter_needle: Option<&str>,
 ) -> Vec<PlainRow> {
     // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
     let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
@@ -101,6 +112,18 @@ pub fn rows_from_view(
                 .iter()
                 .map(|k| cell_value(e, *k, size_format, date_format, tz_offset_secs))
                 .collect();
+            // Rango del match en el nombre ORIGINAL (para pintar el tramo resaltado); a la
+            // vez entrega el flag filter_match. Un solo fold por fila (no contains + rango).
+            let (filter_match, match_pre, match_mid, match_post) = match filter_needle
+                .and_then(|n| naygo_core::text_match::match_char_range(&e.name, n))
+            {
+                Some((s, en)) => {
+                    let (pre, mid, post) =
+                        naygo_core::text_match::split_at_char_range(&e.name, s, en);
+                    (true, pre, mid, post)
+                }
+                None => (false, String::new(), String::new(), String::new()),
+            };
             Some(PlainRow {
                 name: e.name.clone(),
                 cells,
@@ -109,6 +132,10 @@ pub fn rows_from_view(
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
                 highlight: is_fresh(&e.path),
+                filter_match,
+                match_pre,
+                match_mid,
+                match_post,
                 icon: icon_of(e),
                 depth: 0,
             })
@@ -651,7 +678,7 @@ mod tests {
     use naygo_core::workspace::FilePaneState;
     use std::path::PathBuf;
 
-    fn mk(name: &str, dir: bool, size: Option<u64>) -> Entry {
+    pub(super) fn mk(name: &str, dir: bool, size: Option<u64>) -> Entry {
         Entry {
             name: name.into(),
             path: PathBuf::from(format!("C:/x/{name}")),
@@ -682,6 +709,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.name == "dir" && r.is_dir));
@@ -706,6 +734,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         );
         assert!(rows[0].cut, "la fila cortada se marca");
     }
@@ -721,6 +750,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         )
         .is_empty());
     }
@@ -755,6 +785,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "d_visible.txt");
@@ -769,6 +800,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         );
         assert_eq!(rows.len(), 4);
 
@@ -790,6 +822,7 @@ mod tests {
             naygo_core::format::SizeFormat::Auto,
             naygo_core::format::DateFormat::IsoMinute,
             0,
+            None,
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "d_visible.txt");
@@ -1038,5 +1071,65 @@ mod tests {
             rows[0].disk_detail.contains('%'),
             "la raíz con dato trae texto de espacio"
         );
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::tests::mk;
+    use super::*;
+    use naygo_core::workspace::FilePaneState;
+    use std::path::PathBuf;
+
+    #[test]
+    fn filtro_marca_solo_las_filas_que_contienen_la_aguja() {
+        let mut f = FilePaneState::new(PathBuf::from("C:/x"));
+        f.entries = vec![
+            mk("Canción Final.mp3", false, Some(1)),
+            mk("reporte.pdf", false, Some(1)),
+            mk("canciones", true, None),
+        ];
+        // Aguja ya plegada (la pliega el controlador con fold_for_match): case/acento-insensible.
+        let needle = naygo_core::text_match::fold_for_match("cancion");
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            Some(&needle),
+        );
+        assert_eq!(rows.len(), 3);
+        let marked: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.filter_match)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(
+            marked.len(),
+            2,
+            "carpeta y archivo matchean, el pdf no: {marked:?}"
+        );
+        assert!(marked.contains(&"Canción Final.mp3"));
+        assert!(marked.contains(&"canciones"));
+    }
+
+    #[test]
+    fn sin_filtro_ninguna_fila_se_marca() {
+        let mut f = FilePaneState::new(PathBuf::from("C:/x"));
+        f.entries = vec![mk("a.txt", false, Some(1))];
+        let rows = rows_from_view(
+            &f,
+            &|_| false,
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            None,
+        );
+        assert!(rows.iter().all(|r| !r.filter_match));
     }
 }
