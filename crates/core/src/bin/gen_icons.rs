@@ -754,10 +754,177 @@ const FLAT_COLOR: &[Map] = &[
 const MONO: &[Map] = LUCIDE;
 
 // ---------------------------------------------------------------------------
-// Declaración de los 5 sets
+// Fluent Emoji (https://github.com/microsoft/fluentui-emoji). MIT License.
+// Estructura: fluentui-emoji-main/assets/<Nombre>/Flat/<nombre>_flat.svg
+// (estilo Flat: legible a 48px y colorido; Color/3D se ve sucio a tamaño ícono).
+// ---------------------------------------------------------------------------
+const FLUENT: &[Map] = &[
+    Map {
+        key: "folder",
+        svg: "File folder/Flat/file_folder_flat",
+    },
+    // No hay "disco duro" en emoji: diskette es el sustituto clásico de unidad.
+    Map {
+        key: "drive",
+        svg: "Floppy disk/Flat/floppy_disk_flat",
+    },
+    Map {
+        key: "unknown",
+        svg: "White question mark/Flat/white_question_mark_flat",
+    },
+    Map {
+        key: "file_image",
+        svg: "Framed picture/Flat/framed_picture_flat",
+    },
+    Map {
+        key: "file_video",
+        svg: "Movie camera/Flat/movie_camera_flat",
+    },
+    Map {
+        key: "file_audio",
+        svg: "Musical note/Flat/musical_note_flat",
+    },
+    Map {
+        key: "file_document",
+        svg: "Page facing up/Flat/page_facing_up_flat",
+    },
+    Map {
+        key: "file_code",
+        svg: "Laptop/Flat/laptop_flat",
+    },
+    Map {
+        key: "file_archive",
+        svg: "Package/Flat/package_flat",
+    },
+    Map {
+        key: "file_executable",
+        svg: "Hammer and wrench/Flat/hammer_and_wrench_flat",
+    },
+    Map {
+        key: "file_model3d",
+        svg: "Game die/Flat/game_die_flat",
+    },
+    Map {
+        key: "file_font",
+        svg: "Input latin letters/Flat/input_latin_letters_flat",
+    },
+    Map {
+        key: "file_generic",
+        svg: "Page with curl/Flat/page_with_curl_flat",
+    },
+    Map {
+        key: "action_back",
+        svg: "Back arrow/Flat/back_arrow_flat",
+    },
+    Map {
+        key: "action_forward",
+        svg: "Right arrow/Flat/right_arrow_flat",
+    },
+    Map {
+        key: "action_up",
+        svg: "Up arrow/Flat/up_arrow_flat",
+    },
+    Map {
+        key: "action_refresh",
+        svg: "Clockwise vertical arrows/Flat/clockwise_vertical_arrows_flat",
+    },
+    Map {
+        key: "action_copy",
+        svg: "Clipboard/Flat/clipboard_flat",
+    },
+    Map {
+        key: "action_cut",
+        svg: "Scissors/Flat/scissors_flat",
+    },
+    Map {
+        key: "action_paste",
+        svg: "Memo/Flat/memo_flat",
+    },
+    Map {
+        key: "action_delete",
+        svg: "Wastebasket/Flat/wastebasket_flat",
+    },
+    Map {
+        key: "action_new_file",
+        svg: "Sparkles/Flat/sparkles_flat",
+    },
+    Map {
+        key: "action_new_folder",
+        svg: "Open file folder/Flat/open_file_folder_flat",
+    },
+    Map {
+        key: "action_add_pane",
+        svg: "Plus/Flat/plus_flat",
+    },
+    Map {
+        key: "action_swap_panes",
+        svg: "Left-right arrow/Flat/left-right_arrow_flat",
+    },
+    Map {
+        key: "action_clone_path",
+        svg: "Link/Flat/link_flat",
+    },
+    Map {
+        key: "action_new_window",
+        svg: "Desktop computer/Flat/desktop_computer_flat",
+    },
+    Map {
+        key: "action_settings",
+        svg: "Gear/Flat/gear_flat",
+    },
+    Map {
+        key: "action_tabs",
+        svg: "Card index dividers/Flat/card_index_dividers_flat",
+    },
+    Map {
+        key: "action_layouts",
+        svg: "Card file box/Flat/card_file_box_flat",
+    },
+    Map {
+        key: "action_terminal",
+        svg: "Laptop/Flat/laptop_flat",
+    },
+    Map {
+        key: "action_eject",
+        svg: "Eject button/Flat/eject_button_flat",
+    },
+    // Panel de operaciones: barras = progreso de las operaciones en curso.
+    Map {
+        key: "action_panel",
+        svg: "Bar chart/Flat/bar_chart_flat",
+    },
+    Map {
+        key: "action_home",
+        svg: "House/Flat/house_flat",
+    },
+    Map {
+        key: "action_search",
+        svg: "Magnifying glass tilted left/Flat/magnifying_glass_tilted_left_flat",
+    },
+    Map {
+        key: "action_show_hidden",
+        svg: "Eye/Flat/eye_flat",
+    },
+    Map {
+        key: "action_history",
+        svg: "Counterclockwise arrows button/Flat/counterclockwise_arrows_button_flat",
+    },
+    Map {
+        key: "action_favorites",
+        svg: "Star/Flat/star_flat",
+    },
+    // Split de paneles: libro abierto = dos páginas lado a lado.
+    Map {
+        key: "action_split",
+        svg: "Open book/Flat/open_book_flat",
+    },
+];
+
+// ---------------------------------------------------------------------------
+// Declaración de los 6 sets
 // ---------------------------------------------------------------------------
 
-const fn all_specs() -> [SetSpec; 5] {
+const fn all_specs() -> [SetSpec; 6] {
     [
         SetSpec {
             id: "lucide",
@@ -791,6 +958,14 @@ const fn all_specs() -> [SetSpec; 5] {
             tintable: false,
             gray: false,
             maps: FLAT_COLOR,
+        },
+        SetSpec {
+            id: "fluent",
+            zip: "assets/icons/fluentui-emoji-main.zip",
+            prefix: "fluentui-emoji-main/assets/",
+            tintable: false,
+            gray: false,
+            maps: FLUENT,
         },
         SetSpec {
             id: "mono",
@@ -995,6 +1170,23 @@ fn main() {
 
     const SIZE: u32 = 48;
     let specs = all_specs();
+    // Filtro opcional por id de set (`gen_icons fluent`): regenera solo ese set, sin
+    // pagar el escaneo de los otros zips (material pesa ~4 GB). Sin argumento: todos.
+    let only: Option<String> = std::env::args().nth(1);
+    let specs: Vec<&SetSpec> = match &only {
+        Some(id) => {
+            let found: Vec<&SetSpec> = specs.iter().filter(|s| s.id == id).collect();
+            if found.is_empty() {
+                eprintln!(
+                    "set desconocido '{id}' (ids: {:?})",
+                    specs.iter().map(|s| s.id).collect::<Vec<_>>()
+                );
+                std::process::exit(1);
+            }
+            found
+        }
+        None => specs.iter().collect(),
+    };
 
     // mono comparte el zip de lucide (mismos SVG, tinte gris): lucide-main.zip se
     // lee dos veces a propósito. Es barato (~1MB) y mantiene los SetSpec simples.

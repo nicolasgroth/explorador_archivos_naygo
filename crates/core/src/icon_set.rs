@@ -38,6 +38,12 @@ impl IconSetCatalog {
                 tintable: true,
             },
             IconSetInfo {
+                id: "fluent".into(),
+                label: "Fluent".into(),
+                builtin: true,
+                tintable: false,
+            },
+            IconSetInfo {
                 id: "tabler".into(),
                 label: "Tabler".into(),
                 builtin: true,
@@ -126,7 +132,7 @@ mod tests {
         for id in ["lucide", "tabler", "material", "flat-color", "mono"] {
             assert!(cat.contains(id), "falta el set de fábrica {id}");
         }
-        assert_eq!(cat.available().len(), 5);
+        assert_eq!(cat.available().len(), 6);
     }
 
     #[test]
@@ -179,7 +185,7 @@ mod tests {
     fn icons_dir_ausente_solo_fabrica() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        assert_eq!(cat.available().len(), 5);
+        assert_eq!(cat.available().len(), 6);
     }
 
     #[test]

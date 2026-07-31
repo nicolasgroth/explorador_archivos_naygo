@@ -235,10 +235,13 @@ impl Theme {
     }
 }
 
-/// Los ids de los 6 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
+/// Los ids de los 9 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
 pub const BUILTIN_THEME_IDS: &[&str] = &[
     "dark-blue",
     "commander",
+    "solarized-dark",
+    "paper",
+    "dracula",
     "winxp",
     "green-on-blue",
     "high-contrast",
@@ -280,6 +283,9 @@ pub struct ThemeCatalog {
 
 const DARK_BLUE_JSON: &str = include_str!("builtin/dark-blue.json");
 const COMMANDER_JSON: &str = include_str!("builtin/commander.json");
+const SOLARIZED_DARK_JSON: &str = include_str!("builtin/solarized-dark.json");
+const PAPER_JSON: &str = include_str!("builtin/paper.json");
+const DRACULA_JSON: &str = include_str!("builtin/dracula.json");
 const HIGH_CONTRAST_JSON: &str = include_str!("builtin/high-contrast.json");
 const NEON_RETRO_JSON: &str = include_str!("builtin/neon-retro.json");
 const WINXP_JSON: &str = include_str!("builtin/winxp.json");
@@ -298,6 +304,9 @@ impl ThemeCatalog {
         for (id, json) in [
             ("dark-blue", DARK_BLUE_JSON),
             ("commander", COMMANDER_JSON),
+            ("solarized-dark", SOLARIZED_DARK_JSON),
+            ("paper", PAPER_JSON),
+            ("dracula", DRACULA_JSON),
             ("winxp", WINXP_JSON),
             ("green-on-blue", GREEN_ON_BLUE_JSON),
             ("high-contrast", HIGH_CONTRAST_JSON),
@@ -530,6 +539,9 @@ mod tests {
         for id in [
             "dark-blue",
             "commander",
+            "solarized-dark",
+            "paper",
+            "dracula",
             "winxp",
             "green-on-blue",
             "high-contrast",
@@ -537,7 +549,7 @@ mod tests {
         ] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
         }
-        assert_eq!(ids.len(), 6, "el catálogo de fábrica debe tener 6 temas");
+        assert_eq!(ids.len(), 9, "el catálogo de fábrica debe tener 9 temas");
     }
 
     #[test]

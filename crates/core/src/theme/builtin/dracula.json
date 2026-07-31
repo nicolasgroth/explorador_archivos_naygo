@@ -1,0 +1,15 @@
+{
+  "name": "Dracula",
+  "base": "dark",
+  "accent": "#bd93f9",
+  "panel_bg": "#282a36",
+  "row_bg": "#21222c",
+  "row_alt_bg": "#2e3040",
+  "text": "#f8f8f2",
+  "text_dim": "#6272a4",
+  "selection_bg": "#44475a",
+  "active_bar": "#bd93f9",
+  "error": "#ff5555",
+  "highlight": "#8be9fd",
+  "border": "#3c4053"
+}

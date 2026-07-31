@@ -1,0 +1,15 @@
+{
+  "name": "Solarized Dark",
+  "base": "dark",
+  "accent": "#268bd2",
+  "panel_bg": "#002b36",
+  "row_bg": "#002b36",
+  "row_alt_bg": "#073642",
+  "text": "#93a1a1",
+  "text_dim": "#586e75",
+  "selection_bg": "#164a5e",
+  "active_bar": "#268bd2",
+  "error": "#dc322f",
+  "highlight": "#2aa198",
+  "border": "#0a4552"
+}

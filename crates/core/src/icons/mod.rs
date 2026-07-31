@@ -98,6 +98,7 @@ set_table!(LUCIDE, "lucide");
 set_table!(TABLER, "tabler");
 set_table!(MATERIAL, "material");
 set_table!(FLAT_COLOR, "flat-color");
+set_table!(FLUENT, "fluent");
 set_table!(MONO, "mono");
 
 /// Set de fábrica usado como último fallback (su `unknown` siempre existe embebido).
@@ -110,6 +111,7 @@ fn table_for_id(set_id: &str) -> Option<&'static [(&'static str, &'static [u8])]
         "tabler" => Some(TABLER),
         "material" => Some(MATERIAL),
         "flat-color" => Some(FLAT_COLOR),
+        "fluent" => Some(FLUENT),
         "mono" => Some(MONO),
         _ => None,
     }
@@ -214,7 +216,14 @@ mod tests {
     #[test]
     fn cada_set_de_fabrica_cubre_las_39_claves() {
         assert_eq!(all_keys().len(), 39, "se esperan exactamente 39 claves");
-        for set in ["lucide", "tabler", "material", "flat-color", "mono"] {
+        for set in [
+            "lucide",
+            "tabler",
+            "material",
+            "flat-color",
+            "fluent",
+            "mono",
+        ] {
             for key in all_keys() {
                 assert!(
                     !bytes_for_id(set, key).is_empty(),
@@ -229,7 +238,14 @@ mod tests {
     fn cada_clave_tiene_su_propio_asset_no_solo_el_fallback() {
         // Verifica que el NOMBRE EXACTO de cada clave está en la tabla (no solo el fallback
         // "unknown"). Un PNG faltante para una clave concreta sí se detecta.
-        for set in ["lucide", "tabler", "material", "flat-color", "mono"] {
+        for set in [
+            "lucide",
+            "tabler",
+            "material",
+            "flat-color",
+            "fluent",
+            "mono",
+        ] {
             let table = table_for_id(set).expect("set embebido existe");
             for key in all_keys() {
                 let name = file_name(key);

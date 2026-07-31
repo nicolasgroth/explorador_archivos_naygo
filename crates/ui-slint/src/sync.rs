@@ -41,6 +41,41 @@ fn set_vec_if_changed<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows:
     }
 }
 
+/// Aplica `rows` al modelo de forma INCREMENTAL cuando el largo cambió (alta/baja de
+/// archivos): en vez de `set_vec` (que re-crea TODOS los delegates del ListView), calcula
+/// el prefijo y el sufijo que ya coinciden y solo quita/inserta el tramo del medio que
+/// cambió. Los delegates fuera del tramo sobreviven (hover, scroll y el editor de rename
+/// intactos); el trabajo es O(cambio) en vez de O(todo el modelo). Caso típico: un archivo
+/// nuevo en una carpeta "viva" (Dropbox) → un insert, no un remontaje completo.
+fn apply_rows_incremental<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    let old_n = model.row_count();
+    let new_n = rows.len();
+    // Prefijo común (filas idénticas al inicio).
+    let mut prefix = 0;
+    while prefix < old_n.min(new_n) && model.row_data(prefix).as_ref() == rows.get(prefix) {
+        prefix += 1;
+    }
+    // Sufijo común (filas idénticas al final, sin solapar el prefijo).
+    let mut suffix = 0;
+    while suffix < (old_n - prefix).min(new_n - prefix)
+        && model.row_data(old_n - 1 - suffix).as_ref() == rows.get(new_n - 1 - suffix)
+    {
+        suffix += 1;
+    }
+    // El tramo del medio se reemplaza: quita lo viejo e inserta lo nuevo en `prefix`.
+    for _ in 0..(old_n - prefix - suffix) {
+        model.remove(prefix);
+    }
+    for (k, row) in rows
+        .into_iter()
+        .skip(prefix)
+        .take(new_n - prefix - suffix)
+        .enumerate()
+    {
+        model.insert(prefix + k, row);
+    }
+}
+
 /// Construye `sync_rows` y `sync_layout` sobre los modelos estables compartidos.
 pub(crate) fn build_sync(
     ui_weak: slint::Weak<AppWindow>,
@@ -199,7 +234,11 @@ pub(crate) fn build_sync(
                                     }
                                 }
                             } else {
-                                pm.rows.set_vec(rows);
+                                // El largo cambió (alta/baja real): aplicación INCREMENTAL
+                                // (prefijo/sufijo intactos; solo el tramo del medio se
+                                // quita/inserta) en vez de un `set_vec` que re-creaba todos
+                                // los delegates — ver `apply_rows_incremental`.
+                                apply_rows_incremental(&pm.rows, rows);
                             }
                             set_vec_if_changed(&pm.columns, cols);
                             set_vec_if_changed(&pm.col_menu, col_menu);
@@ -830,4 +869,64 @@ pub(crate) fn build_apply_device_change(
             ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn to_vec(model: &VecModel<i32>) -> Vec<i32> {
+        model.iter().collect()
+    }
+
+    #[test]
+    fn incremental_agrega_al_final_sin_tocar_prefijo() {
+        let m = VecModel::from(vec![1, 2, 3]);
+        apply_rows_incremental(&m, vec![1, 2, 3, 4]);
+        assert_eq!(to_vec(&m), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn incremental_inserta_en_el_medio() {
+        let m = VecModel::from(vec![1, 2, 4, 5]);
+        apply_rows_incremental(&m, vec![1, 2, 3, 4, 5]);
+        assert_eq!(to_vec(&m), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn incremental_quita_en_el_medio() {
+        let m = VecModel::from(vec![1, 2, 3, 4, 5]);
+        apply_rows_incremental(&m, vec![1, 2, 4, 5]);
+        assert_eq!(to_vec(&m), vec![1, 2, 4, 5]);
+    }
+
+    #[test]
+    fn incremental_quita_al_final() {
+        let m = VecModel::from(vec![1, 2, 3, 4]);
+        apply_rows_incremental(&m, vec![1, 2]);
+        assert_eq!(to_vec(&m), vec![1, 2]);
+    }
+
+    #[test]
+    fn incremental_reemplazo_total() {
+        let m = VecModel::from(vec![1, 2, 3]);
+        apply_rows_incremental(&m, vec![7, 8, 9, 10]);
+        assert_eq!(to_vec(&m), vec![7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn incremental_de_vacio_y_a_vacio() {
+        let m = VecModel::from(Vec::<i32>::new());
+        apply_rows_incremental(&m, vec![1, 2]);
+        assert_eq!(to_vec(&m), vec![1, 2]);
+        apply_rows_incremental(&m, vec![]);
+        assert_eq!(to_vec(&m), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn incremental_mismo_contenido_es_noop() {
+        let m = VecModel::from(vec![1, 2, 3]);
+        apply_rows_incremental(&m, vec![1, 2, 3]);
+        assert_eq!(to_vec(&m), vec![1, 2, 3]);
+    }
 }

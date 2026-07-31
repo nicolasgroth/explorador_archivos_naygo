@@ -8,6 +8,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [Sin publicar]
 
 ### Añadido
+- **Más temas de fábrica** (9 en total): **Commander** (look tipo Total Commander: fondo
+  negro, carpetas en cian, fechas en teal), **Solarized Dark**, **Paper** (claro) y
+  **Dracula**, todos con contraste cuidado para legibilidad.
+- **Set de íconos Fluent** (Microsoft Fluent UI Emoji, MIT): sexto set de fábrica,
+  colorido, generado desde los SVG originales con `gen_icons`.
 - **Filtro visual por tipeo**: al escribir en un panel de archivos, las filas cuyo nombre
   **contiene** el texto se tiñen con el acento del tema y el propio tramo coincidente se
   resalta dentro del nombre (sin distinguir mayúsculas ni tildes: «cancion» encuentra
@@ -48,7 +53,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Cambios
 - La UI principal quedó dividida en módulos (`main.rs` pasó de ~5.900 a ~850 líneas:
-  `callbacks_*`, `tick`, `vm_builders`, `wire`).
+  `callbacks_*`, `tick`, `vm_builders`, `wire`), y el modelo de filas ahora se actualiza
+  de forma **incremental** (quita/inserta solo el tramo que cambió al entrar o salir
+  archivos, en vez de reconstruir toda la lista).
 - `lopdf` unificado a una sola versión; `image`/`zip`/`tempfile`/`serde_json` centralizados
   en el workspace. El prototipo `proto-slint` se retiró del workspace.
 - Releases con **SHA256SUMS**; CI verifica paridad de idiomas; `rust-toolchain.toml`
