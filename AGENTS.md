@@ -108,6 +108,9 @@ comandos (Ctrl+P), animaciones de íconos, personalización fina de toolbar.
 
 ## Cómo trabajar conmigo (el usuario)
 
+- **Lee primero `docs/BACKLOG.md`**: ahí está todo lo pendiente acordado (mejoras
+  técnicas, funcionalidades aprobadas, bugs conocidos y notas de operación).
+  Actualízalo al cerrar cada ítem.
 - Soy Nicolás. Hablo español chileno, tuteo. Inglés técnico OK.
 - Ingeniero, base técnica fuerte. No me expliques lo obvio, pero si algo es
   ambiguo, pregúntame antes de avanzar con supuestos.
