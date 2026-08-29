@@ -160,7 +160,7 @@ impl WorkspaceCtrl {
             if std::fs::read_dir(&dir).is_ok() {
                 self.cancel_deep_if_navigating(id);
                 self.start_listing(id, dir.clone());
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(id, dir);
             }
         }
     }
@@ -191,7 +191,7 @@ impl WorkspaceCtrl {
             f.navigate_to(dest.clone());
         }
         self.start_listing(id, dest.clone());
-        self.sync_trees_active(dest);
+        self.sync_trees_for_files(id, dest);
     }
 
     /// Navegar el panel `id` a `dir` (elegido en el selector nativo) y re-listar.
@@ -201,7 +201,7 @@ impl WorkspaceCtrl {
             f.navigate_to(dir.clone());
         }
         self.start_listing(id, dir.clone());
-        self.sync_trees_active(dir);
+        self.sync_trees_for_files(id, dir);
     }
 
     /// Cerrar el panel `id` (si se puede; si es el último, lo manda al HOME en su lugar).
@@ -226,6 +226,12 @@ impl WorkspaceCtrl {
         if let Some(l) = self.listings.get(&id) {
             l.cancel();
         }
+        // Una comparación describe exactamente los snapshots cargados; navegar o refrescar uno
+        // de sus lados la invalida para no dejar marcas obsoletas sobre nombres nuevos.
+        if self.comparison.remove(&id).is_some() {
+            self.comparison.clear();
+            self.comparison_revision = self.comparison_revision.wrapping_add(1);
+        }
         // Navegar a OTRA carpeta limpia el filtro visual por tipeo (decisión de diseño:
         // persiste hasta Esc o navegar). Un refresh de la MISMA carpeta (F5) lo conserva.
         // La referencia es `last_listing_dirs` (lo último PEDIDO para el panel), NO
@@ -241,9 +247,9 @@ impl WorkspaceCtrl {
         // Un listado nuevo reemplaza al anterior: su reciente diferido (si lo había) ya no
         // aplica — el camino que navega decide si registra uno para el listado NUEVO.
         self.pending_recents.remove(&id);
-        // Navegar (o refrescar) puede cambiar de unidad: invalida la caché de disco del footer
-        // para que el espacio libre/total se relea. Es pequeña; se repuebla a demanda por tick.
-        self.footer_disk_cache.clear();
+        // Navegar (o refrescar) puede cambiar de unidad. La caché está indexada por raíz, así que
+        // no necesitamos borrar datos útiles de los demás paneles; los dispositivos sí la
+        // invalidan explícitamente en `invalidate_footer_disk_cache`.
         // Si el panel estaba marcado como "expulsado" y ahora navega a una carpeta válida,
         // limpiar el flag para que el aviso vuelva a ser el genérico si vuelve a desconectarse.
         self.ejected_panes.remove(&id.0);
@@ -267,6 +273,35 @@ impl WorkspaceCtrl {
     /// footer siga esos eventos aunque el panel no haya navegado.
     pub fn invalidate_footer_disk_cache(&mut self) {
         self.footer_disk_cache.clear();
+    }
+
+    /// Drena las lecturas de espacio terminadas. Corre en el tick de UI pero solo hace `try_recv`:
+    /// la llamada WinAPI real vive exclusivamente en el worker lanzado más abajo.
+    fn pump_footer_disk_results(&mut self) {
+        while let Ok((root, usage)) = self.footer_disk_results.try_recv() {
+            self.footer_disk_pending.remove(&root);
+            if let Some(usage) = usage {
+                self.footer_disk_cache.insert(root, usage);
+            }
+        }
+    }
+
+    /// Devuelve el dato ya cacheado y, si falta, agenda una lectura asíncrona. La primera pintura
+    /// muestra "—" brevemente; nunca bloquea la navegación ni el render por un share lento.
+    fn cached_disk_usage(&mut self, root: &Path) -> Option<naygo_core::disk::DiskUsage> {
+        self.pump_footer_disk_results();
+        if let Some(usage) = self.footer_disk_cache.get(root) {
+            return Some(*usage);
+        }
+        let root = root.to_path_buf();
+        if self.footer_disk_pending.insert(root.clone()) {
+            let sender = self.footer_disk_sender.clone();
+            std::thread::spawn(move || {
+                let usage = disk_usage(&root);
+                let _ = sender.send((root, usage));
+            });
+        }
+        None
     }
 
     /// El preset de footer EFECTIVO: si el guardado es `Custom`, usa el template del usuario
@@ -301,18 +336,10 @@ impl WorkspaceCtrl {
         else {
             return String::new();
         };
-        // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por raíz de unidad.
+        // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por raíz de unidad. Si falta,
+        // se solicita a un worker y este tick conserva una respuesta inmediata.
         let disk = match root {
-            Some(root) => match self.footer_disk_cache.get(&root) {
-                Some(d) => Some(*d),
-                None => {
-                    let d = disk_usage(&root);
-                    if let Some(u) = d {
-                        self.footer_disk_cache.insert(root, u);
-                    }
-                    d
-                }
-            },
+            Some(root) => self.cached_disk_usage(&root),
             None => None,
         };
         let data = naygo_core::footer::FooterData {
@@ -330,6 +357,41 @@ impl WorkspaceCtrl {
         } else {
             format!("{base} · {suffix}")
         }
+    }
+
+    /// Texto del volumen para el extremo derecho del footer. El preset Completa/Solo disco ya
+    /// contiene estos datos, por lo que no se duplica; Compacta (el valor por defecto) mantiene
+    /// selección a la izquierda y capacidad/libre/uso claramente separado a la derecha.
+    pub fn footer_disk_text_of(&mut self, id: PaneId) -> String {
+        if !self.config.settings.footer_enabled {
+            return String::new();
+        }
+        if matches!(
+            self.config.settings.footer_preset,
+            naygo_core::footer::FooterPreset::Full
+                | naygo_core::footer::FooterPreset::DiskOnly
+                | naygo_core::footer::FooterPreset::Custom(_)
+        ) {
+            return String::new();
+        }
+        let root = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .and_then(|f| f.current_dir.ancestors().last().map(Path::to_path_buf));
+        let Some(usage) = root
+            .as_deref()
+            .and_then(|root| self.cached_disk_usage(root))
+        else {
+            return String::new();
+        };
+        let free = naygo_core::format::format_size(usage.free, self.config.settings.size_format);
+        let total = naygo_core::format::format_size(usage.total, self.config.settings.size_format);
+        self.config
+            .t("disk.usage")
+            .replace("{free}", &free)
+            .replace("{total}", &total)
+            .replace("{pct}", &usage.percent_used().to_string())
     }
 
     /// Etiqueta del filtro visual por tipeo para el panel `id` (`filtro: "texto" · N
@@ -387,6 +449,7 @@ impl WorkspaceCtrl {
                         f.entries.clear();
                     }
                     f.entries.extend(batch);
+                    f.entries_changed();
                 }
                 if done {
                     // Carpeta que quedó VACÍA tras refrescar: el listado nuevo no emitió ningún
@@ -394,11 +457,13 @@ impl WorkspaceCtrl {
                     // Al terminar, si aún estaba fresco, vaciar para reflejar la carpeta vacía.
                     if fresh && batch_was_empty {
                         f.entries.clear();
+                        f.entries_changed();
                     }
                     let spec = f.sort;
                     naygo_core::sort::sort_entries(&mut f.entries, &spec);
                     if f.focused.is_none() && !f.entries.is_empty() {
                         f.focused = Some(0);
+                        f.presentation_changed();
                     }
                 }
             }
@@ -517,6 +582,7 @@ impl WorkspaceCtrl {
                             focused: false,
                             cut: ops.is_cut(&e.path),
                             highlight: false,
+                            compare_state: 0,
                             filter_match,
                             match_pre,
                             match_mid,
@@ -534,7 +600,7 @@ impl WorkspaceCtrl {
         }
 
         // Vista normal: préstamos disjuntos para ops/watchers/icons.
-        let rows = {
+        let mut rows = {
             let WorkspaceCtrl {
                 ws,
                 ops,
@@ -556,6 +622,16 @@ impl WorkspaceCtrl {
                 None => Vec::new(),
             }
         };
+        if let (Some(marks), Some(f)) = (
+            self.comparison.get(&id),
+            self.ws.pane(id).and_then(|p| p.files.as_ref()),
+        ) {
+            for (row, &real) in rows.iter_mut().zip(f.view_indices().iter()) {
+                if let Some(entry) = f.entries.get(real) {
+                    row.compare_state = marks.get(&entry.path).copied().unwrap_or(0);
+                }
+            }
+        }
         if filter_needle.is_some() {
             self.filter_match_count = rows.iter().filter(|r| r.filter_match).count();
         }
@@ -623,9 +699,10 @@ impl WorkspaceCtrl {
 
         // --- Íconos (set activo + tinte + overrides): cambia el ícono de cada fila ---
         self.icons.signature().hash(&mut h);
+        self.comparison_revision.hash(&mut h);
 
-        // --- Foco (cambia el flag `focused` de una fila) ---
-        f.focused.hash(&mut h);
+        // --- Selección/foco: revisión O(1), incluso con "seleccionar todo" en 100k filas. ---
+        f.presentation_revision().hash(&mut h);
 
         // --- Filtro visual por tipeo: cambia el flag `filter_match` de las filas. Se hashea
         // el buffer CRUDO (la aguja plegada se deriva de él); solo el panel activo se tiñe.
@@ -635,15 +712,6 @@ impl WorkspaceCtrl {
         } else {
             0u8.hash(&mut h);
         }
-        // --- Selección. Orden-independiente (la vista la consulta como conjunto). ---
-        let mut sel_acc: u64 = 0;
-        for &pos in &f.selected {
-            let mut sh = std::collections::hash_map::DefaultHasher::new();
-            pos.hash(&mut sh);
-            sel_acc ^= sh.finish();
-        }
-        sel_acc.hash(&mut h);
-
         // --- Vista profunda: otra fuente de filas (deep_items con depth). ---
         if self.is_deep_active(id) {
             1u8.hash(&mut h); // marca "modo profundo" (distinto de la vista normal)
@@ -672,12 +740,23 @@ impl WorkspaceCtrl {
             0u8.hash(&mut h); // marca "vista normal"
                               // Contenido de las entries VISIBLES, en orden de vista. Captura inserción/borrado
                               // (cambia la vista), reordenamiento, y mutación IN SITU (Modified).
-            let view = f.view_indices();
-            view.len().hash(&mut h);
-            for &real in &view {
-                if let Some(e) = f.entries.get(real) {
-                    hash_entry_for_row(e, &mut h);
+                              // La revisión la incrementan el listado y los watchers al mutar `entries`; junto a
+                              // sort/filtros evita recorrer/clonar toda la vista en cada tick.
+            f.entries_revision().hash(&mut h);
+            f.sort.hash(&mut h);
+            for (kind, filter) in &f.table.filters {
+                kind.hash(&mut h);
+                filter.hash(&mut h);
+            }
+            f.group_new_at_end.hash(&mut h);
+            if f.group_new_at_end {
+                let mut highlighted_acc = 0u64;
+                for path in &f.highlighted {
+                    let mut ph = std::collections::hash_map::DefaultHasher::new();
+                    path.hash(&mut ph);
+                    highlighted_acc ^= ph.finish();
                 }
+                highlighted_acc.hash(&mut h);
             }
         }
 
@@ -765,6 +844,36 @@ impl WorkspaceCtrl {
             self.preview.start();
         }
         self.preview.busy()
+    }
+
+    /// Rota el preview STL/3MF actualmente enfocado. Solo actualiza estado y despacha workers;
+    /// nunca realiza I/O en el hilo de UI.
+    pub fn preview_orbit(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        self.preview.orbit_mesh(delta_x, delta_y)
+    }
+
+    /// Acerca/aleja el preview STL/3MF con la rueda o touchpad.
+    pub fn preview_zoom(&mut self, wheel_delta: f32) -> bool {
+        self.preview.zoom_mesh(wheel_delta)
+    }
+
+    /// Restaura la orientación y zoom originales del preview STL/3MF sin volver a leer el disco.
+    pub fn preview_reset_camera(&mut self) -> bool {
+        self.preview.reset_mesh_camera()
+    }
+
+    /// Cancela la lectura/rasterización del preview actual. El worker hace I/O fuera de la UI y
+    /// observa su token cooperativo; esta llamada solo corta el canal y actualiza el estado.
+    pub fn cancel_preview(&mut self) -> bool {
+        self.preview.cancel()
+    }
+
+    /// Copia el contenido textual ya cargado al portapapeles de Windows. No se pre-copia al
+    /// enfocar: copiar debe ser una acción explícita y no debe pisar el portapapeles del usuario.
+    pub fn copy_preview_text(&self, text: &str) {
+        if !text.is_empty() {
+            let _ = naygo_platform::clipboard::write_text(text);
+        }
     }
 
     /// Refresca (re-lista) la carpeta del panel activo — estilo navegador (F5). No toca el

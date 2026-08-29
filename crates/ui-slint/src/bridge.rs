@@ -24,6 +24,8 @@ pub struct PlainRow {
     pub cut: bool,
     /// El ítem apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     pub highlight: bool,
+    /// Resultado de comparar paneles: 0=normal/igual, 1=metadatos distintos, 2=solo aquí.
+    pub compare_state: u8,
     /// Matchea el filtro visual por tipeo ("contiene"): se pinta con tinte de acento.
     pub filter_match: bool,
     /// Tramos del nombre alrededor del match del filtro (vacíos si no hay match): la UI
@@ -132,6 +134,7 @@ pub fn rows_from_view(
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
                 highlight: is_fresh(&e.path),
+                compare_state: 0,
                 filter_match,
                 match_pre,
                 match_mid,
@@ -374,11 +377,31 @@ pub struct FavTreeRow {
     pub is_group: bool,
     pub name: String,
     pub path: String,
+    /// Ruta absoluta abreviada por el medio para mostrar junto al alias sin revelar ni perder
+    /// el comienzo/final relevantes (p. ej. `C:\\Win...m32\\drivers`). Vacía en grupos.
+    pub path_hint: String,
     pub group_id: String,
     pub name_path: String,
     pub expanded: bool,
     pub has_children: bool,
     pub icon: slint::Image,
+}
+
+/// Acorta una ruta preservando ambos extremos. La ruta completa sigue en `path` para navegar;
+/// este texto es solo presentación del panel Favoritos, donde el ancho es necesariamente finito.
+fn abbreviate_favorite_path(path: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max_chars || max_chars < 8 {
+        return path.to_string();
+    }
+    // Tres caracteres para "..." y al menos uno visible a cada lado.
+    let left = (max_chars - 3) / 2;
+    let right = max_chars - 3 - left;
+    format!(
+        "{}...{}",
+        chars[..left].iter().collect::<String>(),
+        chars[chars.len() - right..].iter().collect::<String>()
+    )
 }
 
 /// Serializa un `GroupId` (`[0, 2, 1]`) a la cadena estable "0/2/1" para cruzar la frontera
@@ -425,6 +448,7 @@ fn push_fav_node(
                     is_group: false,
                     name: label.clone(),
                     path: path.display().to_string(),
+                    path_hint: abbreviate_favorite_path(&path.display().to_string(), 34),
                     group_id: String::new(),
                     name_path,
                     expanded: false,
@@ -444,6 +468,7 @@ fn push_fav_node(
                     is_group: true,
                     name: name.clone(),
                     path: String::new(),
+                    path_hint: String::new(),
                     group_id: group_id_to_str(&id),
                     name_path: name_path.clone(),
                     expanded: is_expanded,
@@ -493,6 +518,32 @@ pub fn recent_rows(recents: &RecentDirs, folder_icon: &slint::Image) -> Vec<NavR
             path: p.display().to_string(),
             icon: folder_icon.clone(),
             removable: false,
+        })
+        .collect()
+}
+
+/// Carpetas más usadas dentro de la ventana de visitas. El contador se hace visible junto al
+/// alias, mientras que `path` conserva la ruta completa para navegar y mostrar tooltips.
+pub fn frequent_dir_rows(
+    recents: &RecentDirs,
+    limit: usize,
+    folder_icon: &slint::Image,
+) -> Vec<NavRow> {
+    recents
+        .most_used(limit)
+        .into_iter()
+        .map(|entry| {
+            let name = entry
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| entry.path.display().to_string());
+            NavRow {
+                label: format!("{name} · {}", entry.visits),
+                path: entry.path.display().to_string(),
+                icon: folder_icon.clone(),
+                removable: false,
+            }
         })
         .collect()
 }
@@ -585,6 +636,8 @@ pub struct TreeRow {
     /// Texto de espacio para las raíces de disco ("120 GB / 500 GB · 76%"); vacío si no es
     /// disco o no hay dato (red caída / óptico vacío). Acompaña a la barrita de `disk_percent`.
     pub disk_detail: String,
+    /// Marcador de un acceso especial físico de Windows. Vacío en carpetas y discos normales.
+    pub special_icon: String,
     /// Ícono de color cacheado (6A): carpeta o disco según `is_drive`.
     pub icon: slint::Image,
 }
@@ -653,6 +706,7 @@ fn push_tree_node(
         } else {
             String::new()
         },
+        special_icon: node.special_icon.clone().unwrap_or_default(),
         icon: icon_of(if is_drive {
             naygo_core::icon_kind::IconKey::Drive(
                 node.drive_kind

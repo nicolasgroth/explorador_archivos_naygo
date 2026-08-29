@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: MIT
 
 use crate::bridge::{
-    fav_tree_rows, favorite_rows, history_rows, inspector_info, recent_rows, rows_from_view,
-    str_to_group_id, tree_rows, FavTreeRow, HistRow, InspectorInfo, NavRow, PlainRow, TreeRow,
-    VisibilityFlags,
+    fav_tree_rows, favorite_rows, frequent_dir_rows, history_rows, inspector_info, recent_rows,
+    rows_from_view, str_to_group_id, tree_rows, FavTreeRow, HistRow, InspectorInfo, NavRow,
+    PlainRow, TreeRow, VisibilityFlags,
 };
 use crate::listing::Listing;
 use naygo_core::favorites::{favorites_path, FavNode, Favorites, NodeId};
@@ -22,6 +22,7 @@ use naygo_core::workspace::layout::{
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::SystemTime;
 
 const PAGE_ROWS: usize = 20;
@@ -124,6 +125,17 @@ pub struct WorkspaceCtrl {
     pub ops: crate::ops_ctrl::OpsCtrl,
     /// Estado del preview (debounce + worker + último resultado).
     pub preview: crate::preview::PreviewState,
+    /// Rutas reunidas desde paneles/carpetas distintas. Su contenido es temporal y no se
+    /// serializa, aunque el panel Basket sí puede permanecer en la disposición.
+    pub basket: naygo_core::basket::SelectionBasket,
+    /// Stagings virtuales referenciados por ítems de la bandeja. Se conservan mientras haya
+    /// elementos en ella y se transfieren al motor al copiar/mover/borrar desde la bandeja.
+    pub basket_staging: Vec<naygo_platform::drop_target::StagedDrop>,
+    /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
+    /// su worker y se cancela al cerrar o cambiar opciones.
+    pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
+    /// Modal/job de transformación de texto. El diagnóstico y la escritura corren en workers.
+    pub text_transform: Option<text_transform::TextTransformState>,
     /// Selector de panel destino en curso (overlay 1..9), si lo hay.
     pub pending_pick: Option<PanePick>,
     /// Última área de contenido conocida (la setea la UI en cada layout) para resolver
@@ -156,6 +168,9 @@ pub struct WorkspaceCtrl {
     /// Nº de filas que matchean el filtro visual por tipeo en el panel activo (lo refresca
     /// `rows_of` al reconstruir las filas; el footer lo muestra como "{n} coincidencias").
     pub filter_match_count: usize,
+    /// Si está activo, el filtro de tipeo elimina de la vista las filas que no coinciden. Es
+    /// efímero: solo controla la búsqueda actual y no se guarda en settings.
+    pub filter_hide_nonmatches: bool,
     /// Última carpeta PEDIDA para listar por panel (incluye las que ya terminaron: el mapa
     /// `listings` las olvida al drenar). Es la referencia fiable para saber si un
     /// `start_listing` es NAVEGACIÓN (cambia la carpeta → limpiar el filtro por tipeo) o
@@ -177,14 +192,14 @@ pub struct WorkspaceCtrl {
     pub new_folder: Option<NewFolderState>,
     /// La ayuda (F1) está abierta.
     pub help_open: bool,
-    /// Cálculo de tamaño de carpeta en curso (F3), si lo hay. Un solo job a la vez: un F3 nuevo
-    /// cancela y reemplaza el anterior. El resultado se muestra en la barra de estado.
+    /// Cálculo de tamaño de carpeta en curso (acción configurable), si lo hay. Un solo job a la
+    /// vez cancela y reemplaza el anterior. El resultado se muestra en la barra de estado.
     pub size_job: Option<SizeJob>,
     /// Lectura de metadata por tipo (dimensiones de imagen, versión de exe) del archivo enfocado,
     /// en un hilo worker. Un solo job a la vez: enfocar otro archivo cancela y reemplaza. `None`
     /// = sin metadata (carpeta o nada enfocado). Ver `MetaJob` y `meta.rs`.
     pub meta_job: Option<meta::MetaJob>,
-    /// Búsqueda recursiva en curso/terminada (Ctrl+F / lupa), si la hay. Mientras esté presente
+    /// Búsqueda recursiva en curso/terminada (F3 / Ctrl+F / lupa), si la hay. Mientras esté presente
     /// la UI muestra el panel de resultados; `None` = sin búsqueda. Ver `SearchJob`.
     pub search_job: Option<SearchJob>,
     /// Vista profunda (listado recursivo) en curso/terminada para un panel, si la hay. Un solo
@@ -229,6 +244,13 @@ pub struct WorkspaceCtrl {
     /// aquí y la UI la consume con `take_toolbar_menu_request` para abrir el menú correspondiente.
     /// `Refresh-drives` también va por acá (refresca la tira). Ver `ToolbarMenuRequest`.
     pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
+    /// Error pendiente de una operación Shell; el tick lo convierte en toast localizado.
+    pub pending_shell_error: Option<String>,
+    /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
+    /// metadatos diferentes (1) de un nombre presente solo en ese lado (2).
+    pub comparison: HashMap<PaneId, HashMap<PathBuf, u8>>,
+    /// Revisión O(1) que invalida el modelo de filas al comparar o limpiar la comparación.
+    pub comparison_revision: u64,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
@@ -238,6 +260,11 @@ pub struct WorkspaceCtrl {
     /// Se vacía al navegar (vía `start_listing`) para que el espacio libre se refresque al
     /// entrar a otra carpeta/unidad. Ver `footer_text_for`.
     footer_disk_cache: std::collections::HashMap<std::path::PathBuf, naygo_core::disk::DiskUsage>,
+    /// Raíces cuyo espacio se está leyendo en un worker. Impide lanzar un hilo por tick mientras
+    /// una unidad de red lenta todavía responde. El resultado llega por `footer_disk_results`.
+    footer_disk_pending: std::collections::HashSet<std::path::PathBuf>,
+    footer_disk_sender: Sender<(std::path::PathBuf, Option<naygo_core::disk::DiskUsage>)>,
+    footer_disk_results: Receiver<(std::path::PathBuf, Option<naygo_core::disk::DiskUsage>)>,
     /// Paneles cuya carpeta se perdió por una expulsión de disco (no por "carpeta borrada").
     /// Cambia solo el TEXTO del aviso in-place ("disco expulsado" vs "carpeta no encontrada").
     /// Se limpia cuando el panel navega a una carpeta válida.
@@ -260,6 +287,9 @@ pub struct WorkspaceCtrl {
     /// Autocompletado async del editor de ruta (path-bar): worker con debounce, para que tipear
     /// no haga un `read_dir` por tecla en el hilo de UI. Ver `input.rs`.
     autocomplete: input::AutocompleteState,
+    /// Autocompletado independiente de la raíz del panel Search. Así no se cruzan resultados
+    /// si una path-bar y el buscador se editan en paneles distintos.
+    search_autocomplete: input::AutocompleteState,
 }
 
 /// Petición de un atajo de teclado que necesita que la UI abra un menú/acción de la toolbar cuyos
@@ -290,6 +320,8 @@ pub struct ContextMenuState {
     /// al abrir el menú (no en cada tick): `folder_mode`, o clic sobre una única fila que es un
     /// directorio. Cachearlo evita un `stat` por tick que en un share de red lento sería costoso.
     pub target_is_folder: bool,
+    /// El menú se abrió sobre un breadcrumb/árbol y su carpeta puede diferir de la actual.
+    pub show_open_here: bool,
 }
 
 /// Modal "nueva(s) carpeta(s)": cada línea del `text` es una subcarpeta a crear dentro de `dir`;
@@ -302,7 +334,7 @@ pub struct NewFolderState {
 /// Un drop intra-app (entre paneles) ya validado y a la espera de que el usuario CONFIRME la
 /// copia/mueve en un modal. Guarda todo lo necesario para arrancar la op al confirmar, sin volver
 /// a hit-testear (el destino ya se resolvió). Ver `WorkspaceCtrl::pending_drop`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PendingDrop {
     /// Archivos a copiar/mover (las rutas de origen del OLE).
     pub paths: Vec<PathBuf>,
@@ -315,6 +347,8 @@ pub struct PendingDrop {
     pub is_move: bool,
     /// Cuántos elementos (para el texto del modal; == `paths.len()`).
     pub count: usize,
+    /// Mantiene vivo el staging cuando el origen proviene de 7-Zip/WinRAR u otra fuente virtual.
+    pub staging: Option<naygo_platform::drop_target::StagedDrop>,
 }
 
 /// Cuántos nombres se listan explícitamente antes de truncar con "y N más" (umbral "pocos").
@@ -448,10 +482,12 @@ pub struct DeepJob {
 /// búsqueda nueva cancela y reemplaza la anterior. Mientras `open`, la UI muestra el panel de
 /// resultados. Modelado igual que `SizeJob`: worker + canal + token + estado acumulado.
 pub struct SearchJob {
-    /// Carpeta raíz bajo la que se busca (la del panel activo al disparar).
+    /// Carpeta raíz bajo la que se busca (por defecto la del panel activo al disparar).
     pub root: PathBuf,
-    /// Texto buscado (lo que el usuario tipeó; se muestra en el encabezado).
+    /// Texto de nombre/patrón buscado (lo que el usuario tipeó; se muestra en el encabezado).
     pub query: String,
+    /// Criterios completos, incluidos contenido y opciones de comparación/recorrido.
+    pub options: naygo_core::search::SearchOptions,
     pub rx: std::sync::mpsc::Receiver<naygo_core::search::SearchMsg>,
     pub token: naygo_core::CancellationToken,
     /// Coincidencias acumuladas (en el orden en que el worker las descubrió).
@@ -496,6 +532,7 @@ fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, h: 
 // --- Submódulos por responsabilidad (O-12) ---
 // Cada uno aporta su propio `impl WorkspaceCtrl`. Rust permite varios `impl` del
 // mismo tipo repartidos en módulos del mismo crate.
+mod basket;
 mod columns;
 mod context;
 mod favorites;
@@ -506,7 +543,9 @@ mod meta;
 mod navigation;
 mod ops;
 mod session;
+mod sync_assistant;
 mod templates;
+mod text_transform;
 mod tree;
 
 impl WorkspaceCtrl {
@@ -524,6 +563,9 @@ impl WorkspaceCtrl {
         ws.layout = SerializableDockLayout::single(id);
         ws.set_active(id);
         let config = crate::config_ctrl::ConfigCtrl::new(config_dir.clone());
+        // El uso de disco puede bloquear en un volumen de red. El canal permite que el worker
+        // publique el dato sin tocar Slint ni el controlador desde otro hilo.
+        let (footer_disk_sender, footer_disk_results) = mpsc::channel();
         let mut icons =
             crate::icons::IconCache::new(config.settings.icon_set.clone(), config_dir.clone());
         // Sembrar overrides + tinte al construir, para que la primera pintura ya sea correcta.
@@ -547,6 +589,10 @@ impl WorkspaceCtrl {
             recents: RecentDirs::new(),
             ops: crate::ops_ctrl::OpsCtrl::new(config_dir.clone()),
             preview: crate::preview::PreviewState::new(),
+            basket: naygo_core::basket::SelectionBasket::new(),
+            basket_staging: Vec::new(),
+            sync_assistant: None,
+            text_transform: None,
             pending_pick: None,
             last_area: Rect {
                 x: 0.0,
@@ -561,6 +607,7 @@ impl WorkspaceCtrl {
             typeahead: String::new(),
             typeahead_at: None,
             filter_match_count: 0,
+            filter_hide_nonmatches: false,
             last_listing_dirs: HashMap::new(),
             ctrl_down: false,
             shift_down: false,
@@ -585,13 +632,20 @@ impl WorkspaceCtrl {
             palette_theme_requested: None,
             open_config_requested: false,
             toolbar_menu_requested: None,
+            pending_shell_error: None,
+            comparison: HashMap::new(),
+            comparison_revision: 0,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
+            footer_disk_pending: std::collections::HashSet::new(),
+            footer_disk_sender,
+            footer_disk_results,
             ejected_panes: std::collections::HashSet::new(),
             missing_cache: std::collections::HashMap::new(),
             missing_probe: None,
             pending_recents: HashMap::new(),
             autocomplete: input::AutocompleteState::new(),
+            search_autocomplete: input::AutocompleteState::new(),
         };
         c.push_recent(start.clone());
         c.start_listing(id, start);
@@ -605,6 +659,20 @@ impl WorkspaceCtrl {
         if let Some(f) = self.ws.active_files_mut() {
             op(f);
         }
+    }
+
+    pub(super) fn report_shell_result(
+        &mut self,
+        result: Result<(), naygo_platform::open::ShellError>,
+    ) {
+        if let Err(error) = result {
+            crate::logging::log_line(&format!("operación Shell falló: {error}"));
+            self.pending_shell_error = Some(error.to_string());
+        }
+    }
+
+    pub fn take_shell_error(&mut self) -> Option<String> {
+        self.pending_shell_error.take()
     }
 
     /// Construye el snapshot de diagnóstico (rutas por panel + tema + idioma). Barato (strings).
@@ -629,14 +697,18 @@ impl WorkspaceCtrl {
     }
 }
 
-/// Construye un `DirTree` inicial con una raíz por unidad del sistema.
+/// Construye un `DirTree` inicial con accesos físicos conocidos y una raíz por unidad.
 fn build_tree() -> DirTree {
+    let folders: Vec<(PathBuf, String, String)> = naygo_platform::known_folders::known_folders()
+        .into_iter()
+        .map(|folder| (folder.path, folder.name, folder.icon.tree_tag().to_string()))
+        .collect();
     let drives: Vec<(PathBuf, String, naygo_core::icon_kind::DriveKind)> =
         naygo_platform::drives::drives()
             .into_iter()
             .map(|d| (d.path, d.label, d.kind))
             .collect();
-    DirTree::from_drives(&drives)
+    DirTree::from_folders_and_drives(&folders, &drives)
 }
 
 /// Datos crudos del footer de un panel (todo MENOS el disco) + la raíz de su unidad (para

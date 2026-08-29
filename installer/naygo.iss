@@ -23,6 +23,11 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
+; Mantener explícitamente el directorio, tareas e idioma del instalador anterior. Junto con el
+; AppId fijo, esto convierte una ejecución posterior del setup en una actualización in-place.
+UsePreviousAppDir=yes
+UsePreviousTasks=yes
+UsePreviousLanguage=yes
 ; Modo elegible: el asistente pregunta "para mí" (sin admin) o "para todos" (admin).
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -39,7 +44,7 @@ SetupIconFile=..\assets\icons\naygo_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 ; Si Naygo está corriendo durante un update, ofrecer cerrarlo antes de reemplazar
 ; el .exe (evita el error "archivo en uso"). No reiniciar la app automáticamente.
-CloseApplications=yes
+CloseApplications=force
 RestartApplications=no
 
 [Languages]
@@ -89,6 +94,13 @@ fr.AppLangPrompt=Choisissez la langue de démarrage de Naygo :
 it.AppLangPrompt=Scegli la lingua con cui verrà avviato Naygo:
 pt.AppLangPrompt=Escolha o idioma com que o Naygo será iniciado:
 ja.AppLangPrompt=Naygo を起動する言語を選んでください：
+en.DebugSymbols=Install debugging symbols (only for crash diagnostics)
+es.DebugSymbols=Instalar símbolos de depuración (solo para diagnosticar fallos)
+de.DebugSymbols=Debugsymbole installieren (nur für Absturzdiagnosen)
+fr.DebugSymbols=Installer les symboles de débogage (diagnostic de crash uniquement)
+it.DebugSymbols=Installa simboli di debug (solo per diagnosticare arresti anomali)
+pt.DebugSymbols=Instalar símbolos de depuração (somente para diagnóstico de falhas)
+ja.DebugSymbols=デバッグ シンボルをインストールする（クラッシュ診断専用）
 
 [Tasks]
 ; Acceso directo en el escritorio (marcado por defecto vía el grupo estándar).
@@ -98,12 +110,14 @@ Name: "startupwin"; Description: "{cm:StartupWin}"; Flags: unchecked
 ; Integraciones opcionales con el shell (desmarcadas por defecto).
 Name: "openwith"; Description: "{cm:OpenWithFolders}"; Flags: unchecked
 Name: "ctxmenu"; Description: "{cm:CtxMenuFolders}"; Flags: unchecked
+; El PDB pesa cientos de MB: solo quien vaya a analizar un crash lo necesita.
+Name: "debugsymbols"; Description: "{cm:DebugSymbols}"; Flags: unchecked
 
 [Files]
 ; Único ejecutable (CRT estático + assets embebidos), licencia y readme.
 Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
-; Símbolos de depuración: el PDB permite backtraces simbolizados en el log de panic.
-Source: "..\target\release\naygo.pdb"; DestDir: "{app}"; Flags: ignoreversion
+; Símbolos opcionales: el PDB permite backtraces simbolizados, pero no es necesario para usar Naygo.
+Source: "..\target\release\naygo.pdb"; DestDir: "{app}"; Flags: ignoreversion; Tasks: debugsymbols
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -138,6 +152,23 @@ Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; F
 [Code]
 var
   LangPage: TInputOptionWizardPage;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  InstalledExe: String;
+begin
+  Result := '';
+  InstalledExe := ExpandConstant('{app}\{#MyAppExe}');
+  { Las versiones nuevas reciben este comando por la instancia única y guardan sesión antes de
+    salir. Para versiones antiguas que aún no lo conocen, CloseApplications=force queda como
+    respaldo acotado al ejecutable que Restart Manager detectó usando el archivo a reemplazar. }
+  if FileExists(InstalledExe) then
+  begin
+    Exec(InstalledExe, '--shutdown', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(500);
+  end;
+end;
 
 function NaygoLangId(Index: Integer): String;
 begin

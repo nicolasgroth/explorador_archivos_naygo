@@ -347,12 +347,13 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// Ordena el panel activo por la columna `kind_int` (0..4). Reusa `sort_key_of` para cubrir
-    /// las 5 columnas (incluida Creado), a diferencia del `on_sort_by` por string. Alterna
-    /// ascendente/descendente si ya estaba ordenado por esa clave.
-    pub fn sort_by_kind(&mut self, kind_int: i32) {
+    /// Ordena EL panel que recibió el clic por la columna `kind_int` (0..4). Reusa `sort_key_of`
+    /// para cubrir las 5 columnas (incluida Creado), a diferencia del `on_sort_by` por string.
+    /// No activa el panel: ordenar una lista secundaria no debe cambiar el foco ni reordenar la
+    /// lista que estaba activa. Alterna ascendente/descendente si ya usaba esa clave.
+    pub fn sort_by_kind(&mut self, id: PaneId, kind_int: i32) {
         let key = naygo_core::columns::sort_key_of(crate::bridge::column_kind_from_int(kind_int));
-        if let Some(f) = self.ws.active_files_mut() {
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             if f.sort.key == key {
                 f.sort.ascending = !f.sort.ascending;
             } else {
@@ -364,7 +365,9 @@ impl WorkspaceCtrl {
         }
     }
 
-    pub fn on_sort_by(&mut self, column: &str) {
+    /// Variante legado del callback de orden: igual que el header dinámico, recibe el panel de
+    /// origen para no caer por accidente en `active_files_mut()`.
+    pub fn on_sort_by(&mut self, id: PaneId, column: &str) {
         let key = match column {
             "name" => SortKey::Name,
             "ext" => SortKey::Extension,
@@ -372,7 +375,7 @@ impl WorkspaceCtrl {
             "modified" => SortKey::Modified,
             _ => return,
         };
-        if let Some(f) = self.ws.active_files_mut() {
+        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             if f.sort.key == key {
                 f.sort.ascending = !f.sort.ascending;
             } else {

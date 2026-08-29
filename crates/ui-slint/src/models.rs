@@ -24,9 +24,11 @@ pub(crate) struct PaneModels {
     pub(crate) tree: Rc<VecModel<TreeRow>>,
     pub(crate) favs: Rc<VecModel<NavRow>>,
     pub(crate) recents: Rc<VecModel<NavRow>>,
+    pub(crate) frequent_dirs: Rc<VecModel<NavRow>>,
     /// Árbol de favoritos editable (panel Favoritos): grupos + hojas aplanados con sangría.
     pub(crate) fav_tree: Rc<VecModel<FavTreeRow>>,
     pub(crate) hist: Rc<VecModel<HistRow>>,
+    pub(crate) basket: Rc<VecModel<BasketRowVm>>,
 }
 
 impl PaneModels {
@@ -38,8 +40,10 @@ impl PaneModels {
             tree: Rc::new(VecModel::default()),
             favs: Rc::new(VecModel::default()),
             recents: Rc::new(VecModel::default()),
+            frequent_dirs: Rc::new(VecModel::default()),
             fav_tree: Rc::new(VecModel::default()),
             hist: Rc::new(VecModel::default()),
+            basket: Rc::new(VecModel::default()),
         }
     }
 }
@@ -100,5 +104,8 @@ pub(crate) fn purpose_to_int(p: PanePurpose) -> i32 {
         PanePurpose::Favorites => 4,
         PanePurpose::Preview => 5,
         PanePurpose::Operations => 6,
+        PanePurpose::Basket => 7,
+        PanePurpose::Search => 8,
+        PanePurpose::Recents => 9,
     }
 }

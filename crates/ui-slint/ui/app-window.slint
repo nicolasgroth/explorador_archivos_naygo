@@ -10,7 +10,11 @@ import { TreePanel } from "tree-panel.slint";
 import { InspectorPanel } from "inspector-panel.slint";
 import { HistoryPanel } from "history-panel.slint";
 import { FavoritesPanel } from "favorites-panel.slint";
+import { RecentsPanel } from "recents-panel.slint";
 import { PreviewPanel } from "preview-panel.slint";
+import { BasketPanel } from "basket-panel.slint";
+import { SyncDialog } from "sync-dialog.slint";
+import { TextTransformDialog } from "text-transform-dialog.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { MessageModal } from "message-modal.slint";
 import { OpsPanel } from "ops-panel.slint";
@@ -22,7 +26,7 @@ import { NewFolder } from "new-folder.slint";
 import { SearchPanel } from "search-panel.slint";
 import { Help } from "help.slint";
 import { CommandPalette } from "command-palette.slint";
-import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm } from "types.slint";
+import { BatchRenameVm, NewFolderVm, HelpRowVm, SearchVm, SyncVm, TextTransformVm } from "types.slint";
 import { PaletteItemVm } from "types.slint";
 import { HistoryItemVm } from "types.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm } from "types.slint";
@@ -48,21 +52,30 @@ component TabBar inherits Rectangle {
     in property <[TabVm]> tabs;
     callback select(int);
     callback close(int);
-    height: 24px;
-    background: Theme.panel-bg;
+    height: 26px;
+    background: Theme.header-bg;
     HorizontalLayout {
-        padding: 2px;
-        spacing: 2px;
+        padding: Theme.space-xs;
+        spacing: Theme.space-xs;
         for t in root.tabs: Rectangle {
-            background: t.active ? Theme.selection-bg : (tab-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg);
-            border-radius: 4px;
+            background: t.active ? Theme.active-pane-bg : (tab-touch.has-hover ? Theme.hover-bg : transparent);
+            border-radius: Theme.radius-sm;
+            if t.active: Rectangle {
+                x: 4px;
+                y: parent.height - 2px;
+                width: parent.width - 8px;
+                height: 2px;
+                background: Theme.active-pane-border;
+                border-radius: 1px;
+            }
             HorizontalLayout {
                 padding-left: 8px;
                 padding-right: 4px;
                 spacing: 4px;
                 Text {
                     text: t.label;
-                    color: t.active ? white : Theme.text-dim;
+                    color: t.active ? Theme.text : Theme.text-dim;
+                    font-weight: t.active ? 700 : 500;
                     vertical-alignment: center;
                     overflow: elide;
                 }
@@ -84,8 +97,11 @@ component TabBar inherits Rectangle {
 component ToolBtn inherits Rectangle {
     in property <string> label;
     in property <string> tip;
-    in property <length> btn-width: 34px;
+    in property <length> btn-width: 30px;
     in property <bool> highlight: false;
+    // Acciones que abren un menú muestran una marca de combobox. Esto evita que se confundan con
+    // acciones inmediatas y permite mantener etiquetas e íconos compactos.
+    in property <bool> has-menu: false;
     // Ícono del set activo para este botón. Vacío = solo texto. Lo rellena Rust (Task 7).
     // La imagen llega ya tintada desde IconCache, así que NO se aplica colorize aquí.
     in property <image> icon;
@@ -95,8 +111,10 @@ component ToolBtn inherits Rectangle {
     in property <bool> icon-only: false;
     callback clicked();
     width: root.btn-width;
-    background: (touch.has-hover || root.highlight) ? Theme.selection-bg : Theme.row-bg;
-    border-radius: 7px;
+    background: root.highlight
+        ? Theme.pressed-bg
+        : (touch.has-hover ? Theme.hover-bg : transparent);
+    border-radius: Theme.radius-md;
     // Contenido centrado por geometría (no por layout, que dejaba el ícono descentrado):
     // ícono + texto juntos, centrados en el botón. En icon-only solo va el ícono.
     content-row := HorizontalLayout {
@@ -116,10 +134,24 @@ component ToolBtn inherits Rectangle {
         }
         if (!root.icon-only || root.icon.width == 0): Text {
             text: root.label;
-            color: white;
-            font-size: 12px;
+            color: Theme.text;
+            font-size: Theme.font-md;
             vertical-alignment: center;
         }
+    }
+    if root.has-menu: Path {
+        width: 7px;
+        height: 7px;
+        x: parent.width - self.width - 3px;
+        y: parent.height - self.height - 3px;
+        stroke: root.enabled ? Theme.text-dim : Theme.text-dim.with-alpha(0.4);
+        stroke-width: 1.1px;
+        fill: transparent;
+        viewbox-width: 7;
+        viewbox-height: 7;
+        MoveTo { x: 1; y: 2.2; }
+        LineTo { x: 3.5; y: 4.7; }
+        LineTo { x: 6; y: 2.2; }
     }
     // Publica el tooltip y su posición X (centro del botón) al pasar el mouse, para que la
     // AppWindow lo pinte ENCIMA del contenido (un tooltip anidado en la toolbar queda tapado
@@ -141,13 +173,13 @@ component ToolBtn inherits Rectangle {
 // Separador vertical entre grupos de la toolbar: una línea fina centrada con aire a los lados,
 // para agrupar visualmente (navegación / paneles / acciones / unidades) sin recargar.
 component ToolSep inherits Rectangle {
-    width: 9px;
+    width: 7px;
     Rectangle {
         width: 1px;
-        height: 20px;
+        height: 18px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Theme.border;
+        background: Theme.divider;
     }
 }
 
@@ -166,8 +198,10 @@ component DriveBtn inherits Rectangle {
     // del ▾, en coords de ventana) para que la AppWindow posicione el menú flotante.
     callback eject-menu(length);
     width: drive-row.preferred-width + 10px;
-    background: dtouch.has-hover ? Theme.selection-bg : Theme.row-bg;
-    border-radius: 4px;
+    background: dtouch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: dtouch.has-hover ? Theme.active-pane-border : Theme.divider;
     drive-row := HorizontalLayout {
         alignment: center;
         spacing: 3px;
@@ -210,8 +244,8 @@ component DriveBtn inherits Rectangle {
         }
         Text {
             text: root.label;
-            color: white;
-            font-size: 12px;
+            color: Theme.text;
+            font-size: Theme.font-md;
             vertical-alignment: center;
         }
         // Triángulo ▾ (estilo combobox): solo en unidades extraíbles. Abre un menú
@@ -273,8 +307,8 @@ component MenuItem inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 26px;
-    background: mi-touch.has-hover ? Theme.selection-bg : transparent;
-    border-radius: 4px;
+    background: mi-touch.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     Text {
         text: root.label;
         color: Theme.text;
@@ -296,8 +330,8 @@ component CheckMenuItem inherits Rectangle {
     in property <bool> checked;
     callback clicked();
     height: 26px;
-    background: cmi-touch.has-hover ? Theme.selection-bg : transparent;
-    border-radius: 4px;
+    background: cmi-touch.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
@@ -346,8 +380,8 @@ component HistoryMenuItem inherits Rectangle {
     in property <string> path;
     callback clicked();
     height: 38px;
-    background: hmi-touch.has-hover ? Theme.selection-bg : transparent;
-    border-radius: 4px;
+    background: hmi-touch.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     VerticalLayout {
         padding-left: 8px;
         padding-right: 8px;
@@ -383,10 +417,10 @@ component HistoryCaret inherits Rectangle {
     in property <string> tip;
     callback clicked(length);
     callback hover-tip(string, length, length);
-    property <color> tint: root.enabled ? white : Theme.text-dim;
+    property <color> tint: root.enabled ? Theme.text : Theme.text-dim;
     width: 14px;
-    border-radius: 7px;
-    background: (hc-touch.has-hover && root.enabled) ? Theme.selection-bg : Theme.row-bg;
+    border-radius: Theme.radius-md;
+    background: (hc-touch.has-hover && root.enabled) ? Theme.hover-bg : transparent;
     Path {
         width: 10px;
         height: 10px;
@@ -463,6 +497,25 @@ export component AppWindow inherits Window {
     callback add-pane-dir(int);       // divide el panel activo en una dirección: 0=derecha
                                       // 1=abajo 2=izquierda 3=arriba (menú del botón "+")
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
+    callback add-linked-browser();    // crea una pareja Árbol↔Files persistente
+    callback basket-remove(int);
+    callback basket-clear();
+    callback basket-copy();
+    callback basket-move();
+    callback basket-delete();
+    in property <SyncVm> sync-vm;
+    callback sync-set-mode(int);
+    callback sync-set-delete(bool);
+    callback sync-toggle(int);
+    callback sync-apply();
+    callback sync-close();
+    in property <TextTransformVm> text-transform-vm;
+    callback text-transform-set-line(int);
+    callback text-transform-set-encoding(int);
+    callback text-transform-set-final(int);
+    callback text-transform-set-trim(bool);
+    callback text-transform-apply();
+    callback text-transform-close();
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift)
     callback row-double-clicked(int, int);
     callback row-middle-clicked(int, int);  // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
@@ -473,8 +526,10 @@ export component AppWindow inherits Window {
     // El panel que está editando su ruta (-1 = ninguno), su texto y sus candidatos. Rust los
     // controla; el FilePanel correspondiente muestra el editor.
     in-out property <int> edit-pane: -1;
-    in property <string> edit-text;
+    in-out property <string> edit-text;
     in property <[string]> edit-suggestions;
+    in property <int> edit-caret: -1;
+    in property <int> edit-caret-revision: 0;
     // --- Rename inline (6D): la fila `rename-pos` del panel `rename-pane` muestra un editor. ---
     in-out property <int> rename-pane: -1;
     in-out property <int> rename-pos: -1;
@@ -494,7 +549,9 @@ export component AppWindow inherits Window {
     callback rename-cycle();                    // F2 dentro del editor: ciclar la selección
     callback rename-cancel();                   // Esc → cerrar sin renombrar
     callback path-segment-clicked(int, string);
+    callback path-segment-context(int, string, length, length);
     callback filter-clear(int);             // (pane-id) limpiar el filtro visual (✕ de la mini-barra)
+    callback filter-toggle-hide(int);       // alterna ocultar las no-coincidencias del filtro visual
     callback path-edit-start(int);
     callback path-edit-changed(int, string);
     callback path-edit-commit(int, string);
@@ -548,7 +605,9 @@ export component AppWindow inherits Window {
     in property <length> splitpreview-h;
     // Paneles especiales:
     callback tree-toggle(int, string);   // (pane-id, ruta) expandir/colapsar rama
-    callback tree-navigate(string);      // navegar el Files activo a esa carpeta
+    callback tree-navigate(int, string); // navegar el Files asociado a ese árbol
+    callback tree-context(int, string, length, length); // menú de la carpeta elegida en el árbol
+    callback tree-link-toggle(int);      // común ↔ dedicado al último Files activo
     callback tree-key(int, string);      // (pane-id, dir) navegación por teclado del árbol
     callback nav-navigate(string);       // favorito/reciente → navegar Files activo
     callback fav-remove(string);         // quitar favorito por ruta
@@ -564,9 +623,15 @@ export component AppWindow inherits Window {
     callback fav-toggle-expand(string);           // expandir/colapsar un grupo (ruta de nombres)
     callback fav-new-group(string, string);       // crear grupo: (parent-group-id, nombre)
     callback fav-rename-group(string, string);    // renombrar grupo: (group-id, nombre)
+    callback fav-rename-favorite(string, string); // renombrar alias: (ruta, alias)
     callback fav-delete-node(bool, string, string);       // eliminar: (is-group, group-id, path)
     callback fav-move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
     callback preview-open(string);       // abrir el archivo previsualizado con el programa por defecto
+    callback preview-orbit(float, float); // arrastre del preview STL/3MF (delta x,y)
+    callback preview-zoom(float);         // rueda/touchpad del preview STL/3MF
+    callback preview-reset-camera();      // restaurar orientación/zoom del STL/3MF
+    callback preview-cancel();            // detener la carga/rasterización pendiente
+    callback preview-copy-text(string);   // copiar el texto cargado explícitamente
     callback undo-entry(int);            // deshacer la entrada del historial
     callback calc-size();                 // Inspector: pedir el cálculo del tamaño de la carpeta enfocada
     // Acciones multi-panel (toolbar):
@@ -658,6 +723,7 @@ export component AppWindow inherits Window {
     callback ctx-open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
     callback ctx-open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
     callback ctx-open-with();
+    callback ctx-run-as-administrator();
     callback ctx-copy();
     callback ctx-cut();
     callback ctx-paste();
@@ -674,6 +740,9 @@ export component AppWindow inherits Window {
     callback ctx-explorer();
     callback ctx-new-folder();
     callback ctx-native();
+    callback ctx-synchronize();
+    callback ctx-add-basket();
+    callback ctx-transform-text();
     callback ctx-dismiss();
     // Clic derecho en la zona vacía del panel → menú contextual de la carpeta (modo carpeta).
     callback empty-context(int, length, length);  // (pane-id, x, y)
@@ -750,12 +819,18 @@ export component AppWindow inherits Window {
     callback missing-ancestor(int);
     callback missing-choose(int);
     callback missing-close-pane(int);
-    // Búsqueda recursiva (Ctrl+F / lupa):
+    // Búsqueda recursiva (F3 / lupa):
     in property <SearchVm> search-vm;
-    callback search-run(string);   // lanzar búsqueda con el texto dado
-    callback search-close();       // cerrar el panel (✕ / Esc / velo)
+    // Autocompletado propio de «Buscar desde». El texto vive en SearchPanel; este buffer solo
+    // identifica para qué edición deben aplicarse los resultados async del worker.
+    in-out property <string> search-root-buffer: "";
+    in property <[string]> search-root-suggestions;
+    callback search-run(string, string, string, bool, bool, bool); // nombre, raíz, contenido y opciones
+    callback search-root-changed(string);
+    callback search-root-complete(string, string) -> string;
     callback search-cancel();      // detener el worker sin cerrar
     callback search-open(int);     // abrir la coincidencia de índice i
+    callback search-reveal(int);   // navegar a la carpeta que contiene la coincidencia
     callback search-toggle();      // abrir/cerrar desde la lupa de la toolbar
     // Ayuda (F1):
     in property <bool> help-open;
@@ -845,10 +920,13 @@ export component AppWindow inherits Window {
         // Barra superior: path del panel activo + subir + agregar panel.
         Rectangle {
             height: root.top-bar-h;
-            background: Theme.panel-bg;
+            background: Theme.chrome-bg;
             HorizontalLayout {
-                padding: 4px;
-                spacing: 6px;
+                padding-left: 6px;
+                padding-right: 6px;
+                padding-top: 2px;
+                padding-bottom: 2px;
+                spacing: 1px;
                 // --- Grupo NAVEGACIÓN ---
                 // Atrás / Adelante / Inicio / Subir: navegación tipo navegador. Cada botón pinta el
                 // ícono del set activo (prop tb-*). Atrás/Adelante se atenúan (y no responden) cuando
@@ -923,7 +1001,8 @@ export component AppWindow inherits Window {
                     icon: root.tb-show-hidden;
                     icon-only: true;
                     tip: Tr.view-hidden-tip;
-                    btn-width: 34px;
+                    btn-width: 30px;
+                    has-menu: true;
                     highlight: root.view-menu-open;
                     clicked => {
                         root.open-view-menu(view-btn.absolute-position.x + view-btn.width / 2);
@@ -935,7 +1014,8 @@ export component AppWindow inherits Window {
                     icon: root.tb-history;
                     icon-only: true;
                     tip: Tr.history;
-                    btn-width: 34px;
+                    btn-width: 30px;
+                    has-menu: true;
                     highlight: root.history-menu-open;
                     clicked => {
                         root.history-open(history-btn.absolute-position.x + history-btn.width / 2);
@@ -947,7 +1027,8 @@ export component AppWindow inherits Window {
                     icon: root.tb-favorites;
                     icon-only: true;
                     tip: Tr.fav-menu-tip;
-                    btn-width: 40px;
+                    btn-width: 32px;
+                    has-menu: true;
                     highlight: root.fav-menu-open;
                     clicked => {
                         // Cerrar otros menús flotantes para no tener dos abiertos a la vez.
@@ -972,7 +1053,8 @@ export component AppWindow inherits Window {
                     icon: root.tb-split;
                     tip: Tr.toolbar-add-tip;
                     highlight: root.dir-menu-open;
-                    btn-width: 34px;
+                    btn-width: 30px;
+                    has-menu: true;
                     clicked => {
                         // Anclar el menú al botón: capturar su x de centro antes de abrir.
                         root.dir-menu-x = split-btn.absolute-position.x + split-btn.width / 2;
@@ -986,7 +1068,8 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-panel-tip;
                     icon: root.tb-panel;
                     icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 68px;
+                    btn-width: root.settings-vm.icon-only ? 30px : 68px;
+                    has-menu: true;
                     highlight: root.add-menu-open;
                     clicked => {
                         root.add-menu-x = panel-btn.absolute-position.x + panel-btn.width / 2;
@@ -1031,7 +1114,8 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-layouts-tip;
                     icon: root.tb-layouts;
                     icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 84px;
+                    btn-width: root.settings-vm.icon-only ? 30px : 84px;
+                    has-menu: true;
                     highlight: root.layout-menu-open;
                     clicked => {
                         // Anclar el menú al botón: capturar su x de centro antes de abrir.
@@ -1060,7 +1144,8 @@ export component AppWindow inherits Window {
                     tip: Tr.toolbar-terminal-tip;
                     icon: root.tb-terminal;
                     icon-only: root.settings-vm.icon-only;
-                    btn-width: root.settings-vm.icon-only ? 34px : 94px;
+                    btn-width: root.settings-vm.icon-only ? 30px : 94px;
+                    has-menu: true;
                     highlight: root.term-menu-open;
                     clicked => {
                         root.term-menu-x = term-btn.absolute-position.x + term-btn.width / 2;
@@ -1115,15 +1200,31 @@ export component AppWindow inherits Window {
                     // hijos del HorizontalLayout tenían ancho finito, así que la fila (y por ende
                     // la ventana) heredaba un max-width finito y no se podía ensanchar la ventana.
                     horizontal-stretch: 1;
-                    background: Theme.row-bg;
-                    border-radius: 4px;
-                    Text { text: root.active-path; color: Theme.text; vertical-alignment: center; x: 8px; }
+                    background: Theme.header-bg;
+                    border-radius: Theme.radius-md;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    Text {
+                        text: root.active-path;
+                        color: Theme.text-dim;
+                        font-size: Theme.font-sm;
+                        vertical-alignment: center;
+                        x: 8px;
+                        width: parent.width - 16px;
+                        overflow: elide;
+                    }
                 }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Theme.divider;
             }
         }
         // Zona de contenido: paneles posicionados absolutamente + barras de splitter.
         content := Rectangle {
-            background: Theme.panel-bg;
+            background: Theme.chrome-bg;
             // Paneles (posición/tamaño calculados en Rust). El componente concreto se
             // elige por `p.purpose`: 0=Files 1=Tree 2=Inspector 3=History 4=Favorites
             // 5=Preview. Cada `if` instancia su componente en el mismo rect del panel.
@@ -1138,7 +1239,7 @@ export component AppWindow inherits Window {
                 // Todo panel lleva una barra de título de 24px arriba: muestra su nombre y
                 // sirve de ASA para arrastrarlo y reacomodar el layout. Si el panel es la
                 // pestaña activa de un grupo, en su lugar va la barra de pestañas.
-                property <length> bar-h: 24px;
+                property <length> bar-h: 26px;
                 if p.tabs.length > 0: TabBar {
                     x: 0;
                     y: 0;
@@ -1157,15 +1258,22 @@ export component AppWindow inherits Window {
                     // Si se está ARRASTRANDO un archivo sobre este panel (`drag-over`), el título se
                     // remarca con acento aunque el panel no sea el activo, para indicar dónde caerá
                     // el drop. drag-over manda sobre active (durante el arrastre es lo relevante).
-                    background: (p.active || p.drag-over) ? Theme.accent : Theme.row-bg;
+                    background: (p.active || p.drag-over) ? Theme.active-pane-bg : Theme.header-bg;
+                    Rectangle {
+                        x: 0;
+                        y: parent.height - (p.active || p.drag-over ? 2px : 1px);
+                        width: parent.width;
+                        height: p.active || p.drag-over ? 2px : 1px;
+                        background: (p.active || p.drag-over || p.link-member) ? Theme.active-pane-border : Theme.divider;
+                    }
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 6px;
                         spacing: 6px;
                         Text {
                             text: p.title;
-                            color: (p.active || p.drag-over) ? white : Theme.text-dim;
-                            font-weight: (p.active || p.drag-over) ? 800 : 600;
+                            color: (p.active || p.drag-over) ? Theme.text : Theme.text-dim;
+                            font-weight: (p.active || p.drag-over) ? 700 : 500;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                             overflow: elide;
@@ -1208,7 +1316,7 @@ export component AppWindow inherits Window {
                             width: 9px; height: 9px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            stroke: closex-touch.has-hover ? white : ((p.active || p.drag-over) ? white : Theme.text-dim);
+                            stroke: closex-touch.has-hover ? white : ((p.active || p.drag-over) ? Theme.text : Theme.text-dim);
                             stroke-width: 1.5px;
                             viewbox-width: 10; viewbox-height: 10;
                             MoveTo { x: 1; y: 1; }
@@ -1255,8 +1363,10 @@ export component AppWindow inherits Window {
                         nav-key: p.path;
                         segments: p.segments;
                         editing: root.edit-pane == p.id;
-                        edit-text: root.edit-pane == p.id ? root.edit-text : "";
+                        edit-text <=> root.edit-text;
                         suggestions: root.edit-pane == p.id ? root.edit-suggestions : [];
+                        edit-caret: root.edit-pane == p.id ? root.edit-caret : -1;
+                        edit-caret-revision: root.edit-caret-revision;
                         is-favorite: p.is-favorite;
                         no-matches: p.no-matches;
                         missing: p.missing;
@@ -1265,8 +1375,13 @@ export component AppWindow inherits Window {
                         missing-ejected: p.missing-ejected;
                         deep-active: p.deep-active;
                         footer-text: p.footer-text;
+                        footer-disk-text: p.footer-disk-text;
+                        can-go-back: p.can-go-back;
+                        can-go-forward: p.can-go-forward;
                         filter-label: p.filter-label;
+                        filter-hiding: p.filter-hiding;
                         filter-clear(id) => { root.filter-clear(id); }
+                        filter-toggle-hide(id) => { root.filter-toggle-hide(id); }
                         toggle-deep(id) => { root.toggle-deep(id); }
                         missing-retry(id) => { root.missing-retry(id); }
                         missing-ancestor(id) => { root.missing-ancestor(id); }
@@ -1292,6 +1407,7 @@ export component AppWindow inherits Window {
                         rename-cycle() => { root.rename-cycle(); }
                         rename-cancel() => { root.rename-cancel(); }
                         segment-clicked(id, path) => { root.path-segment-clicked(id, path); }
+                        segment-context(id, path, x, y) => { root.path-segment-context(id, path, x, y); }
                         path-edit-start(id) => { root.path-edit-start(id); }
                         path-edit-changed(id, t) => { root.path-edit-changed(id, t); }
                         path-edit-commit(id, t) => { root.path-edit-commit(id, t); }
@@ -1315,6 +1431,9 @@ export component AppWindow inherits Window {
                         key-release(c, s, a) => { root.key-release(c, s, a); }
                         nav-back(id) => { root.nav-back(id); }
                         nav-forward(id) => { root.nav-forward(id); }
+                        nav-up(id) => { root.activate(id); root.go-up(); }
+                        open-back-history(id, x) => { root.activate(id); root.open-back-history(x); }
+                        open-forward-history(id, x) => { root.activate(id); root.open-forward-history(x); }
                     }
                     if p.purpose == 1: TreePanel {
                         width: 100%;
@@ -1322,9 +1441,15 @@ export component AppWindow inherits Window {
                         active: p.active;
                         rows: p.tree-rows;
                         row-h: root.settings-vm.row-h;
+                        linked: p.tree-linked;
+                        link-label: p.tree-link-label;
                         toggle(path) => { root.tree-toggle(p.id, path); }
-                        navigate(path) => { root.tree-navigate(path); }
+                        navigate(path) => { root.tree-navigate(p.id, path); }
+                        context(path, x, y) => { root.tree-context(p.id, path, x, y); }
+                        toggle-link() => { root.tree-link-toggle(p.id); }
+                        hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                         tree-key(k) => { root.tree-key(p.id, k); }
+                        key(t, c, s, a) => { root.key(t, c, s, a); }
                         focus-pane() => { root.activate(p.id); }
                     }
                     if p.purpose == 2: InspectorPanel {
@@ -1348,17 +1473,26 @@ export component AppWindow inherits Window {
                         height: 100%;
                         active: p.active;
                         fav-tree: p.fav-tree;
-                        recents: p.recents;
                         group-options: root.fav-group-options;
                         move-targets: root.fav-move-targets;
                         navigate(path) => { root.nav-navigate(path); }
                         toggle-expand(np) => { root.fav-toggle-expand(np); }
                         new-group(pid, name) => { root.fav-new-group(pid, name); }
                         rename-group(gid, name) => { root.fav-rename-group(gid, name); }
+                        rename-favorite(path, alias) => { root.fav-rename-favorite(path, alias); }
                         delete-node(g, gid, path) => { root.fav-delete-node(g, gid, path); }
                         request-move-targets(g, gid) => { root.fav-build-move-targets(g, gid); }
                         move-node(g, sgid, spath, dgid) => { root.fav-move-node(g, sgid, spath, dgid); }
                         pin-current() => { root.fav-pin-current(); }
+                        focus-pane() => { root.activate(p.id); }
+                    }
+                    if p.purpose == 9: RecentsPanel {
+                        width: 100%;
+                        height: 100%;
+                        active: p.active;
+                        recents: p.recents;
+                        frequent-dirs: p.frequent-dirs;
+                        navigate(path) => { root.nav-navigate(path); }
                         focus-pane() => { root.activate(p.id); }
                     }
                     if p.purpose == 5: PreviewPanel {
@@ -1368,6 +1502,11 @@ export component AppWindow inherits Window {
                         view: p.preview;
                         focus-pane() => { root.activate(p.id); }
                         open-in-system() => { root.preview-open(p.preview.path); }
+                        mesh-orbit(dx, dy) => { root.preview-orbit(dx, dy); }
+                        mesh-zoom(delta) => { root.preview-zoom(delta); }
+                        reset-mesh() => { root.preview-reset-camera(); }
+                        cancel-preview() => { root.preview-cancel(); }
+                        copy-text(text) => { root.preview-copy-text(text); }
                         hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                     }
                     // Panel rico de operaciones montado como pane (Panel ▾ → Operaciones).
@@ -1391,6 +1530,32 @@ export component AppWindow inherits Window {
                         cancel-all() => { root.op-cancel-all(); }
                         show-files(i) => { root.op-show-files(i); }
                     }
+                    if p.purpose == 7: BasketPanel {
+                        width: 100%; height: 100%; active: p.active; rows: p.basket-rows;
+                        focus-pane() => { root.activate(p.id); }
+                        remove(i) => { root.basket-remove(i); }
+                        clear() => { root.basket-clear(); }
+                        copy() => { root.basket-copy(); }
+                        move-files() => { root.basket-move(); }
+                        delete-files() => { root.basket-delete(); }
+                    }
+                    if p.purpose == 8: SearchPanel {
+                        width: 100%;
+                        height: 100%;
+                        vm: root.search-vm;
+                        root-suggestions: root.search-root-suggestions;
+                        run(name, base, content, ignore-case, wildcards, recursive) => {
+                            root.search-run(name, base, content, ignore-case, wildcards, recursive);
+                        }
+                        root-changed(text) => { root.search-root-changed(text); }
+                        root-complete(buffer, name) => {
+                            return root.search-root-complete(buffer, name);
+                        }
+                        key(t, c, s, a) => { root.key(t, c, s, a); }
+                        cancel() => { root.search-cancel(); }
+                        open(i) => { root.search-open(i); }
+                        reveal(i) => { root.search-reveal(i); }
+                    }
                 }
             }
             // Barras de splitter arrastrables. La barra VISIBLE es fina (4px), pero la zona de
@@ -1408,7 +1573,7 @@ export component AppWindow inherits Window {
                     y: s.horizontal ? 0 : (parent.height - s.h) / 2;
                     width: s.w;
                     height: s.h;
-                    background: sp-touch.has-hover || sp-touch.pressed ? Theme.accent : Theme.border;
+                    background: sp-touch.has-hover || sp-touch.pressed ? Theme.accent : Theme.divider;
                 }
                 sp-touch := TouchArea {
                     mouse-cursor: s.horizontal ? ew-resize : ns-resize;
@@ -1451,7 +1616,7 @@ export component AppWindow inherits Window {
                 y: root.drop-y;
                 width: root.drop-w;
                 height: root.drop-h;
-                background: #4f8ae055;
+                background: Theme.accent.with-alpha(0.28);
                 border-width: 2px;
                 border-color: Theme.accent;
                 border-radius: 4px;
@@ -1483,7 +1648,8 @@ export component AppWindow inherits Window {
         // Barra de estado: carpeta activa + recuento de ítems y selección.
         Rectangle {
             height: 22px;
-            background: Theme.panel-bg;
+            background: Theme.chrome-bg;
+            Rectangle { y: 0; width: parent.width; height: 1px; background: Theme.divider; }
             Text {
                 text: root.status;
                 color: Theme.text-dim;
@@ -1559,6 +1725,7 @@ export component AppWindow inherits Window {
         open-other-pane() => { root.ctx-open-other-pane(); }
         open-new-pane() => { root.ctx-open-new-pane(); }
         open-with() => { root.ctx-open-with(); }
+        run-as-administrator() => { root.ctx-run-as-administrator(); }
         copy() => { root.ctx-copy(); }
         cut() => { root.ctx-cut(); }
         paste() => { root.ctx-paste(); }
@@ -1575,6 +1742,9 @@ export component AppWindow inherits Window {
         explorer() => { root.ctx-explorer(); }
         new-folder() => { root.ctx-new-folder(); }
         native() => { root.ctx-native(); }
+        synchronize() => { root.ctx-synchronize(); }
+        add-to-basket() => { root.ctx-add-basket(); }
+        transform-text() => { root.ctx-transform-text(); }
         dismiss() => { root.ctx-dismiss(); }
     }
 
@@ -1639,17 +1809,6 @@ export component AppWindow inherits Window {
         active: root.help-open;
         shortcuts: root.help-shortcuts;
         close() => { root.help-close(); }
-    }
-
-    // Panel de búsqueda recursiva (Ctrl+F / lupa).
-    SearchPanel {
-        width: 100%;
-        height: 100%;
-        vm: root.search-vm;
-        run(t) => { root.search-run(t); }
-        close() => { root.search-close(); }
-        cancel() => { root.search-cancel(); }
-        open(i) => { root.search-open(i); }
     }
 
     // Menú flotante ▾ de FAVORITOS (toolbar). Muestra el árbol jerárquico de favoritos: grupos
@@ -1902,7 +2061,7 @@ export component AppWindow inherits Window {
         // Anclado al botón Panel (su x de centro), con clamp para no salirse de la ventana.
         x: min(root.width - self.width - 4px, max(4px, root.add-menu-x - self.width / 2));
         y: root.top-bar-h + 2px;
-        width: 160px;
+        width: 270px;
         height: menu-items.preferred-height + 8px;
         background: Theme.row-bg;
         border-color: Theme.selection-bg;
@@ -1912,12 +2071,16 @@ export component AppWindow inherits Window {
             padding: 4px;
             spacing: 1px;
             MenuItem { label: Tr.add-files; clicked => { root.add-pane-of(0); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-linked-browser; clicked => { root.add-linked-browser(); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-tree; clicked => { root.add-pane-of(1); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-inspector; clicked => { root.add-pane-of(2); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-operations; clicked => { root.add-pane-of(6); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-basket; clicked => { root.add-pane-of(7); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-search; clicked => { root.add-pane-of(8); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-recents; clicked => { root.add-pane-of(9); root.add-menu-open = false; } }
         }
     }
 
@@ -2136,6 +2299,25 @@ export component AppWindow inherits Window {
         dismiss => { root.palette-dismiss(); }
     }
 
+    SyncDialog {
+        width: 100%; height: 100%; vm: root.sync-vm;
+        set-mode(mode) => { root.sync-set-mode(mode); }
+        set-delete-extras(value) => { root.sync-set-delete(value); }
+        toggle(index) => { root.sync-toggle(index); }
+        apply() => { root.sync-apply(); }
+        close() => { root.sync-close(); }
+    }
+
+    TextTransformDialog {
+        width: 100%; height: 100%; vm: root.text-transform-vm;
+        set-line(value) => { root.text-transform-set-line(value); }
+        set-encoding(value) => { root.text-transform-set-encoding(value); }
+        set-final(value) => { root.text-transform-set-final(value); }
+        set-trim(value) => { root.text-transform-set-trim(value); }
+        apply() => { root.text-transform-apply(); }
+        close() => { root.text-transform-close(); }
+    }
+
     // Modales de operaciones (overlay sobre toda la ventana; visible solo si hay uno) y aviso
     // (USB/errores). Se montan COMO ÚLTIMOS HIJOS del raíz a propósito: en Slint el último hijo
     // queda al frente en el z-order, así estos modales tapan a TODOS los demás overlays (menús,
@@ -2175,4 +2357,5 @@ export component AppWindow inherits Window {
         context: root.op-file-context;
         close() => { root.op-file-list-open = false; }
     }
+
 }

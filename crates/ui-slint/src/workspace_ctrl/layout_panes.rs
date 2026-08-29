@@ -16,9 +16,9 @@ impl WorkspaceCtrl {
         self.last_area = area;
     }
 
-    /// Panel FILES que está bajo el punto `(content_x, content_y)` (coords de contenido, el mismo
+    /// Panel que acepta archivos bajo el punto `(content_x, content_y)` (coords de contenido, el mismo
     /// sistema que usan `pane_rects`/`drop_hit`/`drop_at`). Reusa el hit-testing del docking. Solo
-    /// devuelve paneles Files: si el punto cae sobre un panel auxiliar (Árbol/Inspector/Preview/…)
+    /// devuelve paneles Files o Bandeja: si cae sobre otro auxiliar (Árbol/Inspector/Preview/…)
     /// o fuera de todo panel, devuelve `None`. Lo usa la UI para resaltar EN VIVO el panel bajo el
     /// cursor mientras se arrastran archivos (mismo destino que recibiría `drop_at`). No ejecuta
     /// nada ni muta estado: es un puro hit-test.
@@ -26,11 +26,10 @@ impl WorkspaceCtrl {
         use naygo_core::workspace::layout::drop_hit;
         let panes = self.pane_rects(self.last_area);
         let (target, _zone) = drop_hit(&panes, content_x, content_y)?;
-        // Filtrar a paneles Files: el resaltado de drop solo aplica donde se puede soltar.
-        self.ws
-            .pane(target)
-            .and_then(|p| p.files.as_ref())
-            .map(|_| target)
+        // Filtrar a los dos destinos válidos: Files transfiere y Basket guarda referencias.
+        self.ws.pane(target).and_then(|pane| {
+            matches!(pane.purpose, PanePurpose::Files | PanePurpose::Basket).then_some(target)
+        })
     }
 
     /// Fija el panel resaltado por arrastre (hover de drop). Devuelve `true` si CAMBIÓ respecto del
@@ -86,7 +85,7 @@ impl WorkspaceCtrl {
         }
         self.push_recent(dir.clone());
         self.start_listing(id, dir.clone());
-        self.sync_trees_active(dir);
+        self.sync_trees_for_files(id, dir);
         true
     }
 
@@ -97,6 +96,14 @@ impl WorkspaceCtrl {
     /// El propósito (tipo) del panel `id`, si existe.
     pub fn purpose_of(&self, id: PaneId) -> Option<PanePurpose> {
         self.ws.pane(id).map(|p| p.purpose)
+    }
+
+    pub fn is_link_member(&self, id: PaneId) -> bool {
+        self.ws.is_link_member(id)
+    }
+
+    pub fn tree_is_linked(&self, id: PaneId) -> bool {
+        self.ws.linked_files(id).is_some()
     }
 
     /// Título de la ventana principal según `Settings.window_title_mode`: solo la app,
@@ -167,11 +174,22 @@ impl WorkspaceCtrl {
             PanePurpose::Favorites => self.config.t("pane.favorites.title"),
             PanePurpose::Preview => self.config.t("pane.preview.title"),
             PanePurpose::Operations => self.config.t("ops.menu_label"),
+            PanePurpose::Basket => self.config.t("basket.title"),
+            PanePurpose::Search => self.config.t("pane.search.title"),
+            PanePurpose::Recents => self.config.t("slint.fav.recents"),
         }
     }
 
     pub fn set_active(&mut self, id: PaneId) {
+        // El filtro de tipeo pertenece al panel con foco. Si se estaba ocultando filas, restaurar
+        // el panel que se deja antes de cambiar y aplicar el mismo buffer al nuevo panel.
+        if self.filter_hide_nonmatches && self.ws.active_id() != Some(id) {
+            if let Some(files) = self.ws.active_files_mut() {
+                files.set_visual_filter(None);
+            }
+        }
         self.ws.set_active(id);
+        self.sync_visual_filter();
         // Recordar el último panel Files activo, para que la navegación desde paneles
         // auxiliares (Árbol/Favoritos) vaya al panel que el usuario venía usando.
         if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Files) {
@@ -184,7 +202,7 @@ impl WorkspaceCtrl {
                 .and_then(|p| p.files.as_ref())
                 .map(|f| f.current_dir.clone())
             {
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(id, dir);
             }
         }
     }
@@ -250,6 +268,10 @@ impl WorkspaceCtrl {
     /// inicializa su `DirTree` desde las unidades del sistema.
     pub fn add_pane_of(&mut self, purpose: PanePurpose, area: Rect) {
         crate::logging::breadcrumb(&format!("abrir panel {:?}", purpose));
+        if matches!(purpose, PanePurpose::Search) {
+            self.open_search_pane(area);
+            return;
+        }
         if matches!(purpose, PanePurpose::Files) {
             self.add_pane_split(area);
             return;
@@ -287,10 +309,86 @@ impl WorkspaceCtrl {
         self.set_active(new_id);
     }
 
+    /// Abre (o enfoca) el buscador como un panel dockable. Conserva un único panel de búsqueda:
+    /// así F3 no llena el workspace de resultados duplicados y la búsqueda en curso sigue siendo
+    /// cancelable desde su propio panel.
+    pub fn open_search_pane(&mut self, _area: Rect) {
+        if let Some(existing) = self
+            .ws
+            .panes()
+            .iter()
+            .find(|p| p.purpose == PanePurpose::Search)
+            .map(|p| p.id)
+        {
+            self.set_active(existing);
+            if !self.search_open() {
+                self.open_empty_search();
+            }
+            return;
+        }
+
+        // Sembrar primero el job vacío mientras aún está activo el Files de origen; luego el
+        // panel Search puede ganar foco sin que la raíz caiga en otro Files arbitrario.
+        self.open_empty_search();
+        let anchor = self.ws.active_id();
+        let root = self
+            .last_active_files
+            .and_then(|id| self.ws.pane(id))
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("C:/"));
+        let id = self.ws.add_pane(PanePurpose::Search, root);
+        if let Some(anchor) = anchor {
+            self.ws.layout.split_leaf(anchor, SplitDir::Horizontal, id);
+        }
+        self.set_active(id);
+    }
+
+    /// Crea un explorador enlazado como unidad: árbol angosto a la izquierda y Files a la
+    /// derecha. El split interno se mantiene anidado para que la pareja se perciba y se mueva
+    /// como un bloque visual incluso junto a otros paneles horizontales.
+    pub fn add_linked_browser(&mut self) {
+        crate::logging::breadcrumb("abrir explorador enlazado");
+        let dir = self
+            .last_active_files
+            .and_then(|id| self.ws.pane(id))
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("C:/"));
+        let anchor = self.ws.active_id();
+        let files = self.ws.add_pane(PanePurpose::Files, dir.clone());
+        self.apply_default_table(files);
+        if let Some(anchor) = anchor {
+            self.ws
+                .layout
+                .split_leaf(anchor, SplitDir::Horizontal, files);
+        } else {
+            self.ws.layout = naygo_core::workspace::SerializableDockLayout::single(files);
+        }
+        let tree = self.ws.add_pane(PanePurpose::Tree, PathBuf::new());
+        self.ws
+            .layout
+            .split_leaf_grouped(files, SplitDir::Horizontal, tree, 0.72);
+        self.ws.layout.swap_split_children(files, tree);
+        self.ws.link_tree(tree, files);
+
+        let mut model = build_tree();
+        model.set_active(dir.clone());
+        self.trees.insert(tree, model);
+        self.reveal_targets.insert(tree, dir.clone());
+        self.set_active(files);
+        self.start_listing(files, dir);
+        self.pump_reveal();
+    }
+
     /// Asegura que exista un panel de Operaciones en el layout; si ya hay uno, no-op. Se llama
     /// al iniciar una operación larga para que el panel rico de progreso "aparezca solo" sin que
     /// el usuario tenga que abrirlo. A diferencia de `add_pane_of`, NO roba el foco: el panel
     /// Files activo sigue activo (el usuario estaba operando ahí). El usuario puede cerrarlo.
+    ///
+    /// El split se decide por el lado más largo DEL panel donde nació la operación, igual que al
+    /// abrir un panel Files. Antes se forzaba Horizontal: en layouts verticales partía el panel de
+    /// trabajo en una dirección inesperada y el progreso aparecía encima de lo que se estaba usando.
     pub fn ensure_ops_pane(&mut self) {
         if self.has_purpose(PanePurpose::Operations) {
             return;
@@ -304,11 +402,17 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
             .unwrap_or_else(|| PathBuf::from("C:/"));
         let active = self.ws.active_id();
+        let split = active
+            .and_then(|id| {
+                self.pane_rects(self.last_area)
+                    .into_iter()
+                    .find(|(pane, _)| *pane == id)
+                    .map(|(_, rect)| naygo_core::workspace::layout::pick_split_dir(rect))
+            })
+            .unwrap_or(SplitDir::Horizontal);
         let new_id = self.ws.add_pane(PanePurpose::Operations, dir);
         if let Some(active) = active {
-            self.ws
-                .layout
-                .split_leaf(active, SplitDir::Horizontal, new_id);
+            self.ws.layout.split_leaf(active, split, new_id);
         }
         // Restaurar el activo previo (el panel de Operaciones no toma el foco).
         if let Some(prev) = prev_active {
@@ -316,28 +420,32 @@ impl WorkspaceCtrl {
         }
     }
 
-    /// `true` si el panel `id` se puede cerrar: hay más de uno (nunca dejamos la ventana sin
-    /// ningún panel).
-    pub fn can_close_pane(&self, id: PaneId) -> bool {
-        self.ws.panes().len() > 1 && self.ws.pane(id).is_some()
+    /// Los paneles que se cierran junto con `id`. Un explorador enlazado Árbol+Files es una
+    /// unidad visual: cerrar cualquiera de sus miembros cierra ambos, sin dejar un árbol o
+    /// listado dedicado huérfano.
+    fn close_targets(&self, id: PaneId) -> Vec<PaneId> {
+        if self.ws.pane(id).is_none() {
+            return Vec::new();
+        }
+        match self.ws.linked_partner(id) {
+            Some(partner) if self.ws.pane(partner).is_some() => vec![id, partner],
+            _ => vec![id],
+        }
     }
 
-    /// Cierra (quita) el panel `id`: cancela su listado en vuelo, suelta su árbol, lo saca del
-    /// layout y del workspace, y reasigna el activo. No-op si es el último panel. Tras cerrar,
-    /// re-sincroniza el árbol con la carpeta del nuevo panel activo.
-    pub fn close_pane(&mut self, id: PaneId) {
-        if !self.can_close_pane(id) {
-            return;
+    /// Cancela y suelta los recursos que pertenecen a un panel antes de retirarlo del
+    /// workspace. Se comparte entre el cierre normal y el de una pestaña para que el cierre
+    /// de una pareja enlazada no deje workers ni estado visual huérfanos.
+    fn release_pane_resources(&mut self, id: PaneId) {
+        if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Search) {
+            self.close_search();
         }
-        crate::logging::breadcrumb(&format!("cerrar panel {}", id.0));
-        // Cancelar y soltar el listado/árbol del panel que se va (no dejar workers huérfanos).
         if let Some(l) = self.listings.remove(&id) {
             l.cancel();
         }
         self.trees.remove(&id);
         self.reveal_targets.remove(&id);
-        // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers
-        // (si no, quedaban dirs-only sin cancelar al cerrar el panel).
+        // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
         self.tree_listings.retain(|(pane, _), l| {
             if *pane == id {
                 l.cancel();
@@ -346,16 +454,56 @@ impl WorkspaceCtrl {
                 true
             }
         });
-        // Sacarlo del layout (el split se colapsa en su hermano) y del workspace (reasigna activo).
-        self.ws.layout.remove_leaf(id);
-        self.ws.remove_pane(id);
-        // Si el último Files activo era este, recomputar.
-        if self.last_active_files == Some(id) {
+    }
+
+    /// `true` si el panel `id` se puede cerrar. Los miembros de un explorador enlazado cuentan
+    /// como una pareja indivisible y nunca dejamos la ventana sin ningún panel.
+    pub fn can_close_pane(&self, id: PaneId) -> bool {
+        let targets = self.close_targets(id);
+        !targets.is_empty() && self.ws.panes().len() > targets.len()
+    }
+
+    /// Cierra el panel `id` o, si pertenece a un explorador enlazado, todo su bloque Árbol+Files.
+    /// Cancela sus listados en vuelo, los saca del layout y del workspace, y reasigna el activo.
+    /// No-op si el cierre dejaría la ventana sin paneles. Tras cerrar, re-sincroniza el árbol con
+    /// la carpeta del nuevo panel activo.
+    pub fn close_pane(&mut self, id: PaneId) {
+        let targets = self.close_targets(id);
+        if targets.is_empty() || self.ws.panes().len() <= targets.len() {
+            return;
+        }
+        crate::logging::breadcrumb(&format!(
+            "cerrar {}",
+            targets
+                .iter()
+                .map(|pane| format!("panel {}", pane.0))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        ));
+        // Primero soltar/cancelar todos los recursos; después mutar layout/workspace. Mantener
+        // la pareja completa hasta este punto permite calcular los dos objetivos aun cuando el
+        // primer `remove_pane` elimina el enlace Tree→Files.
+        for target in &targets {
+            self.release_pane_resources(*target);
+        }
+        for target in &targets {
+            self.ws.layout.remove_leaf(*target);
+        }
+        for target in &targets {
+            self.ws.remove_pane(*target);
+        }
+        // Si el último Files activo era parte del bloque cerrado, recomputar.
+        if self
+            .last_active_files
+            .is_some_and(|last| targets.contains(&last))
+        {
             self.last_active_files = self.ws.files_panes().first().copied();
         }
         // Re-resaltar el árbol hacia la carpeta del panel activo resultante.
         if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
-            self.sync_trees_active(dir);
+            if let Some(files) = self.last_active_files {
+                self.sync_trees_for_files(files, dir);
+            }
         }
     }
 
@@ -451,13 +599,21 @@ impl WorkspaceCtrl {
 
     /// Crea un segundo panel Files (split del activo) y devuelve su id, para usarlo como
     /// destino cuando solo hay un panel. Mantiene el foco en el origen.
+    #[cfg(test)]
     pub fn split_for_target(&mut self) -> Option<PaneId> {
-        let origin = self.ws.active_id()?;
+        let origin = self.active_files_id()?;
+        self.split_for_target_from(origin)
+    }
+
+    /// Variante explícita para acciones disparadas desde un panel auxiliar (como Search): el
+    /// split se ancla al explorador de origen, nunca al panel auxiliar que tiene el foco.
+    fn split_for_target_from(&mut self, origin: PaneId) -> Option<PaneId> {
         let dir = self
             .ws
-            .active_files()
-            .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .pane(origin)
+            .filter(|pane| pane.purpose == PanePurpose::Files)
+            .and_then(|pane| pane.files.as_ref())
+            .map(|files| files.current_dir.clone())?;
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
         self.apply_default_table(new_id);
         self.ws
@@ -465,7 +621,7 @@ impl WorkspaceCtrl {
             .split_leaf(origin, SplitDir::Horizontal, new_id);
         self.start_listing(new_id, dir);
         // El foco se queda en el origen (estás explorando desde ahí).
-        self.ws.set_active(origin);
+        self.set_active(origin);
         Some(new_id)
     }
 
@@ -518,7 +674,7 @@ impl WorkspaceCtrl {
                     // Swap/apilar con un solo panel no tiene sentido: no-op.
                     return false;
                 }
-                if let Some(dest) = self.split_for_target() {
+                if let Some(dest) = self.split_for_target_from(origin) {
                     self.apply_action(action, origin, dest)
                 } else {
                     false
@@ -599,35 +755,20 @@ impl WorkspaceCtrl {
         // Sacar el origen de su posición actual en el layout y apilarlo sobre el destino.
         self.ws.layout.remove_leaf(origin);
         self.ws.layout.stack_onto(dest, origin);
-        self.ws.set_active(origin);
+        self.set_active(origin);
     }
 
     /// Cambia la pestaña activa de un grupo al miembro `member` y lo deja activo.
     pub fn set_active_tab(&mut self, member: PaneId) {
         self.ws.layout.set_active_tab(member);
-        self.ws.set_active(member);
+        self.set_active(member);
     }
 
-    /// Cierra la pestaña `member`: la quita del layout y del workspace. Si era la única del
-    /// grupo, el grupo desaparece (su rect lo absorbe el hermano del split).
+    /// Cierra la pestaña `member`. La ruta comparte el cierre normal para respetar la regla de
+    /// que un explorador enlazado Árbol+Files se elimina como bloque. Si era la única del grupo,
+    /// este desaparece y su rect lo absorbe el hermano del split.
     pub fn close_tab(&mut self, member: PaneId) {
-        self.ws.layout.remove_leaf(member);
-        self.ws.remove_pane(member);
-        // Cancelar el listado en vuelo antes de soltarlo (no dejar workers huérfanos),
-        // igual que en `close_pane`.
-        if let Some(l) = self.listings.remove(&member) {
-            l.cancel();
-        }
-        self.trees.remove(&member);
-        // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
-        self.tree_listings.retain(|(pane, _), l| {
-            if *pane == member {
-                l.cancel();
-                false
-            } else {
-                true
-            }
-        });
+        self.close_pane(member);
     }
 
     /// Los grupos de pestañas actuales: (miembros, índice activo). Para que la UI pinte las
@@ -696,7 +837,7 @@ impl WorkspaceCtrl {
                 if matches!(zone, DropZone::Left | DropZone::Top) {
                     self.ws.layout.swap_split_children(target, dragged);
                 }
-                self.ws.set_active(dragged);
+                self.set_active(dragged);
             }
         }
         true

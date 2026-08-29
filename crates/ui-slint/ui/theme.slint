@@ -7,6 +7,8 @@ export global Theme {
     // Tokens del tema (ver core::theme::Theme). Defaults = dark-blue.
     in property <color> accent: #4f8ae0;
     in property <color> panel-bg: #0e1622;
+    in property <color> active-panel-bg: #0e1622;
+    in property <color> inactive-panel-bg: #0e1622;
     in property <color> row-bg: #1b2838;
     in property <color> row-alt-bg: #1f3350;
     // Fondo de las filas de los paneles NO activos. Default = igual a row-bg (sin cambio visible
@@ -19,7 +21,42 @@ export global Theme {
     in property <color> error: #d4574e;
     in property <color> highlight: #ffd479;
     in property <color> border: #2a3a52;
+
+    // Tokens semánticos derivados. Mantienen todos los componentes coherentes sin ampliar el
+    // formato JSON de temas: al cambiar los colores base, estas superficies se recalculan en
+    // caliente. La jerarquía sigue siendo deliberadamente plana para el renderer por software.
+    in property <color> chrome-bg: panel-bg.darker(12%);
+    in property <color> surface-raised: row-bg.brighter(5%);
+    in property <color> surface-floating: row-bg.brighter(9%);
+    in property <color> header-bg: row-bg.darker(6%);
+    in property <color> hover-bg: selection-bg.with-alpha(0.58);
+    in property <color> pressed-bg: selection-bg.with-alpha(0.82);
+    in property <color> selection-inactive-bg: selection-bg.with-alpha(0.48);
+    // El foco de panel necesita verse antes de leer texto: fondo de ruta perceptible, borde vivo
+    // y superficies inactivas más tranquilas. Los valores salen del color de acento del tema, por
+    // lo que cada paleta conserva su personalidad sin introducir colores fijos.
+    in property <color> active-pane-bg: accent.with-alpha(0.20);
+    in property <color> active-pane-border: accent.with-alpha(0.92);
+    in property <color> divider: border.with-alpha(0.78);
+    // Las carpetas deben distinguirse sin competir con selección/errores. `highlight` queda
+    // reservado para ítems recién aparecidos y otros avisos temporales.
+    in property <color> folder-text: text;
+
+    // Métricas visuales compartidas. Centralizarlas evita que cada popup/panel invente radios,
+    // espaciados y tamaños ligeramente distintos.
+    in property <length> space-xs: 2px;
+    in property <length> space-sm: 4px;
+    in property <length> space-md: 6px;
+    in property <length> space-lg: 8px;
+    in property <length> radius-sm: 3px;
+    in property <length> radius-md: 5px;
+    in property <length> radius-lg: 8px;
+    in property <length> font-xs: 10px;
+    in property <length> font-sm: 11px;
+    in property <length> font-md: 12px;
+    in property <length> font-body: 13px;
     // Cuando es true, las filas de un panel inactivo se pintan TODAS de row-inactive-bg (sin la
     // alternancia cebra), de modo que el panel inactivo se ve "plano". Default false.
     in property <bool> flat-inactive-panels: false;
+    in property <bool> use-inactive-row-color: true;
 }

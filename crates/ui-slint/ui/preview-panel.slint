@@ -50,15 +50,51 @@ component OpenExternalIcon inherits Rectangle {
     }
 }
 
+// Dos hojas superpuestas: copiar el contenido textual sin depender de glifos de fuente.
+component CopyIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    Path {
+        width: root.size; height: root.size;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        stroke: root.tint; stroke-width: 1.3px; viewbox-width: 12; viewbox-height: 12;
+        MoveTo { x: 4; y: 1; } LineTo { x: 11; y: 1; } LineTo { x: 11; y: 9; }
+        LineTo { x: 4; y: 9; } LineTo { x: 4; y: 1; }
+        MoveTo { x: 2; y: 3; } LineTo { x: 2; y: 11; } LineTo { x: 9; y: 11; }
+    }
+}
+
+// Flecha circular: devuelve el modelo 3D a su orientación y zoom iniciales.
+component ResetViewIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    Path {
+        width: root.size; height: root.size;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        stroke: root.tint; stroke-width: 1.3px; viewbox-width: 12; viewbox-height: 12;
+        MoveTo { x: 10; y: 4; } CubicTo { control-1-x: 8; control-1-y: 0.5; control-2-x: 2; control-2-y: 1; x: 2; y: 6; }
+        CubicTo { control-1-x: 2; control-1-y: 10; control-2-x: 7; control-2-y: 12; x: 10; y: 8; }
+        MoveTo { x: 10; y: 4; } LineTo { x: 10; y: 1; } MoveTo { x: 10; y: 4; } LineTo { x: 7; y: 4; }
+    }
+}
+
 export component PreviewPanel inherits Rectangle {
     in property <bool> active;
     in property <PreviewVm> view;
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     callback open-in-system();   // abrir el archivo previsualizado con el programa por defecto
+    callback mesh-orbit(float, float); // delta de arrastre para STL/3MF
+    callback mesh-zoom(float);         // rueda/touchpad para STL/3MF
+    callback reset-mesh();              // volver a la cámara inicial
+    callback cancel-preview();          // detener el worker si lleva demasiado tiempo
+    callback copy-text(string);         // copiar contenido textual ya cargado
     callback hover-tip(string, length, length);   // tooltip flotante (texto, x centrada, y borde inferior) → AppWindow
-    background: Theme.panel-bg;
-    border-width: root.active ? 1.5px : 0px;
-    border-color: Theme.accent;
+    // El wrap parte activado para que los textos siempre sean legibles en paneles angostos. El
+    // usuario puede apagarlo temporalmente si necesita respetar columnas/indentación exacta.
+    property <bool> wrap-text: true;
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     // TouchArea de fondo: un clic en el cuerpo (texto, imagen o zona vacía) marca el panel
     // como activo. Va PRIMERO (al fondo) para que el ScrollView del modo texto siga
@@ -85,12 +121,68 @@ export component PreviewPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 overflow: elide;
             }
+            // Estado de carga: se mantiene discreto mientras corre; después de cinco segundos se
+            // habilita una cancelación inequívoca para cualquier tipo de archivo.
+            if root.view.loading: Text {
+                text: Tr.preview-loading;
+                color: Theme.text-dim;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+            if root.view.loading && root.view.can-cancel: Rectangle {
+                width: 52px;
+                height: 20px;
+                background: cancel-touch.has-hover ? Theme.error.brighter(12%) : Theme.error;
+                border-radius: Theme.radius-sm;
+                Text { text: Tr.preview-cancel; color: #ffffff; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+                cancel-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cancel-preview(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-cancel-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // Copiar el texto completo. No se toca el portapapeles al enfocar un archivo: es una
+            // acción explícita, predecible y útil aun en el renderer por software.
+            if root.view.mode == 1: Rectangle {
+                width: 26px; height: 20px;
+                background: copy-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                CopyIcon { width: 100%; height: 100%; tint: copy-touch.has-hover ? Theme.text : Theme.text-dim; }
+                copy-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.copy-text(root.view.text); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-copy-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // El botón de wrap es un control de lectura, no modifica el archivo ni la configuración.
+            if root.view.mode == 1 && !root.view.highlighted: Rectangle {
+                width: 26px; height: 20px;
+                background: wrap-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: root.wrap-text ? "↵" : "→"; color: wrap-touch.has-hover ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                wrap-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.wrap-text = !root.wrap-text; }
+                    changed has-hover => { root.hover-tip(self.has-hover ? (root.wrap-text ? Tr.preview-wrap-off-tip : Tr.preview-wrap-on-tip) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                background: reset-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                ResetViewIcon { width: 100%; height: 100%; tint: reset-touch.has-hover ? Theme.text : Theme.text-dim; }
+                reset-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.reset-mesh(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-reset-view-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
             // Botón abrir con el programa del sistema (visible cuando hay algo en preview).
             if root.view.mode != 0: Rectangle {
                 width: 26px;
                 height: 20px;
-                background: open-touch.has-hover ? Theme.selection-bg : transparent;
-                border-radius: 3px;
+                background: open-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
                 OpenExternalIcon {
                     width: 100%;
                     height: 100%;
@@ -112,7 +204,7 @@ export component PreviewPanel inherits Rectangle {
         // no duplicar la misma información — Nicolás lo pidió así.)
 
         if root.view.mode == 0: Text {
-            text: Tr.preview-select;
+            text: root.view.loading ? Tr.preview-loading : Tr.preview-select;
             color: Theme.text-dim;
             vertical-alignment: center;
         }
@@ -134,6 +226,7 @@ export component PreviewPanel inherits Rectangle {
                 // TEXT_MAX_LINE_CHARS, así que ningún glifo sale del rango i16 del render software.
                 if root.view.highlighted: hl-col := VerticalLayout {
                     alignment: start;
+                    x: 8px;
                     for line in root.view.hl-lines: HorizontalLayout {
                         alignment: start;
                         // Espaciador para que las líneas vacías ocupen alto.
@@ -149,13 +242,10 @@ export component PreviewPanel inherits Rectangle {
                         }
                     }
                 }
-                // Texto plano (modo no-código): un solo Text con ajuste de línea.
-                // NOTA: aquí NO se usa un TextEdit read-only (aunque permitiría selección con el
-                // mouse + Ctrl+C nativos) porque el render por SOFTWARE que Naygo fuerza
-                // (main.rs: new_with_renderer_by_name("software")) no rasteriza ese widget y el
-                // panel salía en blanco. Un Text sí se pinta bajo software. La selección de texto
-                // queda fuera mientras se use el render por software.
-                if !root.view.highlighted: Text {
+                // Texto plano con ajuste de línea e indentación. `TextEdit` read-only permitiría
+                // selección nativa, pero el renderer por SOFTWARE que Naygo fuerza no lo
+                // rasteriza correctamente; usar Text conserva estabilidad en VMs y equipos sin GPU.
+                if !root.view.highlighted && root.wrap-text: Text {
                     text: root.view.text;
                     color: Theme.text;
                     font-family: "Consolas";
@@ -163,6 +253,15 @@ export component PreviewPanel inherits Rectangle {
                     // i16 (~32767px). Una línea larguísima sin ajuste empujaba un glifo fuera de rango
                     // y la app caía al pintar. El core ya recorta cada línea; el wrap es 2ª defensa.
                     wrap: word-wrap;
+                    x: 8px;
+                    width: parent.width - 16px;
+                }
+                if !root.view.highlighted && !root.wrap-text: Text {
+                    text: root.view.text;
+                    color: Theme.text;
+                    font-family: "Consolas";
+                    wrap: no-wrap;
+                    x: 8px;
                 }
             }
             if root.view.truncated: Text {
@@ -172,10 +271,40 @@ export component PreviewPanel inherits Rectangle {
             }
         }
 
-        if root.view.mode == 2: Image {
+        if root.view.mode == 2: Rectangle {
             vertical-stretch: 1;
-            source: root.view.image;
-            image-fit: contain;
+            // El renderer sigue siendo una imagen CPU; esta capa solo captura gestos y nunca
+            // transforma el modelo en el hilo de UI. Arrastrar rota, rueda/touchpad acerca.
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.view.image;
+                image-fit: contain;
+            }
+            mesh-touch := TouchArea {
+                enabled: root.view.mesh-interactive;
+                mouse-cursor: self.pressed ? grabbing : grab;
+                property <length> last-x: 0px;
+                property <length> last-y: 0px;
+                moved => {
+                    if self.pressed {
+                        root.mesh-orbit((self.mouse-x - self.last-x) / 1px, (self.mouse-y - self.last-y) / 1px);
+                        self.last-x = self.mouse-x;
+                        self.last-y = self.mouse-y;
+                    }
+                }
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down {
+                        self.last-x = self.mouse-x;
+                        self.last-y = self.mouse-y;
+                        root.focus-pane();
+                    }
+                }
+                scroll-event(ev) => {
+                    root.mesh-zoom(-ev.delta-y / 1px);
+                    accept;
+                }
+            }
         }
 
         if root.view.mode == 3: Text {

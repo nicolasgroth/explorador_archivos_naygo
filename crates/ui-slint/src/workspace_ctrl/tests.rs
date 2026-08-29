@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use slint::Model;
 
 /// Drena los listados hasta que todos terminan (con timeout), simulando los ticks del
 /// Timer. Devuelve true si terminaron.
@@ -26,6 +27,207 @@ fn drain_missing(c: &mut WorkspaceCtrl) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     false
+}
+
+fn drain_sync(c: &mut WorkspaceCtrl) -> bool {
+    for _ in 0..3000 {
+        if c.pump_sync() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    false
+}
+
+fn drain_text_transform(c: &mut WorkspaceCtrl) -> bool {
+    for _ in 0..3000 {
+        if c.pump_text_transform() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    false
+}
+
+#[test]
+fn bandeja_reune_seleccion_y_la_deduplica() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("a.txt"), b"a").unwrap();
+    std::fs::write(work.path().join("b.txt"), b"b").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ws.active_files_mut().unwrap().select_all();
+    assert_eq!(c.basket_add_selected(), 2);
+    assert_eq!(c.basket_add_selected(), 0);
+    assert_eq!(c.basket_rows().len(), 2);
+    assert!(c.basket_remove(0));
+    assert_eq!(c.basket.len(), 1);
+}
+
+#[test]
+fn asistente_sync_planifica_en_worker_y_publica_preview() {
+    let cfg = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let left = tmp.path().join("left");
+    let right = tmp.path().join("right");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::create_dir_all(&right).unwrap();
+    std::fs::write(left.join("nuevo.txt"), b"hola").unwrap();
+    let mut c = WorkspaceCtrl::new_in(left.clone(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.ws.active_id().unwrap();
+    let second = c.ws.add_pane(PanePurpose::Files, right.clone());
+    c.ws.layout.split_leaf(first, SplitDir::Horizontal, second);
+    c.ws.set_active(first);
+    c.last_active_files = Some(first);
+    assert!(c.sync_open());
+    assert!(drain_sync(&mut c));
+    let vm = c.sync_vm();
+    assert!(vm.active);
+    assert_eq!(vm.rows.row_count(), 1);
+    assert!(vm.can_apply);
+    c.sync_close();
+}
+
+#[test]
+fn transformar_texto_desde_controlador_es_async_y_seguro() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("a.txt");
+    std::fs::write(&path, b"uno\r\ndos\r\n").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pos = active_pos_of(&c, "a.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+    assert!(c.text_transform_open());
+    assert!(drain_text_transform(&mut c));
+    c.text_transform_set_line(1);
+    assert!(c.text_transform_apply());
+    assert!(drain_text_transform(&mut c));
+    assert_eq!(std::fs::read(&path).unwrap(), b"uno\ndos\n");
+    assert!(c.text_transform_vm().finished);
+}
+
+#[test]
+fn dialogo_sync_deja_conflictos_visibles_pero_no_seleccionables() {
+    let cfg = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let left = tmp.path().join("left");
+    let right = tmp.path().join("right");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::create_dir_all(&right).unwrap();
+    std::fs::write(left.join("dato.txt"), b"izquierda").unwrap();
+    std::fs::write(right.join("dato.txt"), b"derecha-distinta").unwrap();
+    let mut c = WorkspaceCtrl::new_in(left, cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.ws.active_id().unwrap();
+    let second = c.ws.add_pane(PanePurpose::Files, right);
+    c.ws.layout.split_leaf(first, SplitDir::Horizontal, second);
+    c.ws.set_active(first);
+    c.last_active_files = Some(first);
+    assert!(c.sync_open());
+    c.sync_set_mode(2);
+    assert!(drain_sync(&mut c));
+    let vm = c.sync_vm();
+    assert_eq!(vm.mode, 2);
+    assert_eq!(vm.rows.row_count(), 1);
+    let row = vm.rows.row_data(0).unwrap();
+    assert!(!row.enabled, "el conflicto exige una decisión consciente");
+    assert!(
+        !row.selected,
+        "nunca se preselecciona una dirección arbitraria"
+    );
+    assert!(!vm.can_apply, "solo conflictos no habilitan Aplicar");
+}
+
+#[test]
+fn dialogo_sync_replanifica_al_activar_borrado_de_sobrantes() {
+    let cfg = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let left = tmp.path().join("left");
+    let right = tmp.path().join("right");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::create_dir_all(&right).unwrap();
+    std::fs::write(right.join("extra.txt"), b"extra").unwrap();
+    let mut c = WorkspaceCtrl::new_in(left, cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.ws.active_id().unwrap();
+    let second = c.ws.add_pane(PanePurpose::Files, right);
+    c.ws.layout.split_leaf(first, SplitDir::Horizontal, second);
+    c.ws.set_active(first);
+    c.last_active_files = Some(first);
+    assert!(c.sync_open());
+    assert!(drain_sync(&mut c));
+    assert_eq!(c.sync_vm().rows.row_count(), 0, "apagado por defecto");
+    c.sync_set_delete_extras(true);
+    assert!(c.sync_vm().planning, "el cambio dispara un worker nuevo");
+    assert!(drain_sync(&mut c));
+    let vm = c.sync_vm();
+    assert!(vm.delete_extras);
+    assert_eq!(vm.rows.row_count(), 1);
+    let row = vm.rows.row_data(0).unwrap();
+    assert!(row.enabled && row.selected);
+    assert!(vm.can_apply);
+}
+
+#[test]
+fn dialogo_texto_refleja_todas_las_opciones_en_su_view_model() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("a.txt"), b"uno\r\ndos\r\n").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pos = active_pos_of(&c, "a.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+    assert!(c.text_transform_open());
+    assert!(drain_text_transform(&mut c));
+    c.text_transform_set_line(2);
+    c.text_transform_set_encoding(4);
+    c.text_transform_set_final(1);
+    c.text_transform_set_trim(true);
+    let vm = c.text_transform_vm();
+    assert!(vm.active && vm.can_apply);
+    assert_eq!(vm.count, 1);
+    assert_eq!(vm.target_line, 2);
+    assert_eq!(vm.target_encoding, 4);
+    assert_eq!(vm.final_newline, 1);
+    assert!(vm.trim);
+    assert!(vm.source.contains("UTF-8") && vm.source.contains("CRLF"));
+}
+
+#[test]
+fn dialogo_texto_binario_invalido_informa_y_bloquea_aplicar() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("bin.dat"), b"abc\0def").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pos = active_pos_of(&c, "bin.dat").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+    assert!(c.text_transform_open());
+    assert!(drain_text_transform(&mut c));
+    let vm = c.text_transform_vm();
+    assert!(vm.active);
+    assert!(!vm.can_apply);
+    assert!(
+        !vm.source.is_empty(),
+        "el diagnóstico expone un error visible"
+    );
+    c.text_transform_close();
+    assert!(!c.text_transform_vm().active);
+}
+
+#[test]
+fn bandeja_vacia_no_inicia_operaciones_y_limpia_su_estado_visual() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    assert!(c.basket_rows().is_empty());
+    assert!(!c.basket_transfer_to(work.path().join("destino"), false));
+    assert!(!c.basket_delete());
+    assert!(c.basket_rows().is_empty());
 }
 
 fn active_pos_of(c: &WorkspaceCtrl, name: &str) -> Option<usize> {
@@ -188,6 +390,7 @@ fn rows_signature_detecta_cambios_y_es_estable() {
         if let Some(e) = f.entries.iter_mut().find(|e| e.name == "a.txt") {
             e.size = Some(99_999);
         }
+        f.entries_changed();
     }
     let s_mod = c.rows_signature(id, secs, now).unwrap();
     assert_ne!(
@@ -214,6 +417,88 @@ fn rows_signature_detecta_cambios_y_es_estable() {
         c.rows_signature(id, secs, later).is_some(),
         "vencido el resaltado, vuelve a ser cacheable"
     );
+}
+
+/// Clic en el encabezado de un panel secundario: ordena ESE panel, sin robar el foco ni tocar
+/// el orden del panel que estaba activo. Regresión de `sort_by_kind` usando active_files_mut().
+#[test]
+fn ordenar_por_header_respeta_el_panel_del_clic() {
+    let cfg = tempfile::tempdir().unwrap();
+    let left = tempfile::tempdir().unwrap();
+    let right = tempfile::tempdir().unwrap();
+    std::fs::write(left.path().join("left-small.txt"), b"x").unwrap();
+    std::fs::write(left.path().join("left-large.txt"), vec![0u8; 20]).unwrap();
+    std::fs::write(right.path().join("right-small.txt"), b"x").unwrap();
+    std::fs::write(right.path().join("right-large.txt"), vec![0u8; 20]).unwrap();
+
+    let mut c = WorkspaceCtrl::new_in(left.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let active = c.active_id().unwrap();
+    c.add_pane_split(area());
+    let clicked = c.active_id().unwrap();
+    c.navigate_pane_to(clicked, right.path().to_path_buf());
+    assert!(drain(&mut c));
+    // Dejar el panel izquierdo activo como en el caso real: se clickea el header del derecho.
+    c.set_active(active);
+
+    c.sort_by_kind(clicked, 2); // Size
+
+    assert_eq!(c.active_id(), Some(active), "ordenar no roba el foco");
+    let active_sort = c.ws.pane(active).unwrap().files.as_ref().unwrap().sort;
+    let clicked_files = c.ws.pane(clicked).unwrap().files.as_ref().unwrap();
+    assert_eq!(active_sort.key, naygo_core::fs_model::SortKey::Name);
+    assert_eq!(clicked_files.sort.key, naygo_core::fs_model::SortKey::Size);
+    assert!(clicked_files.sort.ascending);
+}
+
+#[test]
+fn comparar_paneles_marca_distintos_y_exclusivos_y_luego_limpia() {
+    let cfg = tempfile::tempdir().unwrap();
+    let left_dir = tempfile::tempdir().unwrap();
+    let right_dir = tempfile::tempdir().unwrap();
+    std::fs::write(left_dir.path().join("igual.txt"), b"abc").unwrap();
+    std::fs::write(right_dir.path().join("igual.txt"), b"abc").unwrap();
+    std::fs::write(left_dir.path().join("cambio.bin"), b"1").unwrap();
+    std::fs::write(right_dir.path().join("cambio.bin"), b"12345").unwrap();
+    std::fs::write(left_dir.path().join("solo-izq.txt"), b"x").unwrap();
+    std::fs::write(right_dir.path().join("solo-der.txt"), b"x").unwrap();
+
+    let mut c = WorkspaceCtrl::new_in(left_dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let left = c.ws.active_id().unwrap();
+    c.add_pane_split(area());
+    let right = *c.ws.files_panes().last().unwrap();
+    assert!(c.navigate_pane_to(right, right_dir.path().to_path_buf()));
+    assert!(drain(&mut c));
+
+    // Normalizar la fecha del par igual: la comparación de fechas es deliberadamente exacta.
+    let same_time = std::time::SystemTime::UNIX_EPOCH;
+    for id in [left, right] {
+        let f = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+        f.entries
+            .iter_mut()
+            .for_each(|e| e.modified = Some(same_time));
+        f.entries_changed();
+    }
+    c.ws.set_active(left);
+    assert!(c.toggle_compare_panels());
+    assert_eq!(c.comparison[&left][&left_dir.path().join("cambio.bin")], 1);
+    assert_eq!(
+        c.comparison[&right][&right_dir.path().join("cambio.bin")],
+        1
+    );
+    assert_eq!(
+        c.comparison[&left][&left_dir.path().join("solo-izq.txt")],
+        2
+    );
+    assert_eq!(
+        c.comparison[&right][&right_dir.path().join("solo-der.txt")],
+        2
+    );
+    assert!(!c.comparison[&left].contains_key(&left_dir.path().join("igual.txt")));
+
+    assert!(c.toggle_compare_panels());
+    assert!(c.comparison.is_empty());
 }
 
 /// C3: agregar/alternar/aliasar/quitar reglas de previsualización; persisten.
@@ -360,6 +645,128 @@ fn calcular_tamano_de_carpeta() {
         "el resultado del cálculo aparece en el status: {}",
         c.status_line()
     );
+}
+
+/// El buscador F3 acepta una raíz explícita, filtra nombre+contenido en un worker y conserva
+/// rutas relativas para que el resultado sea utilizable como una carpeta virtual.
+#[test]
+fn busqueda_f3_por_nombre_y_contenido_desde_raiz_elegida() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("base");
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(root.join("cosa.txt"), "sin la palabra requerida").unwrap();
+    let expected = sub.join("cosa_final.txt");
+    std::fs::write(&expected, "texto AQUÍ buscable").unwrap();
+    std::fs::write(sub.join("otra.log"), "AQUÍ pero extensión distinta").unwrap();
+
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.start_search(
+        "*cosa*.txt".into(),
+        root.to_string_lossy().into_owned(),
+        "aquí".into(),
+        true,
+        true,
+        true,
+    );
+    for _ in 0..3000 {
+        if c.pump_search() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let job = c.search_job.as_ref().expect("la búsqueda queda abierta");
+    assert!(job.done);
+    assert_eq!(job.hits.len(), 1);
+    assert_eq!(job.hits[0].entry.path, expected);
+    assert_eq!(job.hits[0].rel_dir, "sub");
+
+    c.reveal_search_hit(0);
+    assert!(
+        c.ws.panes().iter().any(|pane| {
+            pane.files
+                .as_ref()
+                .is_some_and(|files| files.current_dir == sub)
+        }),
+        "revelar crea o reutiliza un panel Files para la carpeta contenedora"
+    );
+    assert!(c.search_open(), "revelar no cierra los resultados");
+}
+
+/// F3 crea un panel Search real del workspace, no un diálogo superpuesto. Al cerrarlo, el job
+/// asociado se cancela para no dejar un worker o resultados huérfanos en la sesión.
+#[test]
+fn busqueda_f3_es_panel_acoplable_y_se_limpia_al_cerrar() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+
+    c.open_search_pane(area());
+    let search =
+        c.ws.panes()
+            .iter()
+            .find(|pane| pane.purpose == PanePurpose::Search)
+            .map(|pane| pane.id)
+            .expect("F3 agrega un panel Search al workspace");
+    assert_eq!(c.ws.active_id(), Some(search));
+    assert!(
+        c.search_open(),
+        "el panel parte listo para recibir la consulta"
+    );
+
+    c.close_pane(search);
+    assert!(
+        !c.ws
+            .panes()
+            .iter()
+            .any(|pane| pane.purpose == PanePurpose::Search),
+        "cerrar el panel lo retira del layout"
+    );
+    assert!(
+        !c.search_open(),
+        "cerrar el panel libera la búsqueda asociada"
+    );
+}
+
+/// «Abrir carpeta contenedora» no adivina el panel al que navegar: con varios exploradores
+/// disponibles deja la elección pendiente para que el selector de destino la muestre al usuario.
+#[test]
+fn revelar_resultado_de_busqueda_pide_panel_destino() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let hit = work.path().join("resultado.txt");
+    std::fs::write(&hit, "contenido").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.add_pane_split(area());
+    c.add_pane_split(area());
+    assert!(drain(&mut c));
+
+    c.start_search(
+        "resultado.txt".into(),
+        work.path().to_string_lossy().into_owned(),
+        String::new(),
+        true,
+        false,
+        false,
+    );
+    for _ in 0..3000 {
+        if c.pump_search() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(c.search_job.as_ref().unwrap().hits.len(), 1);
+
+    c.reveal_search_hit(0);
+    assert!(
+        c.pending_pick.is_some(),
+        "hay dos paneles Files alternativos: se debe preguntar el destino"
+    );
+    assert_eq!(c.pending_pick.as_ref().unwrap().candidates.len(), 2);
 }
 
 /// El worker de metadata lee las dimensiones de un PNG enfocado: `request_metadata` lanza el
@@ -665,6 +1072,50 @@ fn drop_at_enruta_al_panel_bajo_el_cursor_no_al_activo() {
         a.path().join("doc.txt").exists(),
         "el original sigue (copia)"
     );
+}
+
+#[test]
+fn drop_at_sobre_bandeja_agrega_referencias_sin_crear_movimiento() {
+    let cfg = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let file = source.path().join("pieza.stl");
+    std::fs::write(&file, b"solid x\nendsolid x\n").unwrap();
+    let mut c = WorkspaceCtrl::new_in(source.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let area = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 800.0,
+        h: 600.0,
+    };
+    c.set_area(area);
+    c.add_pane_of(PanePurpose::Basket, area);
+    let basket =
+        c.ws.panes()
+            .iter()
+            .find(|pane| pane.purpose == PanePurpose::Basket)
+            .map(|pane| pane.id)
+            .unwrap();
+    let (_, rect) = c
+        .pane_rects(area)
+        .into_iter()
+        .find(|(id, _)| *id == basket)
+        .unwrap();
+
+    assert_eq!(c.pane_at(rect.x + 5.0, rect.y + 5.0), Some(basket));
+    assert!(c.drop_at(
+        rect.x + rect.w / 2.0,
+        rect.y + rect.h / 2.0,
+        false,
+        false,
+        vec![file.clone()],
+    ));
+    assert_eq!(c.basket.items(), &[file]);
+    assert!(
+        c.ops.active_ops.is_empty(),
+        "la bandeja no inicia operaciones"
+    );
+    assert!(c.pending_drop.is_none(), "la bandeja no abre confirmación");
 }
 
 /// Regresión: arrastrar desde un panel que NO está activo debe tomar los archivos de ESE
@@ -1593,6 +2044,133 @@ fn navega_al_ultimo_files_activo_no_al_primero() {
     );
 }
 
+#[test]
+fn marcar_un_files_sincroniza_el_arbol_comun_con_su_carpeta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.active_id().unwrap();
+    c.add_pane_split(area());
+    let second = c.active_id().unwrap();
+    c.open_in_pane(second, other.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.add_pane_of(PanePurpose::Tree, area());
+    let tree = c.active_id().unwrap();
+
+    c.set_active(first);
+    assert_eq!(
+        c.trees
+            .get(&tree)
+            .and_then(|model| model.active_path.as_ref()),
+        Some(&tmp.path().to_path_buf())
+    );
+    c.set_active(second);
+    assert_eq!(
+        c.trees
+            .get(&tree)
+            .and_then(|model| model.active_path.as_ref()),
+        Some(&other.path().to_path_buf())
+    );
+    assert_eq!(
+        c.tree_cursor.get(&tree),
+        Some(&other.path().to_path_buf()),
+        "el cursor de teclado acompaña la selección visible del árbol"
+    );
+}
+
+#[test]
+fn arbol_dedicado_navega_solo_su_panel_enlazado() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.active_id().unwrap();
+    c.add_pane_split(area());
+    let linked_files = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Tree, area());
+    let tree = c.active_id().unwrap();
+    assert!(c.toggle_tree_link(tree));
+    assert_eq!(c.ws.linked_files(tree), Some(linked_files));
+
+    // Cambiar el Files global activo no cambia el destino fijo del árbol dedicado.
+    c.set_active(first);
+    assert!(c.navigate_tree_to(tree, target.clone()));
+    assert_eq!(c.path_of(linked_files), target.display().to_string());
+    assert_eq!(c.path_of(first), tmp.path().display().to_string());
+}
+
+#[test]
+fn explorador_enlazado_crea_pareja_persistente_y_ponderada() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.add_linked_browser();
+
+    let tree =
+        c.ws.panes()
+            .iter()
+            .find(|p| p.purpose == PanePurpose::Tree)
+            .map(|p| p.id)
+            .unwrap();
+    let linked_files = c.ws.linked_files(tree).expect("árbol dedicado");
+    assert!(c.ws.is_link_member(tree));
+    assert!(c.ws.is_link_member(linked_files));
+    assert_eq!(c.active_id(), Some(linked_files));
+
+    let rects: std::collections::HashMap<_, _> = c.pane_rects(area()).into_iter().collect();
+    let tree_rect = rects.get(&tree).unwrap();
+    let files_rect = rects.get(&linked_files).unwrap();
+    assert!(tree_rect.x < files_rect.x, "el árbol queda a la izquierda");
+    assert!(
+        tree_rect.w < files_rect.w,
+        "el árbol usa la fracción angosta"
+    );
+
+    let restored = Workspace::from_persist(&c.session_persist()).unwrap();
+    assert_eq!(restored.linked_files(tree), Some(linked_files));
+}
+
+/// Árbol+Files de `add_linked_browser` es un bloque: cerrar cualquiera de los dos quita ambos,
+/// conserva el panel previo y no deja enlaces ni hojas de layout huérfanos.
+#[test]
+fn cerrar_explorador_enlazado_cierra_ambos_miembros() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let original = c.active_id().unwrap();
+    c.add_linked_browser();
+
+    let (tree, files) = c.ws.tree_links().into_iter().next().unwrap();
+    assert!(c.can_close_pane(tree));
+    assert!(c.can_close_pane(files));
+    c.close_pane(tree);
+
+    assert!(c.ws.pane(original).is_some());
+    assert!(c.ws.pane(tree).is_none());
+    assert!(c.ws.pane(files).is_none());
+    assert!(c.ws.tree_links().is_empty());
+    assert_eq!(c.ws.layout.pane_ids(), vec![original]);
+}
+
+/// El botón X de una pestaña usa la misma semántica de bloque para un explorador enlazado.
+#[test]
+fn cerrar_pestana_de_explorador_enlazado_cierra_toda_la_pareja() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let original = c.active_id().unwrap();
+    c.add_linked_browser();
+    let (tree, files) = c.ws.tree_links().into_iter().next().unwrap();
+
+    c.close_tab(files);
+
+    assert!(c.ws.pane(original).is_some());
+    assert!(c.ws.pane(tree).is_none());
+    assert!(c.ws.pane(files).is_none());
+}
+
 /// F5B: si un panel quedó parado en una carpeta que desapareció (p. ej. se sacó el USB), el
 /// panel marca su carpeta como "perdida" (aviso IN-PLACE, sin popup global). Elegir "subir al
 /// ancestro existente" lo reubica a la carpeta superior que exista y limpia el aviso.
@@ -1866,6 +2444,41 @@ fn agregar_panel_especial_no_lista_archivos() {
             .unwrap()
             .id;
     assert!(c.trees.contains_key(&tree_id));
+}
+
+/// Tab conserva el recorrido Commander sólo entre Files; Ctrl+Tab recorre todos los paneles
+/// del workspace, incluidos los auxiliares. Es importante para disposiciones densas donde el
+/// usuario quiere llegar a Favoritos, Árbol o Preview sin usar el mouse.
+#[test]
+fn ctrl_tab_cicla_todos_los_paneles_y_tab_solo_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let files = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Tree, area());
+    let tree = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Favorites, area());
+    let favorites = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Search, area());
+    let search = c.active_id().unwrap();
+
+    let tab: slint::SharedString = slint::platform::Key::Tab.into();
+    assert!(c.on_key(tab.as_str(), true, false, false));
+    assert_eq!(c.active_id(), Some(files));
+    assert!(c.on_key(tab.as_str(), true, false, false));
+    assert_eq!(c.active_id(), Some(tree));
+    assert!(c.on_key(tab.as_str(), true, false, false));
+    assert_eq!(c.active_id(), Some(favorites));
+    assert!(c.on_key(tab.as_str(), true, false, false));
+    assert_eq!(c.active_id(), Some(search));
+    // El recorrido no termina en Buscar: vuelve a los Files y sigue siendo circular.
+    assert!(c.on_key(tab.as_str(), true, false, false));
+    assert_eq!(c.active_id(), Some(files));
+
+    // Tab no abandona un panel especial para recorrer auxiliares; mantiene el convenio
+    // Commander de saltar exclusivamente entre paneles Files.
+    assert!(!c.on_key(tab.as_str(), false, false, false));
+    assert_eq!(c.active_id(), Some(files));
 }
 
 /// El inspector refleja el ítem enfocado del panel Files activo, aunque el panel activo
@@ -2331,6 +2944,7 @@ fn any_modal_open_refleja_los_overlays_del_controlador() {
     std::fs::write(work.path().join("a.txt"), b"x").unwrap();
     let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     assert!(drain(&mut c));
+    c.config.settings.confirm_trash = true;
 
     // Reposo: sin modales → false (el timer puede dormir como antes; bajo consumo intacto).
     assert!(!c.any_modal_open(), "en reposo no hay modales abiertos");
@@ -2366,6 +2980,45 @@ fn any_modal_open_refleja_los_overlays_del_controlador() {
     assert!(c.any_modal_open(), "la ayuda (F1) mantiene vivo el timer");
     c.help_open = false;
     assert!(!c.any_modal_open());
+}
+
+/// Esc cierra el menú que está por encima antes de que la misma tecla afecte el listado bajo él.
+#[test]
+fn esc_cierra_menu_contextual_y_menu_de_columna() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    c.column_menu_open(id, 0, 10.0, 10.0);
+    c.open_context_menu(id, 10.0, 10.0);
+    let esc = crate::keys::escape_char().to_string();
+    assert!(c.on_key(&esc, false, false, false));
+    assert!(c.context_menu.is_none());
+    assert!(c.column_menu.is_none());
+}
+
+/// Con la confirmación de Papelera desactivada, borrar debe seguir registrando el
+/// inverso: antes se lanzaba con `record_undo=false` y Ctrl+Z parecía no hacer nada.
+#[test]
+fn delete_directo_a_papelera_conserva_el_deshacer() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("a.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.config.settings.confirm_trash = false;
+    let pos = active_pos_of(&c, "a.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+
+    c.op_delete(false);
+
+    assert!(c.ops.pending_dialog.is_none());
+    assert_eq!(c.ops.active_ops.len(), 1);
+    assert!(
+        c.ops.active_ops[0].plan_record_undo,
+        "el borrado directo debe conservar el recibo para Ctrl+Z"
+    );
 }
 
 #[test]

@@ -3421,7 +3421,7 @@ checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "naygo-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "lofty",
@@ -3442,12 +3442,13 @@ dependencies = [
 
 [[package]]
 name = "naygo-platform"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "global-hotkey",
  "naygo-core",
  "notify",
  "notify-debouncer-full",
+ "serde_json",
  "tempfile",
  "tracing",
  "windows",
@@ -3456,7 +3457,7 @@ dependencies = [
 
 [[package]]
 name = "naygo-ui-slint"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "flate2",
  "i-slint-backend-winit",

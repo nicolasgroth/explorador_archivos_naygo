@@ -29,6 +29,16 @@ impl WorkspaceCtrl {
         recent_rows(&self.recents, &folder)
     }
 
+    /// Ranking global de las carpetas más visitadas dentro de la ventana configurada.
+    pub fn frequent_dir_rows(&mut self) -> Vec<NavRow> {
+        let folder = self.icons.get(naygo_core::icon_kind::IconKey::Folder);
+        frequent_dir_rows(
+            &self.recents,
+            self.config.settings.frequent_dirs_limit,
+            &folder,
+        )
+    }
+
     /// Filas del historial de deshacer (validadas contra el disco). Fecha en formato legible
     /// según el ajuste del usuario y con los registros más nuevos primero.
     pub fn history_rows(&self) -> Vec<HistRow> {
@@ -147,6 +157,14 @@ impl WorkspaceCtrl {
                     self.fav_expanded.insert(format!("{new}{suffix}"));
                 }
             }
+        }
+    }
+
+    /// Renombra únicamente el alias visible de un favorito. La ruta es la identidad estable del
+    /// nodo, así que cambiar el alias no altera Ctrl+1..9, el grupo ni la carpeta de destino.
+    pub fn fav_rename_favorite(&mut self, path: &str, alias: &str) {
+        if self.favorites.rename_favorite(Path::new(path), alias) {
+            self.persist_favorites();
         }
     }
 

@@ -33,9 +33,9 @@ export component InspectorPanel inherits Rectangle {
     in property <InspectorVm> info;
     callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
     callback calc-size();    // pedir el cálculo del tamaño de la carpeta enfocada
-    background: Theme.panel-bg;
-    border-width: root.active ? 1.5px : 0px;
-    border-color: Theme.accent;
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     // TouchArea de fondo: un clic en el cuerpo (texto o zona vacía) marca el panel como
     // activo. Va PRIMERO (al fondo) para no robar clics a controles que se monten encima.
@@ -78,10 +78,10 @@ export component InspectorPanel inherits Rectangle {
                 if root.info.size-calc == "": Rectangle {
                     width: 90px;
                     height: 24px;
-                    border-radius: 4px;
-                    background: calc-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+                    border-radius: Theme.radius-md;
+                    background: calc-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                     border-width: 1px;
-                    border-color: Theme.border;
+                    border-color: Theme.divider;
                     Text {
                         text: Tr.inspector-calc-size;
                         color: Theme.text;

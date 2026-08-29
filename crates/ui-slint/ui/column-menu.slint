@@ -17,8 +17,8 @@ component MenuRow inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
     height: 26px;
-    background: t.has-hover && root.enabled ? Theme.selection-bg : transparent;
-    border-radius: 3px;
+    background: t.has-hover && root.enabled ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     Text {
         text: root.label;
         color: root.enabled ? Theme.text : Theme.text-dim;
@@ -61,10 +61,10 @@ export component ColumnMenu inherits Rectangle {
         y: min(root.vm.y, root.height - self.height - 4px);
         width: 240px;
         height: card.preferred-height + 12px;
-        background: Theme.row-bg;
-        border-color: Theme.selection-bg;
+        background: Theme.surface-floating;
+        border-color: Theme.divider;
         border-width: 1px;
-        border-radius: 6px;
+        border-radius: Theme.radius-md;
         TouchArea {} // captura clics dentro de la tarjeta (no cierra)
         card := VerticalLayout {
             padding: 6px;
@@ -135,8 +135,8 @@ export component ColumnMenu inherits Rectangle {
                     ListView {
                         for e[i] in root.vm.exts: Rectangle {
                             height: 24px;
-                            background: ext-touch.has-hover ? Theme.selection-bg : transparent;
-                            border-radius: 3px;
+                            background: ext-touch.has-hover ? Theme.hover-bg : transparent;
+                            border-radius: Theme.radius-sm;
                             HorizontalLayout {
                                 padding-left: 6px;
                                 spacing: 6px;
@@ -211,8 +211,8 @@ export component ColumnMenu inherits Rectangle {
                     Rectangle {
                         height: 28px;
                         width: 80px;
-                        background: clear-touch.has-hover ? Theme.row-alt-bg : Theme.panel-bg;
-                        border-radius: 4px;
+                        background: clear-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                        border-radius: Theme.radius-md;
                         Text {
                             text: Tr.colfilter-clear;
                             color: Theme.text;

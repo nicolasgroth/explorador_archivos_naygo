@@ -109,6 +109,7 @@ fn cli_help_text() -> String {
      [carpeta]          Abre esa carpeta en el panel activo.\n\
      --theme <id>       Usa ese tema solo en esta ejecución (no se guarda).\n\
      --layout <nombre>  Usa esa plantilla de disposición solo en esta ejecución.\n\
+     --shutdown         Cierra una instancia de Naygo que ya esté ejecutándose.\n\
      --help             Muestra esta ayuda y sale.\n\
      --version          Muestra la versión y sale."
         .to_string()
@@ -181,11 +182,19 @@ fn main() -> Result<(), slint::PlatformError> {
     let si_guard = match naygo_platform::single_instance::acquire() {
         naygo_platform::single_instance::Instance::AlreadyRunning => {
             logging::log_line("instancia única: ya hay un Naygo corriendo; se le avisa y salimos");
-            naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
+            if cli_args.shutdown {
+                naygo_platform::single_instance::notify_shutdown();
+            } else {
+                naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
+            }
             return Ok(());
         }
         naygo_platform::single_instance::Instance::Primary(guard) => guard,
     };
+    // Si no había una instancia primaria, `--shutdown` ya cumplió su objetivo: no abrir una nueva.
+    if cli_args.shutdown {
+        return Ok(());
+    }
 
     let ui = AppWindow::new()?;
     // Título de la ventana limpio: solo "Naygo". El id de build (p. ej. "0.3.0+build.202607021614")
@@ -489,7 +498,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // drena: restaura la ventana y, si la secundaria dejó una carpeta en el spool ("Abrir en
     // Naygo" con la app ya corriendo), la abre en un panel nuevo.
     let si_show_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    si_guard.watch(si_show_requested.clone(), waker.clone());
+    let si_shutdown_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    si_guard.watch(
+        si_show_requested.clone(),
+        si_shutdown_requested.clone(),
+        waker.clone(),
+    );
 
     // Hotkey global: handler que despierta el loop de UI en cada pulsación. Sin esto, con la app
     // dormida (reposo/bajo consumo) la pulsación quedaba encolada hasta el próximo wake por otra
@@ -519,9 +533,9 @@ fn main() -> Result<(), slint::PlatformError> {
         sync::build_apply_device_change(ctrl.clone(), devices.clone(), home.clone(), ui.as_weak());
 
     // Drag&drop OLE — RECIBIR (Fase 5D): canal de archivos soltados sobre la ventana. El
-    // registro del IDropTarget se hace en el primer tick (cuando el HWND ya es válido) y el
-    // guard vive toda la sesión. Por simplicidad el drop va al panel ACTIVO (fallback del
-    // diseño: no se mapea el punto de drop a un panel concreto).
+    // registro del IDropTarget se hace cuando el HWND ya es válido (y se reintenta si winit/OLE
+    // aún no lo permitía); el guard vive toda la sesión. El punto físico del drop se mapea al
+    // panel Files que está bajo el cursor, no al panel activo.
     let (drop_tx, drop_rx) = std::sync::mpsc::channel::<naygo_platform::drop_target::DropPayload>();
     let drop_rx = Rc::new(drop_rx);
     // Canal HERMANO para los eventos de HOVER durante el arrastre (resaltar el panel bajo el
@@ -532,6 +546,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let drag_rx = Rc::new(drag_rx);
     let drop_guard: Rc<RefCell<Option<naygo_platform::drop_target::DropTargetGuard>>> =
         Rc::new(RefCell::new(None));
+    let drop_registration_attempt = Rc::new(std::cell::Cell::new(None));
 
     // Tray (Fase 5E): ícono en bandeja con menú Abrir/Salir, solo si el ajuste lo pide. Vive
     // toda la sesión. `tray_active` lo lee el handler de cierre para decidir si oculta a la
@@ -608,6 +623,7 @@ fn main() -> Result<(), slint::PlatformError> {
         drag_tx: drag_tx.clone(),
         drag_rx: drag_rx.clone(),
         drop_guard: drop_guard.clone(),
+        drop_registration_attempt: drop_registration_attempt.clone(),
         tray: tray.clone(),
         tray_active,
         hotkey_id: hotkey_id.clone(),
@@ -616,6 +632,7 @@ fn main() -> Result<(), slint::PlatformError> {
         #[cfg(not(windows))]
         geometry_restored: Rc::new(std::cell::Cell::new(false)),
         si_show_requested: si_show_requested.clone(),
+        si_shutdown_requested: si_shutdown_requested.clone(),
     });
     start_timer();
 
@@ -770,6 +787,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let quit = tray::should_quit_on_close(close_to_tray, tray_active);
             if quit {
                 // Salir de verdad: terminar el loop y dejar que Slint oculte la ventana.
+                tray::arm_exit_watchdog();
                 let _ = slint::quit_event_loop();
                 slint::CloseRequestResponse::HideWindow
             } else {

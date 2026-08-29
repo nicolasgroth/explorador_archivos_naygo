@@ -34,6 +34,9 @@ crea a su lado. Ideal para probar rápido en una VM o llevar en un pendrive.
   del usuario para que Naygo arranque con Windows (con el argumento `--tray`, minimizado
   en la bandeja).
 - **Ejecutar al terminar**: opción en la última página.
+- **Símbolos de depuración (opcional, desmarcado)**: instala `naygo.pdb` solo si se va a
+  investigar un crash. No es necesario para usar Naygo y se deja fuera del ZIP portable para
+  mantener la descarga liviana.
 
 ### Qué escribe en el sistema
 
@@ -126,6 +129,19 @@ Para generar los artefactos en `dist\` sin crear un release:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 ```
+
+### Firma del instalador (mantenedores)
+
+El build puede firmar y verificar el `setup.exe` con Authenticode cuando ISGroth disponga de un
+certificado. No guarda secretos en el repositorio: configurar `NAYGO_SIGNTOOL` con la ruta de
+`signtool.exe` y `NAYGO_SIGN_CERT_SHA1` con el thumbprint SHA-1 del certificado disponible en el
+store de Windows; opcionalmente `NAYGO_SIGN_TIMESTAMP_URL` para el servidor RFC 3161. También se
+pueden pasar como parámetros a `build-release.ps1`.
+
+Sin ambos valores el build deja una advertencia y genera artefactos sin firma, conservando el
+procedimiento de SmartScreen de arriba. La integración con SignPath.io requiere que Nicolás/ISGroth
+cree y autorice la organización y el certificado; una vez disponible, se puede alimentar este
+gancho o incorporar su acción oficial al workflow de release.
 
 ### Integración continua
 

@@ -13,6 +13,8 @@ use crate::win_helpers::*;
 use crate::wire::WireCtx;
 use crate::*;
 use naygo_core::workspace::PaneId;
+use slint::{ModelRc, SharedString, VecModel};
+use std::rc::Rc;
 
 /// Registra los callbacks del menú contextual, carpetas nuevas, missing, búsqueda y toolbar.
 pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
@@ -155,23 +157,64 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
             sync_layout();
         });
     }
-    // Búsqueda recursiva (Ctrl+F / lupa): lanzar / cerrar / detener / abrir resultado / alternar.
+    // Búsqueda recursiva (F3 / lupa): lanzar / cerrar / detener / abrir resultado / enfocar.
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
-        ui.on_search_run(move |q| {
-            ctrl.borrow_mut().start_search(q.to_string());
+        ui.on_search_run(
+            move |name, root, content, ignore_case, wildcards, recursive| {
+                ctrl.borrow_mut().start_search(
+                    name.to_string(),
+                    root.to_string(),
+                    content.to_string(),
+                    ignore_case,
+                    wildcards,
+                    recursive,
+                );
+                start_timer();
+                sync_rows();
+            },
+        );
+    }
+    {
+        // «Buscar desde» usa el mismo autocompletado async de la path-bar, pero con su propio
+        // estado para no competir con una ruta que se edite simultáneamente en otro panel.
+        let ctrl = ctrl.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_search_root_changed(move |text| {
+            ctrl.borrow_mut()
+                .request_search_path_autocomplete(text.to_string(), std::time::Instant::now());
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_search_root_buffer(text);
+                ui.set_search_root_suggestions(ModelRc::from(Rc::new(VecModel::from(Vec::<
+                    SharedString,
+                >::new(
+                )))));
+            }
             start_timer();
-            sync_rows();
         });
     }
     {
+        // Elegir una sugerencia completa el último segmento y agrega «\\», listo para seguir
+        // bajando. El `read_dir` puntual ocurre tras un clic, nunca por cada pulsación.
         let ctrl = ctrl.clone();
-        let sync_rows = sync_rows.clone();
-        ui.on_search_close(move || {
-            ctrl.borrow_mut().close_search();
-            sync_rows();
+        let ui_weak = ui.as_weak();
+        ui.on_search_root_complete(move |buffer, name| {
+            let (parent, _) = naygo_core::path_segments::split_edit_buffer(buffer.as_str());
+            let completed = format!("{parent}{name}\\");
+            let suggestions = ctrl.borrow().path_autocomplete(&completed);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_search_root_buffer(completed.clone().into());
+                ui.set_search_root_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                    suggestions
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect::<Vec<_>>(),
+                ))));
+            }
+            completed.into()
         });
     }
     {
@@ -195,18 +238,26 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_search_toggle(move || {
-            // La lupa alterna: si hay panel abierto, lo cierra; si no, lo abre vacío (sin lanzar
-            // todavía — el usuario escribe y pulsa Enter/Buscar). Abrir = sembrar un job inactivo
-            // mostrando el panel; lo modelamos arrancando una búsqueda con query vacía no sirve
-            // (no abre), así que abrimos con un marcador: reusamos open_empty_search.
-            let open = ctrl.borrow().search_open();
-            if open {
-                ctrl.borrow_mut().close_search();
-            } else {
-                ctrl.borrow_mut().open_empty_search();
-            }
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_search_reveal(move |i| {
+            ctrl.borrow_mut().reveal_search_hit(i.max(0) as usize);
+            start_timer();
             sync_rows();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_search_toggle(move || {
+            // La lupa sigue el mismo flujo que F3: abre/enfoca un panel dockable y conserva
+            // cualquier resultado ya existente.
+            let area = ctrl.borrow().last_area;
+            ctrl.borrow_mut().open_search_pane(area);
+            sync_rows();
+            sync_layout();
         });
     }
     // Toolbar: nueva carpeta en el panel activo (abre el modal).
@@ -294,6 +345,14 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
         let sync_rows = sync_rows.clone();
         ui.on_ctx_open_with(move || {
             ctrl.borrow_mut().ctx_open_with();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_run_as_administrator(move || {
+            ctrl.borrow_mut().ctx_run_as_administrator();
             sync_rows();
         });
     }
@@ -467,6 +526,98 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
                 let _ =
                     naygo_platform::context_menu::show_native_context_menu(hwnd, &targets, sx, sy);
             }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_synchronize(move || {
+            ctrl.borrow_mut().close_context_menu();
+            if ctrl.borrow_mut().sync_open() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_ctx_add_basket(move || {
+            let added = ctrl.borrow_mut().basket_add_selected();
+            ctrl.borrow_mut().close_context_menu();
+            if added > 0 {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(
+                        format!("{}: {added}", ctrl.borrow().config.t("basket.added")).into(),
+                    );
+                }
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_ctx_transform_text(move || {
+            ctrl.borrow_mut().close_context_menu();
+            if ctrl.borrow_mut().text_transform_open() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_text_transform_set_line(move |value| {
+            ctrl.borrow_mut().text_transform_set_line(value);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_text_transform_set_encoding(move |value| {
+            ctrl.borrow_mut().text_transform_set_encoding(value);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_text_transform_set_final(move |value| {
+            ctrl.borrow_mut().text_transform_set_final(value);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_text_transform_set_trim(move |value| {
+            ctrl.borrow_mut().text_transform_set_trim(value);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_text_transform_apply(move || {
+            if ctrl.borrow_mut().text_transform_apply() {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_text_transform_close(move || {
+            ctrl.borrow_mut().text_transform_close();
+            sync_rows();
         });
     }
 }

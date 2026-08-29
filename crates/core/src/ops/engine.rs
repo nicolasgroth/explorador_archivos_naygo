@@ -245,7 +245,7 @@ fn exec_step(
     progress: ProgressCtx,
 ) -> (std::path::PathBuf, OpOutcome, u64, bool) {
     match kind {
-        OpKind::Copy => exec_copy_step(
+        OpKind::Copy | OpKind::Duplicate => exec_copy_step(
             step,
             conflict,
             token,
@@ -276,7 +276,13 @@ fn exec_step(
                 )
             } else {
                 let outcome = exec_delete(step, token);
-                (step.to.clone(), outcome, 0, !step.is_dir)
+                let done = matches!(outcome, OpOutcome::Done);
+                (
+                    step.to.clone(),
+                    outcome,
+                    if done { step.bytes } else { 0 },
+                    true,
+                )
             }
         }
         // BatchRename: cada paso ya viene con su par from→to (ordenado por
@@ -594,9 +600,19 @@ fn copy_buffered(
 fn exec_delete(step: &OpStep, token: &CancellationToken) -> OpOutcome {
     let target = step.from.as_ref().unwrap_or(&step.to);
     if step.is_dir {
-        match remove_dir_all_cancelable(target, token) {
-            Ok(true) => OpOutcome::Done,
-            Ok(false) => OpOutcome::Skipped,
+        if token.is_cancelled() {
+            return OpOutcome::Skipped;
+        }
+        match remove_dir_tolerante(target) {
+            Ok(()) => OpOutcome::Done,
+            // Compatibilidad con journals antiguos, donde una carpeta completa era un solo paso.
+            Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                match remove_dir_all_cancelable(target, token) {
+                    Ok(true) => OpOutcome::Done,
+                    Ok(false) => OpOutcome::Skipped,
+                    Err(e) => OpOutcome::Failed(e.to_string()),
+                }
+            }
             Err(e) => OpOutcome::Failed(e.to_string()),
         }
     } else {

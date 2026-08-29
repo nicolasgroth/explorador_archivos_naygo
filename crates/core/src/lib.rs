@@ -8,6 +8,7 @@
 
 pub mod archive_ops;
 pub mod archive_tree;
+pub mod basket;
 pub mod batch_rename;
 pub mod cancel;
 pub mod changelog;
@@ -34,6 +35,7 @@ pub mod icons;
 pub mod keymap;
 pub mod listing;
 pub mod listing_cache;
+pub mod mesh_preview;
 pub mod metadata;
 pub mod ops;
 pub mod palette;
@@ -45,7 +47,9 @@ pub mod render_hint;
 pub mod search;
 pub mod sizing;
 pub mod sort;
+pub mod sync_plan;
 pub mod text_match;
+pub mod text_transform;
 pub mod theme;
 pub mod tree;
 pub mod workspace;

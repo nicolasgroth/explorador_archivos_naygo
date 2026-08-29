@@ -16,9 +16,9 @@ export component HistoryPanel inherits Rectangle {
     callback undo(int);   // id de la entrada a deshacer
     callback focus-pane();
 
-    background: Theme.panel-bg;
-    border-width: root.active ? 1.5px : 0px;
-    border-color: Theme.accent;
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     VerticalLayout {
         padding: 6px;
@@ -33,8 +33,8 @@ export component HistoryPanel inherits Rectangle {
             vertical-stretch: 1;
             for e[i] in root.rows: Rectangle {
                 height: 30px;
-                background: row-touch.has-hover ? Theme.row-bg : transparent;
-                border-radius: 3px;
+                background: row-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
                 // El TouchArea de la fila (solo para el hover del fondo) va PRIMERO → queda por
                 // DEBAJO en z-order del botón «Deshacer». Antes iba último (por encima) y se tragaba
                 // el clic destinado al botón, así que Deshacer no hacía nada. Ahora el `undo-touch`
@@ -63,13 +63,13 @@ export component HistoryPanel inherits Rectangle {
                         width: 86px;
                         background: e.undone
                             ? transparent
-                            : (e.undoable ? (undo-touch.has-hover ? Theme.selection-bg : Theme.row-bg) : Theme.panel-bg);
-                        border-radius: 4px;
+                            : (e.undoable ? (undo-touch.has-hover ? Theme.hover-bg : Theme.surface-raised) : Theme.panel-bg);
+                        border-radius: Theme.radius-md;
                         border-width: e.undone ? 1px : 0px;
                         border-color: Theme.accent;
                         Text {
                             text: e.undone ? Tr.history-undone : Tr.history-undo;
-                            color: e.undone ? Theme.accent : (e.undoable ? white : Theme.text-dim);
+                            color: e.undone ? Theme.accent : (e.undoable ? Theme.text : Theme.text-dim);
                             font-weight: e.undone ? 700 : 400;
                             horizontal-alignment: center;
                             vertical-alignment: center;

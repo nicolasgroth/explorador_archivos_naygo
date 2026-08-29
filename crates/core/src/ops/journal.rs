@@ -77,6 +77,7 @@ impl OpJournal {
             .unwrap_or_default();
         let verb = match self.kind {
             OpKind::Copy => "Copiar",
+            OpKind::Duplicate => "Duplicar",
             OpKind::Move => "Mover",
             OpKind::Delete { .. } => "Eliminar",
             OpKind::Rename { .. } | OpKind::BatchRename { .. } => "Renombrar",

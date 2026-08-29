@@ -68,6 +68,7 @@ fn pending_drop_names_summary_uno_pocos_muchos() {
         dest_pane: PaneId(0),
         is_move: false,
         count: 0,
+        staging: None,
     };
     // El sufijo de "y N más" lo simulamos con " +N" para no depender de i18n en el test.
     let more = |n: usize| format!(" +{}", n);
@@ -374,6 +375,32 @@ fn crear_carpeta_con_ctrl_shift_n() {
     assert!(
         active_pos_of(&c, "Documentos").is_some(),
         "la carpeta nueva aparece en la vista tras refrescar"
+    );
+}
+
+/// GESTO: el usuario selecciona un archivo y pulsa Ctrl+D. RESULTADO: el motor planifica una
+/// copia con nombre único en la misma carpeta y la deja disponible para deshacer.
+#[test]
+fn duplicar_con_ctrl_d_crea_copia_en_la_misma_carpeta() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("informe.txt"), b"contenido").unwrap();
+    let (mut c, _cfg) = ctrl_en(work.path());
+    let pane = c.ws.active_id().expect("hay un panel activo al arrancar");
+    let pos = active_pos_of(&c, "informe.txt").expect("el archivo aparece en el panel");
+    c.on_row_clicked(pane, pos, false, false, std::time::Instant::now());
+
+    c.on_key("d", true, false, false);
+    assert!(drain_ops(&mut c), "la duplicación debe terminar");
+
+    let copy = work.path().join("informe - copia.txt");
+    assert_eq!(std::fs::read(&copy).unwrap(), b"contenido");
+    let duplicate_label = c.config.t("action.duplicate");
+    assert!(
+        c.ops
+            .undo_history
+            .iter()
+            .any(|entry| entry.label == duplicate_label),
+        "la duplicación conserva una entrada para deshacer"
     );
 }
 

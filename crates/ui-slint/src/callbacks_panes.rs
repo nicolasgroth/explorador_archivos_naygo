@@ -21,6 +21,100 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         area_of,
         ..
     } = ctx;
+    // Bandeja temporal: acciones sobre sus rutas. El selector nativo de carpeta corre solo al
+    // confirmar copiar/mover; el trabajo posterior queda en el motor asíncrono de operaciones.
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_basket_remove(move |index| {
+            ctrl.borrow_mut().basket_remove(index.max(0) as usize);
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_basket_clear(move || {
+            ctrl.borrow_mut().basket_clear();
+            sync_layout();
+        });
+    }
+    for move_files in [false, true] {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        let handler = move || {
+            if let Some(dest) = rfd::FileDialog::new().pick_folder() {
+                if ctrl.borrow_mut().basket_transfer_to(dest, move_files) {
+                    start_timer();
+                }
+                sync_layout();
+            }
+        };
+        if move_files {
+            ui.on_basket_move(handler);
+        } else {
+            ui.on_basket_copy(handler);
+        }
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_basket_delete(move || {
+            if ctrl.borrow_mut().basket_delete() {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_sync_set_mode(move |mode| {
+            ctrl.borrow_mut().sync_set_mode(mode);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_sync_set_delete(move |value| {
+            ctrl.borrow_mut().sync_set_delete_extras(value);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_sync_toggle(move |index| {
+            ctrl.borrow_mut().sync_toggle_item(index.max(0) as usize);
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_sync_apply(move || {
+            if ctrl.borrow_mut().sync_apply() {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_sync_close(move || {
+            ctrl.borrow_mut().sync_close();
+            sync_layout();
+        });
+    }
     // --- Acciones multi-panel (swap / clonar) + selector de destino ---
     {
         let ctrl = ctrl.clone();

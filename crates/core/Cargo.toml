@@ -9,6 +9,10 @@ license.workspace = true
 name = "gen_icons"
 required-features = ["gen-icons"]
 
+[[bench]]
+name = "large_directory"
+harness = false
+
 [features]
 gen-icons = ["dep:resvg", "dep:usvg", "dep:tiny-skia"]
 

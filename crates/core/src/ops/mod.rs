@@ -33,6 +33,9 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
     Copy,
+    /// Copia en la misma carpeta con un destino único generado por el planificador.
+    /// Nunca pisa el original ni pregunta por conflicto: el nombre se desambigua antes de ejecutar.
+    Duplicate,
     Move,
     Delete {
         to_trash: bool,

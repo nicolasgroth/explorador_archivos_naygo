@@ -44,10 +44,19 @@ pub struct FilePaneState {
     /// `compute_view_indices` lo aplica junto a los filtros de columna, así la VISTA (y por
     /// tanto selección/foco/teclado) comparte EXACTAMENTE el conjunto filtrado que se pinta.
     pub visibility: VisibilityFlags,
+    /// Filtro efímero del typeahead cuando la UI pide ocultar las no-coincidencias. Ya viene
+    /// plegado para comparación case/acento-insensible; no se persiste ni reemplaza los filtros
+    /// configurables por columna.
+    pub visual_filter: Option<String>,
     /// Caché de los índices de vista (filtrados+ordenados). Recompute PEREZOSO bajo
     /// `&self` vía `RefCell`; se invalida comparando una firma O(1) de los inputs. NO se
     /// clona (cada panel reconstruye el suyo) ni se persiste. Efímero de presentación.
     view_cache: std::cell::RefCell<Option<ViewCache>>,
+    /// Revisión monotónica del contenido de `entries`. Permite a la UI invalidar modelos en
+    /// O(1), incluso cuando un watcher modifica metadata sin cambiar la cantidad de filas.
+    entries_revision: std::cell::Cell<u64>,
+    /// Revisión de selección/foco para evitar hashear selecciones masivas en cada frame.
+    presentation_revision: std::cell::Cell<u64>,
     /// Contador de recomputes de la vista (solo para tests; mide aciertos del caché).
     #[cfg(test)]
     view_recomputes: std::cell::Cell<u32>,
@@ -76,8 +85,11 @@ impl Clone for FilePaneState {
             highlighted: self.highlighted.clone(),
             group_new_at_end: self.group_new_at_end,
             visibility: self.visibility,
+            visual_filter: self.visual_filter.clone(),
             // El caché NO se arrastra: el clon lo reconstruye a demanda.
             view_cache: std::cell::RefCell::new(None),
+            entries_revision: std::cell::Cell::new(self.entries_revision.get()),
+            presentation_revision: std::cell::Cell::new(self.presentation_revision.get()),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
         }
@@ -119,7 +131,10 @@ impl FilePaneState {
             highlighted: std::collections::HashSet::new(),
             group_new_at_end: false,
             visibility: VisibilityFlags::default(),
+            visual_filter: None,
             view_cache: std::cell::RefCell::new(None),
+            entries_revision: std::cell::Cell::new(1),
+            presentation_revision: std::cell::Cell::new(1),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
         }
@@ -128,6 +143,28 @@ impl FilePaneState {
     /// ¿Está esta ruta resaltada como nueva?
     pub fn is_highlighted(&self, path: &Path) -> bool {
         self.highlighted.contains(path)
+    }
+
+    /// Notifica que `entries` fue reemplazado o mutado. El vector sigue siendo público por
+    /// compatibilidad, pero los productores runtime deben llamar esto tras cada lote/evento.
+    pub fn entries_changed(&self) {
+        self.entries_revision
+            .set(self.entries_revision.get().wrapping_add(1));
+        *self.view_cache.borrow_mut() = None;
+    }
+
+    /// Revisión barata para cachés externos de presentación.
+    pub fn entries_revision(&self) -> u64 {
+        self.entries_revision.get()
+    }
+
+    pub fn presentation_changed(&self) {
+        self.presentation_revision
+            .set(self.presentation_revision.get().wrapping_add(1));
+    }
+
+    pub fn presentation_revision(&self) -> u64 {
+        self.presentation_revision.get()
     }
 
     /// Limpia todo el resaltado (al interactuar o re-listar).
@@ -191,6 +228,7 @@ impl FilePaneState {
             self.anchor = Some(last);
         }
         self.selected = positions;
+        self.presentation_changed();
         count
     }
 
@@ -205,6 +243,55 @@ impl FilePaneState {
         self.clamp_selection_to_view();
     }
 
+    /// Aplica o quita el filtro transitorio de typeahead a la VISTA real. Conserva por ruta las
+    /// selecciones que aún siguen visibles; si el foco queda fuera, enfoca la primera fila. Así
+    /// render, teclado y operaciones usan siempre índices de la misma vista.
+    pub fn set_visual_filter(&mut self, filter: Option<String>) {
+        if self.visual_filter == filter {
+            return;
+        }
+        let old_view = self.view_indices();
+        let path_at = |pos: Option<usize>| {
+            pos.and_then(|p| old_view.get(p))
+                .and_then(|&real| self.entries.get(real))
+                .map(|entry| entry.path.clone())
+        };
+        let focused_path = path_at(self.focused);
+        let anchor_path = path_at(self.anchor);
+        let selected_paths: std::collections::HashSet<PathBuf> = self
+            .selected
+            .iter()
+            .filter_map(|&pos| path_at(Some(pos)))
+            .collect();
+
+        self.visual_filter = filter;
+        let new_view = self.view_indices();
+        let position_of = |path: &PathBuf| {
+            new_view.iter().position(|&real| {
+                self.entries
+                    .get(real)
+                    .map(|entry| &entry.path == path)
+                    .unwrap_or(false)
+            })
+        };
+        self.selected = new_view
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, &real)| {
+                self.entries
+                    .get(real)
+                    .filter(|entry| selected_paths.contains(&entry.path))
+                    .map(|_| pos)
+            })
+            .collect();
+        self.focused = focused_path
+            .as_ref()
+            .and_then(position_of)
+            .or_else(|| (!new_view.is_empty()).then_some(0));
+        self.anchor = anchor_path.as_ref().and_then(position_of).or(self.focused);
+        self.presentation_changed();
+    }
+
     /// Reacomoda foco/selección/ancla para que no apunten fuera de la vista actual (p.ej.
     /// tras esconder filas con el menú "ojo"). El foco se clampa al último válido; la
     /// selección descarta posiciones que ya no existen.
@@ -214,6 +301,7 @@ impl FilePaneState {
             self.focused = None;
             self.selected.clear();
             self.anchor = None;
+            self.presentation_changed();
             return;
         }
         if let Some(f) = self.focused {
@@ -225,6 +313,7 @@ impl FilePaneState {
                 self.anchor = self.focused;
             }
         }
+        self.presentation_changed();
     }
 
     /// Firma O(1) de los inputs que determinan la vista. Si no cambia entre llamadas, el
@@ -234,6 +323,7 @@ impl FilePaneState {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.entries.len().hash(&mut h);
+        self.entries_revision.get().hash(&mut h);
         // SortSpec deriva Hash: cubre key, ascending y dirs_first.
         self.sort.hash(&mut h);
         // Filtros: el BTreeMap es ordenado, así que el recorrido (y el hash) es estable.
@@ -244,6 +334,7 @@ impl FilePaneState {
         self.group_new_at_end.hash(&mut h);
         // Los flags de visibilidad cambian qué entries entran a la vista: parte de la firma.
         self.visibility.hash(&mut h);
+        self.visual_filter.hash(&mut h);
         // El conjunto de resaltadas solo cambia el orden si se agrupan al final.
         if self.group_new_at_end {
             self.highlighted.len().hash(&mut h);
@@ -297,6 +388,12 @@ impl FilePaneState {
             .enumerate()
             .filter(|(_, e)| self.visibility.allows(e))
             .filter(|(_, e)| !has_col_filters || filter_matches(e, &self.table.filters))
+            .filter(|(_, e)| {
+                self.visual_filter
+                    .as_deref()
+                    .map(|needle| crate::text_match::contains_folded(&e.name, needle))
+                    .unwrap_or(true)
+            })
             .map(|(i, _)| i)
             .collect();
         let sort = self.sort;
@@ -378,9 +475,11 @@ impl FilePaneState {
     fn enter(&mut self, dir: PathBuf) {
         self.current_dir = dir;
         self.entries.clear();
+        self.entries_changed();
         self.focused = None;
         self.selected.clear();
         self.anchor = None;
+        self.presentation_changed();
     }
 
     /// Posición válida en la vista (clamp a [0, len-1]); None si la vista está vacía.
@@ -399,6 +498,7 @@ impl FilePaneState {
             self.selected = vec![p];
             self.focused = Some(p);
             self.anchor = Some(p);
+            self.presentation_changed();
         }
     }
 
@@ -412,6 +512,7 @@ impl FilePaneState {
             }
             self.focused = Some(p);
             self.anchor = Some(p);
+            self.presentation_changed();
         }
     }
 
@@ -433,6 +534,7 @@ impl FilePaneState {
         };
         self.selected = (lo..=hi).collect();
         self.focused = Some(p);
+        self.presentation_changed();
         // anchor se mantiene
     }
 
@@ -453,6 +555,7 @@ impl FilePaneState {
             self.focused = Some(last);
             self.anchor = Some(last);
         }
+        self.presentation_changed();
     }
 
     /// Selecciona toda la vista.
@@ -462,6 +565,7 @@ impl FilePaneState {
         if len > 0 {
             self.focused = Some(len - 1);
         }
+        self.presentation_changed();
     }
 
     /// Limpia la selección y el ancla (p. ej. al cambiar el filtro u orden: las
@@ -470,6 +574,7 @@ impl FilePaneState {
     pub fn clear_selection(&mut self) {
         self.selected.clear();
         self.anchor = None;
+        self.presentation_changed();
     }
 
     /// Mueve el foco `delta` (teclado). Con `extend` (Shift) extiende el rango desde el
@@ -546,6 +651,7 @@ impl FilePaneState {
         let cur = self.focused.unwrap_or(0) as isize;
         let new = (cur + delta).clamp(0, len as isize - 1) as usize;
         self.focused = Some(new);
+        self.presentation_changed();
     }
 
     /// ¿La posición de vista `pos` está seleccionada?
@@ -1043,6 +1149,34 @@ mod tests {
         let mut p = FilePaneState::new(PathBuf::from("C:/"));
         p.entries = (0..n).map(|i| mk(&format!("f{i}.txt"))).collect();
         p
+    }
+
+    #[test]
+    fn visual_filter_oculta_sin_desalinear_foco_ni_seleccion() {
+        let mut p = pane_n(4);
+        p.entries[0].name = "alpha.txt".into();
+        p.entries[1].name = "beta.txt".into();
+        p.entries[2].name = "beta-nota.txt".into();
+        p.entries[3].name = "gamma.txt".into();
+        // El foco queda en una coincidencia que cambia de posición al esconder filas.
+        p.select_single(1);
+
+        p.set_visual_filter(Some("beta".into()));
+        assert_eq!(p.view_len(), 2);
+        assert_eq!(p.focused_view_entry().unwrap().name, "beta-nota.txt");
+        assert_eq!(
+            p.selected,
+            vec![0],
+            "la selección se conserva por ruta visible"
+        );
+        assert_eq!(
+            p.view_entry_at(p.selected[0]).unwrap().name,
+            "beta-nota.txt"
+        );
+
+        p.set_visual_filter(None);
+        assert_eq!(p.view_len(), 4);
+        assert_eq!(p.focused_view_entry().unwrap().name, "beta-nota.txt");
     }
 
     #[test]

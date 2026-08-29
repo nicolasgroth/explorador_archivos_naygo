@@ -36,6 +36,10 @@ pub struct LayoutTemplate {
     pub favorite: bool,
     /// Paneles que crea la plantilla, en orden.
     pub panes: Vec<TemplatePane>,
+    /// Enlaces semánticos Árbol→Files por índice de `panes`. Vacío significa que
+    /// los árboles son comunes y siguen al último panel Files activo.
+    #[serde(default)]
+    pub tree_links: Vec<(usize, usize)>,
     /// Cómo se reparten visualmente (los índices de hoja referencian `panes`).
     pub layout: LayoutShape,
 }
@@ -68,6 +72,7 @@ impl LayoutTemplate {
                 purpose: PanePurpose::Files,
                 dir: TemplateDir::Home,
             }],
+            tree_links: Vec::new(),
             layout: LayoutShape::Leaf(0),
         }
     }
@@ -92,6 +97,7 @@ impl LayoutTemplate {
                     dir: TemplateDir::Home,
                 },
             ],
+            tree_links: Vec::new(),
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
                 fraction: 0.22,
@@ -130,6 +136,7 @@ impl LayoutTemplate {
                     dir: TemplateDir::Home,
                 },
             ],
+            tree_links: Vec::new(),
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
                 fraction: 0.18,
@@ -182,6 +189,7 @@ impl LayoutTemplate {
                     dir: TemplateDir::Home,
                 },
             ],
+            tree_links: Vec::new(),
             // árbol (0.18) | [ archivos A | archivos B ] (centro) | [ props / preview ] (derecha)
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
@@ -232,6 +240,7 @@ impl LayoutTemplate {
                     dir: TemplateDir::Home,
                 },
             ],
+            tree_links: Vec::new(),
             layout: LayoutShape::Split {
                 dir: SplitDir::Horizontal,
                 fraction: 0.3,
@@ -359,6 +368,17 @@ mod tests {
         assert_eq!(t.panes.len(), 1);
         assert_eq!(t.panes[0].purpose, PanePurpose::Files);
         assert_eq!(t.layout, LayoutShape::Leaf(0));
+    }
+
+    #[test]
+    fn plantilla_anterior_sin_enlaces_migra_a_arbol_comun() {
+        let json = r#"{
+            "name":"Vieja","builtin":false,"favorite":false,
+            "panes":[{"purpose":"Files","dir":"Home"}],
+            "layout":{"Leaf":0}
+        }"#;
+        let t: LayoutTemplate = serde_json::from_str(json).unwrap();
+        assert!(t.tree_links.is_empty());
     }
 
     #[test]

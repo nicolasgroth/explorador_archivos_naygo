@@ -20,6 +20,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
+mod archive;
+mod batch_delete;
+mod resume;
+
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
 /// el modal queda para crear archivo/carpeta, confirmar el nombre al pegar y renombrar un
 /// archivo en conflicto.)
@@ -171,6 +175,9 @@ pub struct ActiveOp {
     /// no son de zip. Es un canal aparte del de progreso porque `OpMsg` (de core) no transporta el
     /// inverso; mantenerlo separado evita tocar el enum compartido.
     pub zip_undo_rx: Option<Receiver<Vec<UndoAction>>>,
+    /// Recibos Shell de un borrado a Papelera. Llegan antes del terminal para que
+    /// `pump_ops` pueda registrar una restauración real con Ctrl+Z.
+    pub trash_receipts_rx: Option<Receiver<Vec<naygo_platform::trash::TrashReceipt>>>,
     /// Segundos epoch UTC del instante en que la op pasó a TERMINADA (se asigna cuando se setea
     /// `summary`). `None` mientras la op está en curso/cola/planificación. Se usa para mostrar la
     /// fecha del registro en el historial del panel y para ordenar las filas terminadas por
@@ -182,6 +189,10 @@ pub struct ActiveOp {
     /// `fs::metadata` por ítem en el hilo de UI (potencialmente miles al abrir el detalle).
     /// Vacío en ops sin plan (zip, planning sin promover aún).
     pub size_map: HashMap<PathBuf, u64>,
+    /// Stagings de fuentes OLE virtuales usados por esta operación. Se vacían al terminal para
+    /// que su guard RAII limpie los temporales en un worker; durante planificación/cola/conflicto
+    /// mantienen los orígenes disponibles.
+    pub staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
 }
 
 /// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño).
@@ -352,25 +363,26 @@ impl OpsCtrl {
     }
 
     /// Lanza una operación. `record_undo` indica si registrar el deshacer al terminar.
-    /// La papelera (Delete to_trash) se hace directo (atómica, fuera del motor) — el
-    /// llamador debe refrescar el panel tras esto.
-    ///
-    /// Copy/Move NO planifican en línea: recorrer un árbol grande con `read_dir`/`metadata`
+    /// Copy/Move/Delete NO planifican en línea: recorrer un árbol grande con `read_dir`/`metadata`
     /// congelaría el hilo de UI (viola la regla de oro). En su lugar se crea la op en fase
     /// "Calculando…" (`plan_rx`) y un worker (`spawn_plan`) escanea el árbol en segundo plano;
     /// `pump_ops` recoge el plan terminado y recién entonces arranca el motor. El resto de
     /// operaciones planifican en O(1) (no recorren árbol) y siguen el camino síncrono directo.
     pub fn start_op(&mut self, req: OpRequest, label: String, record_undo: bool) {
+        self.start_op_with_staging(req, label, record_undo, Vec::new());
+    }
+
+    /// Lanza una operación conservando los stagings de un drop virtual hasta su terminal.
+    pub fn start_op_with_staging(
+        &mut self,
+        req: OpRequest,
+        label: String,
+        record_undo: bool,
+        staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
+    ) {
         // Al comenzar una operación nueva, descartar las terminadas del panel (sus
         // resúmenes ya se vieron); las en curso/en cola se conservan.
         self.prune_finished();
-        // Papelera: atómica, sin motor.
-        if matches!(req.kind, OpKind::Delete { to_trash: true }) {
-            let _ = naygo_platform::trash::move_to_trash(&req.sources);
-            // No se ofrece deshacer-a-papelera (recuperable desde Windows).
-            return;
-        }
-
         // Comprimir/extraer: worker propio de zip (no pasa por plan/exec_step). Reusa el panel,
         // el canal de progreso, el id de op y la cancelación, igual que el resto.
         //
@@ -382,25 +394,28 @@ impl OpsCtrl {
         // que encolarlo como Copy/Move.)
         if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
             let id = self.alloc_op_id();
-            self.spawn_zip_op(id, req, label, record_undo);
+            self.spawn_zip_op(id, req, label, record_undo, staging_guards);
             return;
         }
 
-        // Copy/Move: planificar en segundo plano (puede recorrer un árbol enorme).
-        if matches!(req.kind, OpKind::Copy | OpKind::Move) {
+        // Copy/Move/Delete: planificar en segundo plano (puede recorrer un árbol enorme).
+        if matches!(
+            req.kind,
+            OpKind::Copy | OpKind::Duplicate | OpKind::Move | OpKind::Delete { .. }
+        ) {
             // Modo cola: si ya hay otra op trabajando (escaneando o copiando), encolar el request
             // CRUDO sin planificar todavía (no se corren dos escaneos pesados a la vez). Su
             // `spawn_plan` arrancará cuando le toque el turno, en `pump_ops`.
             if self.ops_mode == OpsMode::Queue && self.any_running() {
-                self.push_queued_req(req, label, record_undo);
+                self.push_queued_req(req, label, record_undo, staging_guards);
                 return;
             }
             let id = self.alloc_op_id();
-            self.start_planning(id, req, label, record_undo);
+            self.start_planning(id, req, label, record_undo, staging_guards);
             return;
         }
 
-        // Resto (Delete-permanente/Rename/Create/BatchRename): plan O(1) síncrono, no congela.
+        // Resto (Rename/Create/BatchRename): plan O(1) síncrono, no congela.
         let plan = match naygo_core::ops::plan(&req) {
             Ok(p) => p,
             Err(error) => {
@@ -423,6 +438,7 @@ impl OpsCtrl {
                 conflict,
                 label,
                 record_undo.then_some(req),
+                staging_guards,
             );
             return;
         }
@@ -434,14 +450,41 @@ impl OpsCtrl {
             conflict,
             label,
             record_undo.then_some(req),
+            staging_guards,
         );
+    }
+
+    /// Lanza un plan ya calculado por otro asistente (por ejemplo, sincronización). El plan trae
+    /// destinos exactos por archivo, algo que `OpRequest` no puede expresar cuando ambos lados
+    /// contienen subcarpetas distintas. Reusa el mismo motor, cola, conflictos, progreso,
+    /// cancelación y journal. No registra undo porque una sincronización puede sobrescribir
+    /// archivos preexistentes y eliminar el resultado no restauraría esos bytes de forma segura.
+    pub fn start_preplanned(&mut self, plan: OpPlan, kind: OpKind, label: String) {
+        if plan.steps.is_empty() {
+            return;
+        }
+        self.prune_finished();
+        let conflict = ConflictPolicy::Ask;
+        if self.ops_mode == OpsMode::Queue && self.any_running() {
+            self.push_queued(plan, kind, conflict, label, None, Vec::new());
+            return;
+        }
+        let id = self.alloc_op_id();
+        self.spawn_op(id, plan, kind, conflict, label, None, Vec::new());
     }
 
     /// Crea una op en fase "Calculando…" y lanza el worker de planificación (`spawn_plan`). El
     /// token se crea aquí, de modo que el botón Cancelar del panel puede abortar el ESCANEO
     /// (no solo la copia). `pump_ops` drenará el `plan_rx` y, al llegar `Done`, decidirá
     /// conflicto/cola y arrancará el motor con `spawn_op`.
-    fn start_planning(&mut self, id: u64, req: OpRequest, label: String, record_undo: bool) {
+    fn start_planning(
+        &mut self,
+        id: u64,
+        req: OpRequest,
+        label: String,
+        record_undo: bool,
+        staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
+    ) {
         let token = CancellationToken::new();
         let (rx, _h) = naygo_core::ops::spawn_plan(req.clone(), token.clone());
         let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
@@ -470,8 +513,10 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            staging_guards,
         });
     }
 
@@ -483,6 +528,7 @@ impl OpsCtrl {
         conflict: ConflictPolicy,
         label: String,
         request: Option<OpRequest>,
+        staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
     ) {
         let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
         let id = self.alloc_op_id();
@@ -511,14 +557,22 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            staging_guards,
         });
     }
 
     /// Empuja una op Copy/Move a la cola SIN planificar todavía (guarda el request crudo). Su
     /// `spawn_plan` arranca cuando le toque el turno en `pump_ops` (fase "Calculando…").
-    fn push_queued_req(&mut self, req: OpRequest, label: String, record_undo: bool) {
+    fn push_queued_req(
+        &mut self,
+        req: OpRequest,
+        label: String,
+        record_undo: bool,
+        staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
+    ) {
         let (conflict_tx, _crx) = std::sync::mpsc::channel::<ConflictDecision>();
         let id = self.alloc_op_id();
         self.active_ops.push(ActiveOp {
@@ -546,8 +600,10 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: Some((req, record_undo)),
             zip_undo_rx: None,
+            trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            staging_guards,
         });
     }
 
@@ -557,6 +613,9 @@ impl OpsCtrl {
     /// `id` es el id ESTABLE de la op: al lanzar una op nueva, el llamador reserva uno fresco
     /// con `alloc_op_id()`; al promover una op desde la cola, pasa el id del placeholder para
     /// CONSERVARLO (el usuario que la veía en cola la sigue refiriendo igual tras arrancar).
+    // La transición de una cola/planificación al motor necesita conservar las siete piezas de
+    // estado explícitas; agruparlas ocultaría ownership de `plan`, `request` y staging.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_op(
         &mut self,
         id: u64,
@@ -565,6 +624,7 @@ impl OpsCtrl {
         conflict: ConflictPolicy,
         label: String,
         request: Option<OpRequest>,
+        staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
     ) {
         let token = CancellationToken::new();
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
@@ -606,195 +666,10 @@ impl OpsCtrl {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map,
-        });
-    }
-
-    /// Lanza el worker de comprimir/extraer. Reusa el MISMO canal/panel/cancelación que las ops
-    /// normales: crea una `ActiveOp` con `rx` vivo (como `spawn_op`), de modo que `pump_ops` drene
-    /// su progreso y la cancelación por id funcione igual que para Copy/Move. La diferencia con
-    /// `spawn_op` es que NO hay plan ni motor (`engine::spawn`): el trabajo (escaneo + compresión/
-    /// extracción) corre dentro del hilo del worker, que habla por el mismo `OpMsg` channel.
-    ///
-    /// `record_undo`: si es `true`, el worker calcula las `UndoAction` SEGURAS (ver `zip_undo_rx`)
-    /// y las manda por un canal aparte; `pump_ops` las recoge al recibir `Done` y arma el
-    /// `UndoEntry`. El deshacer trashea SOLO lo que la op CREÓ: el .zip al comprimir; al extraer,
-    /// solo las rutas nuevas (nunca archivos/carpetas preexistentes del usuario).
-    fn spawn_zip_op(&mut self, id: u64, req: OpRequest, label: String, record_undo: bool) {
-        use naygo_core::archive_ops::{compress_zip, extract_zip, ExtractConflict};
-        let token = CancellationToken::new();
-        let (tx, rx) = std::sync::mpsc::channel::<OpMsg>();
-        // Canal de conflicto REAL para la extracción: el worker emite `OpMsg::Conflict` al chocar un
-        // archivo y se BLOQUEA en `conflict_rx` esperando la decisión del usuario; `pump_ops` la
-        // enruta de vuelta por `conflict_tx` (vía `resolve_conflict`). Para comprimir, el canal no se
-        // usa: el `dest_name` ya viene DESAMBIGUADO desde `name_confirm` (`unique_zip_name`), así que
-        // crear el `.zip` nunca pisa un archivo preexistente y no hay conflicto que preguntar. Se crea
-        // igual para poblar `ActiveOp`.
-        let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
-        // Canal de UNA muestra para el inverso (deshacer) del zip: el worker lo calcula desde los
-        // `ArchiveOpItem` (que traen `created`) y lo manda; `pump_ops` lo drena al `Done`. Solo se
-        // engancha si `record_undo` (si no, ni se ofrece deshacer).
-        let (undo_tx, undo_rx) = std::sync::mpsc::channel::<Vec<UndoAction>>();
-
-        // Datos que el worker necesita (clonados antes de mover el closure al hilo).
-        let token_worker = token.clone();
-        let dest_dir = req.dest_dir.clone().unwrap_or_default();
-        let kind = req.kind.clone();
-        let sources = req.sources.clone();
-
-        // REGISTRAR la op en curso EXACTAMENTE como `spawn_op`: misma `ActiveOp` con `rx` vivo,
-        // `started: true`, sin journal (el zip no se retoma) y con el `request` guardado solo si se
-        // registra undo (el popup "Archivos de la operación" usa el request para el contexto). El
-        // inverso del deshacer NO sale del request: llega por `zip_undo_rx`. El resto de campos
-        // copian los valores neutros de `spawn_op` (sin fase Planning, sin cola, sin conflicto).
-        self.active_ops.push(ActiveOp {
-            id,
-            rx: Some(rx),
-            conflict_tx,
-            token,
-            label,
-            progress: None,
-            summary: None,
-            started: true,
-            pending: None,
-            journal_id: None,
-            request: record_undo.then(|| req.clone()),
-            awaiting_conflict: None,
-            awaiting_folders: None,
-            resume_skipped: 0,
-            started_at: None,
-            last_sample: None,
-            peak_speed: 0,
-            plan_rx: None,
-            plan_kind: OpKind::Copy,
-            plan_record_undo: false,
-            scan_files: 0,
-            scan_bytes: 0,
-            pending_req: None,
-            zip_undo_rx: record_undo.then_some(undo_rx),
-            finished_epoch_secs: None,
-            size_map: HashMap::new(),
-        });
-
-        std::thread::spawn(move || {
-            // `tx` (Sender<OpMsg>) es Clone. Se clona para cada clausura `FnMut` porque ambas lo
-            // capturan: `on_progress` por su clon y `on_conflict` por el suyo (una `&mut dyn FnMut`
-            // no podría co-capturar el mismo `tx` por valor). El `tx` original queda libre para los
-            // mensajes terminales (`Done`/`Cancelled`/`Failed`) al final del worker.
-            let tx_progress = tx.clone();
-            let tx_conflict = tx.clone();
-            // El progreso del zip es por BYTES (no archivos): se manda como `OpProgress` con los
-            // contadores de archivos en 0; el panel pinta la barra por el porcentaje de bytes.
-            let mut on_progress = |done: u64, total: u64| {
-                let _ = tx_progress.send(OpMsg::Progress(OpProgress {
-                    bytes_done: done,
-                    bytes_total: total,
-                    files_done: 0,
-                    files_total: 0,
-                    current: PathBuf::new(),
-                }));
-            };
-            let result = match &kind {
-                OpKind::Compress { dest_name } => {
-                    let dest_zip = dest_dir.join(dest_name);
-                    let r = compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker);
-                    if record_undo {
-                        // El undo de COMPRIMIR trashea SOLO el .zip CREADO (la única ruta nueva), y
-                        // solo si la op terminó OK (`Ok`): los `path` de los items son los ORÍGENES
-                        // y NO deben tocarse jamás (BUG 1). Si falló/canceló, sin inverso.
-                        let acts = match &r {
-                            Ok(_) => vec![UndoAction::TrashCreated { path: dest_zip }],
-                            Err(_) => Vec::new(),
-                        };
-                        let _ = undo_tx.send(acts);
-                    }
-                    r
-                }
-                OpKind::Extract => {
-                    let zip = sources.first().cloned().unwrap_or_default();
-                    // Conflicto al extraer: el worker se PARA, emite el prompt lado-a-lado y ESPERA la
-                    // decisión del usuario (mismo molde que el motor de copiar en `engine.rs`).
-                    //
-                    // `extract_zip` llama `on_conflict(&target)` con UNA sola ruta (el archivo destino
-                    // que ya existe). El prompt necesita dos lados: se usa la MISMA ruta para ambos
-                    // (existing = incoming = el archivo en conflicto). La UI lo muestra lado a lado: el
-                    // "existente" es el del disco; el "entrante" es el que se va a escribir en ese mismo
-                    // destino. Es la mejor aproximación disponible con la firma de `extract_zip`.
-                    //
-                    // Memoria de "aplicar a todos": si el usuario marca `apply_all`, se memoriza la
-                    // acción mapeada en `sticky` y los conflictos siguientes la reaplican sin volver a
-                    // preguntar (mejor UX). Sin `apply_all`, cada conflicto re-pregunta.
-                    let mut sticky: Option<ExtractConflict> = None;
-                    let mut on_conflict = |target: &Path| -> ExtractConflict {
-                        if let Some(s) = sticky {
-                            return s;
-                        }
-                        let _ = tx_conflict.send(OpMsg::Conflict(ConflictPrompt::from_paths(
-                            target.to_path_buf(),
-                            target.to_path_buf(),
-                        )));
-                        loop {
-                            if token_worker.is_cancelled() {
-                                return ExtractConflict::Cancel;
-                            }
-                            match conflict_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                                Ok(d) => {
-                                    let mapped = map_action_to_extract(d.action);
-                                    if d.apply_all {
-                                        sticky = Some(mapped);
-                                    }
-                                    return mapped;
-                                }
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                    return ExtractConflict::Skip;
-                                }
-                            }
-                        }
-                    };
-                    let r = extract_zip(
-                        &zip,
-                        &dest_dir,
-                        &mut on_conflict,
-                        &mut on_progress,
-                        &token_worker,
-                    );
-                    if record_undo {
-                        // El undo de EXTRAER trashea SOLO las rutas que la op CREÓ de cero
-                        // (`created == true`): dirs/archivos nuevos y el destino "(2)" de KeepBoth.
-                        // NUNCA toca preexistentes del usuario — dir poblado o archivo sobrescrito
-                        // (BUG 2). Se construye desde los items, que traen el flag `created`.
-                        let acts = match &r {
-                            Ok(items) => zip_undo_actions_from_items(items),
-                            Err(_) => Vec::new(),
-                        };
-                        let _ = undo_tx.send(acts);
-                    }
-                    r
-                }
-                // Invariante: spawn_zip_op solo se llama con Compress/Extract (lo garantiza
-                // `start_op`). Si el invariante se rompe, NO paniquear: un panic en el worker
-                // dejaría la op colgada para siempre (su `rx` jamás recibiría el terminal).
-                // Reportar el fallo por el canal, igual que cualquier otro error de la op.
-                other => {
-                    let _ = tx.send(OpMsg::Failed(format!(
-                        "worker de zip recibió un tipo de operación no soportado: {other:?}"
-                    )));
-                    return;
-                }
-            };
-            match result {
-                Ok(items) => {
-                    let _ = tx.send(OpMsg::Done(zip_summary(items)));
-                }
-                Err(naygo_core::archive_ops::ArchiveError::Cancelled) => {
-                    let _ = tx.send(OpMsg::Cancelled(zip_summary(Vec::new())));
-                }
-                Err(e) => {
-                    let _ = tx.send(OpMsg::Failed(e.to_string()));
-                }
-            }
+            staging_guards,
         });
     }
 
@@ -810,6 +685,10 @@ impl OpsCtrl {
         conflict: ConflictPolicy,
         request: Option<OpRequest>,
     ) {
+        if matches!(kind, OpKind::Delete { to_trash: true }) {
+            self.promote_planning_to_trash(idx, plan, request);
+            return;
+        }
         let token = self.active_ops[idx].token.clone();
         let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
         let (journal, journal_id) = if Self::journalable(&kind) {
@@ -833,11 +712,12 @@ impl OpsCtrl {
         op.scan_files = 0;
         op.scan_bytes = 0;
     }
+
     /// ¿La operación amerita journal (es larga y se puede retomar)?
     fn journalable(kind: &OpKind) -> bool {
         matches!(
             kind,
-            OpKind::Copy | OpKind::Move | OpKind::Delete { to_trash: false }
+            OpKind::Copy | OpKind::Duplicate | OpKind::Move | OpKind::Delete { to_trash: false }
         )
     }
 
@@ -902,6 +782,7 @@ impl OpsCtrl {
                 op.request = None;
                 op.summary = Some(OpSummary::default());
                 op.finished_epoch_secs = Some(now_epoch_secs());
+                op.staging_guards.clear();
                 continue;
             }
 
@@ -915,6 +796,15 @@ impl OpsCtrl {
                     _ => ConflictPolicy::Overwrite,
                 };
                 let undo_req = if record_undo { req.clone() } else { None };
+                // La papelera necesita SIEMPRE las rutas originales para pasárselas a
+                // IFileOperation, aunque esta operación no registre Undo. Antes se reutilizaba
+                // `undo_req`; con confirmación de papelera desactivada (`record_undo=false`) eso
+                // convertía `sources` en un vector vacío y el Shell terminaba OK sin borrar nada.
+                let execution_req = if matches!(kind, OpKind::Delete { to_trash: true }) {
+                    req.clone()
+                } else {
+                    undo_req.clone()
+                };
 
                 // P3: ¿alguna carpeta de origen ya existe (como carpeta) en el destino? Si sí, la
                 // op se detiene a esperar la decisión de carpeta (Fusionar/Reemplazar/Saltar/
@@ -950,11 +840,11 @@ impl OpsCtrl {
                     op.plan_rx = None;
                     op.started = false; // pasa a "en cola"
                     op.pending = Some((plan, kind, conflict));
-                    op.request = undo_req;
+                    op.request = execution_req;
                     op.scan_files = 0;
                     op.scan_bytes = 0;
                 } else {
-                    self.promote_planning_to_copy(i, plan, kind, conflict, undo_req);
+                    self.promote_planning_to_copy(i, plan, kind, conflict, execution_req);
                 }
             }
         }
@@ -1029,7 +919,18 @@ impl OpsCtrl {
                     // solo rutas nuevas, NUNCA preexistentes del usuario). Esto evita los dos bugs de
                     // pérdida de datos (trashear orígenes al comprimir; trashear carpetas/archivos
                     // preexistentes al extraer). Para el resto de ops, el camino normal de `build_undo`.
-                    let actions = if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
+                    let actions = if matches!(req.kind, OpKind::Delete { to_trash: true }) {
+                        self.active_ops[i]
+                            .trash_receipts_rx
+                            .take()
+                            .and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(1)).ok())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|receipt| UndoAction::RestoreTrash {
+                                original: receipt.original,
+                            })
+                            .collect()
+                    } else if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
                         // El worker SIEMPRE manda el inverso por `undo_tx` ANTES del terminal
                         // (`Done`/`Cancelled`) — ver `spawn_zip_op`. Como aquí ya leímos ese terminal,
                         // el inverso está esperando en el canal y `recv` retorna al instante. Aun así
@@ -1067,6 +968,7 @@ impl OpsCtrl {
                 self.active_ops[i].summary = Some(summary);
                 self.active_ops[i].finished_epoch_secs = Some(now_epoch_secs());
                 self.active_ops[i].rx = None;
+                self.active_ops[i].staging_guards.clear();
             }
         }
 
@@ -1151,9 +1053,10 @@ impl OpsCtrl {
                     // `pending_req` era None (rama else), corresponde `pending`. Si el
                     // invariante se rompe, no arrancar nada en vez de paniquear.
                     let request = self.active_ops[idx].request.take();
+                    let staging_guards = std::mem::take(&mut self.active_ops[idx].staging_guards);
                     // Quitar el placeholder en cola y spawnear de verdad.
                     self.active_ops.remove(idx);
-                    self.spawn_op(id, plan, kind, conflict, label, request);
+                    self.spawn_op(id, plan, kind, conflict, label, request, staging_guards);
                 }
             }
         }
@@ -1297,6 +1200,7 @@ impl OpsCtrl {
             // Cerrar a historial: la op no llegó a copiar nada.
             op.summary = Some(OpSummary::default());
             op.finished_epoch_secs = Some(now_epoch_secs());
+            op.staging_guards.clear();
         }
         self.pending_dialog = None;
     }
@@ -1432,6 +1336,7 @@ impl OpsCtrl {
                 kind: 1,
                 del_count: sources.len() as i32,
                 del_permanent: *permanent,
+                del_preview: delete_preview(sources),
                 ..Default::default()
             },
             Some(OpDialog::Conflict { op_id, prompt }) => {
@@ -1813,7 +1718,7 @@ impl OpsCtrl {
         };
         // Tipo: 0=Copiar 1=Mover 2=otra. Se toma del request (si lo hay).
         let kind = match op.request.as_ref().map(|r| &r.kind) {
-            Some(OpKind::Copy) => 0,
+            Some(OpKind::Copy) | Some(OpKind::Duplicate) => 0,
             Some(OpKind::Move) => 1,
             _ => 2,
         };
@@ -1955,111 +1860,6 @@ impl OpsCtrl {
         self.start_op(req, label.to_string(), true);
         true
     }
-
-    // --- Journal: retomar operaciones tras un cierre inesperado ---
-
-    /// Al arrancar la app: si hay journals pendientes, abre el modal de retomar.
-    pub fn scan_resume(&mut self) {
-        let pend = journal::scan(&self.config_dir);
-        if !pend.is_empty() {
-            self.pending_dialog = Some(OpDialog::Resume { items: pend });
-        }
-    }
-
-    /// Retoma la operación journaleada `id`: replanifica los pasos pendientes y la lanza
-    /// con un journal nuevo que reusa el id. Devuelve true si arrancó algo.
-    pub fn resume(&mut self, id: &str) -> bool {
-        // Tomar el journal del modal (si está ahí) o del disco.
-        let journal = match &self.pending_dialog {
-            Some(OpDialog::Resume { items }) => items.iter().find(|j| j.id == id).cloned(),
-            _ => None,
-        }
-        .or_else(|| {
-            journal::scan(&self.config_dir)
-                .into_iter()
-                .find(|j| j.id == id)
-        });
-        let Some(journal) = journal else {
-            return false;
-        };
-        let resume = journal::resume_plan(&journal);
-        if resume.plan.steps.is_empty() {
-            // Nada pendiente: limpiar el journal y listo.
-            journal::remove(&self.config_dir, id);
-            self.drop_resume_item(id);
-            return false;
-        }
-        // Cuántos orígenes se omiten por haber cambiado/desaparecido (se reporta al usuario).
-        let resume_skipped = resume.skipped_changed.len();
-        let label = journal.label();
-        let token = CancellationToken::new();
-        let (conflict_tx, conflict_rx) = std::sync::mpsc::channel::<ConflictDecision>();
-        let writer = JournalWriter::new(
-            &self.config_dir,
-            OpJournal::new(
-                journal.id.clone(),
-                journal.kind.clone(),
-                journal.conflict,
-                resume.plan.clone(),
-            ),
-        );
-        let size_map = size_map_of(&resume.plan);
-        let (rx, _h) = engine::spawn(
-            resume.plan,
-            journal.kind.clone(),
-            journal.conflict,
-            token.clone(),
-            conflict_rx,
-            Some(writer),
-        );
-        let op_id = self.alloc_op_id();
-        self.active_ops.push(ActiveOp {
-            id: op_id,
-            rx: Some(rx),
-            conflict_tx,
-            token,
-            label,
-            progress: None,
-            summary: None,
-            started: true,
-            pending: None,
-            journal_id: Some(journal.id.clone()),
-            request: None,
-            awaiting_conflict: None,
-            awaiting_folders: None,
-            resume_skipped,
-            started_at: None,
-            last_sample: None,
-            peak_speed: 0,
-            plan_rx: None,
-            plan_kind: OpKind::Copy,
-            plan_record_undo: false,
-            scan_files: 0,
-            scan_bytes: 0,
-            pending_req: None,
-            zip_undo_rx: None,
-            finished_epoch_secs: None,
-            size_map,
-        });
-        self.drop_resume_item(id);
-        true
-    }
-
-    /// Descarta la operación journaleada `id` (borra el journal sin retomar).
-    pub fn discard(&mut self, id: &str) {
-        journal::remove(&self.config_dir, id);
-        self.drop_resume_item(id);
-    }
-
-    /// Quita un ítem del modal Resume; si queda vacío, cierra el modal.
-    fn drop_resume_item(&mut self, id: &str) {
-        if let Some(OpDialog::Resume { items }) = &mut self.pending_dialog {
-            items.retain(|j| j.id != id);
-            if items.is_empty() {
-                self.pending_dialog = None;
-            }
-        }
-    }
 }
 
 /// Una fila del popup "Archivos de la operación": nombre + ruta RELATIVA + tamaño + estado
@@ -2149,6 +1949,28 @@ fn folder_of(p: &Path) -> String {
         .to_string()
 }
 
+/// Preview compacto y sin I/O del borrado: hasta ocho nombres de la selección superior. Una
+/// carpeta representa explícitamente todo su subárbol; el escaneo detallado ocurre después en el
+/// worker y alimenta el progreso, evitando congelar el popup sobre discos lentos.
+fn delete_preview(paths: &[PathBuf]) -> String {
+    const LIMIT: usize = 8;
+    let mut lines: Vec<String> = paths
+        .iter()
+        .take(LIMIT)
+        .map(|p| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string());
+            format!("• {name}")
+        })
+        .collect();
+    if paths.len() > LIMIT {
+        lines.push(format!("… y {} más", paths.len() - LIMIT));
+    }
+    lines.join("\n")
+}
+
 /// Asegura que `name` termine en `.zip` (sin duplicar si ya la trae, sin importar mayúsculas):
 /// "foo" → "foo.zip"; "foo.zip" / "FOO.ZIP" se dejan tal cual. El nombre del zip que arma la op
 /// de comprimir pasa por aquí (el usuario puede haber borrado la extensión del campo).
@@ -2212,6 +2034,7 @@ pub struct OpDialogVmData {
     pub kind: i32,
     pub del_count: i32,
     pub del_permanent: bool,
+    pub del_preview: String,
     pub conflict_name: String,
     /// Tipo de la operación EN CONFLICTO (para que el modal anteponga la acción al encabezado):
     /// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
@@ -2262,7 +2085,7 @@ pub struct OpDialogVmData {
 /// 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro.
 pub fn op_kind_code(kind: &OpKind) -> i32 {
     match kind {
-        OpKind::Copy => 0,
+        OpKind::Copy | OpKind::Duplicate => 0,
         OpKind::Move => 1,
         OpKind::Delete { .. } => 2,
         OpKind::Compress { .. } => 3,
@@ -2403,6 +2226,40 @@ mod tests {
         assert!(c.is_cut(Path::new("C:/x/a.txt")));
         c.clear_cut();
         assert!(!c.is_cut(Path::new("C:/x/a.txt")));
+    }
+
+    #[test]
+    fn preview_de_borrado_muestra_nombres_y_trunca_lotes_grandes() {
+        let paths: Vec<PathBuf> = (0..11)
+            .map(|i| PathBuf::from(format!("C:/datos/archivo-{i}.bin")))
+            .collect();
+        let preview = delete_preview(&paths);
+        assert!(preview.contains("archivo-0.bin"));
+        assert!(preview.contains("archivo-7.bin"));
+        assert!(!preview.contains("archivo-8.bin"));
+        assert!(preview.contains("3 más"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn papelera_sin_undo_conserva_las_rutas_y_borra_el_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("naygo-trash-no-undo.txt");
+        std::fs::write(&file, b"descartar").unwrap();
+        let mut c = OpsCtrl::new(dir.path().to_path_buf());
+        c.start_op(
+            naygo_core::ops::delete(vec![file.clone()], true),
+            "Enviar a papelera".into(),
+            false,
+        );
+        drain(&mut c);
+        assert!(!file.exists(), "IFileOperation recibió la ruta original");
+        let summary = c
+            .active_ops
+            .last()
+            .and_then(|op| op.summary.as_ref())
+            .unwrap();
+        assert_eq!(summary.count_done(), 1, "el historial informa un elemento");
     }
 
     #[test]
@@ -2868,9 +2725,12 @@ mod tests {
             .undo_history
             .iter()
             .flat_map(|e| &e.actions)
-            .map(|a| match a {
-                UndoAction::TrashCreated { path } => path,
-                UndoAction::MoveBack { now, .. } => now,
+            .filter_map(|a| match a {
+                UndoAction::TrashCreated { path } => Some(path),
+                UndoAction::MoveBack { now, .. } => Some(now),
+                // Restaurar una entrada que YA estaba en la Papelera no creó una ruta que este
+                // undo de extracción pueda mandar a la Papelera; no participa en esta aserción.
+                UndoAction::RestoreTrash { .. } => None,
             })
             .collect();
         assert!(
@@ -3207,8 +3067,10 @@ mod tests {
             scan_bytes: 0,
             pending_req: None,
             zip_undo_rx: None,
+            trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            staging_guards: Vec::new(),
         }
     }
 

@@ -1,0 +1,84 @@
+// Naygo — diálogo de transformación segura de texto.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+
+import { Button, CheckBox } from "std-widgets.slint";
+import { TextTransformVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component Choice inherits Rectangle {
+    in property <string> label;
+    in property <bool> chosen;
+    callback clicked();
+    height: 29px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: root.chosen ? Theme.accent : Theme.divider;
+    background: root.chosen ? Theme.selection-bg : (touch.has-hover ? Theme.hover-bg : Theme.row-bg);
+    Text { text: root.label; color: root.chosen ? white : Theme.text; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component TextTransformDialog inherits Rectangle {
+    in property <TextTransformVm> vm;
+    callback set-line(int);
+    callback set-encoding(int);
+    callback set-final(int);
+    callback set-trim(bool);
+    callback apply();
+    callback close();
+    visible: root.vm.active;
+    background: #00000099;
+    TouchArea { clicked => {} }
+    Rectangle {
+        width: min(650px, parent.width - 40px);
+        height: min(500px, parent.height - 40px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface-floating;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: Theme.radius-lg;
+        VerticalLayout {
+            padding: 15px; spacing: 10px;
+            Text { text: Tr.text-transform-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+            Text { text: root.vm.count + " " + Tr.text-transform-files; color: Theme.text-dim; }
+            Rectangle {
+                height: 48px; background: Theme.row-bg; border-radius: Theme.radius-md;
+                VerticalLayout { padding: 6px; Text { text: Tr.text-transform-detected; color: Theme.text-dim; font-size: 10px; } Text { text: root.vm.source; color: Theme.text; } }
+            }
+            Text { text: Tr.text-transform-line-ending; color: Theme.text; font-weight: 700; }
+            HorizontalLayout {
+                spacing: 5px;
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-windows; chosen: root.vm.target-line == 0; clicked => { root.set-line(0); } }
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-unix; chosen: root.vm.target-line == 1; clicked => { root.set-line(1); } }
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-mac-classic; chosen: root.vm.target-line == 2; clicked => { root.set-line(2); } }
+            }
+            Text { text: Tr.text-transform-encoding; color: Theme.text; font-weight: 700; }
+            HorizontalLayout {
+                spacing: 4px;
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-preserve; chosen: root.vm.target-encoding == 0; clicked => { root.set-encoding(0); } }
+                Choice { horizontal-stretch: 1; label: "UTF-8"; chosen: root.vm.target-encoding == 1; clicked => { root.set-encoding(1); } }
+                Choice { horizontal-stretch: 1; label: "UTF-8 BOM"; chosen: root.vm.target-encoding == 2; clicked => { root.set-encoding(2); } }
+                Choice { horizontal-stretch: 1; label: "UTF-16 LE"; chosen: root.vm.target-encoding == 3; clicked => { root.set-encoding(3); } }
+                Choice { horizontal-stretch: 1; label: "UTF-16 BE"; chosen: root.vm.target-encoding == 4; clicked => { root.set-encoding(4); } }
+            }
+            Text { text: Tr.text-transform-final; color: Theme.text; font-weight: 700; }
+            HorizontalLayout {
+                spacing: 5px;
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-preserve; chosen: root.vm.final-newline == 0; clicked => { root.set-final(0); } }
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-ensure; chosen: root.vm.final-newline == 1; clicked => { root.set-final(1); } }
+                Choice { horizontal-stretch: 1; label: Tr.text-transform-remove; chosen: root.vm.final-newline == 2; clicked => { root.set-final(2); } }
+            }
+            CheckBox { text: Tr.text-transform-trim; checked: root.vm.trim; toggled => { root.set-trim(self.checked); } }
+            Rectangle { vertical-stretch: 1; }
+            if root.vm.status != "": Text { text: root.vm.status; color: root.vm.finished ? Theme.accent : Theme.text-dim; }
+            HorizontalLayout {
+                spacing: 7px; Rectangle { horizontal-stretch: 1; }
+                Button { text: root.vm.finished ? Tr.ops-close : Tr.dlg-cancel; clicked => { root.close(); } }
+                Button { text: Tr.text-transform-apply; enabled: root.vm.can-apply; clicked => { root.apply(); } }
+            }
+        }
+    }
+}

@@ -34,10 +34,10 @@ impl WorkspaceCtrl {
         if is_double {
             self.last_click = None; // un triple clic no encadena dos navegaciones
             self.last_open = Some(now);
-            return self.on_row_double_clicked(id, pos);
+            return self.on_row_double_clicked_with_shift(id, pos, shift);
         }
         self.last_click = Some((id, pos, now));
-        self.ws.set_active(id);
+        self.set_active(id);
         if let Some(f) = self.ws.active_files_mut() {
             if shift {
                 f.select_range_to(pos);
@@ -55,7 +55,7 @@ impl WorkspaceCtrl {
     /// si no, la reemplaza. Reusa `FilePaneState::select_rect`. La UI calcula from/to por la `y`
     /// del arrastre (filas de alto fijo).
     pub fn select_rect_range(&mut self, id: PaneId, from_pos: i32, to_pos: i32, additive: bool) {
-        self.ws.set_active(id);
+        self.set_active(id);
         let Some(f) = self.ws.active_files_mut() else {
             return;
         };
@@ -86,7 +86,7 @@ impl WorkspaceCtrl {
         }
         self.last_open = Some(now);
         self.last_click = None;
-        self.on_row_double_clicked(id, pos)
+        self.on_row_double_clicked_with_shift(id, pos, self.shift_down)
     }
 
     /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
@@ -95,7 +95,12 @@ impl WorkspaceCtrl {
     /// En modo deep las filas vienen de `deep_items` (mismo orden que `rows_of` devuelve),
     /// así que `pos` mapea directamente contra ese slice.
     pub fn on_row_double_clicked(&mut self, id: PaneId, pos: usize) -> bool {
-        self.ws.set_active(id);
+        self.on_row_double_clicked_with_shift(id, pos, false)
+    }
+
+    /// Variante que conserva el modificador del gesto: Shift+doble-clic eleva un `.exe`/`.com`.
+    fn on_row_double_clicked_with_shift(&mut self, id: PaneId, pos: usize, shift: bool) -> bool {
+        self.set_active(id);
 
         // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
         if self.is_deep_active(id) {
@@ -116,10 +121,15 @@ impl WorkspaceCtrl {
                 }
                 self.push_recent(e.path.clone());
                 self.start_listing(id, e.path.clone());
-                self.sync_trees_active(e.path);
+                self.sync_trees_for_files(id, e.path);
                 return true;
             } else {
-                let _ = naygo_platform::open::open_default(&e.path);
+                let result = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
+                    naygo_platform::open::run_as_administrator(&e.path)
+                } else {
+                    naygo_platform::open::open_default(&e.path)
+                };
+                self.report_shell_result(result);
                 return false;
             }
         }
@@ -147,10 +157,15 @@ impl WorkspaceCtrl {
             }
             self.push_recent(e.path.clone());
             self.start_listing(id, e.path.clone());
-            self.sync_trees_active(e.path);
+            self.sync_trees_for_files(id, e.path);
             true
         } else {
-            let _ = naygo_platform::open::open_default(&e.path);
+            let result = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
+                naygo_platform::open::run_as_administrator(&e.path)
+            } else {
+                naygo_platform::open::open_default(&e.path)
+            };
+            self.report_shell_result(result);
             false
         }
     }
@@ -160,7 +175,7 @@ impl WorkspaceCtrl {
     /// `open_dir_in_new_pane`); si es un archivo, no hace nada (el clic-medio no abre archivos).
     /// Mismo patrón deep/no-deep que `on_row_double_clicked` para resolver la entrada en `pos`.
     pub fn on_row_middle_clicked(&mut self, id: PaneId, pos: usize) -> bool {
-        self.ws.set_active(id);
+        self.set_active(id);
 
         // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
         if self.is_deep_active(id) {
@@ -207,7 +222,7 @@ impl WorkspaceCtrl {
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(active, dir);
                 true
             }
             None => false,
@@ -232,7 +247,7 @@ impl WorkspaceCtrl {
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(active, dir);
                 true
             }
             None => false,
@@ -256,7 +271,7 @@ impl WorkspaceCtrl {
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(active, dir);
                 true
             }
             None => false,
@@ -284,6 +299,26 @@ impl WorkspaceCtrl {
     pub fn can_go_forward(&self) -> bool {
         self.ws
             .active_files()
+            .map(|f| f.can_go_forward())
+            .unwrap_or(false)
+    }
+
+    /// Variante por id para los controles de ruta que viven DENTRO de cada FilePanel. No activa
+    /// ni navega el panel: solo lee su pila local, de modo que varios paneles pueden mostrar
+    /// correctamente sus propios estados Atrás/Adelante al mismo tiempo.
+    pub fn can_go_back_for(&self, id: PaneId) -> bool {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.can_go_back())
+            .unwrap_or(false)
+    }
+
+    /// Ver [`Self::can_go_back_for`].
+    pub fn can_go_forward_for(&self, id: PaneId) -> bool {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
             .map(|f| f.can_go_forward())
             .unwrap_or(false)
     }
@@ -389,31 +424,48 @@ impl WorkspaceCtrl {
         self.size_status()
     }
 
-    // ----- Búsqueda recursiva (Ctrl+F / lupa) ----------------------------------------------
+    // ----- Búsqueda recursiva (F3 / lupa) ---------------------------------------------------
 
-    /// Lanza una búsqueda recursiva de `query` bajo la carpeta del panel Files activo. Cancela y
-    /// reemplaza cualquier búsqueda anterior. Una `query` vacía no hace nada (no abre el panel).
+    /// Lanza una búsqueda recursiva bajo `root_text`. Cancela y reemplaza cualquier búsqueda
+    /// anterior. La raíz llega de la UI pero el acceso real al disco ocurre únicamente dentro del
+    /// worker de `spawn_search`; esta función no bloquea el hilo UI.
     /// El panel de resultados queda abierto (`search_job` presente) y se llena en vivo vía
     /// `pump_search`.
-    pub fn start_search(&mut self, query: String) {
-        let q = query.trim().to_string();
-        if q.is_empty() {
+    pub fn start_search(
+        &mut self,
+        query: String,
+        root_text: String,
+        content_query: String,
+        ignore_case: bool,
+        use_wildcards: bool,
+        recursive: bool,
+    ) {
+        let options = naygo_core::search::SearchOptions {
+            name_query: query.trim().to_string(),
+            content_query: content_query.trim().to_string(),
+            ignore_case,
+            use_wildcards,
+            recursive,
+        };
+        if options.is_empty() {
             return;
         }
-        crate::logging::breadcrumb(&format!("buscar '{}'", q));
-        let Some(root) = self.ws.active_files().map(|f| f.current_dir.clone()) else {
+        let root = std::path::PathBuf::from(root_text.trim());
+        if root.as_os_str().is_empty() {
             return;
-        };
+        }
+        crate::logging::breadcrumb(&format!("buscar '{}'", options.name_query));
         // Cancelar el job anterior.
         if let Some(job) = self.search_job.take() {
             job.token.cancel();
         }
         let token = naygo_core::CancellationToken::new();
         let (rx, _handle) =
-            naygo_core::search::spawn_search(root.clone(), q.clone(), token.clone());
+            naygo_core::search::spawn_search(root.clone(), options.clone(), token.clone());
         self.search_job = Some(SearchJob {
             root,
-            query: q,
+            query: options.name_query.clone(),
+            options,
             rx,
             token,
             hits: Vec::new(),
@@ -432,7 +484,13 @@ impl WorkspaceCtrl {
         if self.search_job.is_some() {
             return;
         }
-        let Some(root) = self.ws.active_files().map(|f| f.current_dir.clone()) else {
+        let root = self
+            .last_active_files
+            .and_then(|id| self.ws.pane(id))
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone())
+            .or_else(|| self.ws.active_files().map(|f| f.current_dir.clone()));
+        let Some(root) = root else {
             return;
         };
         // Canal/token muertos (nunca se usan: el job nace `done`). Se descartan al primer Buscar.
@@ -441,6 +499,7 @@ impl WorkspaceCtrl {
         self.search_job = Some(SearchJob {
             root,
             query: String::new(),
+            options: naygo_core::search::SearchOptions::default(),
             rx,
             token,
             hits: Vec::new(),
@@ -452,7 +511,7 @@ impl WorkspaceCtrl {
         });
     }
 
-    /// ¿Hay un panel de resultados de búsqueda abierto? (la UI muestra/oculta el overlay).
+    /// ¿Hay un estado de búsqueda (vacío, en curso o terminado) asociado al panel Search?
     pub fn search_open(&self) -> bool {
         self.search_job.is_some()
     }
@@ -465,8 +524,18 @@ impl WorkspaceCtrl {
             .unwrap_or_default()
     }
 
+    /// Opciones de la búsqueda actual. El panel usa esto para preservar los controles tras cada
+    /// actualización incremental de resultados.
+    pub fn search_options(&self) -> naygo_core::search::SearchOptions {
+        self.search_job
+            .as_ref()
+            .map(|j| j.options.clone())
+            .unwrap_or_default()
+    }
+
     /// Cierra el panel de resultados y cancela el worker en vuelo (si lo hay).
     pub fn close_search(&mut self) {
+        self.cancel_search_autocomplete();
         if let Some(job) = self.search_job.take() {
             job.token.cancel();
         }
@@ -520,9 +589,9 @@ impl WorkspaceCtrl {
         job.done
     }
 
-    /// Abre la coincidencia `idx` del panel de resultados: si es carpeta, navega el panel activo a
-    /// ella (y cierra el panel de búsqueda, porque el contexto cambió); si es archivo, lo abre con
-    /// su programa por defecto (el panel sigue abierto para abrir más). No falla si `idx` es inválido.
+    /// Abre la coincidencia `idx` del panel de resultados: si es carpeta, ofrece el mismo destino
+    /// que «Abrir carpeta contenedora»; si es archivo, lo abre con su programa por defecto. No
+    /// falla si `idx` es inválido.
     pub fn open_search_hit(&mut self, idx: usize) {
         let Some(hit) = self
             .search_job
@@ -533,11 +602,33 @@ impl WorkspaceCtrl {
             return;
         };
         if hit.entry.kind == EntryKind::Directory {
-            self.navigate_active_to(hit.entry.path);
-            self.close_search();
+            let Some(origin) = self.last_active_files.or_else(|| self.active_files_id()) else {
+                return;
+            };
+            self.request_action(PaneAction::OpenDir(hit.entry.path), origin, self.last_area);
         } else {
-            let _ = naygo_platform::open::open_default(&hit.entry.path);
+            let result = naygo_platform::open::open_default(&hit.entry.path);
+            self.report_shell_result(result);
         }
+    }
+
+    /// Lleva el panel Files activo a la carpeta que contiene una coincidencia sin abrir el
+    /// archivo. El buscador queda abierto, por lo que se pueden inspeccionar varios resultados.
+    pub fn reveal_search_hit(&mut self, idx: usize) {
+        let Some(parent) = self
+            .search_job
+            .as_ref()
+            .and_then(|j| j.hits.get(idx))
+            .and_then(|hit| hit.entry.path.parent().map(std::path::Path::to_path_buf))
+        else {
+            return;
+        };
+        let Some(origin) = self.last_active_files.or_else(|| self.active_files_id()) else {
+            return;
+        };
+        // Misma resolución que Shift+Enter/Ctrl+doble-clic: si hay varios paneles Files el
+        // selector pregunta el destino; con uno solo, crea otro panel para preservar el origen.
+        self.request_action(PaneAction::OpenDir(parent), origin, self.last_area);
     }
 
     /// Filas del panel de resultados, ya formateadas y con el ícono resuelto. Vacío si no hay
@@ -710,7 +801,7 @@ impl WorkspaceCtrl {
                 self.cancel_deep_if_navigating(active);
                 self.push_recent(dir.clone());
                 self.start_listing(active, dir.clone());
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(active, dir);
                 true
             }
             None => false,

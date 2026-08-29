@@ -18,6 +18,15 @@ export component NewFolder inherits Rectangle {
     callback close();
 
     visible: root.vm.active;
+    // El primer Enter conserva el salto de línea del editor. Durante una ventana breve, un
+    // segundo Enter confirma la creación; el temporizador desarma la espera sin I/O ni timers
+    // del backend.
+    private property <bool> enter-armed: false;
+    enter-reset := Timer {
+        interval: 500ms;
+        running: root.enter-armed;
+        triggered => { root.enter-armed = false; }
+    }
     // Velo modal: clic fuera cierra.
     background: #000000aa;
     veil := TouchArea { clicked => { root.close(); } }
@@ -66,16 +75,29 @@ export component NewFolder inherits Rectangle {
                     text: root.vm.text;
                     wrap: no-wrap;
                     edited(t) => { root.set-text(t); }
-                    // Ctrl+Enter = Crear (si hay líneas válidas). El TextEdit expone su propio
-                    // `key-pressed` (alias del TextInput interno), que Slint invoca ANTES de
-                    // que la tecla se procese como inserción de texto: si devolvemos `accept`,
-                    // el salto de línea NUNCA se inserta. Enter solo (sin Ctrl) se deja pasar
-                    // (`reject`) para que el editor lo trate como salto de línea normal.
+                    // Ctrl+Enter crea de inmediato. Dos Enter dentro de 500 ms también crean;
+                    // el primero siempre se rechaza para que el TextEdit inserte su salto de
+                    // línea. `key-pressed` ocurre antes de editar el texto: aceptar el primer
+                    // Enter impediría el flujo multilínea que permite crear varias carpetas.
                     key-pressed(event) => {
                         if (event.text == Key.Return && event.modifiers.control) {
+                            root.enter-armed = false;
                             if (root.vm.can-create) { root.create(); }
                             return accept;
                         }
+                        if (event.text == Key.Return) {
+                            if (root.enter-armed) {
+                                root.enter-armed = false;
+                                if (root.vm.can-create) {
+                                    root.create();
+                                    return accept;
+                                }
+                            } else {
+                                root.enter-armed = true;
+                            }
+                            return reject;
+                        }
+                        root.enter-armed = false;
                         return reject;
                     }
                 }

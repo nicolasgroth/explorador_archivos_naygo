@@ -27,7 +27,11 @@ pub enum PlanError {
 pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
     match &req.kind {
         OpKind::Copy | OpKind::Move => plan_transfer(req),
-        OpKind::Delete { .. } => plan_delete(req),
+        OpKind::Duplicate => plan_duplicate(req),
+        OpKind::Delete { .. } => {
+            let mut sink = |_files: usize, _bytes: u64| {};
+            plan_delete_with(req, &mut sink, &|| false)
+        }
         OpKind::Rename { new_name } => {
             if !is_valid_name(new_name) {
                 return Err(PlanError::InvalidName(new_name.clone()));
@@ -169,6 +173,78 @@ fn plan_transfer(req: &OpRequest) -> Result<OpPlan, PlanError> {
     plan_transfer_with(req, &mut |_, _| {}, &|| false)
 }
 
+/// Planifica duplicados en la carpeta de cada origen. La resolución de nombres ocurre en el
+/// worker de planificación (nunca en UI): `foto.png` → `foto - copia.png` →
+/// `foto - copia (2).png`. El set reservado evita colisiones entre varios ítems del mismo lote.
+fn plan_duplicate(req: &OpRequest) -> Result<OpPlan, PlanError> {
+    plan_duplicate_with(req, &mut |_, _| {}, &|| false)
+}
+
+pub(super) fn plan_duplicate_with(
+    req: &OpRequest,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<OpPlan, PlanError> {
+    let mut steps = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut total_files = 0usize;
+    let mut reserved = std::collections::HashSet::<String>::new();
+    for src in &req.sources {
+        if cancelled() {
+            break;
+        }
+        let parent = src.parent().ok_or(PlanError::MissingDest)?;
+        let name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| PlanError::InvalidName(src.display().to_string()))?;
+        let dest = unique_duplicate_path(parent, name, &reserved);
+        reserved.insert(dest.to_string_lossy().to_lowercase());
+        expand(
+            src,
+            &dest,
+            &mut steps,
+            &mut total_bytes,
+            &mut total_files,
+            sink,
+            cancelled,
+        )?;
+    }
+    Ok(OpPlan {
+        steps,
+        total_bytes,
+        total_files,
+        pre_delete: Vec::new(),
+    })
+}
+
+fn unique_duplicate_path(
+    parent: &Path,
+    name: &str,
+    reserved: &std::collections::HashSet<String>,
+) -> PathBuf {
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let mut n = 1usize;
+    loop {
+        let suffix = if n == 1 {
+            " - copia".to_string()
+        } else {
+            format!(" - copia ({n})")
+        };
+        let candidate = parent.join(format!("{stem}{suffix}{ext}"));
+        if !candidate.exists() && !reserved.contains(&candidate.to_string_lossy().to_lowercase()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// Núcleo de `plan_transfer` parametrizado por un `sink` de progreso y un predicado de
 /// cancelación, para que el worker asíncrono (`plan_async::spawn_plan`) REUSE exactamente
 /// este recorrido en vez de duplicarlo. El camino síncrono pasa un sink vacío y un
@@ -222,27 +298,79 @@ pub(super) fn plan_transfer_with(
     })
 }
 
-fn plan_delete(req: &OpRequest) -> Result<OpPlan, PlanError> {
+/// Planifica un borrado recorriendo el árbol en postorden. Además de permitir progreso real,
+/// evita que una carpeta grande sea un único paso opaco e incancelable. Los directorios se
+/// agregan después de su contenido para que el motor solo tenga que quitar directorios vacíos.
+pub fn plan_delete_with(
+    req: &OpRequest,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<OpPlan, PlanError> {
     let mut steps = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut total_items = 0usize;
     for src in &req.sources {
-        if !src.exists() {
-            return Err(PlanError::SourceUnreadable(src.clone()));
-        }
-        let is_dir = src.is_dir();
-        steps.push(OpStep {
-            from: Some(src.clone()),
-            to: src.clone(),
-            bytes: 0,
-            is_dir,
-        });
+        expand_delete(
+            src,
+            &mut steps,
+            &mut total_bytes,
+            &mut total_items,
+            sink,
+            cancelled,
+        )?;
     }
-    let n = steps.iter().filter(|s| !s.is_dir).count();
     Ok(OpPlan {
         steps,
-        total_bytes: 0,
-        total_files: n,
+        total_bytes,
+        // Para borrado la unidad útil es "elementos": archivos + carpetas.
+        total_files: total_items,
         pre_delete: Vec::new(),
     })
+}
+
+fn expand_delete(
+    path: &Path,
+    steps: &mut Vec<OpStep>,
+    total_bytes: &mut u64,
+    total_items: &mut usize,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), PlanError> {
+    if cancelled() {
+        return Ok(());
+    }
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|_| PlanError::SourceUnreadable(path.to_path_buf()))?;
+    let is_real_dir = meta.is_dir() && !meta.file_type().is_symlink();
+    if is_real_dir {
+        let entries =
+            std::fs::read_dir(path).map_err(|_| PlanError::SourceUnreadable(path.to_path_buf()))?;
+        for entry in entries {
+            let entry = entry.map_err(|_| PlanError::SourceUnreadable(path.to_path_buf()))?;
+            expand_delete(
+                &entry.path(),
+                steps,
+                total_bytes,
+                total_items,
+                sink,
+                cancelled,
+            )?;
+            if cancelled() {
+                return Ok(());
+            }
+        }
+    }
+    let bytes = if is_real_dir { 0 } else { meta.len() };
+    *total_bytes = total_bytes.saturating_add(bytes);
+    *total_items += 1;
+    steps.push(OpStep {
+        from: Some(path.to_path_buf()),
+        to: path.to_path_buf(),
+        bytes,
+        is_dir: is_real_dir,
+    });
+    sink(*total_items, *total_bytes);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -366,6 +494,108 @@ mod tests {
         assert_eq!(plan.total_bytes, 4);
         assert_eq!(plan.steps[0].to, dest.join("a.txt"));
         assert_eq!(plan.steps[0].bytes, 4);
+        assert!(!plan.steps[0].is_dir);
+    }
+
+    #[test]
+    fn duplicate_crea_nombre_unico_y_reserva_colisiones_del_lote() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("informe.txt");
+        let second = dir.path().join("resumen.txt");
+        fs::write(&first, b"uno").unwrap();
+        fs::write(&second, b"dos").unwrap();
+        fs::write(dir.path().join("informe - copia.txt"), b"previo").unwrap();
+
+        let plan = plan(&req(
+            OpKind::Duplicate,
+            vec![first.clone(), first, second],
+            None,
+        ))
+        .unwrap();
+
+        assert_eq!(plan.total_files, 3);
+        assert_eq!(plan.total_bytes, 9);
+        assert_eq!(plan.steps[0].to, dir.path().join("informe - copia (2).txt"));
+        assert_eq!(plan.steps[1].to, dir.path().join("informe - copia (3).txt"));
+        assert_eq!(plan.steps[2].to, dir.path().join("resumen - copia.txt"));
+        assert!(plan
+            .steps
+            .iter()
+            .all(|step| step.from.as_ref() != Some(&step.to)));
+    }
+
+    #[test]
+    fn duplicate_carpeta_expande_el_arbol_en_la_misma_carpeta() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("proyecto");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("nota.txt"), b"hola").unwrap();
+
+        let plan = plan(&req(OpKind::Duplicate, vec![source], None)).unwrap();
+
+        assert_eq!(plan.total_files, 1);
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step.is_dir && step.to == dir.path().join("proyecto - copia")));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step.to == dir.path().join("proyecto - copia").join("nota.txt")));
+    }
+
+    #[test]
+    fn delete_expande_en_postorden_y_cuenta_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("arbol");
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let a = root.join("a.txt");
+        let b = sub.join("b.txt");
+        fs::write(&a, b"12").unwrap();
+        fs::write(&b, b"345").unwrap();
+
+        let plan = plan(&req(
+            OpKind::Delete { to_trash: false },
+            vec![root.clone()],
+            None,
+        ))
+        .unwrap();
+        assert_eq!(plan.total_files, 4);
+        assert_eq!(plan.total_bytes, 5);
+        assert_eq!(plan.steps.len(), 4);
+        assert_eq!(plan.steps.last().map(|s| &s.to), Some(&root));
+        let sub_pos = plan.steps.iter().position(|s| s.to == sub).unwrap();
+        let b_pos = plan.steps.iter().position(|s| s.to == b).unwrap();
+        assert!(
+            b_pos < sub_pos,
+            "el contenido debe borrarse antes que su carpeta"
+        );
+    }
+
+    #[test]
+    fn delete_no_sigue_symlink_de_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("conservar.txt"), b"x").unwrap();
+        let link = dir.path().join("link");
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&target, &link).is_err() {
+            // Windows puede exigir Developer Mode o privilegio de creación de symlinks.
+            return;
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let plan = plan(&req(
+            OpKind::Delete { to_trash: false },
+            vec![link.clone()],
+            None,
+        ))
+        .unwrap();
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].to, link);
         assert!(!plan.steps[0].is_dir);
     }
 

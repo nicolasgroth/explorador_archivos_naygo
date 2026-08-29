@@ -24,6 +24,19 @@ impl WorkspaceCtrl {
         let Some(active_files_id) = self.active_files_id() else {
             return false;
         };
+        self.navigate_files_to(active_files_id, dir)
+    }
+
+    /// Navega desde un árbol. Los árboles dedicados operan exclusivamente sobre su Files;
+    /// los comunes conservan el comportamiento clásico sobre el último Files activo.
+    pub fn navigate_tree_to(&mut self, tree: PaneId, dir: PathBuf) -> bool {
+        let Some(files) = self.ws.linked_files(tree).or(self.last_active_files) else {
+            return false;
+        };
+        self.navigate_files_to(files, dir)
+    }
+
+    fn navigate_files_to(&mut self, active_files_id: PaneId, dir: PathBuf) -> bool {
         crate::logging::breadcrumb(&format!(
             "navegar panel {} → {}",
             active_files_id.0,
@@ -47,21 +60,80 @@ impl WorkspaceCtrl {
         }
         self.start_listing(active_files_id, dir.clone());
         self.pending_recents.insert(active_files_id, dir.clone());
-        self.sync_trees_active(dir);
+        self.sync_trees_for_files(active_files_id, dir);
         true
     }
 
-    /// Resalta `dir` en todos los árboles (cuando cambia la carpeta del Files activo) y arranca
-    /// el REVEAL: cada árbol expandirá progresivamente los ancestros hasta `dir`.
-    pub(super) fn sync_trees_active(&mut self, dir: PathBuf) {
-        let ids: Vec<PaneId> = self.trees.keys().copied().collect();
+    /// Resalta `dir` solo en los árboles que corresponden al Files: todos los dedicados
+    /// explícitamente a él y los comunes cuando él es el último Files activo.
+    pub(super) fn sync_trees_for_files(&mut self, files: PaneId, dir: PathBuf) {
+        let ids: Vec<PaneId> = self
+            .trees
+            .keys()
+            .copied()
+            .filter(|tree| match self.ws.linked_files(*tree) {
+                Some(target) => target == files,
+                None => self.last_active_files == Some(files),
+            })
+            .collect();
         for id in &ids {
             if let Some(t) = self.trees.get_mut(id) {
                 t.set_active(dir.clone());
             }
+            // El cursor de teclado y la selección visual deben describir la MISMA carpeta.
+            // Sin esto el árbol podía conservar el cursor de una navegación anterior: al volver
+            // con flechas/Enter desde un panel Files, el árbol se veía desfasado respecto de la
+            // carpeta realmente abierta.
+            self.tree_cursor.insert(*id, dir.clone());
             self.reveal_targets.insert(*id, dir.clone());
         }
         self.pump_reveal();
+    }
+
+    /// Alterna entre árbol común y dedicado. Al enlazar usa el último Files activo, que es
+    /// exactamente el panel con el que el usuario venía trabajando antes de tocar el árbol.
+    pub fn toggle_tree_link(&mut self, tree: PaneId) -> bool {
+        if self.ws.pane(tree).map(|p| p.purpose) != Some(PanePurpose::Tree) {
+            return false;
+        }
+        let target = if self.ws.linked_files(tree).is_some() {
+            let _ = self.ws.unlink_tree(tree);
+            self.last_active_files
+        } else {
+            let Some(files) = self
+                .last_active_files
+                .or_else(|| self.ws.files_panes().first().copied())
+            else {
+                return false;
+            };
+            if !self.ws.link_tree(tree, files) {
+                return false;
+            }
+            Some(files)
+        };
+        if let Some(files) = target {
+            if let Some(dir) = self
+                .ws
+                .pane(files)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone())
+            {
+                if let Some(t) = self.trees.get_mut(&tree) {
+                    t.set_active(dir.clone());
+                }
+                self.tree_cursor.insert(tree, dir.clone());
+                self.reveal_targets.insert(tree, dir);
+                self.pump_reveal();
+            }
+        }
+        true
+    }
+
+    pub fn tree_link_label(&self, tree: PaneId) -> String {
+        match self.ws.linked_files(tree) {
+            Some(files) => format!("↔ {}", self.pane_label(files)),
+            None => self.config.t("tree.link.common"),
+        }
     }
 
     /// Avanza el "reveal" de cada árbol: expande el ancestro más profundo del destino que ya
@@ -283,7 +355,7 @@ impl WorkspaceCtrl {
                 }
                 false
             }
-            "enter" => self.navigate_active_to(cursor),
+            "enter" => self.navigate_tree_to(id, cursor),
             _ => false,
         }
     }

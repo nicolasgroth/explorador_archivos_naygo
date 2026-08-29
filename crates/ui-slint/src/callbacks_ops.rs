@@ -35,6 +35,54 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         });
     }
     {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_orbit(move |dx, dy| {
+            if ctrl.borrow_mut().preview_orbit(dx, dy) {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_reset_camera(move || {
+            if ctrl.borrow_mut().preview_reset_camera() {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_preview_cancel(move || {
+            if ctrl.borrow_mut().cancel_preview() {
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        ui.on_preview_copy_text(move |text| {
+            ctrl.borrow().copy_preview_text(text.as_str());
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_zoom(move |delta| {
+            if ctrl.borrow_mut().preview_zoom(delta) {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
         // Botón "Deshacer" del panel Historial: en vez de deshacer directo, abre un popup de
         // CONFIRMACIÓN (MessageVm kind 5) que explica QUÉ se hará (borrar N / devolver N + lista de
         // archivos). El deshacer real ocurre al confirmar (ver `on_message_confirm`, kind 5). El id

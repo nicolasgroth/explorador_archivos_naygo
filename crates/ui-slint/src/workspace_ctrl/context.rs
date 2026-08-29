@@ -14,7 +14,7 @@ impl WorkspaceCtrl {
         // Activar el panel del clic derecho: el menú (Copiar/Cortar/…) opera sobre ese panel, no
         // sobre el que estaba activo. Sin esto, clic derecho en un panel inactivo copiaba/cortaba
         // la selección de OTRO panel.
-        self.ws.set_active(pane);
+        self.set_active(pane);
         let targets = self.selected_paths();
         if targets.is_empty() {
             return;
@@ -35,6 +35,7 @@ impl WorkspaceCtrl {
             targets,
             folder_mode: false,
             target_is_folder,
+            show_open_here: false,
         });
     }
 
@@ -56,14 +57,30 @@ impl WorkspaceCtrl {
                 targets: vec![dir],
                 folder_mode: true,
                 target_is_folder: true,
+                show_open_here: false,
             });
         }
+    }
+
+    /// Abre el menú de carpeta para un destino explícito de breadcrumb o árbol. Esos modelos ya
+    /// entregan directorios reales, por lo que no se hace I/O adicional para validar la ruta.
+    pub fn open_path_folder_context_menu(&mut self, id: PaneId, dir: PathBuf, x: f32, y: f32) {
+        self.set_active(id);
+        self.context_menu = Some(ContextMenuState {
+            x,
+            y,
+            targets: vec![dir],
+            folder_mode: true,
+            target_is_folder: true,
+            show_open_here: true,
+        });
     }
 
     /// Abrir el Explorador de Windows en la carpeta objetivo del menú (modo carpeta).
     pub fn ctx_open_explorer(&mut self) {
         if let Some(dir) = self.terminal_dir() {
-            let _ = naygo_platform::open::open_default(&dir);
+            let result = naygo_platform::open::open_default(&dir);
+            self.report_shell_result(result);
         }
         self.close_context_menu();
     }
@@ -212,16 +229,29 @@ impl WorkspaceCtrl {
 
     /// Abrir el primer objetivo con su programa por defecto.
     pub fn ctx_open(&mut self) {
-        if let Some(p) = self.context_targets().first() {
-            let _ = naygo_platform::open::open_default(p);
+        if let Some(p) = self.context_targets().first().cloned() {
+            let result = naygo_platform::open::open_default(&p);
+            self.report_shell_result(result);
         }
         self.close_context_menu();
     }
 
     /// Abrir-con… (diálogo del Shell) sobre el primer objetivo.
     pub fn ctx_open_with(&mut self) {
-        if let Some(p) = self.context_targets().first() {
-            let _ = naygo_platform::open::open_with_dialog(p);
+        if let Some(p) = self.context_targets().first().cloned() {
+            let result = naygo_platform::open::open_with_dialog(&p);
+            self.report_shell_result(result);
+        }
+        self.close_context_menu();
+    }
+
+    /// Ejecuta el primer objetivo como administrador mediante el verbo Shell `runas`.
+    pub fn ctx_run_as_administrator(&mut self) {
+        if let Some(p) = self.context_targets().first().cloned() {
+            if naygo_platform::open::can_run_as_administrator(&p) {
+                let result = naygo_platform::open::run_as_administrator(&p);
+                self.report_shell_result(result);
+            }
         }
         self.close_context_menu();
     }
@@ -244,7 +274,8 @@ impl WorkspaceCtrl {
     /// seleccionada o, si no hay, en la del panel activo. Cierra el menú contextual.
     pub fn ctx_open_terminal(&mut self, term_int: i32) {
         if let Some(dir) = self.terminal_dir() {
-            let _ = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
+            let result = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
+            self.report_shell_result(result);
         }
         self.close_context_menu();
     }
@@ -258,7 +289,8 @@ impl WorkspaceCtrl {
             .map(|f| f.current_dir.clone())
             .filter(|d| d.is_dir())
         {
-            let _ = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
+            let result = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
+            self.report_shell_result(result);
         }
     }
 

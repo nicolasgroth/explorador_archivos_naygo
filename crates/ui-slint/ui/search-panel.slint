@@ -1,13 +1,12 @@
-// Naygo — panel de búsqueda recursiva (Ctrl+F / lupa): busca por nombre en la carpeta del panel
-// activo y TODAS sus subcarpetas, mostrando los resultados en vivo. Es un overlay dentro de la
-// ventana principal (no una Window aparte), con la carpeta visible detrás (velo translúcido).
+// Naygo — panel de búsqueda recursiva (F3 / lupa): busca por nombre desde la carpeta del último
+// panel Files activo y sus subcarpetas, mostrando los resultados en vivo como un panel acoplable.
 // Hacer clic en un resultado lo abre con su programa por defecto (o entra si es carpeta).
 //
 // Regla de render por software: los íconos (lupa, ✕) se dibujan con `Path`, NUNCA con glifos de
 // fuente (los emojis salen invisibles/monocromos con el renderizador por software de Slint).
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
-import { LineEdit, ListView } from "std-widgets.slint";
+import { LineEdit, ListView, CheckBox } from "std-widgets.slint";
 import { SearchVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -15,40 +14,77 @@ import { Theme } from "theme.slint";
 export component SearchPanel inherits Rectangle {
     in property <SearchVm> vm;
     // Lanza la búsqueda con el texto actual del campo.
-    callback run(string);
-    // Cierra el panel (✕ / Esc / clic en el velo).
-    callback close();
+    callback run(string, string, string, bool, bool, bool);
+    // Autocompletado async de «Buscar desde», reutilizando la misma lógica segura de path-bar.
+    in property <[string]> root-suggestions;
+    callback root-changed(string);
+    callback root-complete(string, string) -> string;
+    // Reenvía los atajos globales que un LineEdit capturaría antes que el panel. En particular,
+    // Ctrl+Tab debe poder continuar el recorrido por TODOS los paneles desde una búsqueda.
+    callback key(string, bool, bool, bool);
     // Cancela el worker en vuelo sin cerrar (botón Detener).
     callback cancel();
     // Abre la coincidencia de índice `i` (archivo → programa por defecto; carpeta → navegar).
     callback open(int);
+    // Navega el panel de archivos activo a la carpeta contenedora del resultado.
+    callback reveal(int);
 
     // Texto en edición del campo (espejo local; al lanzar se manda por `run`).
     property <string> draft: root.vm.query;
+    property <string> draft-root: root.vm.root-label;
+    property <string> draft-content: root.vm.content-query;
+    property <bool> draft-ignore-case: root.vm.ignore-case;
+    property <bool> draft-wildcards: root.vm.use-wildcards;
+    property <bool> draft-recursive: root.vm.recursive;
+    property <int> pulse: 0;
+    // Selección del desplegable de rutas. El foco queda en el editor para que el usuario
+    // no tenga que alternar entre campo/lista: ↑/↓ elige y Enter completa.
+    property <int> root-suggestion-index: -1;
 
-    visible: root.vm.active;
-    background: #00000088;
-    // Clic en el velo cierra.
-    TouchArea {
-        clicked => { root.close(); }
+    function move-root-suggestion(delta: int) {
+        if (root.root-suggestions.length == 0) { return; }
+        if (root.root-suggestion-index < 0) {
+            root.root-suggestion-index = delta > 0 ? 0 : root.root-suggestions.length - 1;
+        } else {
+            root.root-suggestion-index = Math.mod(
+                root.root-suggestion-index + delta + root.root-suggestions.length,
+                root.root-suggestions.length);
+        }
     }
 
-    // Tarjeta central.
+    function accept-root-suggestion() {
+        if (root.root-suggestion-index >= 0 && root.root-suggestion-index < root.root-suggestions.length) {
+            root.draft-root = root.root-complete(
+                root.draft-root, root.root-suggestions[root.root-suggestion-index]);
+            root.root-suggestion-index = -1;
+        }
+    }
+
+    changed root-suggestions => { root.root-suggestion-index = -1; }
+
+    // Animación mínima, barata y visible en renderer por software: tres puntos que avanzan
+    // mientras el worker recorre el árbol. El timer se detiene por completo al terminar.
+    Timer {
+        interval: 180ms;
+        running: root.vm.running;
+        triggered => { root.pulse = Math.mod(root.pulse + 1, 3); }
+    }
+
+    background: Theme.panel-bg;
+
+    // Contenido del panel acoplable.
     Rectangle {
-        width: min(720px, parent.width - 80px);
-        height: min(560px, parent.height - 80px);
+        width: 100%;
+        height: 100%;
         background: Theme.panel-bg;
-        border-radius: 8px;
         border-width: 1px;
         border-color: Theme.border;
-        // Tragar clics dentro (no cerrar al interactuar con la tarjeta).
-        TouchArea {}
 
         VerticalLayout {
             padding: 16px;
             spacing: 10px;
 
-            // --- Encabezado: título + carpeta raíz + cerrar ✕ ---
+            // --- Encabezado ---
             HorizontalLayout {
                 spacing: 8px;
                 VerticalLayout {
@@ -59,39 +95,87 @@ export component SearchPanel inherits Rectangle {
                         font-size: 16px;
                         font-weight: 700;
                     }
-                    Text {
-                        text: root.vm.root-label;
-                        color: Theme.text-dim;
-                        font-size: 11px;
-                        overflow: elide;
-                    }
                 }
-                // Botón cerrar ✕ (dibujado con Path).
-                Rectangle {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 5px;
-                    background: close-touch.has-hover ? Theme.selection-bg : transparent;
-                    Path {
-                        width: 14px;
-                        height: 14px;
-                        stroke: Theme.text;
-                        stroke-width: 1.6px;
-                        viewbox-width: 14;
-                        viewbox-height: 14;
-                        MoveTo { x: 3; y: 3; }
-                        LineTo { x: 11; y: 11; }
-                        MoveTo { x: 11; y: 3; }
-                        LineTo { x: 3; y: 11; }
+            }
+
+            // --- Raíz editable. Se inicializa desde el último panel Files activo. ---
+            HorizontalLayout {
+                spacing: 8px;
+                height: 32px;
+                Text {
+                    text: Tr.search-root;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                    font-size: 11px;
+                }
+                LineEdit {
+                    horizontal-stretch: 1;
+                    text <=> root.draft-root;
+                    edited(t) => {
+                        root.root-suggestion-index = -1;
+                        root.root-changed(t);
                     }
-                    close-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.close(); }
+                    key-pressed(ev) => {
+                        if (ev.text == Key.Tab && ev.modifiers.control) {
+                            root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                            return accept;
+                        }
+                        if (ev.text == Key.DownArrow) {
+                            root.move-root-suggestion(1);
+                            return accept;
+                        }
+                        if (ev.text == Key.UpArrow) {
+                            root.move-root-suggestion(-1);
+                            return accept;
+                        }
+                        if (ev.text == Key.Return && root.root-suggestion-index >= 0) {
+                            root.accept-root-suggestion();
+                            return accept;
+                        }
+                        // Igual que en la path-bar: AltGr puede entregar «\\» como Ctrl+Alt,
+                        // combinación que el TextInput base no inserta por sí solo.
+                        if (ev.text == "\\") {
+                            root.root-suggestion-index = -1;
+                            root.draft-root = self.text + "\\";
+                            root.root-changed(root.draft-root);
+                            return accept;
+                        }
+                        return reject;
                     }
                 }
             }
 
-            // --- Fila de búsqueda: campo + botón Buscar/Detener ---
+            // Sugerencias de subcarpetas, como en la path-bar del explorador. Se muestran bajo
+            // el campo y elegir una deja el separador final para seguir profundizando la ruta.
+            if root.root-suggestions.length > 0: Rectangle {
+                height: min(root.root-suggestions.length * 22px + 4px, 110px);
+                background: Theme.surface-floating;
+                border-width: 1px;
+                border-color: Theme.divider;
+                border-radius: Theme.radius-md;
+                ListView {
+                    for s[i] in root.root-suggestions: Rectangle {
+                        height: 22px;
+                        background: i == root.root-suggestion-index ? Theme.selection-bg
+                            : (suggestion-touch.has-hover ? Theme.hover-bg : transparent);
+                        Text {
+                            text: "📁 " + s;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            x: 6px;
+                        }
+                        suggestion-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.draft-root = root.root-complete(root.draft-root, s);
+                                root.root-suggestion-index = -1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Nombre/patrón + botón Buscar/Detener ---
             HorizontalLayout {
                 spacing: 8px;
                 height: 32px;
@@ -100,12 +184,26 @@ export component SearchPanel inherits Rectangle {
                     placeholder-text: Tr.search-placeholder;
                     text <=> root.draft;
                     // Enter lanza la búsqueda.
-                    accepted(t) => { root.run(t); }
+                    accepted(t) => {
+                        root.run(t, root.draft-root, root.draft-content,
+                            root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
+                    }
+                    key-pressed(ev) => {
+                        if (ev.text == Key.Tab && ev.modifiers.control) {
+                            root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                            return accept;
+                        }
+                        return reject;
+                    }
                 }
                 Rectangle {
                     width: 96px;
                     border-radius: 5px;
-                    background: btn-touch.has-hover ? Theme.accent : Theme.selection-bg;
+                    // Detener es una acción de cancelación: rojo sostenido, con mayor contraste
+                    // que Buscar para que se encuentre al primer vistazo.
+                    background: root.vm.running
+                        ? (btn-touch.has-hover ? Theme.error.brighter(12%) : Theme.error)
+                        : (btn-touch.has-hover ? Theme.accent : Theme.selection-bg);
                     Text {
                         text: root.vm.running ? Tr.search-stop : Tr.search-go;
                         color: Theme.text;
@@ -116,17 +214,68 @@ export component SearchPanel inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             if (root.vm.running) { root.cancel(); }
-                            else { root.run(root.draft); }
+                            else {
+                                root.run(root.draft, root.draft-root, root.draft-content,
+                                    root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
+                            }
                         }
                     }
                 }
             }
 
+            // --- Condición opcional de texto dentro de archivos ---
+            HorizontalLayout {
+                spacing: 8px;
+                height: 30px;
+                Text {
+                    text: Tr.search-content;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                    font-size: 11px;
+                }
+                LineEdit {
+                    horizontal-stretch: 1;
+                    placeholder-text: Tr.search-content-placeholder;
+                    text <=> root.draft-content;
+                    accepted(t) => {
+                        root.run(root.draft, root.draft-root, root.draft-content,
+                            root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
+                    }
+                    key-pressed(ev) => {
+                        if (ev.text == Key.Tab && ev.modifiers.control) {
+                            root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 16px;
+                height: 28px;
+                CheckBox { text: Tr.search-ignore-case; checked <=> root.draft-ignore-case; }
+                CheckBox { text: Tr.search-wildcards; checked <=> root.draft-wildcards; }
+                CheckBox { text: Tr.search-recursive; checked <=> root.draft-recursive; }
+            }
+
             // --- Estado: "Buscando…", "N resultados", "parcial / tope" ---
-            Text {
-                text: root.vm.status;
-                color: Theme.text-dim;
-                font-size: 11px;
+            HorizontalLayout {
+                height: 14px;
+                spacing: 5px;
+                if root.vm.running: HorizontalLayout {
+                    width: 26px;
+                    spacing: 3px;
+                    Rectangle { width: 6px; height: 6px; y: 4px; border-radius: 3px; background: Theme.accent; opacity: root.pulse == 0 ? 1 : 0.22; }
+                    Rectangle { width: 6px; height: 6px; y: 4px; border-radius: 3px; background: Theme.accent; opacity: root.pulse == 1 ? 1 : 0.22; }
+                    Rectangle { width: 6px; height: 6px; y: 4px; border-radius: 3px; background: Theme.accent; opacity: root.pulse == 2 ? 1 : 0.22; }
+                }
+                Text {
+                    text: root.vm.status;
+                    color: root.vm.running ? Theme.accent : Theme.text-dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
             }
 
             // --- Resultados (lista scrollable) ---
@@ -183,6 +332,23 @@ export component SearchPanel inherits Rectangle {
                                 font-size: 11px;
                                 vertical-alignment: center;
                                 horizontal-alignment: right;
+                            }
+                            Rectangle {
+                                width: 76px;
+                                height: 22px;
+                                border-radius: 4px;
+                                background: folder-touch.has-hover ? Theme.selection-bg : transparent;
+                                Text {
+                                    text: Tr.search-open-folder;
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                folder-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.reveal(i); }
+                                }
                             }
                         }
                         row-touch := TouchArea {

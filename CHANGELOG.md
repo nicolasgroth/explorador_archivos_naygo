@@ -8,6 +8,53 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [Sin publicar]
 
 ### Añadido
+- **Buscador F3 ampliado**: raíz editable desde el panel activo, coincidencia opcional sensible
+  a mayúsculas, comodines Windows `*`/`?`, recorrido recursivo configurable y texto dentro de
+  archivos de texto. Los resultados llegan en vivo con ruta relativa y acción para abrir su
+  carpeta contenedora.
+- El árbol muestra accesos directos a las carpetas conocidas de Windows (Escritorio,
+  Documentos, Descargas, Imágenes, Música y Videos), además de las ubicaciones físicas de
+  OneDrive y Dropbox, incluso cuando fueron reubicadas a otra unidad.
+
+### Corregido
+- Los archivos arrastrados directamente desde 7-Zip, WinRAR y otras fuentes OLE virtuales
+  ahora se extraen en segundo plano y entran al flujo normal de copia. Naygo valida sus rutas,
+  no bloquea la interfaz y limpia el staging temporal al terminar o cancelar.
+- Marcar un panel de archivos ahora revela y selecciona inmediatamente su carpeta en el árbol
+  común o dedicado correspondiente.
+- Soltar archivos sobre la Bandeja temporal ya no parpadea ni crea movimientos vacíos: agrega
+  las referencias al instante y resalta la Bandeja como destino válido durante el arrastre.
+- Enviar a la papelera con la confirmación desactivada ya no pierde la lista de rutas; el panel
+  informa el número real de elementos y detecta cancelaciones/errores del Shell de Windows.
+- Las instalaciones actualizadas reciben las reglas STL/3MF sin sobrescribir preferencias de
+  preview existentes. Los 3MF de slicers con geometría externa usan su miniatura incrustada,
+  más fiel y liviana que descomprimir cientos de MB para rasterizarlos.
+
+## [0.4.0] - 2026-08-16
+
+### Añadido
+- **Asistente de sincronización entre paneles**: compara dos carpetas en segundo plano,
+  presenta un plan seleccionable y ejecuta izquierda→derecha, derecha→izquierda o
+  bidireccional. El borrado de sobrantes es opcional y parte desactivado.
+- **Bandeja temporal de selección**: reúne rutas de carpetas distintas sin copiar datos y
+  permite copiarlas, moverlas o enviarlas a la papelera como un lote.
+- **Transformación de archivos de texto**: CRLF, LF y CR clásico; UTF-8/UTF-16 con o sin
+  BOM, control del salto final y limpieza de espacio final. Trabaja fuera del hilo de UI,
+  con cancelación y reemplazo transaccional.
+- **Preview 3D STL/3MF por CPU**: vista isométrica estática sin depender de GPU, junto con
+  dimensiones, cantidad de triángulos y unidad declarada en 3MF. Respeta el `build`,
+  componentes anidados y sus matrices de transformación, con protección ante ciclos.
+- **Exploradores enlazados Árbol + Archivos**: desde el menú Panel se crea una pareja
+  visual 28/72 cuyo árbol navega exclusivamente su panel de archivos. Cada árbol puede
+  alternarse en caliente entre modo **común** (sigue al último panel Files activo) y
+  **dedicado**; los enlaces sobreviven al reinicio y al guardar una plantilla.
+- El borrado de lotes grandes muestra planificación, cantidad/tamaño, archivos en curso,
+  velocidad, progreso y cancelación en el panel de Operaciones. La confirmación puede incluir
+  una vista previa paginada y desactivarse desde Configuración.
+- Los ejecutables pueden abrirse **como administrador** manteniendo Shift o desde el menú
+  contextual, con elevación nativa de Windows.
+- Comparación rápida entre paneles y mejoras visuales inspiradas en exploradores tipo
+  Commander/Directory Opus, manteniendo el renderer por software y el bajo consumo.
 - **Más temas de fábrica** (9 en total): **Commander** (look tipo Total Commander: fondo
   negro, carpetas en cian, fechas en teal), **Solarized Dark**, **Paper** (claro) y
   **Dracula**, todos con contraste cuidado para legibilidad.

@@ -50,6 +50,9 @@ pub struct Guard {
     /// Handle del evento `NaygoSingleInstanceShow` (0 = inerte: `watch` no hará nada).
     #[cfg_attr(not(windows), allow(dead_code))]
     event: isize,
+    /// Evento separado para pedir cierre limpio (instalador / `--shutdown`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    shutdown_event: isize,
 }
 
 impl Guard {
@@ -59,6 +62,7 @@ impl Guard {
         Guard {
             _mutex: 0,
             event: 0,
+            shutdown_event: 0,
         }
     }
 
@@ -69,38 +73,56 @@ impl Guard {
     /// El hilo es *detached*: muere con el proceso, no hay nada que joinear. Esperar con
     /// `INFINITE` no consume CPU (el hilo duerme en el kernel hasta el `SetEvent`).
     /// En no-Windows es un no-op.
-    pub fn watch(&self, requested: Arc<AtomicBool>, waker: Waker) {
+    pub fn watch(
+        &self,
+        requested: Arc<AtomicBool>,
+        shutdown_requested: Arc<AtomicBool>,
+        waker: Waker,
+    ) {
         #[cfg(windows)]
         {
-            if self.event == 0 {
-                // Guard inerte (el evento no se pudo crear): no hay nada que vigilar.
-                return;
-            }
             // El handle cruza al hilo como isize: HANDLE envuelve un puntero y no es Send.
             let event = self.event;
-            let builder = std::thread::Builder::new().name("naygo-single-instance".into());
-            // Si el spawn falla (recursos agotados), se tolera: la app sigue sin el "muéstrate".
-            let _ = builder.spawn(move || {
-                use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
-                use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+            let shutdown_event = self.shutdown_event;
+            if event != 0 {
+                let show_waker = waker.clone();
+                let builder = std::thread::Builder::new().name("naygo-single-instance".into());
+                // Si el spawn falla, se tolera: la app sigue sin el "muéstrate".
+                let _ = builder.spawn(move || {
+                    use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+                    use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
 
-                let event = HANDLE(event as *mut core::ffi::c_void);
-                loop {
-                    let r = unsafe { WaitForSingleObject(event, INFINITE) };
-                    if r != WAIT_OBJECT_0 {
-                        // WAIT_FAILED (handle inválido, etc.): salir del loop para no quedar
-                        // girando en un busy-loop de errores. El hilo termina en silencio.
-                        break;
+                    let event = HANDLE(event as *mut core::ffi::c_void);
+                    loop {
+                        let r = unsafe { WaitForSingleObject(event, INFINITE) };
+                        if r != WAIT_OBJECT_0 {
+                            break;
+                        }
+                        requested.store(true, std::sync::atomic::Ordering::SeqCst);
+                        show_waker();
                     }
-                    requested.store(true, std::sync::atomic::Ordering::SeqCst);
-                    waker();
-                }
-            });
+                });
+            }
+            if shutdown_event != 0 {
+                let waker = waker.clone();
+                let _ = std::thread::Builder::new()
+                    .name("naygo-shutdown-request".into())
+                    .spawn(move || {
+                        use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+                        use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+
+                        let event = HANDLE(shutdown_event as *mut core::ffi::c_void);
+                        if unsafe { WaitForSingleObject(event, INFINITE) } == WAIT_OBJECT_0 {
+                            shutdown_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+                            waker();
+                        }
+                    });
+            }
         }
         #[cfg(not(windows))]
         {
             // Stub no-Windows: no hay evento que vigilar.
-            let _ = (requested, waker);
+            let _ = (requested, shutdown_requested, waker);
         }
     }
 }
@@ -158,10 +180,19 @@ pub fn acquire() -> Instance {
                 0
             }
         };
+        let shutdown_event =
+            match CreateEventW(None, false, false, w!("NaygoSingleInstanceShutdown")) {
+                Ok(h) => h.0 as isize,
+                Err(e) => {
+                    eprintln!("naygo: CreateEventW falló ({e}); sin cierre remoto");
+                    0
+                }
+            };
 
         Instance::Primary(Guard {
             _mutex: mutex.0 as isize,
             event,
+            shutdown_event,
         })
     }
 }
@@ -198,6 +229,26 @@ pub fn notify_running(folder: Option<&Path>) {
 /// Stub no-Windows: no hay a quién avisar.
 #[cfg(not(windows))]
 pub fn notify_running(_folder: Option<&Path>) {}
+
+/// Desde una instancia secundaria solicita que la primaria termine. Usa el mismo evento de
+/// wake que "mostrar", precedido por un marcador separado para no confundir comandos con rutas.
+#[cfg(windows)]
+pub fn notify_shutdown() {
+    use windows::core::w;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
+
+    unsafe {
+        if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, w!("NaygoSingleInstanceShutdown"))
+        {
+            let _ = SetEvent(event);
+            let _ = CloseHandle(event);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn notify_shutdown() {}
 
 /// Ruta FIJA del archivo de spool en temp. Fija a propósito: primaria y secundaria son procesos
 /// distintos y deben coincidir en la ruta sin coordinarse.

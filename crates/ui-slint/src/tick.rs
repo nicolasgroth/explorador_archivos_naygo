@@ -15,6 +15,7 @@ use crate::*;
 use naygo_core::workspace::layout::Rect;
 use naygo_core::workspace::PaneId;
 use slint::{ModelRc, SharedString, TimerMode, VecModel};
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -33,11 +34,15 @@ pub(crate) struct TickDeps {
     pub drag_tx: std::sync::mpsc::Sender<naygo_platform::drop_target::DragHover>,
     pub drag_rx: Rc<std::sync::mpsc::Receiver<naygo_platform::drop_target::DragHover>>,
     pub drop_guard: Rc<RefCell<Option<naygo_platform::drop_target::DropTargetGuard>>>,
+    /// Último intento de registro OLE: un guard inerte se reintenta, pero nunca
+    /// en cada tick para no llenar el log mientras winit termina de realizar el HWND.
+    pub drop_registration_attempt: Rc<Cell<Option<std::time::Instant>>>,
     pub tray: Rc<Option<tray::Tray>>,
     pub tray_active: bool,
     pub hotkey_id: Rc<std::cell::Cell<Option<u32>>>,
     pub geometry_restored: Rc<std::cell::Cell<bool>>,
     pub si_show_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub si_shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Construye `start_timer`: la factory que (re)arranca el timer de 30 ms con el tick completo.
@@ -55,11 +60,13 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         drag_tx,
         drag_rx,
         drop_guard,
+        drop_registration_attempt,
         tray,
         tray_active,
         hotkey_id,
         geometry_restored,
         si_show_requested,
+        si_shutdown_requested,
     } = deps;
     let ctrl = ctrl.clone();
     let sync_rows = sync_rows.clone();
@@ -72,6 +79,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
     let drag_tx = drag_tx.clone();
     let drag_rx = drag_rx.clone();
     let drop_guard = drop_guard.clone();
+    let drop_registration_attempt = drop_registration_attempt.clone();
     let tray = tray.clone();
     // Solo se LEE el id del hotkey (en el tick, bajo cfg windows). El registro en sí lo
     // mantiene vivo el binding `global_hotkey_slot` del scope de `main`, no este closure.
@@ -94,6 +102,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         let drag_tx = drag_tx.clone();
         let drag_rx = drag_rx.clone();
         let drop_guard = drop_guard.clone();
+        let drop_registration_attempt = drop_registration_attempt.clone();
         let tray = tray.clone();
         // Solo se clona `hotkey_id` para LEER si hay registro vivo en el tick (bajo cfg
         // windows). El registro lo mantiene vivo el binding `global_hotkey_slot` del scope de
@@ -103,6 +112,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         // Flag "muéstrate" de la instancia única (lo marca el hilo vigilante cuando otra
         // instancia del exe avisó antes de salir).
         let si_show_requested = si_show_requested.clone();
+        let si_shutdown_requested = si_shutdown_requested.clone();
         // One-shot de geometría guardada (se intenta en cada tick hasta aplicarla; barata:
         // un get() de Cell una vez consumida).
         #[cfg(windows)]
@@ -125,7 +135,15 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 }
                 // Registrar el destino de drop OLE una sola vez, cuando el HWND ya es válido
                 // (primer tick con la ventana realizada). El guard vive toda la sesión.
-                if drop_guard.borrow().is_none() {
+                let retry_due = drop_registration_attempt.get().is_none_or(|last| {
+                    now.duration_since(last) >= std::time::Duration::from_secs(1)
+                });
+                let needs_registration = drop_guard
+                    .borrow()
+                    .as_ref()
+                    .is_none_or(|guard| !guard.is_registered());
+                if needs_registration && retry_due {
+                    drop_registration_attempt.set(Some(now));
                     if let Some(ui) = ui_weak.upgrade() {
                         if let Some(hwnd) = naygo_hwnd(&ui) {
                             let g = naygo_platform::drop_target::register(
@@ -134,7 +152,9 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 drag_tx.clone(),
                                 waker.clone(),
                             );
-                            *drop_guard.borrow_mut() = Some(g);
+                            if g.is_registered() {
+                                *drop_guard.borrow_mut() = Some(g);
+                            }
                         }
                     }
                 }
@@ -159,7 +179,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 const TOP_BAR_H: f32 = 34.0;
                 // HOVER del arrastre (resaltar el panel bajo el cursor: borde + título). Drenar
                 // ANTES del drop. `Over{screen}` → coords de contenido (MISMA fórmula que el
-                // drop) → `pane_at` (solo paneles Files) → `set_drag_over`. `Leave` (salir o
+                // drop) → `pane_at` (paneles Files o Bandeja) → `set_drag_over`. `Leave` (salir o
                 // soltar) limpia. Coalescemos a la ÚLTIMA posición del lote: el SO dispara
                 // `DragOver` muchísimo y solo importa dónde está el cursor AHORA. `set_drag_over`
                 // solo marca cambio si el panel difiere, así no re-pintamos en cada movimiento.
@@ -209,6 +229,16 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     }
                 }
                 while let Ok(payload) = drop_rx.try_recv() {
+                    if let Some(error) = payload.error.as_ref() {
+                        let base = ctrl.borrow().config.t("drop.virtual_failed");
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.invoke_show_toast(format!("{base}: {error}").into());
+                        }
+                        crate::logging::log_line(&format!(
+                            "drop virtual no materializado: {error}"
+                        ));
+                        continue;
+                    }
                     let mut routed = false;
                     if let Some(ui) = ui_weak.upgrade() {
                         // Tras el bucle modal de `DoDragDrop` (OLE), la ventana de Naygo deja
@@ -234,12 +264,13 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                             let scale = ui.window().scale_factor().max(0.01);
                             let cx = client_x as f32 / scale;
                             let cy = client_y as f32 / scale - TOP_BAR_H;
-                            routed = ctrl.borrow_mut().drop_at(
+                            routed = ctrl.borrow_mut().drop_at_with_staging(
                                 cx,
                                 cy,
                                 payload.move_,       // move_hint (Shift del OLE)
                                 payload.copy_forced, // copy_forced (Ctrl del OLE)
                                 payload.paths.clone(),
+                                payload.staging.clone(),
                             );
                         }
                     }
@@ -254,11 +285,12 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         // "already borrowed" (mismo patrón que la ruta feliz ya evita arriba).
                         let active = ctrl.borrow().active_id();
                         if let Some(active) = active {
-                            ctrl.borrow_mut().drop_external(
+                            ctrl.borrow_mut().drop_external_with_staging(
                                 active,
                                 payload.paths,
                                 payload.move_,
                                 payload.copy_forced,
+                                payload.staging,
                             );
                         }
                     }
@@ -280,6 +312,12 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     // y consumió el pendiente: `routed` es true pero `pending` quedó None.
                     // (Distinto de "cayó fuera de todo panel": ahí `routed` es false.)
                     let direct_drop_ran = routed && pending.is_none();
+                    // Un drop directo también puede haber mutado solo la bandeja temporal. En
+                    // ambos casos sincronizar filas ahora evita que el panel parezca parpadear o
+                    // quede vacío hasta el siguiente evento periódico.
+                    if direct_drop_ran {
+                        sync_rows();
+                    }
                     if let (Some(pd), Some(ui)) = (pending, ui_weak.upgrade()) {
                         let tr = ui.global::<Tr>();
                         let dest_name = pd
@@ -410,6 +448,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 if let Some(t) = tray.as_ref() {
                                     t.hide_icon();
                                 }
+                                tray::arm_exit_watchdog();
                                 let _ = slint::quit_event_loop();
                             }
                         }
@@ -433,7 +472,14 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // volvió a lanzar Naygo desde el ícono anclado o con "Abrir en Naygo").
                 // Restaurar la ventana y, si dejó una carpeta en el spool, abrirla en un
                 // panel NUEVO (split del activo), sin perder lo que el usuario tenía.
-                if si_show_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                if si_shutdown_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    ctrl.borrow().save_session();
+                    if let Some(t) = tray.as_ref() {
+                        t.hide_icon();
+                    }
+                    tray::arm_exit_watchdog();
+                    let _ = slint::quit_event_loop();
+                } else if si_show_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     if let Some(ui) = ui_weak.upgrade() {
                         restore_window(&ui);
                         if let Some(dir) = naygo_platform::single_instance::take_open_request() {
@@ -481,10 +527,24 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         }
                     }
                 }
+                // Autocompletado de «Buscar desde»: canal separado para que el resultado nunca
+                // aparezca en la path-bar (ni viceversa). Se aplica solo al buffer vigente.
+                let search_ac_busy = ctrl.borrow_mut().drive_search_autocomplete(now);
+                if let Some((buffer, sugg)) = ctrl.borrow_mut().poll_search_autocomplete() {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        if ui.get_search_root_buffer().as_str() == buffer {
+                            ui.set_search_root_suggestions(ModelRc::from(Rc::new(VecModel::from(
+                                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                            ))));
+                        }
+                    }
+                }
                 // Probe async de "carpeta no encontrada": aplicar los resultados al caché.
                 let missing_done = ctrl.borrow_mut().pump_missing_probe();
                 // Drenar el progreso de las operaciones de archivo (F3).
                 let ops_done = ctrl.borrow_mut().ops.pump_ops();
+                let sync_done = ctrl.borrow_mut().pump_sync();
+                let text_transform_done = ctrl.borrow_mut().pump_text_transform();
                 let plan_failed = ctrl.borrow_mut().ops.take_plan_error().is_some();
                 if plan_failed {
                     let message = ctrl.borrow().config.t("ops.plan_failed");
@@ -497,6 +557,12 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // usuario creía haber pegado.
                 if let Some((_path, err)) = ctrl.borrow_mut().ops.take_paste_error() {
                     let base = ctrl.borrow().config.t("paste.error");
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.invoke_show_toast(format!("{base}: {err}").into());
+                    }
+                }
+                if let Some(err) = ctrl.borrow_mut().take_shell_error() {
+                    let base = ctrl.borrow().config.t("shell.error");
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.invoke_show_toast(format!("{base}: {err}").into());
                     }
@@ -562,8 +628,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && tree_done
                     && !preview_busy
                     && !ac_busy
+                    && !search_ac_busy
                     && missing_done
                     && ops_done
+                    && sync_done
+                    && text_transform_done
                     && size_done
                     && meta_done
                     && search_done

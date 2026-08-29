@@ -40,6 +40,23 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         });
     }
     {
+        // Clic derecho en un breadcrumb: menú completo de la carpeta específica, incluyendo
+        // abrir aquí/en otro panel/nuevo panel, carpeta nueva, borrar y Shell de Windows.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_path_segment_context(move |id, path, x, y| {
+            ctrl.borrow_mut().open_path_folder_context_menu(
+                PaneId(id as u64),
+                std::path::PathBuf::from(path.as_str()),
+                x,
+                y,
+            );
+            sync_rows();
+            start_timer();
+        });
+    }
+    {
         // Entrar a modo edición: cargar la ruta actual del panel y sus candidatos.
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
@@ -51,6 +68,7 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
             let sugg = ctrl.borrow().path_autocomplete(&path);
             ui.set_edit_pane(id);
             ui.set_edit_text(path.into());
+            ui.set_edit_caret(-1);
             ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
                 sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
             ))));
@@ -62,13 +80,9 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         // tipear una ruta congelaba la app. El tick entrega el resultado (ver el timer).
         let ctrl = ctrl.clone();
         let start_timer = start_timer.clone();
-        let ui_weak = ui.as_weak();
         ui.on_path_edit_changed(move |_id, text| {
             ctrl.borrow_mut()
                 .request_path_autocomplete(text.to_string(), std::time::Instant::now());
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_edit_text(text);
-            }
             // Mantener el timer vivo para que el debounce venza y el resultado llegue.
             start_timer();
         });
@@ -137,6 +151,8 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
             let completed = format!("{parent}{name}\\");
             let sugg = ctrl.borrow().path_autocomplete(&completed);
             ui.set_edit_text(completed.into());
+            ui.set_edit_caret(ui.get_edit_text().len() as i32);
+            ui.set_edit_caret_revision(ui.get_edit_caret_revision() + 1);
             ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
                 sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
             ))));
@@ -186,6 +202,17 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         ui.on_fav_rename_group(move |gid, name| {
             ctrl.borrow_mut()
                 .fav_rename_group(gid.as_str(), name.as_str());
+            sync_rows();
+        });
+    }
+    {
+        // Renombrar un favorito solo cambia su alias visible; la ruta permanece como identidad
+        // estable para navegar, mover dentro de grupos y los atajos Ctrl+1..9.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_fav_rename_favorite(move |path, alias| {
+            ctrl.borrow_mut()
+                .fav_rename_favorite(path.as_str(), alias.as_str());
             sync_rows();
         });
     }

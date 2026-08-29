@@ -122,6 +122,8 @@ pub(crate) fn build_sync(
                 })
                 .collect();
             let recents: Vec<NavRow> = c.recent_rows().into_iter().map(to_nav_row).collect();
+            let frequent_dirs: Vec<NavRow> =
+                c.frequent_dir_rows().into_iter().map(to_nav_row).collect();
             let hist: Vec<HistRow> = c.history_rows().into_iter().map(to_hist_row).collect();
             let info = c.inspector_info();
             let mut inspector = to_inspector_vm(info.clone());
@@ -255,11 +257,20 @@ pub(crate) fn build_sync(
                     }
                     Some(PanePurpose::Favorites) => {
                         m.models_for(id).favs.set_vec(favs.clone());
-                        m.models_for(id).recents.set_vec(recents.clone());
                         m.models_for(id).fav_tree.set_vec(fav_tree.clone());
+                    }
+                    Some(PanePurpose::Recents) => {
+                        m.models_for(id).recents.set_vec(recents.clone());
+                        m.models_for(id)
+                            .frequent_dirs
+                            .set_vec(frequent_dirs.clone());
                     }
                     Some(PanePurpose::History) => {
                         m.models_for(id).hist.set_vec(hist.clone());
+                    }
+                    Some(PanePurpose::Basket) => {
+                        let rows = c.basket_rows();
+                        m.models_for(id).basket.set_vec(rows);
                     }
                     _ => {}
                 }
@@ -347,6 +358,16 @@ pub(crate) fn build_sync(
                             pv.focused_row = focused;
                             changed = true;
                         }
+                        let can_back = c.can_go_back_for(id);
+                        if pv.can_go_back != can_back {
+                            pv.can_go_back = can_back;
+                            changed = true;
+                        }
+                        let can_forward = c.can_go_forward_for(id);
+                        if pv.can_go_forward != can_forward {
+                            pv.can_go_forward = can_forward;
+                            changed = true;
+                        }
                         // Footer (barra inferior): selección + disco. Vacío si está deshabilitado.
                         // El disco se cachea por unidad dentro del controlador (no pega a WinAPI
                         // en cada tick).
@@ -355,10 +376,20 @@ pub(crate) fn build_sync(
                             pv.footer_text = footer;
                             changed = true;
                         }
+                        let footer_disk = SharedString::from(c.footer_disk_text_of(id).as_str());
+                        if pv.footer_disk_text != footer_disk {
+                            pv.footer_disk_text = footer_disk;
+                            changed = true;
+                        }
                         // Mini-barra del filtro visual por tipeo (vacío = oculta).
                         let filter_label = SharedString::from(c.filter_label_of(id).as_str());
                         if pv.filter_label != filter_label {
                             pv.filter_label = filter_label;
+                            changed = true;
+                        }
+                        let filter_hiding = c.filter_hide_nonmatches;
+                        if pv.filter_hiding != filter_hiding {
+                            pv.filter_hiding = filter_hiding;
                             changed = true;
                         }
                     }
@@ -380,6 +411,8 @@ pub(crate) fn build_sync(
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
             }
             ui.set_status(SharedString::from(c.status_line().as_str()));
+            ui.set_sync_vm(c.sync_vm());
+            ui.set_text_transform_vm(c.text_transform_vm());
             // Botones Atrás/Adelante del toolbar: habilitados según el historial del panel activo.
             // Va aquí (refresco central) para que se actualicen tras cualquier navegación —teclado,
             // mouse, doble-clic, breadcrumbs— no solo al pulsar los botones.
@@ -438,6 +471,11 @@ pub(crate) fn build_sync(
                     // Carpeta objetivo (habilita el submenú "Abrir ▸"): flag YA cacheado al abrir
                     // el menú (evita un `stat` por tick, costoso en shares de red lentos).
                     target_is_folder: cm.target_is_folder,
+                    show_open_here: cm.show_open_here,
+                    target_is_executable: cm
+                        .targets
+                        .first()
+                        .is_some_and(|p| naygo_platform::open::can_run_as_administrator(p)),
                 },
                 None => ContextMenuVm {
                     active: false,
@@ -449,6 +487,8 @@ pub(crate) fn build_sync(
                     is_single_zip: false,
                     has_selection: false,
                     target_is_folder: false,
+                    show_open_here: false,
+                    target_is_executable: false,
                 },
             };
             ui.set_ctx_menu(ctx);
@@ -463,12 +503,13 @@ pub(crate) fn build_sync(
             });
             // (El aviso "carpeta no encontrada" es ahora IN-PLACE por panel: se arma en el PaneVm
             //  con `missing`/`missing-path`; ya no hay un VM de modal global.)
-            // Panel de búsqueda recursiva (Ctrl+F / lupa).
+            // Panel de búsqueda recursiva (F3 / lupa).
             {
                 let open = c.search_open();
                 let (status, running) = c.search_status_text();
                 let root_label = c.search_root_label();
                 let query = c.search_query();
+                let options = c.search_options();
                 let hits: Vec<SearchHitVm> = c
                     .search_rows()
                     .into_iter()
@@ -484,6 +525,10 @@ pub(crate) fn build_sync(
                     active: open,
                     query: query.into(),
                     root_label: root_label.into(),
+                    content_query: options.content_query.into(),
+                    ignore_case: options.ignore_case,
+                    use_wildcards: options.use_wildcards,
+                    recursive: options.recursive,
                     running,
                     hits: ModelRc::new(VecModel::from(hits)),
                     status: status.into(),
@@ -690,6 +735,11 @@ pub(crate) fn build_sync(
                             drag_over: ctrl.borrow().drag_over_pane() == Some(*id),
                             purpose,
                             title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
+                            link_member: ctrl.borrow().is_link_member(*id),
+                            tree_linked: ctrl.borrow().tree_is_linked(*id),
+                            tree_link_label: SharedString::from(
+                                ctrl.borrow().tree_link_label(*id).as_str(),
+                            ),
                             rows: ModelRc::from(pm.rows.clone()),
                             columns: ModelRc::from(pm.columns.clone()),
                             col_menu: ModelRc::from(pm.col_menu.clone()),
@@ -708,8 +758,12 @@ pub(crate) fn build_sync(
                             // El footer se llena en el primer `sync_rows` (necesita `&mut` por la
                             // caché de disco). Aquí nace vacío.
                             footer_text: SharedString::new(),
+                            footer_disk_text: SharedString::new(),
+                            can_go_back: ctrl.borrow().can_go_back_for(*id),
+                            can_go_forward: ctrl.borrow().can_go_forward_for(*id),
                             // La mini-barra del filtro igual nace vacía (la llena sync_rows).
                             filter_label: SharedString::new(),
+                            filter_hiding: false,
                             segments: {
                                 let segs: Vec<PathSeg> = ctrl
                                     .borrow()
@@ -725,10 +779,12 @@ pub(crate) fn build_sync(
                             tree_rows: ModelRc::from(pm.tree.clone()),
                             favs: ModelRc::from(pm.favs.clone()),
                             recents: ModelRc::from(pm.recents.clone()),
+                            frequent_dirs: ModelRc::from(pm.frequent_dirs.clone()),
                             fav_tree: ModelRc::from(pm.fav_tree.clone()),
                             hist_rows: ModelRc::from(pm.hist.clone()),
                             inspector: InspectorVm::default(),
                             preview: PreviewVm::default(),
+                            basket_rows: ModelRc::from(pm.basket.clone()),
                             tabs: ModelRc::from(Rc::new(VecModel::from(tabs))),
                         }
                     })
@@ -763,11 +819,27 @@ pub(crate) fn build_sync(
                 for (id, r) in &visible {
                     if let Some(i) = m.pane_ids.iter().position(|p| p == id) {
                         if let Some(mut pv) = m.panes.row_data(i) {
-                            if pv.x != r.x || pv.y != r.y || pv.w != r.w || pv.h != r.h {
+                            let link_member = ctrl.borrow().is_link_member(*id);
+                            let tree_linked = ctrl.borrow().tree_is_linked(*id);
+                            let tree_link_label =
+                                SharedString::from(ctrl.borrow().tree_link_label(*id).as_str());
+                            let link_changed = pv.link_member != link_member
+                                || pv.tree_linked != tree_linked
+                                || pv.tree_link_label != tree_link_label;
+                            let geometry_changed =
+                                pv.x != r.x || pv.y != r.y || pv.w != r.w || pv.h != r.h;
+                            if geometry_changed {
                                 pv.x = r.x;
                                 pv.y = r.y;
                                 pv.w = r.w;
                                 pv.h = r.h;
+                            }
+                            if link_changed {
+                                pv.link_member = link_member;
+                                pv.tree_linked = tree_linked;
+                                pv.tree_link_label = tree_link_label;
+                            }
+                            if link_changed || geometry_changed {
                                 m.panes.set_row_data(i, pv);
                             }
                         }

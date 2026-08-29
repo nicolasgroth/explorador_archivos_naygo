@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 //! Historial global de carpetas visitadas, en orden MRU (la más reciente primero),
-//! con tope y sin duplicados. Se persiste como JSON (solo rutas, nada de contenido).
-//! Lo consumen: el menú del botón atrás (hoy), y el autocompletado del path + la
-//! sección Recientes del panel Favoritos (fase siguiente).
+//! con tope y sin duplicados. Además conserva una ventana de visitas para calcular
+//! las carpetas más usadas. Se persiste como JSON (solo rutas, nada de contenido).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -14,6 +13,17 @@ use std::path::{Path, PathBuf};
 pub struct RecentDirs {
     /// La más reciente PRIMERO.
     dirs: Vec<PathBuf>,
+    /// Visitas individuales, de la más nueva a la más antigua. No se desduplica: es la base de
+    /// la estadística "más usadas". `serde(default)` mantiene compatibles los recents.json viejos.
+    #[serde(default)]
+    visits: Vec<PathBuf>,
+}
+
+/// Una carpeta frecuente y cuántas veces aparece en la ventana de visitas actual.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrequentDir {
+    pub path: PathBuf,
+    pub visits: usize,
 }
 
 impl RecentDirs {
@@ -26,14 +36,17 @@ impl RecentDirs {
     pub fn push(&mut self, dir: PathBuf, limit: usize) {
         let limit = limit.max(1);
         self.dirs.retain(|d| d != &dir);
-        self.dirs.insert(0, dir);
+        self.dirs.insert(0, dir.clone());
         self.dirs.truncate(limit);
+        self.visits.insert(0, dir);
+        self.visits.truncate(limit);
     }
 
     /// Recorta la lista a los `n` más recientes (n=0 deja la lista vacía). Se usa cuando el
     /// usuario BAJA el límite en la configuración.
     pub fn truncate_to(&mut self, n: usize) {
         self.dirs.truncate(n);
+        self.visits.truncate(n);
     }
 
     /// Las recientes, la más nueva primero.
@@ -41,10 +54,40 @@ impl RecentDirs {
         &self.dirs
     }
 
+    /// Devuelve las carpetas más visitadas dentro de la ventana persistida. En empates se prioriza
+    /// la visita más reciente, así el resultado es estable y útil para navegación rápida.
+    pub fn most_used(&self, limit: usize) -> Vec<FrequentDir> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let source = if self.visits.is_empty() {
+            &self.dirs
+        } else {
+            &self.visits
+        };
+        let mut counted: Vec<FrequentDir> = Vec::new();
+        for path in source {
+            if let Some(existing) = counted.iter_mut().find(|entry| entry.path == *path) {
+                existing.visits += 1;
+            } else {
+                counted.push(FrequentDir {
+                    path: path.clone(),
+                    visits: 1,
+                });
+            }
+        }
+        // `sort_by_key` es estable: como se recorrió de nuevo a antiguo, un empate conserva la
+        // carpeta usada más recientemente por delante.
+        counted.sort_by_key(|entry| std::cmp::Reverse(entry.visits));
+        counted.truncate(limit);
+        counted
+    }
+
     /// Quita las carpetas que ya no existen (se llama antes de MOSTRAR la lista,
     /// nunca en el hilo caliente: son `exists()` de metadata local).
     pub fn remove_missing(&mut self) {
         self.dirs.retain(|d| d.exists());
+        self.visits.retain(|d| d.exists());
     }
 
     /// Serializa a JSON (pretty: el archivo es diminuto y queda inspeccionable).
@@ -116,6 +159,30 @@ mod tests {
         assert_eq!(back.list(), r.list());
         assert!(RecentDirs::from_json("{corrupto").list().is_empty());
         assert!(RecentDirs::from_json("").list().is_empty());
+    }
+
+    #[test]
+    fn most_used_cuenta_visitas_y_desempata_por_recencia() {
+        let mut r = RecentDirs::new();
+        r.push(p("D:/a"), 20);
+        r.push(p("D:/b"), 20);
+        r.push(p("D:/a"), 20);
+        r.push(p("D:/b"), 20);
+        let used = r.most_used(10);
+        assert_eq!(
+            used[0],
+            FrequentDir {
+                path: p("D:/b"),
+                visits: 2
+            }
+        );
+        assert_eq!(
+            used[1],
+            FrequentDir {
+                path: p("D:/a"),
+                visits: 2
+            }
+        );
     }
 
     #[test]

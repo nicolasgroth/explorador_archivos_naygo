@@ -4,12 +4,19 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 (inspirado en Directory Opus). Paneles dinámicos, navegación por teclado, diez idiomas
 incluidos, temas y sets de íconos personalizables.
 
+<p align="center">
+  <img src="assets/screenshots/naygo-multipanel.png" alt="Naygo con árbol de carpetas, dos paneles de archivos y panel de propiedades" width="100%">
+</p>
+
+<p align="center"><em>Ejemplo sintético: árbol, dos carpetas en paralelo y propiedades, todo en una sola ventana. Las rutas y nombres mostrados son ficticios.</em></p>
+
 > **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
 > redimensionado en vivo (mover un divisor solo afecta a sus dos vecinos; doble clic =
 > 50/50), árbol de carpetas, columnas estilo planilla (orden + filtros), renombrado en
 > línea y por lotes, plantillas de disposición (Layouts), búsqueda recursiva,
-> previsualización (imágenes, SVG, PDF, texto/código y contenido de .zip/.tar/.tar.gz
-> como árbol), comprimir y extraer .zip, barra de unidades con espacio libre/usado y
+> previsualización (imágenes, SVG, PDF, texto/código, modelos STL/3MF y contenido de
+> .zip/.tar/.tar.gz como árbol), sincronización de carpetas, bandeja temporal de archivos,
+> conversión de texto, comprimir y extraer .zip, barra de unidades con espacio libre/usado y
 > expulsión segura de USB, drag & drop (interno y con el sistema), abrir una terminal en
 > la carpeta, configuración completa (incluido Acerca de + Avanzado), diez idiomas, sets
 > de íconos personalizables, bandeja del sistema (la X esconde a la bandeja), atajo
@@ -37,28 +44,75 @@ incluidos, temas y sets de íconos personalizables.
 
 - Navegación por paneles dual (o múltiples), con ir atrás/adelante (incluidos los botones
   laterales del mouse) y barra de ruta editable con favoritos.
-- Árbol de carpetas con expansión incremental y revelado hasta la carpeta activa.
+- Árbol de carpetas con expansión incremental y revelado hasta la carpeta activa. Puede ser
+  **común** para todos los paneles o **dedicado** a un Files; “Explorador enlazado” crea la
+  pareja Árbol + Archivos ya agrupada y el vínculo se conserva al reiniciar.
 - Columnas estilo planilla: ordenar, filtrar por tipo de columna y reordenar arrastrando.
-- Operaciones entre paneles (copiar, mover, eliminar) con cola opcional, progreso y cancelación.
+- Operaciones entre paneles (copiar, mover, eliminar) con cola opcional, progreso y cancelación;
+  los borrados grandes incluyen planificación y vista previa configurable.
+- Asistente de sincronización recursiva entre dos paneles: izquierda→derecha,
+  derecha→izquierda o bidireccional, con plan seleccionable y borrado de sobrantes
+  desactivado por defecto.
+- Bandeja temporal para reunir archivos de carpetas distintas y luego copiarlos, moverlos o
+  enviarlos a la papelera como un solo lote.
+- Accesos físicos en el árbol a Escritorio, Documentos, Descargas, Imágenes, OneDrive y
+  Dropbox; siguen funcionando aunque Windows o el proveedor los haya reubicado a otra unidad.
+- Transformación segura de texto entre CRLF, LF y CR clásico; UTF-8/UTF-16, BOM, salto final
+  y limpieza de espacios finales.
 - Comprimir la selección en un `.zip` y extraer un `.zip` desde el menú contextual, en
   segundo plano, con progreso, cancelación y deshacer seguro.
 - Renombrado en línea, en cadena y por lotes.
-- Búsqueda recursiva por nombre en la carpeta y sus subcarpetas.
-- Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código y el
-  contenido de archivos ZIP.
+- Búsqueda F3 por nombre, patrón Windows (`*`, `?`) y texto dentro de archivos, con raíz
+  editable, resultados incrementales y rutas relativas.
+- Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código, modelos
+  3D STL/3MF rasterizados por CPU y contenido de archivos ZIP, TAR y TAR.GZ.
 - Cálculo de tamaño de carpetas bajo demanda.
 - Barra de unidades de disco con espacio libre/total y porcentaje usado; ícono propio para
   unidades USB y expulsión segura.
-- Integración con Windows: menú contextual del shell, "Abrir con", detección de cambios y de
-  dispositivos, drag & drop, bandeja del sistema y arranque opcional con el sistema.
-- Sets de íconos: cinco de fábrica (Lucide, Mono, Tabler, Material, Flat Color), cambio de
-  ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
+- Integración con Windows: menú contextual del shell, "Abrir con", ejecutar `.exe` como
+  administrador con Shift o clic derecho, detección de cambios y de
+  dispositivos, drag & drop —incluidos archivos virtuales desde 7-Zip/WinRAR—, bandeja del
+  sistema y arranque opcional con el sistema.
+- Sets de íconos: seis de fábrica (Lucide, Mono, Tabler, Material, Flat Color y Fluent),
+  cambio de ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
 - Atajo global **Ctrl+Alt+Z** (configurable) que muestra Naygo y lo trae al frente desde
   cualquier aplicación.
 - La **X** esconde a la bandeja del sistema (salir de verdad: menú de la bandeja); la
   ventana recuerda tamaño, posición y maximizado entre sesiones.
 - Configuración completa: apariencia, atajos, previsualización, plantilla de tabla, opciones
   avanzadas y sección "Acerca de".
+
+## De simple a multipanel
+
+Naygo no obliga a trabajar siempre con una interfaz compleja. Una plantilla puede dejar solo
+la carpeta actual para navegar con la máxima claridad, y otra puede reunir árbol, varios
+paneles de archivos y propiedades para operaciones más exigentes.
+
+![Naygo en su disposición minimalista de un panel con datos de demostración](assets/screenshots/naygo-minimal.png)
+
+Las disposiciones se pueden guardar y restaurar. El árbol puede ser común a todos los paneles
+o estar enlazado a uno específico, para que cada zona de trabajo conserve su propio contexto.
+
+## ¿Qué aporta Naygo?
+
+| Necesidad | Naygo | Explorador de Windows | Gestores comerciales (en general) |
+| --- | --- | --- | --- |
+| Trabajar entre carpetas | Varios paneles dentro de una ventana | Pestañas o ventanas separadas | Habitualmente dos paneles |
+| Adaptar el espacio de trabajo | Paneles dinámicos y disposiciones guardables | Disposición principalmente fija | Depende del producto |
+| Árbol de directorios | Común o dedicado y enlazado a un panel | Un árbol por ventana | Depende del producto |
+| Operaciones largas | Cola integrada, progreso, velocidad, cancelación y deshacer; también para borrados grandes | Diálogos separados del explorador | Habitualmente disponible |
+| Confirmar un borrado grande | Planificación y vista previa opcional antes de ejecutar | Confirmación general | Depende del producto |
+| Sincronizar dos carpetas | Plan previo, tres direcciones y eliminación opcional | Requiere operaciones manuales | Habitualmente disponible |
+| Reunir archivos dispersos | Bandeja temporal entre carpetas | Selección limitada a la carpeta actual | Depende del producto |
+| Revisar archivos de impresión 3D | Preview STL/3MF por CPU, sin abrir otra app | Sin preview STL/3MF nativo general | Depende de extensiones o del producto |
+| Portabilidad y transparencia | Portable, código abierto MIT y sin telemetría | Integrado en Windows, código cerrado | Normalmente propietario y de pago |
+| Equipos modestos y máquinas virtuales | Render por software, sin requerir GPU | Integrado con el sistema | Depende del producto |
+
+Naygo no intenta reemplazar cada función especializada de las alternativas de pago. Su valor
+está en concentrar el flujo cotidiano de navegar, comparar y operar archivos con rapidez, sin
+suscripción, publicidad ni funciones que consuman recursos en segundo plano. Las prestaciones
+de los gestores comerciales varían entre productos y versiones; la tabla resume categorías,
+no pretende ser una comparativa exhaustiva.
 
 ## Stack
 

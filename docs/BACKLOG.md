@@ -2,55 +2,55 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
-> Última actualización: 2026-08-26.
+> Última actualización: 2026-08-29.
 
 ## Estado de partida
 
 - Versión en curso: **0.4.0+** (0.4.0 publicada 2026-08-16; hay trabajo sin publicar en el
   working tree: buscador F3 ampliado, carpetas conocidas de Windows en el árbol, y más).
-- Suite: ~1.022 tests verdes. Clippy: 3 warnings menores (ver T-5).
+- Suite: **1.100 tests verdes** (más 6 smoke tests de Windows ignorados por requerir interacción).
+  Clippy: cero warnings en todo el workspace y todos los targets.
 - i18n: 10 idiomas con paridad verificada por `scripts/check_i18n_lang.py` (en CI).
 - **Fix ya aplicado en el working tree (incluir en el próximo commit):** las 7 claves
   `slint.preview.{loading,cancel,cancel_tip,copy_tip,wrap_on_tip,wrap_off_tip,reset_view_tip}`
   se agregaron a los 8 idiomas que las perdían (pt/de/fr/hi/it/ja/ko/zh). Sin esto, el test
   `i18n::tests::todos_los_idiomas_tienen_las_claves_de_es` falla.
+- **Cierre operativo 2026-08-28:** `scripts/build-release.ps1` ya tiene fallback SHA-256 con
+  .NET para runtimes PowerShell sin `Get-FileHash`. El release del 2026-08-22 sí produjo ZIP e
+  instalador; antes de este fix el script fallaba solo al escribir `SHA256SUMS.txt`, después de
+  terminar ambos artefactos.
+- **Cierre técnico 2026-08-28 (T-1):** `ops_ctrl` ahora es un módulo con raíz en
+  `ops_ctrl/mod.rs`; los workers de archivo comprimido, borrado por lotes/Papelera y recuperación
+  de journal viven respectivamente en `archive.rs`, `batch_delete.rs` y `resume.rs`. El wizard de
+  sincronización y la bandeja ya estaban correctamente aislados en `workspace_ctrl/`.
+- **Cierre técnico 2026-08-28 (T-2):** `scripts/smoke-ui.ps1` ejecuta los drivers interactivos de
+  editor de ruta y scroll, exige capturas y rechaza panics nuevos en el log. Quedó documentado como
+  gate manual post-build porque los runners alojados no ofrecen un escritorio Windows fiable.
+- **Cierre técnico 2026-08-28 (T-3):** el ZIP portable ya no incluye `naygo.pdb` (bajó de ~70 MB a
+  ~11 MB). El instalador ofrece los símbolos como tarea opcional y desmarcada; el PDB se sigue
+  generando junto al binario para diagnósticos.
+- **Cierre funcional 2026-08-29 (C-2):** el diálogo «nueva carpeta» mantiene `Enter` como salto
+  de línea y confirma con dos `Enter` consecutivos dentro de 500 ms; `Ctrl+Enter` continúa como
+  confirmación inmediata.
+- **Cierre funcional 2026-08-29 (F-3):** la mini-barra del filtro por tipeo ahora alterna entre
+  resaltar coincidencias y mostrar solo estas. El filtro actúa sobre la vista real del panel,
+  conserva foco/selección por ruta y no se persiste ni altera los filtros por columna.
+- **Cierre funcional 2026-08-29 (F-2):** `Ctrl+D` duplica la selección en su misma carpeta con
+  nombres seguros (` - copia`, ` - copia (2)`, …), planificación asíncrona, journal y deshacer.
+  Las configuraciones heredadas liberan el antiguo `Ctrl+D` de Favoritos solo cuando conservan
+  exactamente ese valor histórico; los atajos personalizados distintos se respetan.
 
 ---
 
 ## A. Mejoras técnicas pendientes (importante aplicarlas)
 
-### T-1. Split de `ops_ctrl.rs` (4.167 líneas)
-El archivo creció el doble con 0.4.0 (wizard de sincronización + bandeja temporal + progreso
-de borrado por lotes). Dividir por dominio siguiendo el precedente de `workspace_ctrl/`:
-`ops_ctrl/sync_wizard.rs`, `ops_ctrl/basket.rs`, `ops_ctrl/batch_delete.rs`, dejando el core
-de cola/ejecución en `ops_ctrl/mod.rs`. Refactor puro, sin cambio de comportamiento.
-
-### T-2. Smoke test de UI en CI
-`scripts/repro-rename.ps1` y `scripts/repro-scroll.ps1` (automatización real de la ventana:
-SendKeys + screenshots + log) ya encontraron 4 bugs reales (crash F2, scroll muerto, blink
-con Shift, auto-scroll sin cablear). Convertirlos en un smoke test que corra post-build
-(release.yml o manual documentado en `docs/PRUEBAS.md`), idealmente con asserts sobre el log
-y comparación de screenshots. Nota: requieren sesión interactiva de Windows (no corren
-headless); quizá como paso manual pre-release más que en GitHub Actions.
-
-### T-3. PDB fuera del camino crítico de descarga
-`naygo.pdb` pesa ~263 MB y es ~80% del paquete (zip ~65 MB). Hacerlo **componente opcional**
-del instalador Inno ("Símbolos de depuración", desmarcado por defecto) y **quitarlo del ZIP
-portable** (baja a ~15 MB). Con el crash de F2 resuelto, el PDB solo se necesita a demanda.
-Mantener el perfil release con `debug = true` (el PDB se genera igual; solo no se distribuye
-por defecto).
-
 ### T-4. Firma de código del instalador
-En máquinas externas SmartScreen advierte al instalar. Opciones: **SignPath.io** (certificado
-gratis para open source, se integra en CI) o documentar el bypass en `docs/DISTRIBUTION.md`.
-El gancho de `signtool` aún no existe en `scripts/build-release.ps1`.
-
-### T-5. Tres warnings de clippy
-- `crates/core/src/ops/undo.rs:522` — `clone()` → `std::slice::from_ref(&action)` (en test).
-- `crates/ui-slint/src/workspace_ctrl/layout_panes.rs:594` — método muerto `split_for_target`
-  (borrar o cablear donde corresponda).
-- `crates/ui-slint/src/preview.rs:138` — tipo complejo del `mesh_load_rx`: extraer a un
-  `type` alias.
+**Preparación completada; activación externa pendiente.** `scripts/build-release.ps1` ya acepta
+`SignToolPath` + `CertificateThumbprint` (o sus variables de entorno), firma el `setup.exe` con
+SHA-256, timestamp y luego ejecuta `signtool verify`. Falta que Nicolás/ISGroth cree y autorice
+un certificado (p. ej. SignPath.io) y entregue la identidad de firma; no se puede fabricar ni
+usar una sin esa autorización. Mientras tanto, el bypass de SmartScreen está documentado en
+`docs/DISTRIBUTION.md`.
 
 ---
 
@@ -64,25 +64,53 @@ ya existe en `crates/ui-slint/src/bridge.rs` (`cell_value`); añadir acción en 
 Pensado para flujo Excel/CSV del usuario. Formato CSV con `;` o `,` configurable, BOM UTF-8
 para que Excel lo abra bien.
 
-### F-2. Duplicar rápido (Ctrl+D)
-Duplicar la selección en la misma carpeta con sufijo « - copia» (y « (2)», « (3)» si ya
-existe, reusando la desambiguación existente del motor de ops). Implementar como una op más
-del engine (`crates/core/src/ops/`), con undo incluido. Nueva `Action` de keymap con su
-entrada i18n en los 10 idiomas.
-
-### F-3. Modo filtro «ocultar no-matches»
-Toggle en la mini-barra del filtro visual (la que muestra `filtro: "texto" · N ✕`): al
-activarlo, la vista solo muestra las coincidencias (filtro real, no solo tinte). El buffer y
-el ciclo ↓/↑ se mantienen. Punteros: el matching vive en `core::text_match` y la marca
-`filter_match` en `bridge::rows_from_view`; la variante «ocultar» debe actuar sobre la VISTA
-del `FilePaneState` (cuidar alineación de posiciones de vista con selección/foco, igual que
-los filtros de columna existentes en `core::filter`).
-
 ### F-4. Historial de portapapeles interno (Ctrl+Shift+V)
 Los últimos N (p. ej. 10) conjuntos de rutas copiados/cortados **dentro de Naygo**, con
 popup para elegir y pegar. Solo rutas de archivos (no texto/imágenes del portapapeles de
 Windows). Punteros: el pipeline de copiar/cortar/pegar vive en `workspace_ctrl/ops.rs` y
 `ops_ctrl.rs`; guardar el historial en memoria (o en `workspace.json` si se quiere persistente).
+
+### F-5. Historial de navegación con memoria de contexto («Atrás de verdad»)
+Al volver Atrás/Adelante, restaurar no solo la ruta sino también el archivo enfocado, selección,
+posición de scroll y filtros activos de esa visita. El objetivo es retomar exactamente donde se
+estaba sin reconstruir visualmente el contexto. Extender `core::workspace::NavHistory` con una
+entrada de navegación compacta; no debe persistir listados ni provocar I/O adicional. Definir qué
+parte del contexto sobrevive al reinicio y cómo degradar si los archivos ya no existen.
+
+### F-6. Radar de destinos para copiar/mover
+Overlay navegable íntegramente por teclado que reúna paneles abiertos numerados, favoritos,
+carpetas recientes/frecuentes y últimos destinos de operaciones. Elegir un destino con una tecla
+y ejecutar copiar/mover sin navegar primero hasta él. Reutilizar el selector numérico de paneles,
+`RecentDirs`, Favoritos y el historial de operaciones; el ranking debe ser local, determinista y
+sin escaneo ni servicio residente.
+
+### F-7. Vista «qué cambió desde mi última visita»
+Comparar el último listado completo conservado en memoria con el listado actual al volver a una
+carpeta y marcar elementos nuevos, modificados y desaparecidos. Primera versión solo durante la
+sesión, usando metadatos ya listados (nombre, tamaño y fecha), sin indexador ni vigilancia global.
+Los desaparecidos se presentan como información, no como filas operables. Evaluar persistencia
+opt-in únicamente después de medir memoria y utilidad real.
+
+### F-8. Comparación entre paneles accionable
+Extender la comparación rápida actual con acciones para ocultar iguales, seleccionar «solo aquí»
+o «distintos» y copiar/mover ese subconjunto al otro panel. Agregar navegación relativa enlazada
+opcional entre dos raíces: entrar a `sub/a` en un lado intenta abrir `sub/a` en el otro y muestra
+discretamente si no existe. La comparación superficial debe seguir usando solo las entradas ya
+cargadas; cualquier comparación recursiva pertenece al asistente cancelable de sincronización.
+
+### F-9. Lente de procedencia de archivos de Windows
+Mostrar bajo demanda los datos de `Zone.Identifier` (zona, URL de origen y referente cuando
+existan) en Propiedades/Inspector, con acciones explícitas para copiar la información y desbloquear
+el archivo. Implementar la lectura/escritura de ADS exclusivamente en `naygo-platform`, nunca al
+listar carpetas: solo para la selección activa y en worker. Informar las limitaciones en volúmenes
+sin ADS y exigir confirmación antes de quitar la marca de procedencia.
+
+### F-10. Bandejas guardables como conjuntos de trabajo (`.naygolist`)
+Guardar y abrir una bandeja como lista portable de referencias a archivos dispersos, sin copiar
+los datos. Debe admitir rutas absolutas y, cuando haya una raíz común declarada, rutas relativas;
+al cargar, conservar entradas ausentes marcadas como tales en vez de descartarlas silenciosamente.
+Integrar con búsqueda, filtros, exportación y operaciones por lote. Definir primero un formato
+JSON versionado, pequeño, inspeccionable y sin metadatos privados innecesarios.
 
 ---
 
@@ -96,13 +124,6 @@ o sea, intercambiar los defaults). Cambiar en `crates/core/src/keymap.rs` (entra
 el keymap del usuario ya persistido en `keybindings.json` tiene el valor viejo — decidir si se
 migra o solo aplica a instalaciones nuevas (el sistema de keymap tiene `reset_action`).
 
-### C-2. Doble Enter seguido = Ctrl+Enter en el diálogo «nueva carpeta»
-El diálogo de nueva carpeta tiene un textarea multi-línea (permite crear varias carpetas de
-una): **Enter+Enter seguidos debe equivaler a Ctrl+Enter** (confirmar y crear lo escrito).
-Implementar en el handler `key-pressed` del textarea en `crates/ui-slint/ui/new-folder.slint`:
-detectar dos Enter consecutivos (timestamp del último Enter, p. ej. < 500 ms) → disparar el
-mismo callback que Ctrl+Enter.
-
 ---
 
 ## D. Bugs/mejoras de arrastrar y soltar
@@ -114,15 +135,6 @@ derecho si aplica). Punteros: el drop entre paneles está resuelto en
 `crates/ui-slint/src/workspace_ctrl/ops.rs` (`drop_at` y siguientes); extender el hit-test de
 `body-touch` en `file-panel.slint` para detectar «fila carpeta destino» dentro del mismo panel.
 
-### D-2. BUG: no se puede arrastrar desde 7-Zip (ni apps similares) a un panel
-Arrastrar archivos desde un zip abierto en 7-Zip hacia un panel no copia nada. Causa probable:
-7-Zip no entrega `CF_HDROP` sino `CFSTR_FILEDESCRIPTOR` + `CFSTR_FILECONTENTS` (streams
-virtuales OLE), formato que el `IDropTarget` propio (`crates/platform/src/drop_target.rs`) no
-implementa. Hay que soportar esos dos formatos: leer el descriptor (nombres) y extraer los
-contenidos por `IStream` a la carpeta destino (o pedir a `core` un destino temporal).
-Reproducir también con WinRAR y con el propio Explorer de Windows (que usa CF_HDROP y sí
-funciona hoy) para no romper el camino actual.
-
 ---
 
 ## Notas de operación para la próxima sesión
@@ -132,6 +144,8 @@ funciona hoy) para no romper el camino actual.
   `scripts/check_i18n_lang.py` para los 10 idiomas al tocar claves.
 - Tras cada fix que afecte la app: rebuild de `dist` con `scripts/build-release.ps1` (el
   usuario prueba instalando desde `dist/`; ver el punto «Cómo trabajar» en AGENTS.md).
+- Validación manual del D-2 cerrado en código: arrastrar archivo + carpeta desde 7-Zip y WinRAR,
+  probar conflicto/cancelación y repetir desde Explorer para confirmar que `CF_HDROP` no regresó.
 - La máquina del usuario estuvo bajo presión de RAM (~700 MB libres): correr builds pesados
   (release con LTO) SOLOS, sin otros trabajos en paralelo.
 - `scripts/run-logged.sh` envuelve comandos pesados (deja salida + curva de RAM en

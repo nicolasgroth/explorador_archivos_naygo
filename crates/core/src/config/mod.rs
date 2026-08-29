@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
 /// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
 /// UI hardcodeaba `version: 1` y, al subir esta constante, la sesión dejaba de restaurarse.
-pub const CONFIG_VERSION: u32 = 3;
+pub const CONFIG_VERSION: u32 = 4;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,10 +295,13 @@ pub struct Settings {
     /// previos → Auto).
     #[serde(default = "default_low_power_mode")]
     pub low_power_mode: LowPowerMode,
-    /// Cuántas carpetas recientes recordar (1–100). `#[serde(default)]` por retro-compat
-    /// (settings viejo sin el campo → 50). El uso real lo clampa a 1..=100.
+    /// Cuántas visitas de carpeta conservar para Recientes y su estadística (1–1000).
+    /// `#[serde(default)]` conserva compatibilidad con settings previos.
     #[serde(default = "default_recent_limit")]
     pub recent_limit: usize,
+    /// Cuántas carpetas mostrar en el ranking de las más usadas (1–50).
+    #[serde(default = "default_frequent_dirs_limit")]
+    pub frequent_dirs_limit: usize,
     /// Mostrar el footer (barra inferior) en cada panel de archivos. `#[serde(default)]`
     /// retro-compat (settings viejo → true).
     #[serde(default = "default_footer_enabled")]
@@ -370,9 +373,14 @@ fn default_low_power_mode() -> LowPowerMode {
     LowPowerMode::Auto
 }
 
-/// Default de `recent_limit`: 50 carpetas recientes.
+/// Default de `recent_limit`: 200 visitas recientes para un ranking representativo.
 fn default_recent_limit() -> usize {
-    50
+    200
+}
+
+/// Default del ranking visible de carpetas más usadas.
+fn default_frequent_dirs_limit() -> usize {
+    10
 }
 
 /// Default de `footer_enabled`: true (mostrar el footer).
@@ -589,7 +597,8 @@ impl Default for Settings {
             preview_rules: default_preview_rules_cfg(),
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Auto,
-            recent_limit: 50,
+            recent_limit: 200,
+            frequent_dirs_limit: 10,
             footer_enabled: true,
             footer_preset: crate::footer::FooterPreset::Compact,
             footer_custom_template: String::new(),
@@ -622,6 +631,10 @@ pub struct WorkspacePersist {
     )>,
     /// Tipo de cada panel del layout (para reconstruir Tree/Inspector también).
     pub purposes: Vec<(crate::workspace::PaneId, crate::workspace::PanePurpose)>,
+    /// Árboles dedicados y el panel Files al que siguen. Ausente en sesiones
+    /// anteriores a 0.4; serde lo migra como lista vacía (árboles comunes).
+    #[serde(default)]
+    pub tree_links: Vec<(crate::workspace::PaneId, crate::workspace::PaneId)>,
 }
 
 /// Lee un archivo JSON y lo deserializa, devolviendo `None` si no existe o falla.
@@ -691,6 +704,7 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
         // Un settings de versión menor o igual se acepta y se migra por etapas (v1→v2→v3…);
         // uno de versión MAYOR (downgrade de la app) se descarta a defaults (brazo de abajo).
         Some(mut s) if s.version <= CONFIG_VERSION => {
+            let loaded_version = s.version;
             // Migración v1 → v2: forzar close_to_tray=true una vez (la X esconde a bandeja por
             // defecto). Se hace explícita para que instalaciones existentes adopten el nuevo
             // comportamiento sin que el usuario toque nada.
@@ -718,6 +732,21 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
             }
             if s.preview_rules.is_empty() {
                 s.preview_rules = crate::preview::default_preview_rules();
+            } else if loaded_version < 4 {
+                // Las reglas se persisten completas. Por eso una instalación actualizada desde
+                // una versión anterior no recibe automáticamente extensiones incorporadas más
+                // tarde (por ejemplo STL/3MF): no hay campo ausente para que actúe serde(default).
+                // Agregar solo las reglas NUEVAS que falten conserva cualquier habilitación,
+                // deshabilitación o modo que el usuario ya haya elegido.
+                for default_rule in crate::preview::default_preview_rules() {
+                    if !s
+                        .preview_rules
+                        .iter()
+                        .any(|rule| rule.ext.eq_ignore_ascii_case(&default_rule.ext))
+                    {
+                        s.preview_rules.push(default_rule);
+                    }
+                }
             }
             s.preview_text_exts_legacy.clear();
             s
@@ -781,8 +810,12 @@ pub fn save_workspace(dir: &Path, w: &WorkspacePersist) {
 
 /// Carga el keymap desde `keybindings.json`; ausente/corrupto → defaults.
 pub fn load_keymap(dir: &Path) -> crate::keymap::KeyMap {
-    read_json::<crate::keymap::KeyMap>(&dir.join("keybindings.json"))
-        .unwrap_or_else(crate::keymap::KeyMap::defaults)
+    let mut keymap = read_json::<crate::keymap::KeyMap>(&dir.join("keybindings.json"))
+        .unwrap_or_else(crate::keymap::KeyMap::defaults);
+    keymap.migrate_legacy_f3_search();
+    keymap.migrate_ctrl_tab_switch_pane();
+    keymap.migrate_legacy_ctrl_d_favorites();
+    keymap
 }
 
 /// Guarda el keymap.
@@ -894,6 +927,7 @@ mod tests {
             preview_text_exts_legacy: String::new(),
             low_power_mode: LowPowerMode::Always,
             recent_limit: 25,
+            frequent_dirs_limit: 7,
             footer_enabled: false,
             footer_preset: crate::footer::FooterPreset::Full,
             footer_custom_template: "{sel}/{total}".into(),
@@ -916,6 +950,35 @@ mod tests {
         };
         save_settings(dir.path(), &s);
         assert_eq!(load_settings(dir.path()), s);
+    }
+
+    #[test]
+    fn settings_v3_recibe_reglas_3d_sin_pisar_preferencias() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            version: 3,
+            preview_rules: vec![crate::preview::PreviewRule {
+                ext: "txt".into(),
+                enabled: false,
+                view: crate::preview::ViewMode::Text,
+            }],
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &settings);
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert!(loaded
+            .preview_rules
+            .iter()
+            .any(|rule| rule.ext == "txt" && !rule.enabled));
+        assert!(loaded
+            .preview_rules
+            .iter()
+            .any(|rule| rule.ext == "stl" && rule.enabled));
+        assert!(loaded
+            .preview_rules
+            .iter()
+            .any(|rule| rule.ext == "3mf" && rule.enabled));
     }
 
     #[test]
@@ -1178,6 +1241,7 @@ mod tests {
             active: Some(PaneId(3)),
             files: Vec::new(),
             purposes: vec![(PaneId(3), crate::workspace::PanePurpose::Files)],
+            tree_links: Vec::new(),
         };
         save_workspace(dir.path(), &persist);
         let loaded = load_workspace(dir.path()).expect("debe cargar");
@@ -1197,6 +1261,7 @@ mod tests {
         std::fs::write(dir.path().join("workspace.json"), viejo).unwrap();
         let loaded = load_workspace(dir.path()).expect("un workspace v1 debe seguir cargando");
         assert_eq!(loaded.layout.pane_ids(), vec![crate::workspace::PaneId(5)]);
+        assert!(loaded.tree_links.is_empty());
     }
 
     #[test]
@@ -1245,18 +1310,20 @@ mod tests {
     }
 
     #[test]
-    fn recent_limit_default_es_50() {
-        // (a) El default del struct es 50.
+    fn recent_limit_default_es_200() {
+        // (a) El default del struct es 200.
         let s = Settings::default();
-        assert_eq!(s.recent_limit, 50);
+        assert_eq!(s.recent_limit, 200);
+        assert_eq!(s.frequent_dirs_limit, 10);
     }
 
     #[test]
-    fn recent_limit_sin_campo_deserializa_a_50() {
-        // (b) Un JSON sin el campo (settings viejo) cae al default 50 vía #[serde(default)].
+    fn recent_limit_sin_campo_deserializa_a_200() {
+        // (b) Un JSON sin los campos nuevos cae a los defaults vía #[serde(default)].
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.recent_limit, 50);
+        assert_eq!(s.recent_limit, 200);
+        assert_eq!(s.frequent_dirs_limit, 10);
     }
 
     #[test]

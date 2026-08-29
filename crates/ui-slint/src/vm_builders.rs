@@ -74,6 +74,9 @@ pub(crate) fn int_to_purpose(p: i32) -> PanePurpose {
         4 => PanePurpose::Favorites,
         5 => PanePurpose::Preview,
         6 => PanePurpose::Operations,
+        7 => PanePurpose::Basket,
+        8 => PanePurpose::Search,
+        9 => PanePurpose::Recents,
         _ => PanePurpose::Files,
     }
 }
@@ -346,16 +349,22 @@ pub(crate) fn code_lang_label(lang: naygo_core::preview::CodeLang) -> &'static s
 }
 
 pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
-    // Ruta del archivo cargado (para "abrir con el programa del sistema"); "" si ninguno.
+    // Ruta del archivo enfocado (para "abrir con el programa del sistema"); usar `wanted`
+    // primero evita que durante una carga larga se vea el path del archivo anterior.
     let path: SharedString = c
         .preview
-        .loaded
+        .wanted
         .as_ref()
+        .or(c.preview.loaded.as_ref())
         .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
         .unwrap_or_default();
     // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
     let meta = meta_fields_model(c);
     let meta_loading = c.meta_loading();
+    let mesh_interactive = c.preview.mesh_interactive();
+    let mesh_busy = c.preview.busy() && mesh_interactive;
+    let loading = c.preview.loading();
+    let can_cancel = c.preview.can_cancel(std::time::Instant::now());
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
@@ -399,6 +408,10 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 path,
                 meta,
                 meta_loading,
+                mesh_interactive,
+                mesh_busy,
+                loading,
+                can_cancel,
             }
         }
         Some(preview::ViewCache::Image {
@@ -418,6 +431,10 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 path,
                 meta,
                 meta_loading,
+                mesh_interactive,
+                mesh_busy,
+                loading,
+                can_cancel,
             }
         }
         Some(preview::ViewCache::Message(m)) => PreviewVm {
@@ -431,6 +448,10 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             path,
             meta,
             meta_loading,
+            mesh_interactive,
+            mesh_busy,
+            loading,
+            can_cancel,
         },
         None => PreviewVm {
             mode: 0,
@@ -443,6 +464,10 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             path: SharedString::new(),
             meta,
             meta_loading,
+            mesh_interactive: false,
+            mesh_busy: false,
+            loading,
+            can_cancel,
         },
     }
 }
@@ -461,6 +486,7 @@ pub(crate) fn to_row_data(r: bridge::PlainRow) -> RowData {
         focused: r.focused,
         cut: r.cut,
         highlight: r.highlight,
+        compare_state: r.compare_state as i32,
         filter_match: r.filter_match,
         match_pre: SharedString::from(r.match_pre.as_str()),
         match_mid: SharedString::from(r.match_mid.as_str()),
@@ -495,6 +521,7 @@ pub(crate) fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
         kind: d.kind,
         del_count: d.del_count,
         del_permanent: d.del_permanent,
+        del_preview: SharedString::from(d.del_preview.as_str()),
         conflict_name: SharedString::from(d.conflict_name.as_str()),
         op_kind: d.op_kind,
         conflict_from: SharedString::from(d.conflict_from.as_str()),
@@ -690,6 +717,7 @@ pub(crate) fn to_tree_row(r: bridge::TreeRow) -> TreeRow {
         error: r.error,
         disk_percent: r.disk_percent,
         disk_detail: SharedString::from(r.disk_detail.as_str()),
+        special_icon: SharedString::from(r.special_icon.as_str()),
         icon: r.icon,
     }
 }
@@ -700,6 +728,7 @@ pub(crate) fn to_fav_tree_row(r: bridge::FavTreeRow) -> FavTreeRow {
         is_group: r.is_group,
         name: SharedString::from(r.name.as_str()),
         path: SharedString::from(r.path.as_str()),
+        path_hint: SharedString::from(r.path_hint.as_str()),
         group_id: SharedString::from(r.group_id.as_str()),
         name_path: SharedString::from(r.name_path.as_str()),
         expanded: r.expanded,

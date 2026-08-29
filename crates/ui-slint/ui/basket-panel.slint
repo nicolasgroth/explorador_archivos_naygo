@@ -1,0 +1,67 @@
+// Naygo — panel de bandeja temporal para rutas de distintas carpetas.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+
+import { Button, ListView } from "std-widgets.slint";
+import { BasketRowVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+export component BasketPanel inherits Rectangle {
+    in property <bool> active;
+    in property <[BasketRowVm]> rows;
+    callback focus-pane();
+    callback remove(int);
+    callback clear();
+    callback copy();
+    callback move-files();
+    callback delete-files();
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 5px;
+        Text { text: Tr.basket-title + " (" + root.rows.length + ")"; color: Theme.text; font-weight: 700; }
+        if root.rows.length == 0: Text {
+            text: Tr.basket-empty;
+            color: Theme.text-dim;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        if root.rows.length > 0: ListView {
+            vertical-stretch: 1;
+            for row[i] in root.rows: Rectangle {
+                height: 38px;
+                background: touch.has-hover ? Theme.hover-bg : (mod(i, 2) == 0 ? Theme.row-bg : Theme.row-alt-bg);
+                HorizontalLayout {
+                    padding-left: 6px; padding-right: 4px; spacing: 7px;
+                    Image { source: row.icon; width: 18px; height: 18px; image-fit: contain; }
+                    VerticalLayout {
+                        alignment: center; spacing: 0px; horizontal-stretch: 1;
+                        Text { text: row.name; color: Theme.text; overflow: elide; }
+                        Text { text: row.path; color: Theme.text-dim; font-size: 10px; overflow: elide; }
+                    }
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: Theme.radius-sm;
+                        background: remove-touch.has-hover ? Theme.hover-bg : transparent;
+                        Text { text: "×"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                        remove-touch := TouchArea { clicked => { root.remove(i); } }
+                    }
+                }
+                touch := TouchArea { clicked => { root.focus-pane(); } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            Button { text: Tr.basket-copy; enabled: root.rows.length > 0; clicked => { root.copy(); } }
+            Button { text: Tr.basket-move; enabled: root.rows.length > 0; clicked => { root.move-files(); } }
+            Button { text: Tr.basket-delete; enabled: root.rows.length > 0; clicked => { root.delete-files(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: Tr.basket-clear; enabled: root.rows.length > 0; clicked => { root.clear(); } }
+        }
+    }
+}

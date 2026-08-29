@@ -13,10 +13,10 @@
 //! recién entonces arranca el motor de copia. El recorrido REUSA `plan::plan_transfer_with`
 //! (no se duplica el walk); solo se le inyecta un sink de progreso y el predicado de cancelación.
 //!
-//! Solo Copy/Move pasan por aquí (son los que recorren el árbol). El resto de operaciones
-//! (Delete/Rename/Create/BatchRename) planifican en O(1) y siguen usando `plan()` directo.
+//! Copy/Move/Delete pasan por aquí porque recorren el árbol. Rename/Create/BatchRename siguen
+//! usando la planificación O(1), también dentro del worker para conservar un único contrato.
 
-use super::plan::{plan, plan_transfer_with, PlanError};
+use super::plan::{plan, plan_delete_with, plan_duplicate_with, plan_transfer_with, PlanError};
 use super::{OpKind, OpPlan, OpRequest};
 use crate::cancel::CancellationToken;
 use std::sync::mpsc::{channel, Receiver};
@@ -50,9 +50,12 @@ pub enum PlanMsg {
 pub fn spawn_plan(req: OpRequest, token: CancellationToken) -> (Receiver<PlanMsg>, JoinHandle<()>) {
     let (tx, rx) = channel();
     let handle = thread::spawn(move || {
-        // Solo Copy/Move recorren árbol; el resto planifica en O(1).
-        let is_transfer = matches!(req.kind, OpKind::Copy | OpKind::Move);
-        if !is_transfer {
+        // Copy/Move y Delete recorren árbol; el resto planifica en O(1).
+        let scans_tree = matches!(
+            req.kind,
+            OpKind::Copy | OpKind::Duplicate | OpKind::Move | OpKind::Delete { .. }
+        );
+        if !scans_tree {
             let msg = match plan(&req) {
                 Ok(p) => PlanMsg::Done(p),
                 Err(e) => PlanMsg::Failed(e),
@@ -79,7 +82,13 @@ pub fn spawn_plan(req: OpRequest, token: CancellationToken) -> (Receiver<PlanMsg
             }
         };
         let cancelled = || token.is_cancelled();
-        let result = plan_transfer_with(&req, &mut sink, &cancelled);
+        let result = if matches!(req.kind, OpKind::Delete { .. }) {
+            plan_delete_with(&req, &mut sink, &cancelled)
+        } else if matches!(req.kind, OpKind::Duplicate) {
+            plan_duplicate_with(&req, &mut sink, &cancelled)
+        } else {
+            plan_transfer_with(&req, &mut sink, &cancelled)
+        };
 
         // Si se canceló durante el escaneo, prima el `Cancelled` (el plan parcial se descarta).
         if token.is_cancelled() {
@@ -192,21 +201,37 @@ mod tests {
     }
 
     #[test]
-    fn delete_planifica_directo_sin_recorrer_arbol() {
-        // Una op que no recorre árbol (Delete) igual pasa por spawn_plan y emite Done O(1).
+    fn delete_recorre_arbol_y_reporta_items_y_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("a.txt");
-        fs::write(&f, b"x").unwrap();
+        let root = dir.path().join("borrar");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("a.txt"), b"123").unwrap();
+        let sub = root.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("b.bin"), b"12345").unwrap();
         let req = OpRequest {
             kind: OpKind::Delete { to_trash: false },
-            sources: vec![f],
+            sources: vec![root.clone()],
             dest_dir: None,
             conflict: ConflictPolicy::Overwrite,
         };
         let token = CancellationToken::new();
         let (rx, _h) = spawn_plan(req, token);
         let msgs = drain(rx);
-        assert!(msgs.iter().any(|m| matches!(m, PlanMsg::Done(_))));
+        let plan = msgs
+            .iter()
+            .find_map(|m| match m {
+                PlanMsg::Done(plan) => Some(plan),
+                _ => None,
+            })
+            .expect("emite el plan final");
+        assert_eq!(plan.total_files, 4); // dos archivos + dos carpetas
+        assert_eq!(plan.total_bytes, 8);
+        assert_eq!(
+            plan.steps.last().map(|s| s.to.as_path()),
+            Some(root.as_path())
+        );
+        assert!(msgs.iter().any(|m| matches!(m, PlanMsg::Progress { .. })));
     }
 
     #[test]

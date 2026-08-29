@@ -118,6 +118,29 @@ fn subtree_remove(nodes: &mut Vec<FavNode>, path: &Path) {
     }
 }
 
+/// Cambia la etiqueta de una hoja favorita, sin modificar su ruta ni su lugar en el árbol.
+/// Las rutas son únicas en el modelo, por lo que la primera coincidencia encontrada es la única.
+fn subtree_rename_favorite(nodes: &mut [FavNode], path: &Path, label: &str) -> bool {
+    for node in nodes {
+        match node {
+            FavNode::Favorite {
+                path: node_path,
+                label: node_label,
+            } if node_path == path => {
+                *node_label = label.to_string();
+                return true;
+            }
+            FavNode::Group { children, .. } => {
+                if subtree_rename_favorite(children, path, label) {
+                    return true;
+                }
+            }
+            FavNode::Favorite { .. } => {}
+        }
+    }
+    false
+}
+
 /// Recorre el subárbol en pre-orden y empuja cada hoja a `out` (orden de `Ctrl+1..9`).
 fn flatten_into(nodes: &[FavNode], out: &mut Vec<Favorite>) {
     for n in nodes {
@@ -216,6 +239,13 @@ impl Favorites {
         if let Some(FavNode::Group { name: n, .. }) = node_at_mut(&mut self.roots, id) {
             *n = name.to_string();
         }
+    }
+
+    /// Renombra el alias visible de una carpeta favorita. Una etiqueta vacía se ignora: la
+    /// carpeta conserva siempre un identificador legible y el usuario nunca pierde el acceso.
+    pub fn rename_favorite(&mut self, path: &Path, label: &str) -> bool {
+        let label = label.trim();
+        !label.is_empty() && subtree_rename_favorite(&mut self.roots, path, label)
     }
 
     /// Mueve un nodo (favorito por ruta, o grupo por id) a `new_parent` (o a la raíz
@@ -461,6 +491,21 @@ mod tests {
             .roots()
             .iter()
             .any(|n| matches!(n, FavNode::Group { name, .. } if name == "Nuevo")));
+    }
+
+    #[test]
+    fn renombrar_alias_de_favorito_conserva_ruta_y_arbol() {
+        let mut f = Favorites::default();
+        let path = p("D:/Trabajo/Informe");
+        f.add_favorite(&path);
+        let g = f.new_group(None, "Proyectos");
+        f.move_node(&NodeId::favorite(&path), Some(&g));
+
+        assert!(f.rename_favorite(&path, "Informe Q3"));
+        assert_eq!(f.list_flat()[0].label, "Informe Q3");
+        assert_eq!(f.list_flat()[0].path, path);
+        assert!(!f.rename_favorite(&p("D:/ausente"), "Nada"));
+        assert!(!f.rename_favorite(&p("D:/Trabajo/Informe"), "  "));
     }
 
     #[test]

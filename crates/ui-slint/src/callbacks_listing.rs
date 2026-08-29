@@ -175,8 +175,9 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_sort_by(move |_id, col| {
-            ctrl.borrow_mut().on_sort_by(col.as_str());
+        ui.on_sort_by(move |id, col| {
+            ctrl.borrow_mut()
+                .on_sort_by(PaneId(id as u64), col.as_str());
             sync_rows();
         });
     }
@@ -184,8 +185,8 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
-        ui.on_sort_by_kind(move |_id, kind| {
-            ctrl.borrow_mut().sort_by_kind(kind);
+        ui.on_sort_by_kind(move |id, kind| {
+            ctrl.borrow_mut().sort_by_kind(PaneId(id as u64), kind);
             sync_rows();
         });
     }

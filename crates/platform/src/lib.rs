@@ -19,6 +19,7 @@ pub mod drop_target;
 pub mod eject;
 pub mod exe_meta;
 pub mod global_hotkey;
+pub mod known_folders;
 pub mod locale;
 pub mod open;
 pub mod single_instance;

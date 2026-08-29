@@ -45,6 +45,31 @@ cargo test -p naygo-ui-slint         # controladores de UI (sin ventana)
 cargo test -p naygo-core --test flujos_ops   # solo los flujos end-to-end de operaciones
 ```
 
+## Smoke visual post-build (Windows interactivo)
+
+La suite Rust prueba los controladores sin abrir una ventana. Antes de distribuir una versión,
+en un escritorio Windows real y con **todas las instancias de Naygo cerradas**, correr:
+
+```powershell
+# Compilación normal de prueba:
+cargo build -p naygo-ui-slint
+scripts\smoke-ui.ps1
+
+# O bien, contra el binario release recién generado:
+scripts\smoke-ui.ps1 -Exe target\release\naygo.exe
+```
+
+El smoke ejecuta los flujos de editor de ruta y selección/scroll mediante clics y teclas reales.
+Exige que la instancia abra una ventana, produce al menos seis capturas en
+`target\ui-smoke\<fecha>/`, y falla si el log nuevo del ejecutable contiene un panic. Las capturas
+son parte de la revisión humana: confirmar que el editor conserva el cursor tras `Shift+X` y que
+la selección se mantiene visible tras el movimiento/filtrado.
+
+No se agrega a GitHub Actions: los runners Windows alojados no tienen una sesión de escritorio
+interactiva fiable para `SendKeys`, foco de ventana y captura de pantalla. En una sesión no
+interactiva el script informa que fue omitido y termina correctamente; para un release este paso
+se realiza manualmente en la máquina de empaquetado.
+
 ## Qué cubre la suite
 
 Las pruebas se reparten en tres capas, igual que el código:
@@ -68,7 +93,7 @@ Las pruebas se reparten en tres capas, igual que el código:
 | **Cancelación** | Cancelar antes de empezar, durante el escaneo del plan y durante la espera. Una copia cancelada no deja basura. |
 | **Batch-rename** | Plan ordenado por dependencia (corrimientos en cadena), rechazo de ciclos puros `a↔b`, ejecución real en disco. |
 | **Deshacer** | Round-trip ejecutado: mover/renombrar → construir el inverso → re-emitir → verificar que el disco vuelve a su estado previo. Borrar no es deshacible (contrato v1). |
-| **Drag & drop (lógica)** | `drop_at` enruta al panel bajo el cursor (no al activo); `move_hint` del OLE fuerza mover; mismo disco sin modificadores mueve por defecto; rubber-band; `same_drive` con rutas mixtas/UNC. |
+| **Drag & drop (lógica)** | `drop_at` enruta al panel bajo el cursor (no al activo); `move_hint` del OLE fuerza mover; mismo disco sin modificadores mueve por defecto; rubber-band; `same_drive` con rutas mixtas/UNC. En platform, los descriptores OLE virtuales validan límites/rutas y conservan solo sus raíces superiores. |
 | **Listado y vista** | Streaming, atributos ocultos/sistema, `is_visible` (filtro ocultos/sistema/dotfiles), `compute_view_indices` (filtro + orden + selección alineada), vista profunda recursiva, tamaño de carpeta, búsqueda recursiva. |
 | **Navegación** | Historial atrás/adelante, favoritos (árbol de grupos anidados + migración del formato plano viejo), recientes, caché de carpetas. |
 | **Config / Settings** | Persistencia round-trip (serde), migración de settings viejos a defaults nuevos, import/export de packs, temas (catálogo de 5, tema de usuario round-trip, `theme_slug`, `is_builtin_id`), i18n (paridad es/en). |

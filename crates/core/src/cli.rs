@@ -48,6 +48,8 @@ pub struct CliArgs {
     /// Arrancar minimizado en la bandeja (sin mostrar la ventana). Lo escribe la entrada
     /// Run del registro cuando `autostart_minimized` está activo.
     pub tray: bool,
+    /// Pide a una instancia ya abierta que termine limpiamente y sale. Uso interno del instalador.
+    pub shutdown: bool,
 }
 
 /// Parsea los argumentos (SIN el ejecutable). `is_dir` valida la carpeta posicional (inyectable
@@ -64,6 +66,7 @@ pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
             "--help" | "-h" => out.help = true,
             "--version" | "-v" => out.version = true,
             "--tray" => out.tray = true,
+            "--shutdown" => out.shutdown = true,
             "--theme" => {
                 if let Some(v) = args.get(i + 1) {
                     out.theme = Some(v.clone());
@@ -225,6 +228,13 @@ mod tests {
         assert!(!parse_args(&[s("D:\\dir")], |_| true).tray);
         let b = parse_args(&[s("--tray"), s("D:\\dir")], |_| true);
         assert!(b.tray && b.dir == Some(PathBuf::from("D:\\dir")));
+    }
+
+    #[test]
+    fn parse_flag_shutdown() {
+        let a = parse_args(&[s("--shutdown")], |_| true);
+        assert!(a.shutdown);
+        assert!(a.dir.is_none());
     }
 
     #[test]

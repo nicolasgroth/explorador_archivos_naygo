@@ -376,16 +376,19 @@ export component ConfigWindow inherits Window {
     in property <[int]> editing-token-r;
     in property <[int]> editing-token-g;
     in property <[int]> editing-token-b;
-    // Nombres legibles de los 12 tokens (orden = índice del token; el 12º es row-inactive-bg).
+    // Nombres legibles de los 14 tokens (orden = índice del token).
     property <[string]> token-names: [
         Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
         Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
         Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border, Tr.theme-tok-row-inactive-bg,
+        Tr.theme-tok-active-panel-bg, Tr.theme-tok-inactive-panel-bg,
     ];
     // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
     // edición).
     in property <bool> editing-flat-inactive: false;
     callback theme-set-flat-inactive(bool);
+    in property <bool> editing-use-inactive-row-color: true;
+    callback theme-set-use-inactive-row-color(bool);
     // Token cuyo picker está abierto/expandido (-1 = ninguno).
     property <int> editing-open-token: -1;
     callback theme-set-name(string);
@@ -408,9 +411,11 @@ export component ConfigWindow inherits Window {
     callback set-close-to-tray(bool);
     callback set-global-hotkey-enabled(bool);
     callback factory-reset();
-    // Historial de carpetas recientes (límite 1–100).
-    in property <int> recent-limit: 50;
+    // Historial de carpetas recientes (ventana 1–1000) y ranking (1–50).
+    in property <int> recent-limit: 200;
     callback recent-limit-changed(int);
+    in property <int> frequent-dirs-limit: 10;
+    callback frequent-dirs-limit-changed(int);
     // Auto-resaltado de código (Previsualización).
     in property <bool> auto-highlight-code: true;
     callback set-auto-highlight-code(bool);
@@ -961,7 +966,7 @@ export component ConfigWindow inherits Window {
                                                 selected => { root.theme-set-base(self.current-index); }
                                             }
                                         }
-                                        // Los 11 tokens. Cada fila: muestra + nombre + hex; clic abre/cierra el picker.
+                                        // Los tokens. Cada fila: muestra + nombre + hex; clic abre/cierra el picker.
                                         for tname[ti] in root.token-names: VerticalLayout {
                                             spacing: 4px;
                                             Rectangle {
@@ -1022,6 +1027,10 @@ export component ConfigWindow inherits Window {
                                                 more-colors-label: Tr.theme-more-colors;
                                                 changed(hex) => { root.theme-set-token(ti, hex); }
                                             }
+                                        }
+                                        Field {
+                                            label: Tr.theme-use-inactive-row-color;
+                                            Switch { checked: root.editing-use-inactive-row-color; toggled => { root.theme-set-use-inactive-row-color(self.checked); } }
                                         }
                                         // Casilla "paneles inactivos planos": cuando se activa, las filas
                                         // de un panel NO activo se pintan sin la cebra (todas del color
@@ -1436,23 +1445,38 @@ export component ConfigWindow inherits Window {
                                         }
                                     }
                                 }
-                                // Historial de carpetas recientes: límite configurable (1–100).
+                                // Historial de carpetas recientes: ventana configurable (1–1000).
                                 Field {
                                     label: Tr.cfg-recent-limit;
                                     tip: Tr.cfg-tip-recent-limit;
                                     LineEdit {
                                         text: root.recent-limit + "";
                                         width: root.ctl-w;
-                                        placeholder-text: "1–100";
+                                        placeholder-text: "1–1000";
                                         edited(t) => {
-                                            // Clampear al vuelo: acepta solo enteros 1–100.
+                                            // Clampear al vuelo: acepta solo enteros 1–1000.
                                             // `to-float` devuelve 0 si no parsea; vacío/texto
                                             // quedan en 0 < 1 y no entran al if (no se aplican).
                                             // Si el valor está fuera de rango se clampa a 1-100
                                             // y se reescribe el campo visualmente al valor corregido.
                                             if (t.to-float() >= 1) {
-                                                self.text = max(1, min(100, Math.round(t.to-float()))) + "";
-                                                root.recent-limit-changed(max(1, min(100, Math.round(t.to-float()))));
+                                                self.text = max(1, min(1000, Math.round(t.to-float()))) + "";
+                                                root.recent-limit-changed(max(1, min(1000, Math.round(t.to-float()))));
+                                            }
+                                        }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-frequent-dirs-limit;
+                                    tip: Tr.cfg-tip-frequent-dirs-limit;
+                                    LineEdit {
+                                        text: root.frequent-dirs-limit + "";
+                                        width: root.ctl-w;
+                                        placeholder-text: "1–50";
+                                        edited(t) => {
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(50, Math.round(t.to-float()))) + "";
+                                                root.frequent-dirs-limit-changed(max(1, min(50, Math.round(t.to-float()))));
                                             }
                                         }
                                     }

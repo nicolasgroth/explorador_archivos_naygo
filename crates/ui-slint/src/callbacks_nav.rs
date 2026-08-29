@@ -36,6 +36,17 @@ pub(crate) fn wire_nav_keys(ui: &AppWindow, ctx: &WireCtx) {
             sync_rows();
         });
     }
+    // Alternar el modo "ocultar no-coincidencias" del filtro por tipeo.
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_filter_toggle_hide(move |_id| {
+            ctrl.borrow_mut().toggle_filter_hide_nonmatches();
+            start_timer();
+            sync_rows();
+        });
+    }
     // Limpiar el filtro visual por tipeo (clic en la ✕ de la mini-barra del panel).
     {
         let ctrl = ctrl.clone();
@@ -276,6 +287,16 @@ pub(crate) fn wire_nav_go(ui: &AppWindow, ctx: &WireCtx) {
         ui.on_add_pane_of(move |purpose| {
             ctrl.borrow_mut()
                 .add_pane_of(int_to_purpose(purpose), area_of());
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_add_linked_browser(move || {
+            ctrl.borrow_mut().add_linked_browser();
             start_timer();
             sync_layout();
         });

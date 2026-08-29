@@ -11,6 +11,7 @@ use std::path::Path;
 
 pub mod audio_meta;
 pub mod image_meta;
+pub mod mesh_meta;
 pub mod office_meta;
 pub mod pdf_meta;
 
@@ -50,6 +51,7 @@ fn ensure_core_providers() {
         register_provider(Box::new(audio_meta::AudioMeta));
         register_provider(Box::new(office_meta::OfficeMeta));
         register_provider(Box::new(pdf_meta::PdfMeta));
+        register_provider(Box::new(mesh_meta::MeshMeta));
     });
 }
 

@@ -12,11 +12,16 @@ use naygo_core::cancel::CancellationToken;
 use naygo_core::highlight::HlLine;
 use naygo_core::preview::{self, CodeLang, PreviewKind, PreviewRule};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 /// Debounce: mover rápido por una carpeta NO dispara una lectura por archivo.
 pub const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Tras este tiempo sin contenido para el archivo enfocado, la UI ofrece cancelar. No es un
+/// timeout: una red lenta o un archivo grande puede seguir; la decisión final siempre es del
+/// usuario y el worker recibe el token cooperativo.
+pub const PREVIEW_CANCEL_AFTER: Duration = Duration::from_secs(5);
 
 /// Última vista entregada, cacheada para pintar en cada tick sin reconstruir el worker
 /// (evita parpadeo entre el momento en que llega el resultado y el siguiente foco). Guarda
@@ -99,6 +104,15 @@ impl Default for PreviewMessages {
     }
 }
 
+type MeshLoadMessage = (
+    PathBuf,
+    Result<Arc<naygo_core::mesh_preview::MeshScene>, naygo_core::mesh_preview::MeshError>,
+);
+type MeshRenderMessage = (
+    PathBuf,
+    Result<naygo_core::mesh_preview::MeshPreview, naygo_core::mesh_preview::MeshError>,
+);
+
 /// Estado del preview: qué se quiere, desde cuándo (debounce), qué está cargado, el worker
 /// en vuelo y su token. Es propiedad del controlador.
 pub struct PreviewState {
@@ -106,6 +120,9 @@ pub struct PreviewState {
     pub wanted: Option<PathBuf>,
     /// Ancla del debounce desde el último cambio de `wanted`.
     since: Option<Instant>,
+    /// Inicio del worker que todavía no entregó contenido para el archivo enfocado. Es distinto
+    /// de `since`: el debounce no cuenta para los cinco segundos del botón Cancelar.
+    loading_since: Option<Instant>,
     /// Path cuyo `Payload` ya está cargado y entregado a la UI.
     pub loaded: Option<PathBuf>,
     /// Worker en vuelo (envía una vez y termina).
@@ -123,6 +140,17 @@ pub struct PreviewState {
     preview_msgs: PreviewMessages,
     /// Última vista entregada (para pintar en cada tick). `None` = nada cargado aún.
     last: Option<ViewCache>,
+    /// Escena 3D cargada en memoria para que arrastrar el modelo no vuelva a leer STL/3MF desde
+    /// disco. `Arc` permite pasarla al worker de rasterización sin copiar sus triángulos.
+    mesh_scene: Option<(PathBuf, Arc<naygo_core::mesh_preview::MeshScene>)>,
+    /// Worker que carga la geometría real al iniciar la primera interacción 3D.
+    mesh_load_rx: Option<Receiver<MeshLoadMessage>>,
+    /// Worker de rasterización de la escena ya cacheada.
+    mesh_render_rx: Option<Receiver<MeshRenderMessage>>,
+    /// Token compartido por la carga/rasterización 3D; se cancela al cambiar de archivo.
+    mesh_token: Option<CancellationToken>,
+    /// Cámara acumulada por arrastre/rueda. El último gesto reemplaza el render pendiente.
+    mesh_camera: naygo_core::mesh_preview::MeshCamera,
 }
 
 impl Default for PreviewState {
@@ -130,6 +158,7 @@ impl Default for PreviewState {
         PreviewState {
             wanted: None,
             since: None,
+            loading_since: None,
             loaded: None,
             rx: None,
             token: None,
@@ -144,6 +173,11 @@ impl Default for PreviewState {
             },
             preview_msgs: PreviewMessages::default(),
             last: None,
+            mesh_scene: None,
+            mesh_load_rx: None,
+            mesh_render_rx: None,
+            mesh_token: None,
+            mesh_camera: naygo_core::mesh_preview::MeshCamera::default(),
         }
     }
 }
@@ -161,14 +195,22 @@ impl PreviewState {
         }
         self.wanted = file.clone();
         self.since = Some(now);
+        self.loading_since = None;
         if let Some(t) = self.token.take() {
             t.cancel();
         }
-        self.rx = None;
-        if file.is_none() {
-            self.loaded = None;
-            self.last = None;
+        if let Some(t) = self.mesh_token.take() {
+            t.cancel();
         }
+        self.rx = None;
+        self.mesh_load_rx = None;
+        self.mesh_render_rx = None;
+        self.mesh_scene = None;
+        self.mesh_camera = naygo_core::mesh_preview::MeshCamera::default();
+        // No conservar el contenido del archivo anterior bajo la ruta recién enfocada: además de
+        // ser engañoso, impedía saber que el preview actual llevaba demasiado tiempo cargando.
+        self.loaded = None;
+        self.last = None;
         true
     }
 
@@ -245,16 +287,26 @@ impl PreviewState {
         });
         self.token = Some(token);
         self.rx = Some(rx);
+        self.loading_since = Some(Instant::now());
     }
 
     /// Drena el worker (sin bloquear). Si llegó un resultado para el path aún enfocado, lo
     /// devuelve y marca `loaded`; un resultado obsoleto se descarta. None si nada listo.
     pub fn poll(&mut self) -> Option<Payload> {
+        let payload = self.poll_primary();
+        if payload.is_some() {
+            return payload;
+        }
+        self.poll_mesh()
+    }
+
+    fn poll_primary(&mut self) -> Option<Payload> {
         let rx = self.rx.as_ref()?;
         match rx.try_recv() {
             Ok((path, payload)) => {
                 self.rx = None;
                 self.token = None;
+                self.loading_since = None;
                 if Some(&path) == self.wanted.as_ref() {
                     self.loaded = Some(path);
                     self.last = Some(match &payload {
@@ -287,8 +339,201 @@ impl PreviewState {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.rx = None;
                 self.token = None;
+                self.loading_since = None;
                 None
             }
+        }
+    }
+
+    /// Indica si el archivo actual es una malla que acepta interacción. La miniatura inicial de
+    /// un 3MF sigue siendo válida; la geometría real se carga recién al primer gesto.
+    pub fn mesh_interactive(&self) -> bool {
+        self.loaded
+            .as_ref()
+            .or(self.wanted.as_ref())
+            .and_then(|path| path.extension())
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("stl") || ext.eq_ignore_ascii_case("3mf"))
+    }
+
+    /// Ajusta la cámara desde la UI. Nunca lee disco en el hilo de UI: si la escena aún no está en
+    /// memoria, arranca un worker de carga; si ya está, rasteriza en otro worker.
+    pub fn orbit_mesh(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        if !self.mesh_interactive() {
+            return false;
+        }
+        self.mesh_camera.yaw_degrees += delta_x * 0.45;
+        self.mesh_camera.pitch_degrees =
+            (self.mesh_camera.pitch_degrees - delta_y * 0.35).clamp(-85.0, 85.0);
+        self.request_mesh_render()
+    }
+
+    /// Aplica zoom exponencial suave para que rueda y touchpad se sientan iguales en modelos muy
+    /// grandes y muy chicos. El clamp final también existe en core como defensa adicional.
+    pub fn zoom_mesh(&mut self, wheel_delta: f32) -> bool {
+        if !self.mesh_interactive() {
+            return false;
+        }
+        self.mesh_camera.zoom =
+            (self.mesh_camera.zoom * (1.0 + wheel_delta * 0.0015)).clamp(0.25, 4.0);
+        self.request_mesh_render()
+    }
+
+    /// Restaura la cámara ortográfica inicial del STL/3MF. La geometría cacheada se reutiliza;
+    /// solo se encola un nuevo raster en el worker.
+    pub fn reset_mesh_camera(&mut self) -> bool {
+        if !self.mesh_interactive() {
+            return false;
+        }
+        self.mesh_camera = naygo_core::mesh_preview::MeshCamera::default();
+        self.request_mesh_render()
+    }
+
+    /// Indica que el preview enfocado está esperando contenido (sin mostrar el del archivo
+    /// anterior). La UI lo usa para una señal de carga discreta y el botón Cancelar tardío.
+    pub fn loading(&self) -> bool {
+        self.loading_since.is_some() && self.last.is_none()
+    }
+
+    /// El botón se ofrece después de cinco segundos, no antes, y solo si aún no hay contenido.
+    pub fn can_cancel(&self, now: Instant) -> bool {
+        self.loading()
+            && self
+                .loading_since
+                .is_some_and(|started| now.duration_since(started) >= PREVIEW_CANCEL_AFTER)
+    }
+
+    /// Cancela todos los workers del archivo enfocado y deja un resultado terminal para evitar
+    /// que `drive_preview` lance el mismo preview otra vez en el siguiente tick.
+    pub fn cancel(&mut self) -> bool {
+        let active =
+            self.rx.is_some() || self.mesh_load_rx.is_some() || self.mesh_render_rx.is_some();
+        if let Some(token) = self.token.take() {
+            token.cancel();
+        }
+        if let Some(token) = self.mesh_token.take() {
+            token.cancel();
+        }
+        self.rx = None;
+        self.mesh_load_rx = None;
+        self.mesh_render_rx = None;
+        self.loading_since = None;
+        if active {
+            if let Some(path) = self.wanted.clone() {
+                self.loaded = Some(path);
+            }
+            self.last = Some(ViewCache::Message(self.preview_msgs.cancelled.clone()));
+        }
+        active
+    }
+
+    fn request_mesh_render(&mut self) -> bool {
+        let Some(path) = self.loaded.clone().or_else(|| self.wanted.clone()) else {
+            return false;
+        };
+        if let Some((scene_path, scene)) = self.mesh_scene.as_ref().cloned() {
+            if scene_path == path {
+                self.start_mesh_render(path, scene);
+                return true;
+            }
+        }
+        if self.mesh_load_rx.is_none() {
+            let token = CancellationToken::new();
+            let worker_token = token.clone();
+            let load_path = path.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let scene =
+                    naygo_core::mesh_preview::load_scene(&load_path, &worker_token).map(Arc::new);
+                let _ = tx.send((load_path, scene));
+            });
+            self.mesh_token = Some(token);
+            self.mesh_load_rx = Some(rx);
+        }
+        true
+    }
+
+    fn start_mesh_render(
+        &mut self,
+        path: PathBuf,
+        scene: Arc<naygo_core::mesh_preview::MeshScene>,
+    ) {
+        if let Some(token) = self.mesh_token.take() {
+            token.cancel();
+        }
+        let token = CancellationToken::new();
+        let worker_token = token.clone();
+        let camera = self.mesh_camera;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let preview =
+                naygo_core::mesh_preview::render_scene(&scene, 800, 600, camera, &worker_token);
+            let _ = tx.send((path, preview));
+        });
+        self.mesh_token = Some(token);
+        self.mesh_render_rx = Some(rx);
+    }
+
+    fn poll_mesh(&mut self) -> Option<Payload> {
+        if let Some(rx) = self.mesh_load_rx.as_ref() {
+            match rx.try_recv() {
+                Ok((path, Ok(scene))) => {
+                    self.mesh_load_rx = None;
+                    if Some(&path) == self.loaded.as_ref().or(self.wanted.as_ref()) {
+                        self.mesh_scene = Some((path.clone(), scene.clone()));
+                        self.start_mesh_render(path, scene);
+                    }
+                }
+                Ok((_path, Err(error))) => {
+                    self.mesh_load_rx = None;
+                    self.mesh_token = None;
+                    return Some(mesh_error_payload(error, &self.preview_msgs));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.mesh_load_rx = None;
+                    self.mesh_token = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let rx = self.mesh_render_rx.as_ref()?;
+        match rx.try_recv() {
+            Ok((path, Ok(preview)))
+                if Some(&path) == self.loaded.as_ref().or(self.wanted.as_ref()) =>
+            {
+                self.mesh_render_rx = None;
+                self.mesh_token = None;
+                let payload = Payload::Image {
+                    rgba: preview.rgba,
+                    width: preview.width,
+                    height: preview.height,
+                };
+                self.last = Some(match &payload {
+                    Payload::Image {
+                        rgba,
+                        width,
+                        height,
+                    } => ViewCache::Image {
+                        rgba: rgba.clone(),
+                        width: *width,
+                        height: *height,
+                    },
+                    _ => unreachable!(),
+                });
+                Some(payload)
+            }
+            Ok((_path, Err(error))) => {
+                self.mesh_render_rx = None;
+                self.mesh_token = None;
+                self.loading_since = None;
+                Some(mesh_error_payload(error, &self.preview_msgs))
+            }
+            Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.mesh_render_rx = None;
+                self.mesh_token = None;
+                None
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
         }
     }
 
@@ -296,10 +541,26 @@ impl PreviewState {
     /// siga vivo hasta entregar el preview.
     pub fn busy(&self) -> bool {
         self.rx.is_some()
+            || self.mesh_load_rx.is_some()
+            || self.mesh_render_rx.is_some()
             || match (&self.wanted, &self.loaded) {
                 (Some(w), loaded) => Some(w) != loaded.as_ref(),
                 _ => false,
             }
+    }
+}
+
+fn mesh_error_payload(
+    error: naygo_core::mesh_preview::MeshError,
+    msgs: &PreviewMessages,
+) -> Payload {
+    match error {
+        naygo_core::mesh_preview::MeshError::Cancelled => Payload::Message(msgs.cancelled.clone()),
+        naygo_core::mesh_preview::MeshError::TooLarge
+        | naygo_core::mesh_preview::MeshError::TooManyTriangles => {
+            Payload::Message(msgs.image_big.clone())
+        }
+        _ => Payload::Message(msgs.decode.clone()),
     }
 }
 
@@ -329,6 +590,26 @@ fn build_payload(
         PreviewKind::Image => read_image(path, token, msgs),
         PreviewKind::Svg => read_svg(path, token, msgs),
         PreviewKind::Pdf => read_pdf(path, msgs),
+        PreviewKind::Mesh => read_mesh(path, token, msgs),
+    }
+}
+
+/// Rasteriza STL/3MF en CPU. El core impone límites de bytes/triángulos y consulta el token.
+fn read_mesh(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
+    match naygo_core::mesh_preview::render_file(path, 800, 600, token) {
+        Ok(preview) => Payload::Image {
+            rgba: preview.rgba,
+            width: preview.width,
+            height: preview.height,
+        },
+        Err(naygo_core::mesh_preview::MeshError::Cancelled) => {
+            Payload::Message(msgs.cancelled.clone())
+        }
+        Err(naygo_core::mesh_preview::MeshError::TooLarge)
+        | Err(naygo_core::mesh_preview::MeshError::TooManyTriangles) => {
+            Payload::Message(msgs.image_big.clone())
+        }
+        Err(_) => Payload::Message(msgs.decode.clone()),
     }
 }
 
@@ -819,6 +1100,18 @@ mod tests {
         s.set_wanted(None, t0);
         assert!(!s.busy());
         assert!(!s.should_start(t0 + PREVIEW_DEBOUNCE));
+    }
+
+    #[test]
+    fn cancelar_preview_se_ofrece_solo_despues_de_cinco_segundos_sin_contenido() {
+        let mut s = PreviewState::new();
+        let t0 = Instant::now();
+        s.set_wanted(Some(PathBuf::from("C:/x/lento.stl")), t0);
+        // Simula el instante en que ya arrancó un worker (el test no toca disco ni hilos).
+        s.loading_since = Some(t0);
+        assert!(s.loading());
+        assert!(!s.can_cancel(t0 + PREVIEW_CANCEL_AFTER - Duration::from_millis(1)));
+        assert!(s.can_cancel(t0 + PREVIEW_CANCEL_AFTER));
     }
 
     #[test]

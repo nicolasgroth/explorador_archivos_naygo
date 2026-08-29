@@ -88,6 +88,10 @@ pub struct Theme {
     pub base: ThemeBase,
     pub accent: ThemeColor,
     pub panel_bg: ThemeColor,
+    /// Fondo del panel Files activo. Al faltar en temas existentes cae a `panel_bg`.
+    pub active_panel_bg: ThemeColor,
+    /// Fondo de panel Files inactivo y paneles de información. Al faltar cae a `panel_bg`.
+    pub inactive_panel_bg: ThemeColor,
     pub row_bg: ThemeColor,
     pub row_alt_bg: ThemeColor,
     /// Fondo de las filas de los paneles NO activos. Por defecto = `row_bg` (no se nota hasta que
@@ -104,16 +108,20 @@ pub struct Theme {
     /// Cuando es `true`, las filas de un panel NO activo se pintan TODAS del mismo color (sin la
     /// alternancia cebra), de modo que el panel inactivo se ve "plano". Por defecto `false`.
     pub flat_inactive_panels: bool,
+    /// Si es false, las filas inactivas usan la misma cebra neutra que el panel activo.
+    pub use_inactive_row_color: bool,
 }
 
 impl Serialize for Theme {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Theme", 15)?;
+        let mut st = s.serialize_struct("Theme", 18)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("base", &self.base)?;
         st.serialize_field("accent", &self.accent)?;
         st.serialize_field("panel_bg", &self.panel_bg)?;
+        st.serialize_field("active_panel_bg", &self.active_panel_bg)?;
+        st.serialize_field("inactive_panel_bg", &self.inactive_panel_bg)?;
         st.serialize_field("row_bg", &self.row_bg)?;
         st.serialize_field("row_alt_bg", &self.row_alt_bg)?;
         st.serialize_field("row_inactive_bg", &self.row_inactive_bg)?;
@@ -125,6 +133,7 @@ impl Serialize for Theme {
         st.serialize_field("highlight", &self.highlight)?;
         st.serialize_field("border", &self.border)?;
         st.serialize_field("flat_inactive_panels", &self.flat_inactive_panels)?;
+        st.serialize_field("use_inactive_row_color", &self.use_inactive_row_color)?;
         st.end()
     }
 }
@@ -136,6 +145,8 @@ struct ThemeRaw {
     base: Option<ThemeBase>,
     accent: Option<ThemeColor>,
     panel_bg: Option<ThemeColor>,
+    active_panel_bg: Option<ThemeColor>,
+    inactive_panel_bg: Option<ThemeColor>,
     row_bg: Option<ThemeColor>,
     row_alt_bg: Option<ThemeColor>,
     row_inactive_bg: Option<ThemeColor>,
@@ -147,6 +158,7 @@ struct ThemeRaw {
     highlight: Option<ThemeColor>,
     border: Option<ThemeColor>,
     flat_inactive_panels: Option<bool>,
+    use_inactive_row_color: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for Theme {
@@ -157,11 +169,14 @@ impl<'de> Deserialize<'de> for Theme {
         // Resolver `row_bg` PRIMERO: es el fallback de `row_inactive_bg`, así un tema viejo (o
         // recién creado) sin ese campo deja los paneles inactivos idénticos a los activos.
         let row_bg = raw.row_bg.unwrap_or(def.row_bg);
+        let panel_bg = raw.panel_bg.unwrap_or(def.panel_bg);
         Ok(Theme {
             name: raw.name.unwrap_or(def.name),
             base,
             accent: raw.accent.unwrap_or(def.accent),
-            panel_bg: raw.panel_bg.unwrap_or(def.panel_bg),
+            panel_bg,
+            active_panel_bg: raw.active_panel_bg.unwrap_or(panel_bg),
+            inactive_panel_bg: raw.inactive_panel_bg.unwrap_or(panel_bg),
             row_bg,
             row_alt_bg: raw.row_alt_bg.unwrap_or(def.row_alt_bg),
             // Por defecto = `row_bg` resuelto (no el del default): sin cambio visible hasta atenuar.
@@ -175,6 +190,7 @@ impl<'de> Deserialize<'de> for Theme {
             border: raw.border.unwrap_or(def.border),
             // Default false: comportamiento actual (cebra en todos los paneles).
             flat_inactive_panels: raw.flat_inactive_panels.unwrap_or(false),
+            use_inactive_row_color: raw.use_inactive_row_color.unwrap_or(true),
         })
     }
 }
@@ -195,6 +211,8 @@ impl Theme {
                 base,
                 accent: c(0x2f, 0x81, 0xf7),
                 panel_bg: c(0x1e, 0x1e, 0x1e),
+                active_panel_bg: c(0x1e, 0x1e, 0x1e),
+                inactive_panel_bg: c(0x1e, 0x1e, 0x1e),
                 row_bg: c(0x1e, 0x1e, 0x1e),
                 row_alt_bg: c(0x23, 0x23, 0x23),
                 // Default = igual a `row_bg`: el panel inactivo no cambia hasta que se atenúe.
@@ -207,6 +225,7 @@ impl Theme {
                 highlight: c(0x2e, 0x7d, 0x32),
                 border: c(0x3a, 0x3a, 0x3a),
                 flat_inactive_panels: false,
+                use_inactive_row_color: true,
             },
             ThemeBase::Light => Theme {
                 name,
@@ -216,6 +235,8 @@ impl Theme {
                 // que los temas claros se perciban demasiado brillantes. Un gris leve da mejor
                 // confort y sensación de contraste sin tocar el texto.
                 panel_bg: c(0xe8, 0xe8, 0xea),
+                active_panel_bg: c(0xe8, 0xe8, 0xea),
+                inactive_panel_bg: c(0xe8, 0xe8, 0xea),
                 row_bg: c(0xee, 0xee, 0xf0),
                 row_alt_bg: c(0xe4, 0xe4, 0xe7),
                 // Default = igual a `row_bg`: el panel inactivo no cambia hasta que se atenúe.
@@ -230,6 +251,7 @@ impl Theme {
                 highlight: c(0xc8, 0xe6, 0xc9),
                 border: c(0xdd, 0xdd, 0xdd),
                 flat_inactive_panels: false,
+                use_inactive_row_color: true,
             },
         }
     }
@@ -433,6 +455,8 @@ mod tests {
             base: ThemeBase::Dark,
             accent: ThemeColor::new(1, 2, 3),
             panel_bg: ThemeColor::new(4, 5, 6),
+            active_panel_bg: ThemeColor::new(6, 7, 8),
+            inactive_panel_bg: ThemeColor::new(8, 9, 10),
             row_bg: ThemeColor::new(7, 8, 9),
             row_alt_bg: ThemeColor::new(10, 11, 12),
             row_inactive_bg: ThemeColor::new(34, 35, 36),
@@ -444,6 +468,7 @@ mod tests {
             highlight: ThemeColor::new(31, 32, 33),
             border: ThemeColor::new(28, 29, 30),
             flat_inactive_panels: true,
+            use_inactive_row_color: true,
         };
         let json = serde_json::to_string(&t).unwrap();
         let back: Theme = serde_json::from_str(&json).unwrap();

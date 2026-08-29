@@ -10,9 +10,11 @@
 //! descubre (streaming incremental): la UI las muestra en vivo sin esperar al final.
 //! Cada búsqueda recibe un `CancellationToken` y aborta limpio en cuanto se cancela.
 //!
-//! El emparejado de nombres (`matches_query`) es PURO y testeable: insensible a
-//! mayúsculas, con comodín `*` (cualquier secuencia). Una consulta vacía no coincide
-//! con nada (evita devolver el árbol entero).
+//! El emparejado de nombres (`matches_query`) es PURO y testeable. Soporta las
+//! convenciones de Windows `*` y `?`, sensibilidad configurable a mayúsculas y una
+//! segunda condición opcional de texto dentro de archivos. Esta última está acotada a
+//! archivos de texto razonablemente pequeños para que una búsqueda amplia no agote la
+//! memoria ni lea ISOs, videos o binarios gigantes.
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
@@ -29,6 +31,45 @@ const PROGRESS_THROTTLE: Duration = Duration::from_millis(150);
 /// gigantes). Al alcanzarlo, el worker termina con `Done { hit_cap: true }`.
 pub const MAX_HITS: usize = 5000;
 
+/// Límite defensivo para la búsqueda de contenido. Los archivos mayores se omiten de
+/// ESA condición, pero siguen pudiendo aparecer en una búsqueda solo por nombre.
+pub const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Criterios de una búsqueda. La UI los arma, pero este tipo no conoce Slint ni Windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchOptions {
+    /// Nombre o patrón del elemento. Vacío significa "cualquier nombre" cuando hay
+    /// una búsqueda de contenido; una búsqueda completamente vacía no produce hits.
+    pub name_query: String,
+    /// Texto que debe existir dentro de un archivo regular. Vacío = no filtrar contenido.
+    pub content_query: String,
+    /// Por defecto se comporta como Explorer: no distingue mayúsculas/minúsculas.
+    pub ignore_case: bool,
+    /// Interpreta `*` (cualquier secuencia) y `?` (un carácter) como en Windows.
+    pub use_wildcards: bool,
+    /// Si es falso, examina solo la carpeta raíz.
+    pub recursive: bool,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            name_query: String::new(),
+            content_query: String::new(),
+            ignore_case: true,
+            use_wildcards: false,
+            recursive: true,
+        }
+    }
+}
+
+impl SearchOptions {
+    /// Una búsqueda debe tener al menos una de sus dos condiciones.
+    pub fn is_empty(&self) -> bool {
+        self.name_query.trim().is_empty() && self.content_query.trim().is_empty()
+    }
+}
+
 /// Mensajes del worker de búsqueda hacia la UI.
 /// (No deriva `Eq` porque `Entry` contiene tiempos del sistema; `PartialEq` basta para tests.)
 #[derive(Debug, Clone, PartialEq)]
@@ -44,26 +85,27 @@ pub enum SearchMsg {
     Cancelled,
 }
 
-/// ¿El `name` coincide con `query`? Insensible a mayúsculas. Si `query` contiene `*`,
-/// se interpreta como comodín (cualquier secuencia, incluso vacía) y debe calzar el
-/// nombre COMPLETO; si no, se busca como subcadena en cualquier posición. Una `query`
-/// vacía (tras quitar espacios) no coincide con nada.
-pub fn matches_query(name: &str, query: &str) -> bool {
+/// ¿El `name` coincide con `query`? Si hay comodines, calza el nombre completo; si no,
+/// busca como subcadena. Una consulta vacía calza todo para permitir contenido-solo.
+pub fn matches_query(name: &str, query: &str, ignore_case: bool, use_wildcards: bool) -> bool {
     let q = query.trim();
     if q.is_empty() {
-        return false;
+        return true;
     }
-    let name_l = name.to_lowercase();
-    let query_l = q.to_lowercase();
-    if query_l.contains('*') {
-        wildcard_match(&name_l, &query_l)
+    let (name, query) = if ignore_case {
+        (name.to_lowercase(), q.to_lowercase())
     } else {
-        name_l.contains(&query_l)
+        (name.to_owned(), q.to_owned())
+    };
+    if use_wildcards {
+        wildcard_match(&name, &query)
+    } else {
+        name.contains(&query)
     }
 }
 
-/// Empareja `name` contra un patrón con comodines `*` (cada `*` = cualquier secuencia).
-/// Debe calzar el nombre completo. Ambos argumentos ya vienen en minúsculas. Algoritmo
+/// Empareja `name` contra un patrón con comodines Windows: `*` = cualquier secuencia y
+/// `?` = exactamente un carácter. Debe calzar el nombre completo. Algoritmo
 /// greedy clásico con backtracking sobre el último `*`, lineal en la práctica.
 fn wildcard_match(name: &str, pattern: &str) -> bool {
     let n: Vec<char> = name.chars().collect();
@@ -75,7 +117,7 @@ fn wildcard_match(name: &str, pattern: &str) -> bool {
             star = Some(j);
             mark = i;
             j += 1;
-        } else if j < p.len() && p[j] == n[i] {
+        } else if j < p.len() && (p[j] == '?' || p[j] == n[i]) {
             i += 1;
             j += 1;
         } else if let Some(s) = star {
@@ -107,27 +149,27 @@ pub(crate) struct DirEntryRaw {
 /// pudo leer (permiso/desaparición) → cuenta como "parcial".
 pub(crate) type ListResult = Option<Vec<DirEntryRaw>>;
 
-/// Lanza la búsqueda de `query` bajo `root` (recursiva) en un worker. Devuelve el receptor
+/// Lanza la búsqueda bajo `root` en un worker. Devuelve el receptor
 /// del canal (la UI lo drena frame a frame) y el `JoinHandle`. Cancelable vía `token`.
 pub fn spawn_search(
     root: PathBuf,
-    query: String,
+    options: SearchOptions,
     token: CancellationToken,
 ) -> (Receiver<SearchMsg>, JoinHandle<()>) {
     let (tx, rx) = channel();
     let handle = thread::spawn(move || {
-        search_walk(&root, &query, &fs_lister, &token, &tx);
+        search_walk(&root, &options, &fs_lister, &token, &tx);
     });
     (rx, handle)
 }
 
 /// Núcleo PURO de la búsqueda: recorre el árbol bajo `root` con una pila propia, emitiendo
-/// por `tx` cada entrada cuyo nombre cumpla `matches_query`. `lister` produce las entradas
+/// por `tx` cada entrada que cumpla todos los `options`. `lister` produce las entradas
 /// de un directorio (en producción lee el FS; en tests, un closure). Chequea `token` entre
 /// directorios. NO desciende a symlinks/junctions. Corta al llegar a `MAX_HITS`.
 fn search_walk(
     root: &Path,
-    query: &str,
+    options: &SearchOptions,
     lister: &dyn Fn(&Path) -> ListResult,
     token: &CancellationToken,
     tx: &Sender<SearchMsg>,
@@ -154,7 +196,20 @@ fn search_walk(
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    if matches_query(&name, query) {
+                    let name_matches = matches_query(
+                        &name,
+                        &options.name_query,
+                        options.ignore_case,
+                        options.use_wildcards,
+                    );
+                    let content_matches = options.content_query.trim().is_empty()
+                        || (!e.is_dir
+                            && file_contains_text(
+                                &e.path,
+                                &options.content_query,
+                                options.ignore_case,
+                            ));
+                    if name_matches && content_matches {
                         let entry = make_entry(&e.path, e.is_dir);
                         // Si el receptor se cayó (la UI cerró la búsqueda), dejar de trabajar.
                         if tx.send(SearchMsg::Hit(entry)).is_err() {
@@ -170,7 +225,7 @@ fn search_walk(
                         }
                     }
                     // Descender a subcarpetas (jamás a symlinks/junctions: evita loops).
-                    if e.is_dir && !e.is_symlink {
+                    if options.recursive && e.is_dir && !e.is_symlink {
                         stack.push(e.path);
                     }
                 }
@@ -189,6 +244,33 @@ fn search_walk(
             partial,
             hit_cap: false,
         });
+    }
+}
+
+/// Busca una cadena UTF-8 dentro de un archivo de texto sin exceder el límite de lectura.
+/// Los binarios (NUL en los primeros 8 KiB) y contenido no UTF-8 se descartan de manera
+/// deliberada: son falsos positivos muy poco útiles y tratar de decodificarlos encarece una
+/// búsqueda masiva. No se propaga ningún error de I/O: el filesystem es hostil.
+fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > MAX_CONTENT_FILE_BYTES {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    if bytes.iter().take(8192).any(|b| *b == 0) {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return false;
+    };
+    if ignore_case {
+        text.to_lowercase().contains(&needle.to_lowercase())
+    } else {
+        text.contains(needle)
     }
 }
 
@@ -266,33 +348,56 @@ mod tests {
 
     #[test]
     fn subcadena_insensible_a_mayusculas() {
-        assert!(matches_query("Informe_Final.PDF", "final"));
-        assert!(matches_query("Informe_Final.PDF", "INFORME"));
-        assert!(matches_query("a.txt", ".txt"));
-        assert!(!matches_query("a.txt", "xml"));
+        assert!(matches_query("Informe_Final.PDF", "final", true, false));
+        assert!(matches_query("Informe_Final.PDF", "INFORME", true, false));
+        assert!(matches_query("a.txt", ".txt", true, false));
+        assert!(!matches_query("a.txt", "xml", true, false));
     }
 
     #[test]
-    fn consulta_vacia_no_coincide() {
-        assert!(!matches_query("cualquier.cosa", ""));
-        assert!(!matches_query("cualquier.cosa", "   "));
+    fn consulta_vacia_calza_todo_para_busqueda_de_contenido() {
+        assert!(matches_query("cualquier.cosa", "", true, false));
+        assert!(matches_query("cualquier.cosa", "   ", true, false));
     }
 
     #[test]
     fn comodin_calza_nombre_completo() {
-        assert!(matches_query("foto_2026.jpg", "*.jpg"));
-        assert!(matches_query("foto_2026.jpg", "foto*"));
-        assert!(matches_query("foto_2026.jpg", "*2026*"));
-        assert!(matches_query("foto_2026.jpg", "foto*jpg"));
+        assert!(matches_query("foto_2026.jpg", "*.jpg", true, true));
+        assert!(matches_query("foto_2026.jpg", "foto*", true, true));
+        assert!(matches_query("foto_2026.jpg", "*2026*", true, true));
+        assert!(matches_query("foto_2026.jpg", "foto*jpg", true, true));
         // Con comodín se exige calzar TODO el nombre: ".jpg" sin '*' delante no calza.
-        assert!(!matches_query("foto_2026.jpg", "*.png"));
-        assert!(!matches_query("foto_2026.jpg", "bar*"));
+        assert!(!matches_query("foto_2026.jpg", "*.png", true, true));
+        assert!(!matches_query("foto_2026.jpg", "bar*", true, true));
     }
 
     #[test]
     fn comodin_solo_estrella_calza_todo() {
-        assert!(matches_query("loquesea", "*"));
-        assert!(matches_query("a.b.c", "*.*"));
+        assert!(matches_query("loquesea", "*", true, true));
+        assert!(matches_query("a.b.c", "*.*", true, true));
+        assert!(matches_query("a.txt", "?.txt", true, true));
+        assert!(!matches_query("ab.txt", "?.txt", true, true));
+    }
+
+    #[test]
+    fn nombre_puede_distinguir_mayusculas_y_los_comodines_son_opcionales() {
+        assert!(!matches_query("Informe.TXT", "informe", false, false));
+        assert!(matches_query("Informe.TXT", "Informe", false, false));
+        assert!(matches_query("literal*.txt", "literal*", true, false));
+        assert!(!matches_query("literalx.txt", "literal*", true, false));
+    }
+
+    #[test]
+    fn contenido_texto_respeta_mayusculas_y_descarta_binarios() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("nota.txt");
+        let binary = dir.path().join("datos.bin");
+        std::fs::write(&text, "Texto con AQUÍ dentro").unwrap();
+        std::fs::write(&binary, b"AQU\0I").unwrap();
+
+        assert!(file_contains_text(&text, "aquí", true));
+        assert!(!file_contains_text(&text, "aquí", false));
+        assert!(!file_contains_text(&binary, "AQU", true));
     }
 
     // --- search_walk (con lister falso) ---
@@ -335,7 +440,16 @@ mod tests {
         let lister = lister_from(map);
         let token = CancellationToken::new();
         let (tx, rx) = channel();
-        search_walk(Path::new("/root"), "objetivo", &lister, &token, &tx);
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "objetivo".into(),
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
         drop(tx);
 
         let msgs = collect(rx);
@@ -367,7 +481,16 @@ mod tests {
         let lister = lister_from(map);
         let token = CancellationToken::new();
         let (tx, rx) = channel();
-        search_walk(Path::new("/root"), "proyecto", &lister, &token, &tx);
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "proyecto".into(),
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
         drop(tx);
 
         let hits: Vec<String> = collect(rx)
@@ -381,6 +504,43 @@ mod tests {
     }
 
     #[test]
+    fn opcion_no_recursiva_no_desciende_a_subcarpetas() {
+        let mut map: HashMap<PathBuf, Vec<(&str, bool)>> = HashMap::new();
+        map.insert(
+            PathBuf::from("/root"),
+            vec![("/root/raiz.txt", false), ("/root/sub", true)],
+        );
+        map.insert(
+            PathBuf::from("/root/sub"),
+            vec![("/root/sub/oculto.txt", false)],
+        );
+        let lister = lister_from(map);
+        let token = CancellationToken::new();
+        let (tx, rx) = channel();
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "*.txt".into(),
+                use_wildcards: true,
+                recursive: false,
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
+        drop(tx);
+        let names: Vec<String> = collect(rx)
+            .into_iter()
+            .filter_map(|m| match m {
+                SearchMsg::Hit(e) => Some(e.name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["raiz.txt"]);
+    }
+
+    #[test]
     fn carpeta_ilegible_marca_parcial() {
         let mut map: HashMap<PathBuf, Vec<(&str, bool)>> = HashMap::new();
         // /root tiene una subcarpeta que el lister NO conoce (devuelve None → ilegible).
@@ -388,7 +548,16 @@ mod tests {
         let lister = lister_from(map);
         let token = CancellationToken::new();
         let (tx, rx) = channel();
-        search_walk(Path::new("/root"), "x", &lister, &token, &tx);
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "x".into(),
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
         drop(tx);
 
         assert!(collect(rx)
@@ -404,7 +573,16 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         let (tx, rx) = channel();
-        search_walk(Path::new("/root"), "a", &lister, &token, &tx);
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "a".into(),
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
         drop(tx);
 
         let msgs = collect(rx);
@@ -435,7 +613,16 @@ mod tests {
         };
         let token = CancellationToken::new();
         let (tx, rx) = channel();
-        search_walk(Path::new("/root"), "objetivo", &lister, &token, &tx);
+        search_walk(
+            Path::new("/root"),
+            &SearchOptions {
+                name_query: "objetivo".into(),
+                ..SearchOptions::default()
+            },
+            &lister,
+            &token,
+            &tx,
+        );
         drop(tx);
 
         assert!(!collect(rx).iter().any(|m| matches!(m, SearchMsg::Hit(_))));

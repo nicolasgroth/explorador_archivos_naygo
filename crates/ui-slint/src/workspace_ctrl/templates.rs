@@ -60,7 +60,6 @@ impl WorkspaceCtrl {
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
         self.relaunch_all_panes();
-        self.last_active_files = self.ws.files_panes().first().copied();
         self.templates.record_use(name, now_secs);
         naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
         self.maybe_persist_session();
@@ -91,7 +90,6 @@ impl WorkspaceCtrl {
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
         self.relaunch_all_panes();
-        self.last_active_files = self.ws.files_panes().first().copied();
         true
     }
 
@@ -116,6 +114,11 @@ impl WorkspaceCtrl {
     /// Relanza el contenido de TODOS los paneles del workspace actual (tras reemplazarlo por una
     /// plantilla): listados de los Files, árboles de los Tree. Mismo patrón que `load_session`.
     pub(super) fn relaunch_all_panes(&mut self) {
+        self.last_active_files = self
+            .ws
+            .active_id()
+            .filter(|id| self.ws.pane(*id).map(|p| p.purpose) == Some(PanePurpose::Files))
+            .or_else(|| self.ws.files_panes().first().copied());
         let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
             .ws
             .panes()
@@ -138,14 +141,21 @@ impl WorkspaceCtrl {
                 }
                 PanePurpose::Tree => {
                     let mut t = build_tree();
-                    if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
-                        t.set_active(cur);
+                    let target = self.ws.linked_files(id).or(self.last_active_files);
+                    if let Some(cur) = target
+                        .and_then(|files| self.ws.pane(files))
+                        .and_then(|p| p.files.as_ref())
+                        .map(|f| f.current_dir.clone())
+                    {
+                        t.set_active(cur.clone());
+                        self.reveal_targets.insert(id, cur);
                     }
                     self.trees.insert(id, t);
                 }
                 _ => {}
             }
         }
+        self.pump_reveal();
     }
 
     // --- Renombrado por lotes (Fase 5) ---

@@ -71,6 +71,25 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Duplica la selección en su misma carpeta. La desambiguación y el recorrido del árbol se
+    /// resuelven en el worker del core; este controlador no toca disco en el hilo UI.
+    pub fn op_duplicate(&mut self) -> bool {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return false;
+        }
+        let req = naygo_core::ops::OpRequest {
+            kind: naygo_core::ops::OpKind::Duplicate,
+            sources: paths,
+            dest_dir: None,
+            conflict: naygo_core::ops::ConflictPolicy::Overwrite,
+        };
+        self.ensure_ops_pane();
+        self.ops
+            .start_op(req, self.config.t("action.duplicate"), true);
+        true
+    }
+
     /// Cortar la selección (marca corte visual).
     pub fn op_cut(&mut self) {
         let paths = self.selected_paths();
@@ -177,12 +196,25 @@ impl WorkspaceCtrl {
     /// (o mueve si `move_`) a su carpeta, reusando el engine de operaciones de F3 (con sus
     /// diálogos de conflicto, panel de progreso y cancelación). No-op si el panel no es Files o
     /// no hay rutas. Devuelve true si arrancó la operación.
+    #[allow(dead_code)]
     pub fn drop_external(
         &mut self,
         dest: PaneId,
         sources: Vec<std::path::PathBuf>,
         move_hint: bool,
         copy_forced: bool,
+    ) -> bool {
+        self.drop_external_with_staging(dest, sources, move_hint, copy_forced, None)
+    }
+
+    /// Variante del drop externo que conserva un staging virtual hasta el terminal de la op.
+    pub fn drop_external_with_staging(
+        &mut self,
+        dest: PaneId,
+        sources: Vec<std::path::PathBuf>,
+        move_hint: bool,
+        copy_forced: bool,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
     ) -> bool {
         if sources.is_empty() {
             return false;
@@ -221,7 +253,8 @@ impl WorkspaceCtrl {
         ));
         let req = naygo_core::ops::transfer(move_, sources, dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label, true);
+        self.ops
+            .start_op_with_staging(req, label, true, staging.into_iter().collect());
         true
     }
 
@@ -235,6 +268,7 @@ impl WorkspaceCtrl {
     /// No-op (devuelve false) si: no hay rutas, el punto no cae sobre ningún panel, el panel
     /// destino no es Files, o el destino ES la misma carpeta de origen de las rutas (soltar
     /// sobre la propia carpeta). Devuelve true si arrancó la operación.
+    #[allow(dead_code)]
     pub fn drop_at(
         &mut self,
         content_x: f32,
@@ -242,6 +276,19 @@ impl WorkspaceCtrl {
         move_hint: bool,
         copy_forced: bool,
         paths: Vec<std::path::PathBuf>,
+    ) -> bool {
+        self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, None)
+    }
+
+    /// Variante que enlaza el staging de un origen OLE virtual con el modal/cola/operación.
+    pub fn drop_at_with_staging(
+        &mut self,
+        content_x: f32,
+        content_y: f32,
+        move_hint: bool,
+        copy_forced: bool,
+        paths: Vec<std::path::PathBuf>,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
     ) -> bool {
         use naygo_core::dnd::{decide_drop, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
@@ -272,7 +319,25 @@ impl WorkspaceCtrl {
         let Some((target, _zone)) = hit else {
             return false;
         };
-        // El destino debe ser un panel Files con carpeta resoluble.
+        // La bandeja temporal es un destino LOGICO: soltar aquí agrega referencias, nunca
+        // copia/mueve archivos. Resolverla antes del camino Files también evita que el caller
+        // interprete el `false` como "drop no enrutado" y aplique el fallback sobre el panel
+        // Files activo (que era la causa de los movimientos fantasma de 0 elementos).
+        if self.ws.pane(target).map(|p| p.purpose) == Some(PanePurpose::Basket) {
+            let added = self.basket.add(paths);
+            if added > 0 {
+                if let Some(staging) = staging {
+                    self.basket_staging.push(staging);
+                }
+            }
+            crate::logging::breadcrumb(&format!(
+                "drop_at: {} ítem(s) agregados a bandeja temporal",
+                added
+            ));
+            return true;
+        }
+
+        // El resto de destinos debe ser un panel Files con carpeta resoluble.
         let Some(dest_dir) = self
             .ws
             .pane(target)
@@ -324,6 +389,7 @@ impl WorkspaceCtrl {
             dest_pane: target,
             is_move,
             count,
+            staging,
         });
         // UN SOLO POPUP COHERENTE (decisión de Nicolás): si el drop CHOCA con archivos que ya
         // existen en el destino, NO mostramos primero "¿Copiar/Mover…?" y luego el conflicto —
@@ -376,14 +442,15 @@ impl WorkspaceCtrl {
         // Activar el panel destino: tras soltar, el foco queda donde aterrizaron los archivos (lo
         // más intuitivo para seguir trabajando ahí). Solo si sigue existiendo.
         if self.ws.pane(pd.dest_pane).is_some() {
-            self.ws.set_active(pd.dest_pane);
+            self.set_active(pd.dest_pane);
             if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
-                self.sync_trees_active(dir);
+                self.sync_trees_for_files(pd.dest_pane, dir);
             }
         }
         let req = naygo_core::ops::transfer(pd.is_move, pd.paths, pd.dest_dir);
         self.ensure_ops_pane();
-        self.ops.start_op(req, label, true);
+        self.ops
+            .start_op_with_staging(req, label, true, pd.staging.into_iter().collect());
         true
     }
 
@@ -397,17 +464,37 @@ impl WorkspaceCtrl {
 
     /// Eliminar la selección: abre el modal de confirmación.
     pub fn op_delete(&mut self, permanent: bool) {
+        // Un menú contextual de breadcrumb/árbol no tiene filas seleccionadas en el FilePanel.
+        // En ese caso la fuente de verdad es su target explícito; el atajo Delete conserva la
+        // selección normal cuando no hay menú abierto.
+        let paths = {
+            let contextual = self.context_targets();
+            if contextual.is_empty() {
+                self.selected_paths()
+            } else {
+                contextual
+            }
+        };
         {
-            let n = self.selected_paths().len();
+            let n = paths.len();
             let modo = if permanent { "permanente" } else { "papelera" };
             crate::logging::breadcrumb(&format!("eliminar {} ítem(s) ({})", n, modo));
         }
-        let paths = self.selected_paths();
         if !paths.is_empty() {
-            self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
-                sources: paths,
-                permanent,
-            });
+            // Permanente siempre confirma. Papelera respeta la preferencia existente: cuando está
+            // desactivada se ejecuta directo; cuando está activa, el modal incluye el preview.
+            if !permanent && !self.config.settings.confirm_trash {
+                self.ensure_ops_pane();
+                let req = naygo_core::ops::delete(paths, true);
+                self.ops
+                    .start_op(req, self.config.t("ops.file_kind_delete"), true);
+            } else {
+                self.ensure_ops_pane();
+                self.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+                    sources: paths,
+                    permanent,
+                });
+            }
         }
     }
 
@@ -718,6 +805,14 @@ impl WorkspaceCtrl {
                 naygo_core::ops::undo::UndoAction::MoveBack { now, back_to } => {
                     format!("{} {} {}", file_name(now), to_arrow, folder_of(back_to))
                 }
+                naygo_core::ops::undo::UndoAction::RestoreTrash { original, .. } => {
+                    format!(
+                        "{} {} {}",
+                        file_name(original),
+                        to_arrow,
+                        folder_of(original)
+                    )
+                }
             })
             .collect();
         Some((summary, lines))
@@ -734,12 +829,15 @@ impl WorkspaceCtrl {
         {
             return false;
         }
-        let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
+        let actions = self.ops.undo_history[idx].actions.clone();
+        let reqs = naygo_core::ops::undo::to_requests(&actions);
+        let receipts = trash_restore_receipts(&actions);
         self.ops.undo_history[idx].undone = true;
         let label = self.config.t("undo.button");
         for req in reqs {
             self.ops.start_op(req, label.clone(), false);
         }
+        self.ops.start_trash_restore(receipts, label);
         true
     }
 
@@ -754,12 +852,33 @@ impl WorkspaceCtrl {
         let Some(idx) = idx else {
             return false;
         };
-        let reqs = naygo_core::ops::undo::to_requests(&self.ops.undo_history[idx].actions);
+        let actions = self.ops.undo_history[idx].actions.clone();
+        let reqs = naygo_core::ops::undo::to_requests(&actions);
+        let receipts = trash_restore_receipts(&actions);
         self.ops.undo_history[idx].undone = true;
         let label = self.config.t("undo.button");
         for req in reqs {
             self.ops.start_op(req, label.clone(), false);
         }
+        self.ops.start_trash_restore(receipts, label);
         true
     }
+}
+
+/// Convierte las acciones de restauración de core a los recibos Shell que la capa
+/// platform necesita. Mantenerlo aquí preserva la frontera: core no depende de Windows.
+fn trash_restore_receipts(
+    actions: &[naygo_core::ops::undo::UndoAction],
+) -> Vec<naygo_platform::trash::TrashReceipt> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            naygo_core::ops::undo::UndoAction::RestoreTrash { original } => {
+                Some(naygo_platform::trash::TrashReceipt {
+                    original: original.clone(),
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }

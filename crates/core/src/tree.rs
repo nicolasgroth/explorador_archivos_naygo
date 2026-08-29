@@ -42,6 +42,9 @@ pub struct TreeNode {
     pub name: String,
     /// `Some(..)` si el nodo es una raíz (unidad de disco).
     pub drive_kind: Option<DriveKind>,
+    /// Marcador visual opcional de una raíz física conocida (Escritorio, Documentos, nube…).
+    /// Es una clave de presentación, nunca una ruta virtual ni lógica de navegación.
+    pub special_icon: Option<String>,
     pub expanded: bool,
     pub state: NodeState,
     /// `None` = nunca expandido (lazy). `Some(vec)` = hijos ya cargados.
@@ -59,6 +62,21 @@ impl TreeNode {
             path,
             name,
             drive_kind: None,
+            special_icon: None,
+            expanded: false,
+            state: NodeState::Collapsed,
+            children: None,
+        }
+    }
+
+    /// Crea un acceso raíz a una carpeta física con nombre visible provisto por la plataforma
+    /// (por ejemplo el nombre localizado que Windows muestra para Documentos o Escritorio).
+    pub fn folder_named(path: PathBuf, name: String, special_icon: Option<String>) -> Self {
+        TreeNode {
+            path,
+            name,
+            drive_kind: None,
+            special_icon,
             expanded: false,
             state: NodeState::Collapsed,
             children: None,
@@ -71,6 +89,7 @@ impl TreeNode {
             path,
             name,
             drive_kind: Some(kind),
+            special_icon: None,
             expanded: false,
             state: NodeState::Collapsed,
             children: None,
@@ -91,10 +110,28 @@ pub struct DirTree {
 impl DirTree {
     /// Crea el árbol con una raíz por unidad. `(path, label, kind)` por unidad.
     pub fn from_drives(drives: &[(PathBuf, String, DriveKind)]) -> Self {
-        let roots = drives
+        Self::from_folders_and_drives(&[], drives)
+    }
+
+    /// Crea el árbol con accesos a carpetas físicas primero y unidades después. Los accesos no
+    /// son rutas virtuales: su `path` es el destino real y por ello navegan/listan igual que
+    /// cualquier carpeta. El orden hace que `reveal_chain` prefiera el acceso más específico a
+    /// Documentos/OneDrive antes que expandir toda la cadena desde C:\.
+    pub fn from_folders_and_drives(
+        folders: &[(PathBuf, String, String)],
+        drives: &[(PathBuf, String, DriveKind)],
+    ) -> Self {
+        let mut roots: Vec<TreeNode> = folders
             .iter()
-            .map(|(path, label, kind)| TreeNode::drive(path.clone(), label.clone(), *kind))
+            .map(|(path, label, icon)| {
+                TreeNode::folder_named(path.clone(), label.clone(), Some(icon.clone()))
+            })
             .collect();
+        roots.extend(
+            drives
+                .iter()
+                .map(|(path, label, kind)| TreeNode::drive(path.clone(), label.clone(), *kind)),
+        );
         DirTree {
             roots,
             active_path: None,

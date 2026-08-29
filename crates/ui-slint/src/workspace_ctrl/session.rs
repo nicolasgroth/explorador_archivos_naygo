@@ -17,19 +17,25 @@ impl WorkspaceCtrl {
     }
 
     /// Registra una visita en el historial respetando el límite configurado
-    /// (`Settings.recent_limit`, clampeado a 1..=100). Centraliza el límite.
+    /// (`Settings.recent_limit`, clampeado a 1..=1000). Centraliza el límite.
     pub(super) fn push_recent(&mut self, dir: std::path::PathBuf) {
-        let limit = self.config.settings.recent_limit.clamp(1, 100);
+        let limit = self.config.settings.recent_limit.clamp(1, 1000);
         self.recents.push(dir, limit);
     }
 
     /// Fija el límite de carpetas recientes, persiste y trunca la lista al nuevo tope.
     /// Cableado desde main.rs: on_recent_limit_changed en la ventana de configuración.
     pub fn set_recent_limit(&mut self, n: usize) {
-        self.config.settings.recent_limit = n.clamp(1, 100);
+        self.config.settings.recent_limit = n.clamp(1, 1000);
         self.config.save();
         let limit = self.config.settings.recent_limit;
         self.recents.truncate_to(limit);
+    }
+
+    /// Fija cuántas carpetas mostrar en el ranking de uso y persiste la preferencia.
+    pub fn set_frequent_dirs_limit(&mut self, n: usize) {
+        self.config.settings.frequent_dirs_limit = n.clamp(1, 50);
+        self.config.save();
     }
 
     /// Estado persistible del workspace (para guardar al cerrar la ventana): disposición,
@@ -49,6 +55,7 @@ impl WorkspaceCtrl {
                 .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.to_persist())))
                 .collect(),
             purposes: self.ws.panes().iter().map(|p| (p.id, p.purpose)).collect(),
+            tree_links: self.ws.tree_links(),
         }
     }
 
@@ -98,6 +105,13 @@ impl WorkspaceCtrl {
                 )
             })
             .collect();
+        // Resolver primero el Files de referencia: los árboles dedicados se inicializan desde
+        // su propio destino y los comunes desde el último Files activo.
+        self.last_active_files = self
+            .ws
+            .active_id()
+            .filter(|a| self.ws.pane(*a).map(|p| p.purpose) == Some(PanePurpose::Files))
+            .or_else(|| self.ws.files_panes().first().copied());
         for (id, purpose, dir) in panes {
             match purpose {
                 PanePurpose::Files => {
@@ -108,7 +122,12 @@ impl WorkspaceCtrl {
                 }
                 PanePurpose::Tree => {
                     let mut t = build_tree();
-                    if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+                    let target = self.ws.linked_files(id).or(self.last_active_files);
+                    if let Some(cur) = target
+                        .and_then(|files| self.ws.pane(files))
+                        .and_then(|p| p.files.as_ref())
+                        .map(|f| f.current_dir.clone())
+                    {
                         t.set_active(cur);
                     }
                     self.trees.insert(id, t);
@@ -119,17 +138,22 @@ impl WorkspaceCtrl {
         // La sesión recién cargada ES el estado en disco: sembrar la huella para no
         // reescribir el mismo workspace.json en el primer tick.
         self.last_saved_fingerprint = Some(self.session_fingerprint());
-        // Sembrar el último Files activo con el activo restaurado (o el primer Files).
-        self.last_active_files = self
-            .ws
-            .active_id()
-            .filter(|a| self.ws.pane(*a).map(|p| p.purpose) == Some(PanePurpose::Files))
-            .or_else(|| self.ws.files_panes().first().copied());
         // Arrancar el REVEAL del árbol hasta la carpeta activa restaurada: antes solo se hacía
         // `set_active` en cada árbol (fijaba el destino) pero no se sembraba `reveal_targets` ni
         // se arrancaba `pump_reveal`, así que al iniciar el árbol no expandía hasta la carpeta.
-        if let Some(active_dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
-            self.sync_trees_active(active_dir);
+        let files: Vec<(PaneId, PathBuf)> = self
+            .ws
+            .files_panes()
+            .into_iter()
+            .filter_map(|id| {
+                self.ws
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| (id, f.current_dir.clone()))
+            })
+            .collect();
+        for (id, dir) in files {
+            self.sync_trees_for_files(id, dir);
         }
         true
     }
@@ -158,7 +182,6 @@ impl WorkspaceCtrl {
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
         self.relaunch_all_panes();
-        self.last_active_files = self.ws.files_panes().first().copied();
     }
 
     /// Huella barata del estado persistible (lo que cambia entre sesiones que vale la pena
@@ -174,6 +197,9 @@ impl WorkspaceCtrl {
                 .map(|f| f.current_dir.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let _ = write!(s, "{}:{:?}:{}|", p.id.0, p.purpose, dir);
+        }
+        for (tree, files) in self.ws.tree_links() {
+            let _ = write!(s, "link:{}>{};", tree.0, files.0);
         }
         let _ = write!(
             s,
@@ -336,6 +362,7 @@ impl WorkspaceCtrl {
         let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &filtered, read_entry);
         let spec = f.sort;
         naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        f.entries_changed();
         // Empujar el flag ANTES de calcular posiciones: si está activo, la vista pone los nuevos al
         // final y la selección debe apuntar a esas posiciones finales.
         f.group_new_at_end = group_new_at_end;

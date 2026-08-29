@@ -4,7 +4,7 @@
 
 //! Modelo del espacio de trabajo: una colección de paneles independientes
 //! (archivos / árbol / inspector), cuál está activo, y la disposición. No depende
-//! de egui ni de Windows: la UI traduce esto a egui_dock.
+//! de Slint ni de Windows: la UI consume este modelo de dock serializable.
 
 pub mod file_pane;
 pub mod layout;
@@ -19,6 +19,7 @@ pub use template::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Identificador único y estable de un panel dentro del workspace.
 /// Estable: no cambia aunque el panel se reordene en la UI.
@@ -43,6 +44,12 @@ pub enum PanePurpose {
     /// Panel de operaciones de archivo en curso (copiar/mover) con progreso y
     /// cancelación. El panel rico y su cableado llegan en una fase posterior.
     Operations,
+    /// Bandeja temporal de rutas reunidas desde carpetas distintas.
+    Basket,
+    /// Búsqueda de archivos como panel acoplable, con resultados incrementales.
+    Search,
+    /// Historial global de carpetas recientes y ranking de las más usadas.
+    Recents,
 }
 
 /// Un panel concreto del workspace. Solo los `Files` llevan `FilePaneState`.
@@ -60,7 +67,10 @@ pub struct Workspace {
     panes: Vec<PaneNode>,
     active: Option<PaneId>,
     next_id: u64,
-    /// Disposición visual (traducida a/desde egui_dock por la capa ui).
+    /// Relación opcional Árbol→Files. Un árbol sin entrada es común y sigue al
+    /// último Files activo; uno con entrada es dedicado a ese panel.
+    tree_links: BTreeMap<PaneId, PaneId>,
+    /// Disposición visual independiente del toolkit, consumida por la capa UI.
     pub layout: SerializableDockLayout,
 }
 
@@ -71,6 +81,7 @@ impl Workspace {
             panes: Vec::new(),
             active: None,
             next_id: 0,
+            tree_links: BTreeMap::new(),
             layout: SerializableDockLayout::empty(),
         }
     }
@@ -96,6 +107,8 @@ impl Workspace {
     /// `Files` restante (o a cualquier panel, o `None` si no queda ninguno).
     pub fn remove_pane(&mut self, id: PaneId) {
         self.panes.retain(|p| p.id != id);
+        self.tree_links
+            .retain(|tree, files| *tree != id && *files != id);
         if self.active == Some(id) {
             self.active = self
                 .panes
@@ -178,6 +191,57 @@ impl Workspace {
             .filter(|p| p.purpose == PanePurpose::Files && p.id != origin)
             .map(|p| p.id)
             .collect()
+    }
+
+    /// Dedica `tree` a `files`. Rechaza ids inexistentes o propósitos inválidos.
+    pub fn link_tree(&mut self, tree: PaneId, files: PaneId) -> bool {
+        let valid_tree = self.pane(tree).map(|p| p.purpose) == Some(PanePurpose::Tree);
+        let valid_files = self.pane(files).map(|p| p.purpose) == Some(PanePurpose::Files);
+        if valid_tree && valid_files {
+            self.tree_links.insert(tree, files);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Convierte un árbol dedicado en árbol común.
+    pub fn unlink_tree(&mut self, tree: PaneId) -> Option<PaneId> {
+        self.tree_links.remove(&tree)
+    }
+
+    /// Panel Files seguido por un árbol dedicado; `None` significa árbol común.
+    pub fn linked_files(&self, tree: PaneId) -> Option<PaneId> {
+        self.tree_links.get(&tree).copied()
+    }
+
+    /// El otro miembro del explorador enlazado al que pertenece `id`.
+    ///
+    /// El enlace se guarda como Árbol→Files porque esa es la dirección de navegación, pero
+    /// las operaciones sobre el bloque visual (por ejemplo, cerrarlo) necesitan poder partir
+    /// desde cualquiera de sus dos paneles.
+    pub fn linked_partner(&self, id: PaneId) -> Option<PaneId> {
+        self.tree_links.iter().find_map(|(tree, files)| {
+            if *tree == id {
+                Some(*files)
+            } else if *files == id {
+                Some(*tree)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Enlaces ordenados de forma estable para persistencia y fingerprints.
+    pub fn tree_links(&self) -> Vec<(PaneId, PaneId)> {
+        self.tree_links.iter().map(|(a, b)| (*a, *b)).collect()
+    }
+
+    /// Indica si el panel participa en un explorador enlazado.
+    pub fn is_link_member(&self, id: PaneId) -> bool {
+        self.tree_links
+            .iter()
+            .any(|(tree, files)| *tree == id || *files == id)
     }
 
     /// Itera los paneles (orden de inserción).
@@ -276,6 +340,11 @@ impl Workspace {
                 shape_to_node(&tpl.layout, &ids)
             },
         };
+        for (tree_idx, files_idx) in &tpl.tree_links {
+            if let (Some(tree), Some(files)) = (ids.get(*tree_idx), ids.get(*files_idx)) {
+                w.link_tree(*tree, *files);
+            }
+        }
         w
     }
 
@@ -367,11 +436,22 @@ impl Workspace {
                 },
             })
             .collect();
+        let tree_links = self
+            .tree_links()
+            .into_iter()
+            .filter_map(|(tree, files)| {
+                Some((
+                    order.iter().position(|id| *id == tree)?,
+                    order.iter().position(|id| *id == files)?,
+                ))
+            })
+            .collect();
         LayoutTemplate {
             name: name.to_string(),
             builtin: false,
             favorite: false,
             panes,
+            tree_links,
             layout,
         }
     }
@@ -431,6 +511,9 @@ impl Workspace {
         if let Some(a) = p.active {
             w.set_active(a);
         }
+        for (tree, files) in &p.tree_links {
+            w.link_tree(*tree, *files);
+        }
         Some(w)
     }
 }
@@ -478,6 +561,7 @@ mod tests {
                 .filter_map(|p| p.files.as_ref().map(|f| (p.id, f.to_persist())))
                 .collect(),
             purposes: w.panes().iter().map(|p| (p.id, p.purpose)).collect(),
+            tree_links: w.tree_links(),
         }
     }
 
@@ -513,6 +597,7 @@ mod tests {
             active: None,
             files: Vec::new(),
             purposes: Vec::new(),
+            tree_links: Vec::new(),
         };
         assert!(Workspace::from_persist(&persist).is_none());
     }
@@ -560,6 +645,47 @@ mod tests {
     }
 
     #[test]
+    fn enlace_tree_files_valida_persiste_y_se_limpia() {
+        let mut w = Workspace::new();
+        let tree = w.add_pane(PanePurpose::Tree, PathBuf::new());
+        let files = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        let other_tree = w.add_pane(PanePurpose::Tree, PathBuf::new());
+        w.layout = SerializableDockLayout::single(tree);
+        w.layout
+            .split_leaf_grouped(tree, SplitDir::Horizontal, files, 0.25);
+        assert!(w.link_tree(tree, files));
+        assert!(!w.link_tree(files, tree));
+        assert_eq!(w.linked_files(tree), Some(files));
+        assert_eq!(w.linked_partner(tree), Some(files));
+        assert_eq!(w.linked_partner(files), Some(tree));
+        assert_eq!(w.linked_partner(other_tree), None);
+        assert_eq!(w.linked_files(other_tree), None);
+
+        let restored = Workspace::from_persist(&persist_de(&w)).unwrap();
+        assert_eq!(restored.linked_files(tree), Some(files));
+
+        w.remove_pane(files);
+        assert_eq!(w.linked_files(tree), None);
+    }
+
+    #[test]
+    fn plantilla_conserva_enlaces_por_indice() {
+        let mut w = Workspace::new();
+        let tree = w.add_pane(PanePurpose::Tree, PathBuf::new());
+        let files = w.add_pane(PanePurpose::Files, PathBuf::from("C:/a"));
+        w.layout = SerializableDockLayout::single(tree);
+        w.layout
+            .split_leaf_grouped(tree, SplitDir::Horizontal, files, 0.25);
+        assert!(w.link_tree(tree, files));
+
+        let tpl = w.to_template("Enlazada");
+        assert_eq!(tpl.tree_links, vec![(0, 1)]);
+        let restored = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
+        let ids = restored.layout.pane_ids();
+        assert_eq!(restored.linked_files(ids[0]), Some(ids[1]));
+    }
+
+    #[test]
     fn from_template_minimalista_crea_un_files_activo() {
         let tpl = crate::workspace::template::LayoutTemplate::minimalista();
         let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
@@ -601,6 +727,7 @@ mod tests {
                 purpose: PanePurpose::Files,
                 dir: TemplateDir::Home,
             }],
+            tree_links: Vec::new(),
             layout: LayoutShape::Leaf(5), // fuera de rango
         };
         let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));

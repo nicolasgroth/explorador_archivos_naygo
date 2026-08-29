@@ -7,8 +7,8 @@
 //! Deshacer = validar que el inverso aún aplica (las rutas existen, nada ocupado) y
 //! re-emitirlo como `OpRequest`s normales: corre por el mismo motor de ops (progreso,
 //! cancelación, panel). Deshacer una copia/creación manda lo creado a PAPELERA,
-//! nunca borra permanente. Delete no es deshacible en v1 (restaurar de la papelera
-//! requiere Shell API aparte).
+//! nunca borra permanente. Los elementos enviados a Papelera se restauran por su
+//! ubicación y nombre originales mediante el namespace Shell de Windows.
 
 use super::{ConflictPolicy, OpKind, OpOutcome, OpRequest, OpSummary};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,8 @@ pub enum UndoAction {
     MoveBack { now: PathBuf, back_to: PathBuf },
     /// Mandar a la papelera algo que la op creó (inverso de copiar/crear).
     TrashCreated { path: PathBuf },
+    /// Restaurar desde Papelera a la ruta original.
+    RestoreTrash { original: PathBuf },
 }
 
 /// Una operación deshecha-ble del historial.
@@ -108,12 +110,13 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
             acts.reverse();
             acts
         }
-        OpKind::Copy | OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => done
-            .into_iter()
-            .map(|item| UndoAction::TrashCreated {
-                path: item.dest.clone(),
-            })
-            .collect(),
+        OpKind::Copy | OpKind::Duplicate | OpKind::CreateDir { .. } | OpKind::CreateFile { .. } => {
+            done.into_iter()
+                .map(|item| UndoAction::TrashCreated {
+                    path: item.dest.clone(),
+                })
+                .collect()
+        }
         OpKind::Delete { .. } => return None,
         // El deshacer de comprimir/extraer lo arma el worker de zip (ui-slint), NO build_undo.
         OpKind::Compress { .. } | OpKind::Extract => return None,
@@ -161,6 +164,21 @@ pub fn validate(actions: &[UndoAction]) -> Result<(), String> {
                     return Err(format!("ya no existe: {}", path.display()));
                 }
             }
+            UndoAction::RestoreTrash { original, .. } => {
+                if original.exists() {
+                    return Err(format!("el destino está ocupado: {}", original.display()));
+                }
+                let parent_ok = original.parent().map(|p| p.exists()).unwrap_or(false);
+                if !parent_ok {
+                    return Err(format!(
+                        "la carpeta de destino ya no existe: {}",
+                        original
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default()
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -198,6 +216,9 @@ pub fn to_requests(actions: &[UndoAction]) -> Vec<OpRequest> {
                 }
             }
             UndoAction::TrashCreated { path } => trash.push(path.clone()),
+            // La restauración la ejecuta el Shell: no se puede reexpresar como
+            // `OpRequest` sin perder la identidad del ítem dentro de Papelera.
+            UndoAction::RestoreTrash { .. } => {}
         }
     }
     let mut reqs: Vec<OpRequest> = Vec::new();
@@ -489,6 +510,19 @@ mod tests {
         // `back` ocupado → inválido.
         std::fs::write(&back, "y").unwrap();
         assert!(validate(&acts).is_err());
+    }
+
+    #[test]
+    fn restore_trash_se_valida_sin_reemitir_un_request_de_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("restaurar.txt");
+        let action = UndoAction::RestoreTrash {
+            original: original.clone(),
+        };
+        assert!(validate(std::slice::from_ref(&action)).is_ok());
+        assert!(to_requests(std::slice::from_ref(&action)).is_empty());
+        std::fs::write(&original, b"ocupado").unwrap();
+        assert!(validate(&[action]).is_err());
     }
 
     #[test]

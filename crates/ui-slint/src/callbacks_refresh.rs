@@ -31,6 +31,7 @@ pub(crate) fn build_refresh_config_vm(
         let (
             settings_vm,
             recent_limit,
+            frequent_dirs_limit,
             auto_hl,
             anim_enabled,
             footer_en,
@@ -45,6 +46,7 @@ pub(crate) fn build_refresh_config_vm(
             editing_name,
             editing_base_index,
             editing_flat_inactive,
+            editing_use_inactive_row_color,
             editing_hexes,
             editing_rs,
             editing_gs,
@@ -59,6 +61,7 @@ pub(crate) fn build_refresh_config_vm(
             let c = ctrl.borrow();
             let settings_vm = build_settings_vm(&c.config);
             let recent_limit = c.config.settings.recent_limit as i32;
+            let frequent_dirs_limit = c.config.settings.frequent_dirs_limit as i32;
             let auto_hl = c.config.auto_highlight_code();
             let anim_enabled = c.config.animations_enabled();
             let footer_en = c.config.footer_enabled();
@@ -114,6 +117,7 @@ pub(crate) fn build_refresh_config_vm(
             let editing_name = c.config.editing_name().to_string();
             let editing_base_index = c.config.editing_base_index();
             let editing_flat_inactive = c.config.editing_flat_inactive();
+            let editing_use_inactive_row_color = c.config.editing_use_inactive_row_color();
             let n = config_ctrl::THEME_TOKEN_COUNT;
             let mut editing_hexes: Vec<SharedString> = Vec::with_capacity(n);
             let mut editing_rs: Vec<i32> = Vec::with_capacity(n);
@@ -142,6 +146,7 @@ pub(crate) fn build_refresh_config_vm(
             (
                 settings_vm,
                 recent_limit,
+                frequent_dirs_limit,
                 auto_hl,
                 anim_enabled,
                 footer_en,
@@ -156,6 +161,7 @@ pub(crate) fn build_refresh_config_vm(
                 editing_name,
                 editing_base_index,
                 editing_flat_inactive,
+                editing_use_inactive_row_color,
                 editing_hexes,
                 editing_rs,
                 editing_gs,
@@ -285,6 +291,7 @@ pub(crate) fn build_refresh_config_vm(
         cfg.set_vm(settings_vm);
         // Poblar el campo de límite de recientes (no está en SettingsVm).
         cfg.set_recent_limit(recent_limit);
+        cfg.set_frequent_dirs_limit(frequent_dirs_limit);
         // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
         // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
         cfg.set_auto_highlight_code(auto_hl);
@@ -312,6 +319,7 @@ pub(crate) fn build_refresh_config_vm(
         cfg.set_editing_name(editing_name.into());
         cfg.set_editing_base_index(editing_base_index);
         cfg.set_editing_flat_inactive(editing_flat_inactive);
+        cfg.set_editing_use_inactive_row_color(editing_use_inactive_row_color);
         cfg.set_editing_token_hex(ModelRc::from(Rc::new(VecModel::from(editing_hexes))));
         cfg.set_editing_token_r(ModelRc::from(Rc::new(VecModel::from(editing_rs))));
         cfg.set_editing_token_g(ModelRc::from(Rc::new(VecModel::from(editing_gs))));

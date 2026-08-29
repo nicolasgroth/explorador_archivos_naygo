@@ -12,6 +12,23 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+/// Red de seguridad del desmontaje: si un watcher o integración Win32 se atasca en `Drop`, el
+/// proceso no puede quedar residente indefinidamente y bloquear una actualización. La sesión se
+/// guarda antes de armarla; normalmente el proceso termina mucho antes de este plazo.
+pub fn arm_exit_watchdog() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    if ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("naygo-exit-watchdog".into())
+        .spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            std::process::exit(0);
+        });
+}
+
 /// Mensajes del tray hacia la app (drenados en el tick).
 pub enum TrayMsg {
     /// Mostrar + enfocar la ventana principal (clic en el ícono o menú "Abrir").

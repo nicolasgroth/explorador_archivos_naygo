@@ -13,8 +13,8 @@ component MenuRow inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 26px;
-    background: t.has-hover ? Theme.selection-bg : transparent;
-    border-radius: 3px;
+    background: t.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     Text {
         text: root.label;
         color: Theme.text;
@@ -31,6 +31,7 @@ export component ContextMenu inherits Rectangle {
     callback open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
     callback open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
     callback open-with();
+    callback run-as-administrator();
     callback copy();
     callback cut();
     callback paste();
@@ -47,6 +48,9 @@ export component ContextMenu inherits Rectangle {
     callback explorer();     // abrir el Explorador de Windows en la carpeta (modo carpeta)
     callback new-folder();   // crear subcarpeta(s) en la carpeta (modo carpeta)
     callback native();      // "Más opciones de Windows…"
+    callback synchronize();
+    callback add-to-basket();
+    callback transform-text();
     callback dismiss();
 
     visible: root.vm.active;
@@ -60,10 +64,10 @@ export component ContextMenu inherits Rectangle {
         y: min(root.vm.y, root.height - self.height - 4px);
         width: 210px;
         height: items.preferred-height + 8px;
-        background: Theme.row-bg;
-        border-color: Theme.selection-bg;
+        background: Theme.surface-floating;
+        border-color: Theme.divider;
         border-width: 1px;
-        border-radius: 6px;
+        border-radius: Theme.radius-md;
         TouchArea {} // captura clics dentro de la tarjeta (no cierra)
         items := VerticalLayout {
             padding: 4px;
@@ -75,8 +79,8 @@ export component ContextMenu inherits Rectangle {
             // (hijo de la fila, `x: parent.width + …`) se dibuja fuera de sus límites sin recorte.
             if root.vm.target-is-folder: Rectangle {
                 height: 26px;
-                background: open-row-touch.has-hover || open-sub.has-hover-sub ? Theme.selection-bg : transparent;
-                border-radius: 3px;
+                background: open-row-touch.has-hover || open-sub.has-hover-sub ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
                 HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 8px;
@@ -94,10 +98,10 @@ export component ContextMenu inherits Rectangle {
                     y: 0;
                     width: 230px;
                     height: sub-items.preferred-height + 8px;
-                    background: Theme.row-bg;
-                    border-color: Theme.selection-bg;
+                    background: Theme.surface-floating;
+                    border-color: Theme.divider;
                     border-width: 1px;
-                    border-radius: 6px;
+                    border-radius: Theme.radius-md;
                     sub-touch := TouchArea {}
                     sub-items := VerticalLayout {
                         padding: 4px;
@@ -106,7 +110,7 @@ export component ContextMenu inherits Rectangle {
                         // navegar el panel activo a ella. En folder-mode (zona vacía) el target es la
                         // carpeta ACTUAL del panel, así que "abrir aquí" re-navegaría a sí misma
                         // (no-op redundante); ahí se omite y quedan solo otro panel / nuevo / Explorador.
-                        if !root.vm.folder-mode: MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
+                        if !root.vm.folder-mode || root.vm.show-open-here: MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
                         MenuRow { label: Tr.ctx-open-other-pane; clicked => { root.open-other-pane(); } }
                         MenuRow { label: Tr.ctx-open-new-pane; clicked => { root.open-new-pane(); } }
                         MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
@@ -118,6 +122,8 @@ export component ContextMenu inherits Rectangle {
             // "Abrir en Explorador de Windows" ya vive en el submenú "Abrir ▸" de arriba (el
             // target-is-folder cubre folder-mode), así que no se duplica aquí.
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-new-folder; clicked => { root.new-folder(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-synchronize; clicked => { root.synchronize(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
@@ -127,6 +133,7 @@ export component ContextMenu inherits Rectangle {
             if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
             // "Abrir con…" solo para archivos: las carpetas ya tienen su submenú "Abrir ▸" propio.
             if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            if root.vm.target-is-executable: MenuRow { label: Tr.ctx-run-as-administrator; clicked => { root.run-as-administrator(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
@@ -137,6 +144,8 @@ export component ContextMenu inherits Rectangle {
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-add-basket; clicked => { root.add-to-basket(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-transform-text; clicked => { root.transform-text(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             // Comprimir/Extraer (.zip). "Comprimir en .zip…" siempre que haya selección; las
             // dos de extraer solo si la selección es exactamente un archivo .zip.

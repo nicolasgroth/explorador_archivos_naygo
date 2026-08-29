@@ -1,15 +1,15 @@
 {
   "name": "Dark Blue",
   "base": "dark",
-  "accent": "#4f8ae0",
-  "panel_bg": "#0e1622",
-  "row_bg": "#1b2838",
-  "row_alt_bg": "#1f3350",
-  "text": "#ddddee",
-  "text_dim": "#99aabb",
-  "selection_bg": "#2a4a7a",
-  "active_bar": "#4f8ae0",
-  "error": "#d4574e",
-  "highlight": "#ffd479",
-  "border": "#2a3a52"
+  "accent": "#4f91e8",
+  "panel_bg": "#101720",
+  "row_bg": "#151e28",
+  "row_alt_bg": "#192430",
+  "text": "#e3e9f0",
+  "text_dim": "#91a0b1",
+  "selection_bg": "#244b72",
+  "active_bar": "#4f91e8",
+  "error": "#e0645b",
+  "highlight": "#e0b866",
+  "border": "#273748"
 }

@@ -258,6 +258,22 @@ export component OpDialogs inherits Rectangle {
                     color: Theme.error;
                     font-size: 12px;
                 }
+                if root.vm.del-preview != "": Rectangle {
+                    background: Theme.surface-raised;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: Theme.radius-sm;
+                    min-height: preview-text.preferred-height + 18px;
+                    preview-text := Text {
+                        x: 10px;
+                        y: 9px;
+                        width: parent.width - 20px;
+                        text: root.vm.del-preview;
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
                 HorizontalLayout {
                     alignment: stretch;
                     spacing: 8px;

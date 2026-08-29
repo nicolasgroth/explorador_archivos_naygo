@@ -1,0 +1,86 @@
+// Naygo — vista previa del plan de sincronización entre paneles.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+
+import { Button, CheckBox, ListView } from "std-widgets.slint";
+import { SyncVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component ModeChoice inherits Rectangle {
+    in property <string> label;
+    in property <bool> chosen;
+    callback clicked();
+    height: 30px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: root.chosen ? Theme.accent : Theme.divider;
+    background: root.chosen ? Theme.selection-bg : (touch.has-hover ? Theme.hover-bg : Theme.row-bg);
+    Text { text: root.label; color: root.chosen ? white : Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component SyncDialog inherits Rectangle {
+    in property <SyncVm> vm;
+    callback set-mode(int);
+    callback set-delete-extras(bool);
+    callback toggle(int);
+    callback apply();
+    callback close();
+    visible: root.vm.active;
+    background: #00000099;
+    TouchArea { clicked => {} }
+    Rectangle {
+        width: min(820px, parent.width - 40px);
+        height: min(650px, parent.height - 40px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface-floating;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: Theme.radius-lg;
+        VerticalLayout {
+            padding: 14px; spacing: 9px;
+            Text { text: Tr.sync-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout { Text { text: Tr.sync-left; color: Theme.text-dim; font-size: 10px; } Text { text: root.vm.left; color: Theme.text; overflow: elide; } }
+                Text { text: "⇄"; color: Theme.accent; font-size: 20px; vertical-alignment: center; }
+                VerticalLayout { Text { text: Tr.sync-right; color: Theme.text-dim; font-size: 10px; } Text { text: root.vm.right; color: Theme.text; overflow: elide; } }
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                ModeChoice { horizontal-stretch: 1; label: Tr.sync-left-to-right; chosen: root.vm.mode == 0; clicked => { root.set-mode(0); } }
+                ModeChoice { horizontal-stretch: 1; label: Tr.sync-right-to-left; chosen: root.vm.mode == 1; clicked => { root.set-mode(1); } }
+                ModeChoice { horizontal-stretch: 1; label: Tr.sync-bidirectional; chosen: root.vm.mode == 2; clicked => { root.set-mode(2); } }
+            }
+            CheckBox {
+                text: Tr.sync-delete-extras;
+                checked: root.vm.delete-extras;
+                toggled => { root.set-delete-extras(self.checked); }
+            }
+            if root.vm.planning: Text { text: Tr.sync-planning; color: Theme.text-dim; vertical-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
+            if root.vm.error != "": Text { text: root.vm.error; color: Theme.error; wrap: word-wrap; vertical-stretch: 1; }
+            if !root.vm.planning && root.vm.error == "": ListView {
+                vertical-stretch: 1;
+                for row[i] in root.vm.rows: Rectangle {
+                    height: 30px;
+                    background: mod(i, 2) == 0 ? Theme.row-bg : Theme.row-alt-bg;
+                    HorizontalLayout {
+                        padding-left: 5px; padding-right: 6px; spacing: 8px;
+                        CheckBox { checked: row.selected; enabled: row.enabled; toggled => { root.toggle(i); } }
+                        Text { text: row.path; color: row.enabled ? Theme.text : Theme.highlight; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: row.action; color: row.enabled ? Theme.accent : Theme.highlight; horizontal-alignment: right; }
+                    }
+                }
+            }
+            if !root.vm.planning && root.vm.error == "" && root.vm.rows.length == 0: Text { text: Tr.sync-no-changes; color: Theme.text-dim; vertical-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
+            HorizontalLayout {
+                spacing: 7px;
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: Tr.dlg-cancel; clicked => { root.close(); } }
+                Button { text: Tr.sync-apply; enabled: root.vm.can-apply && !root.vm.planning; clicked => { root.apply(); } }
+            }
+        }
+    }
+}

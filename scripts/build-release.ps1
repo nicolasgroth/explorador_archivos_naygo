@@ -4,12 +4,68 @@
 # Autor: Nicolás Groth <ngroth@gmail.com> — ISGroth.
 #
 # Uso:  powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+#       powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 `
+#         -SignToolPath 'C:\...\signtool.exe' -CertificateThumbprint '<SHA1>'
 # Prerequisitos: Rust (toolchain MSVC). Inno Setup (ISCC.exe) opcional: si falta,
 # se genera solo el ZIP portable y se avisa.
+
+[CmdletBinding()]
+param(
+    # Omitir ambos mantiene el build sin firmar (comportamiento apto para desarrollo).
+    [string]$SignToolPath = $env:NAYGO_SIGNTOOL,
+    [string]$CertificateThumbprint = $env:NAYGO_SIGN_CERT_SHA1,
+    [string]$TimestampUrl = $env:NAYGO_SIGN_TIMESTAMP_URL
+)
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot           # raiz del repo (scripts/ esta un nivel abajo)
 $dist = Join-Path $repo "dist"
+
+if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {
+    $TimestampUrl = 'http://timestamp.digicert.com'
+}
+
+# PowerShell 7 normalmente expone Get-FileHash, pero algunos runtimes embebidos/minimalistas no
+# incluyen ese cmdlet. El empaquetado no debe fallar DESPUÉS de crear ambos artefactos solo por
+# imprimir sus checksums: usamos el cmdlet cuando existe y un fallback .NET compatible si no.
+function Get-Sha256Hex([string]$path) {
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($path)
+    try {
+        # BitConverter existe tanto en Windows PowerShell clásico como en PowerShell moderno.
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
+
+function Invoke-SignedInstaller([string]$path) {
+    $hasTool = -not [string]::IsNullOrWhiteSpace($SignToolPath)
+    $hasCert = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint)
+    if (-not $hasTool -and -not $hasCert) {
+        Write-Warning 'Instalador sin firma: no se configuró signtool ni certificado.'
+        return
+    }
+    if (-not $hasTool -or -not $hasCert) {
+        throw 'Para firmar, entrega SignToolPath y CertificateThumbprint (o NAYGO_SIGNTOOL y NAYGO_SIGN_CERT_SHA1).'
+    }
+    if (-not (Test-Path -LiteralPath $SignToolPath)) {
+        throw "No existe signtool.exe: $SignToolPath"
+    }
+
+    Write-Host "Firmando instalador con SHA-256..."
+    & $SignToolPath sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $path
+    if ($LASTEXITCODE -ne 0) { throw "signtool sign falló para $path." }
+    & $SignToolPath verify /pa /all /v $path
+    if ($LASTEXITCODE -ne 0) { throw "signtool verify falló para $path." }
+    Write-Host 'Firma Authenticode verificada.'
+}
 
 # --- 1. Version: fuente unica = workspace.package.version del Cargo.toml raiz ---
 $cargoToml = Get-Content (Join-Path $repo "Cargo.toml") -Raw
@@ -29,19 +85,19 @@ if (-not (Test-Path $exe)) { throw "No se encontro $exe tras compilar." }
 # --- 3. Preparar dist/ ---
 if (-not (Test-Path $dist)) { New-Item -ItemType Directory -Path $dist | Out-Null }
 
-# --- 4. ZIP portable: naygo.exe + naygo.pdb + LICENSE + LEEME.txt ---
+# --- 4. ZIP portable: ejecutable y documentos (los símbolos no viajan por defecto) ---
 Write-Host "Armando ZIP portable..."
 $stage = Join-Path $dist "portable-stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item $exe (Join-Path $stage "naygo.exe")
-# Simbolos de depuracion: el PDB permite backtraces simbolizados en el log de panic.
+# El PDB se conserva en target\release para diagnóstico, pero no se agrega al ZIP portable:
+# pesa cientos de MB y el usuario normal no lo necesita para navegar archivos.
 $pdb = Join-Path $repo "target\release\naygo.pdb"
 if (Test-Path $pdb) {
-    Copy-Item $pdb (Join-Path $stage "naygo.pdb")
-    Write-Host "Incluyendo naygo.pdb (simbolos para backtraces del log de panic)."
+    Write-Host "naygo.pdb generado (no se incluye en el ZIP portable)."
 } else {
-    Write-Warning "No se encontro $pdb; el ZIP queda sin simbolos de depuracion."
+    Write-Warning "No se encontró $pdb; el instalador no ofrecerá símbolos de depuración."
 }
 Copy-Item (Join-Path $repo "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $repo "installer\LEEME.txt") (Join-Path $stage "LEEME.txt")
@@ -100,7 +156,26 @@ if ($null -eq $isccPath) {
     Write-Host "Generando instalador con Inno Setup ($isccPath)..."
     & $isccPath "/DMyAppVersion=$version" (Join-Path $repo "installer\naygo.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC fallo al compilar el instalador." }
-    Write-Host "Instalador: $dist\Naygo-$version-setup.exe"
+    $setup = Join-Path $dist "Naygo-$version-setup.exe"
+    Invoke-SignedInstaller $setup
+    Write-Host "Instalador: $setup"
 }
+
+# Checksums reproducibles también en builds LOCALES (CI ya hacía esto por separado).
+# Así el contenido de dist/ queda completo y verificable sin depender del workflow remoto.
+$artifacts = @($zip)
+$setup = Join-Path $dist "Naygo-$version-setup.exe"
+if (Test-Path -LiteralPath $setup) { $artifacts += $setup }
+$checksumPath = Join-Path $dist "SHA256SUMS.txt"
+$checksumLines = foreach ($artifact in $artifacts) {
+    $hash = Get-Sha256Hex $artifact
+    "$hash  $(Split-Path -Leaf $artifact)"
+}
+[System.IO.File]::WriteAllLines(
+    $checksumPath,
+    $checksumLines,
+    [System.Text.UTF8Encoding]::new($false)
+)
+Write-Host "Checksums: $checksumPath"
 
 Write-Host "Listo. Artefactos en: $dist"

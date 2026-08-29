@@ -11,19 +11,89 @@ import { TreeRow } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
+// Glifos compactos para accesos físicos conocidos. Se dibujan con Path para funcionar también
+// en el renderer por software y no dependen de una fuente/emoji ni de una llamada al Shell.
+component SpecialFolderIcon inherits Rectangle {
+    in property <string> kind;
+    width: 16px;
+    height: 16px;
+    property <color> ink: Theme.accent;
+    if root.kind == "desktop": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.5px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 2; y: 3; } LineTo { x: 14; y: 3; } LineTo { x: 14; y: 11; }
+        LineTo { x: 2; y: 11; } Close { } MoveTo { x: 5; y: 13; } LineTo { x: 11; y: 13; }
+        MoveTo { x: 8; y: 11; } LineTo { x: 8; y: 13; }
+    }
+    if root.kind == "documents": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.4px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 4; y: 1; } LineTo { x: 10; y: 1; } LineTo { x: 13; y: 4; }
+        LineTo { x: 13; y: 15; } LineTo { x: 4; y: 15; } Close { }
+        MoveTo { x: 10; y: 1; } LineTo { x: 10; y: 4; } LineTo { x: 13; y: 4; }
+        MoveTo { x: 6; y: 8; } LineTo { x: 11; y: 8; } MoveTo { x: 6; y: 11; } LineTo { x: 11; y: 11; }
+    }
+    if root.kind == "downloads": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.5px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 8; y: 1; } LineTo { x: 8; y: 10; } MoveTo { x: 5; y: 7; }
+        LineTo { x: 8; y: 10; } LineTo { x: 11; y: 7; } MoveTo { x: 2; y: 13; }
+        LineTo { x: 14; y: 13; } LineTo { x: 14; y: 15; } LineTo { x: 2; y: 15; } Close { }
+    }
+    if root.kind == "pictures": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.4px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 2; y: 3; } LineTo { x: 14; y: 3; } LineTo { x: 14; y: 13; }
+        LineTo { x: 2; y: 13; } Close { } MoveTo { x: 4; y: 11; } LineTo { x: 7; y: 8; }
+        LineTo { x: 9; y: 10; } LineTo { x: 11; y: 7; } LineTo { x: 14; y: 11; }
+    }
+    if root.kind == "music": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.4px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 11; y: 2; } LineTo { x: 11; y: 11; } MoveTo { x: 11; y: 3; }
+        LineTo { x: 6; y: 4; } LineTo { x: 6; y: 12; }
+        MoveTo { x: 2.5; y: 12; } LineTo { x: 4; y: 10.5; } LineTo { x: 5.5; y: 12; }
+        LineTo { x: 4; y: 13.5; } Close { } MoveTo { x: 7.5; y: 11; } LineTo { x: 9; y: 9.5; }
+        LineTo { x: 10.5; y: 11; } LineTo { x: 9; y: 12.5; } Close { }
+    }
+    if root.kind == "videos": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.4px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 2; y: 4; } LineTo { x: 11; y: 4; } LineTo { x: 11; y: 13; }
+        LineTo { x: 2; y: 13; } Close { } MoveTo { x: 11; y: 7; } LineTo { x: 15; y: 5; }
+        LineTo { x: 15; y: 12; } LineTo { x: 11; y: 10; } Close { }
+        MoveTo { x: 6; y: 7; } LineTo { x: 9; y: 8.5; } LineTo { x: 6; y: 10; } Close { }
+    }
+    if root.kind == "cloud": Path {
+        width: 16px; height: 16px; stroke: root.ink; stroke-width: 1.5px; fill: transparent;
+        viewbox-width: 16; viewbox-height: 16;
+        MoveTo { x: 3; y: 12; } LineTo { x: 13; y: 12; } LineTo { x: 14; y: 10; }
+        LineTo { x: 12; y: 7; } LineTo { x: 10; y: 7; } LineTo { x: 8; y: 4; }
+        LineTo { x: 5; y: 6; } LineTo { x: 3; y: 9; } Close { }
+    }
+}
+
 export component TreePanel inherits Rectangle {
     in property <bool> active;
     in property <[TreeRow]> rows;
     in property <length> row-h: 22px;   // alto de fila (densidad configurable)
+    in property <bool> linked;
+    in property <string> link-label;
     callback toggle(string);    // expandir/colapsar la rama (por ruta)
     callback navigate(string);  // navegar el Files activo a esa carpeta
+    callback context(string, length, length); // clic derecho: menú de la carpeta real
     callback focus-pane();
+    callback toggle-link();
+    callback hover-tip(string, length, length);
     // Navegación por teclado del árbol (F6/teclado): "up"/"down"/"left"/"right"/"enter".
     callback tree-key(string);
+    // Sólo Ctrl+Tab se delega al enrutador global: el árbol toma el foco real, por lo que sin
+    // este puente el recorrido por todos los paneles se detenía al llegar a él.
+    callback key(string, bool, bool, bool);
 
-    background: Theme.panel-bg;
-    border-width: root.active ? 1.5px : 0px;
-    border-color: Theme.accent;
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     // Cuando el panel pasa a activo, tomar el foco para recibir las flechas sin un clic previo.
     changed active => {
@@ -32,6 +102,10 @@ export component TreePanel inherits Rectangle {
 
     fs := FocusScope {
         key-pressed(ev) => {
+            if (ev.text == Key.Tab && ev.modifiers.control) {
+                root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                return accept;
+            }
             if (ev.text == Key.UpArrow) { root.tree-key("up"); return accept; }
             if (ev.text == Key.DownArrow) { root.tree-key("down"); return accept; }
             if (ev.text == Key.LeftArrow) { root.tree-key("left"); return accept; }
@@ -40,14 +114,47 @@ export component TreePanel inherits Rectangle {
             return reject;
         }
     VerticalLayout {
-        padding: 4px;
-        // (Sin título interno: la pestaña del panel ya rotula "Árbol"; repetirlo era redundante.)
+        padding: Theme.space-sm;
+        Rectangle {
+            height: 24px;
+            border-radius: Theme.radius-sm;
+            background: link-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+            HorizontalLayout {
+                padding-left: 7px;
+                padding-right: 7px;
+                spacing: 5px;
+                Text {
+                    text: root.linked ? "●" : "○";
+                    color: root.linked ? Theme.accent : Theme.text-dim;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.link-label;
+                    color: root.linked ? Theme.text : Theme.text-dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+            link-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.focus-pane(); root.toggle-link(); }
+                changed has-hover => {
+                    root.hover-tip(self.has-hover ? Tr.tree-link-tip : "",
+                        self.absolute-position.x + self.width / 2,
+                        self.absolute-position.y + self.height);
+                }
+            }
+        }
         ListView {
             vertical-stretch: 1;
             for n[i] in root.rows: row-rect := Rectangle {
                 height: root.row-h;
-                background: n.active ? Theme.selection-bg : (node-touch.has-hover ? Theme.row-alt-bg : transparent);
-                border-radius: 3px;
+                background: n.active
+                    ? (root.active ? Theme.selection-bg : Theme.selection-inactive-bg)
+                    : (node-touch.has-hover ? Theme.hover-bg : transparent);
+                border-radius: Theme.radius-sm;
                 // Sangría + ancho de la zona del chevron (los primeros 16px tras la sangría).
                 // El clic dentro de esa zona expande/colapsa; fuera, navega. Antes había DOS
                 // TouchAreas (chevron + fila): el de la fila, declarado último, quedaba ENCIMA y
@@ -70,8 +177,12 @@ export component TreePanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
-                    // Ícono de color cacheado (carpeta o disco) + nombre con sufijo de estado.
-                    Image {
+                    // Accesos conocidos tienen glifo propio; carpetas/unidades conservan el
+                    // ícono del set activo. El path real de cada fila sigue siendo el destino.
+                    if n.special-icon != "": SpecialFolderIcon {
+                        kind: n.special-icon;
+                    }
+                    if n.special-icon == "": Image {
                         source: n.icon;
                         width: 16px;
                         height: 16px;
@@ -122,6 +233,12 @@ export component TreePanel inherits Rectangle {
                             } else {
                                 root.navigate(n.path);
                             }
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                            root.focus-pane();
+                            root.context(n.path,
+                                self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
                         }
                         if (ev.kind == PointerEventKind.cancel) {
                             self.pressed-here = false;

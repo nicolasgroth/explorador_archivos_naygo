@@ -56,7 +56,7 @@ Cada panel puede ser de un **tipo**:
 | Tipo | Para qué sirve |
 |------|----------------|
 | **Archivos** | Lista navegable de una carpeta. Es el panel principal. |
-| **Árbol** | Árbol de carpetas; clic navega el panel de archivos activo. |
+| **Árbol** | Árbol de carpetas; puede seguir al último panel de archivos activo o quedar enlazado a uno específico. |
 | **Propiedades** | Datos del ítem enfocado (nombre, tipo, tamaño, fechas). |
 | **Historial de acciones** | Operaciones hechas, con botón de deshacer. |
 | **Favoritos** | Carpetas ancladas + recientes. |
@@ -68,7 +68,13 @@ Cada panel puede ser de un **tipo**:
 - El botón **＋** divide el panel activo (elige dirección: derecha/abajo/izq/arriba).
   Dividir varias veces en la misma dirección crea una fila pareja de paneles (no cajas
   anidadas), así los divisores se comportan de forma predecible.
-- El botón **Panel ▾** agrega un panel especial (árbol, propiedades, etc.).
+- El botón **Panel ▾** agrega un panel especial (árbol, propiedades, etc.) o un
+  **Explorador enlazado**, que crea Árbol + Archivos como una pareja 28/72. En la cabecera
+  del árbol, `○ Árbol común` / `● ↔ carpeta` alterna entre seguir al último panel usado y
+  quedar dedicado a ese panel.
+- El árbol comienza con accesos a las carpetas conocidas de Windows y a las cuentas de
+  **OneDrive/Dropbox** detectadas. Cada acceso navega su carpeta física real —también si fue
+  reubicada a otra unidad— y al marcar un panel de archivos el árbol revela esa ubicación.
 - **Arrastra la barra de título** de un panel sobre otro para reacomodar (los bordes
   dividen; el centro apila como pestaña).
 - **Arrastra las barras divisorias** para redimensionar: mientras arrastras verás una
@@ -100,6 +106,12 @@ espacio libre/total del disco de su unidad. Se muestra u oculta y se da formato 
   resaltado por colores**, aparece un botón **✎** en la barra de la vista previa que
   alterna a una vista de **texto seleccionable** (en un solo color) para poder
   seleccionar y copiar; al pulsarlo de nuevo vuelve a la vista con colores.
+- **Modelos de impresión 3D:** los archivos **STL** (binario o ASCII) y **3MF** muestran
+  una vista estática sin requerir GPU. En 3MF creados por un slicer se prefiere la miniatura
+  incrustada (más fiel, con colores y muy liviana); sin ella se rasteriza por CPU. El panel de
+  propiedades informa dimensiones X/Y/Z, triángulos y, para 3MF, la unidad declarada.
+  La primera versión prioriza rapidez y compatibilidad: no rota el modelo ni interpreta
+  materiales complejos o funciones de laminado.
 
 ---
 
@@ -164,7 +176,16 @@ aunque no estén seguidas, y se resaltan las que coinciden. La paleta busca en:
 
 Navegas con las flechas **↑ / ↓**, **Enter** ejecuta el elemento seleccionado y **Esc**
 cierra. La paleta **no** busca archivos recorriendo subcarpetas del disco; para eso
-está **Ctrl+F** (búsqueda recursiva).
+está **F3** (búsqueda recursiva).
+
+**Buscar archivos (F3):** abre el panel de búsqueda tomando la carpeta del último panel de
+archivos activo como raíz. La ruta es editable. Puedes buscar una parte del nombre o activar
+comodines Windows (`*` y `?`), distinguir mayúsculas, limitarte a la carpeta raíz o incluir
+subcarpetas. El campo opcional **Texto dentro del archivo** combina ambas condiciones, por
+ejemplo `*cosa*.txt` y `AQUÍ`. Los resultados llegan en vivo, muestran la ruta relativa y
+permiten abrir el elemento o navegar a su carpeta contenedora. Para mantener la aplicación
+ágil, el contenido se revisa solo en archivos UTF-8 de texto de hasta 16 MiB; binarios y
+archivos mayores se omiten de esa condición.
 
 **Mostrar u ocultar archivos (menú del ojo):** el botón con un **ojo** en la barra de
 herramientas despliega tres interruptores:
@@ -204,6 +225,7 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 | Atajo | Acción |
 |-------|--------|
 | **Ctrl+C / Ctrl+X / Ctrl+V** | Copiar / cortar / pegar |
+| **Ctrl+D** | Duplicar en la misma carpeta (` - copia`, ` - copia (2)`, …) |
 | **Supr** | Enviar a la papelera |
 | **Shift+Supr** | Eliminar permanente |
 | **F2** | Renombrar (en línea) |
@@ -260,6 +282,10 @@ panel a otro. Dentro del **mismo disco** la operación **mueve**; hacia **otro d
 **fuerza mover**. (Arrastrar archivos **fuera** de Naygo, al Explorador de Windows,
 sigue funcionando como antes.)
 
+También puedes arrastrar archivos directamente desde una ventana de **7-Zip**, **WinRAR** u
+otra aplicación que entregue contenido virtual. Naygo lo prepara en segundo plano y lo copia
+al panel de destino; el contenido temporal se elimina automáticamente al terminar o cancelar.
+
 **Comprimir y extraer (.zip):** con uno o más archivos o carpetas seleccionados, el menú
 contextual ofrece **«Comprimir en .zip»** (pide el nombre del archivo; si ya existe un
 `.zip` con ese nombre, Naygo nunca lo pisa: desambigua agregando «(2)»). Con un `.zip`
@@ -269,6 +295,26 @@ compresión en curso borra el archivo `.zip` parcial). Si al extraer algún arch
 con uno existente, se abre el mismo **diálogo de conflicto lado a lado** que usan copiar
 y mover. Las dos operaciones se pueden **deshacer** de forma segura: a la papelera va
 solo lo que la operación creó, nunca algo que ya existía antes.
+
+**Sincronizar carpetas:** abre el menú contextual sobre el fondo de un panel y elige
+**Sincronizar con otro panel**. Naygo usa el panel activo y otro panel de archivos abierto,
+compara ambos árboles en segundo plano y muestra el plan antes de tocar datos. Puedes elegir
+izquierda → derecha, derecha → izquierda o bidireccional y desmarcar acciones individuales.
+**Eliminar sobrantes** parte apagado; al activarlo, esas entradas se envían a la papelera.
+Los conflictos donde ambos lados cambiaron se muestran, pero no se eligen automáticamente.
+
+**Bandeja temporal:** agrega el panel **Bandeja** desde **Panel ▾**. En cualquier panel de
+archivos, selecciona elementos y usa **Agregar a la bandeja** en el menú contextual. La
+bandeja acepta rutas de carpetas distintas, elimina duplicados y permite copiarlas o moverlas
+a una carpeta elegida, enviarlas a la papelera, quitarlas o limpiar la lista. Solo guarda las
+rutas durante la sesión: no duplica el contenido ni se persiste al cerrar Naygo.
+
+**Transformar texto:** selecciona uno o varios archivos y elige **Transformar texto…** en el
+menú contextual. El diagnóstico distingue Windows CRLF, Unix/macOS LF, Mac clásico CR y
+mezclas. Como destino puedes conservar o convertir la codificación entre UTF-8, UTF-8 con
+BOM y UTF-16 LE/BE, asegurar o quitar el salto final y limpiar espacios al final de cada
+línea. El reemplazo es transaccional y cancelable; los binarios, textos inválidos y archivos
+mayores a 128 MiB se rechazan para evitar corrupción o picos de memoria.
 
 **Cuando algo ya existe en el destino:**
 
@@ -423,11 +469,12 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Ctrl+P | Abrir la paleta de comandos |
 | F1 | Ayuda |
 | F2 / Shift+F2 | Renombrar / renombrar por lotes |
-| F3 | Calcular el tamaño de la carpeta |
+| F3 / Ctrl+F | Buscar archivos |
 | F5 | Refrescar |
 | F6 | Mover al otro panel |
 | Esc | Cancelar listado |
 | Ctrl+C / X / V | Copiar / cortar / pegar |
+| Ctrl+D | Duplicar la selección en su misma carpeta |
 | Supr / Shift+Supr | Papelera / eliminar permanente |
 | Ctrl+N / Ctrl+Shift+N | Nuevo archivo / carpeta |
 | Ctrl+A | Seleccionar todo |

@@ -21,6 +21,8 @@ pub enum PreviewKind {
     /// PDF: se muestra el TEXTO extraído + metadatos (nº páginas). NO se renderiza la página
     /// (preview liviano, sin DLLs): la salida es texto.
     Pdf,
+    /// Modelo 3D STL/3MF: se rasteriza por CPU a una imagen estática en el worker.
+    Mesh,
     /// Sin vista previa (video/audio/binario/desconocido): NUNCA se lee el archivo.
     None,
 }
@@ -34,6 +36,9 @@ pub const SVG_EXTENSIONS: &[&str] = &["svg"];
 
 /// Extensión de documento PDF: preview de texto + metadatos (sin render de página).
 pub const PDF_EXTENSIONS: &[&str] = &["pdf"];
+
+/// Modelos de impresión 3D previsualizables con el rasterizador CPU de Naygo.
+pub const MESH_EXTENSIONS: &[&str] = &["stl", "3mf"];
 
 /// Extensiones de texto previsualizables por defecto. La UI permite editar la lista en
 /// Configuración; esta es la semilla.
@@ -287,6 +292,8 @@ fn kind_of_extension(ext: &str) -> PreviewKind {
         PreviewKind::Svg
     } else if PDF_EXTENSIONS.contains(&ext) {
         PreviewKind::Pdf
+    } else if MESH_EXTENSIONS.contains(&ext) {
+        PreviewKind::Mesh
     } else if DEFAULT_TEXT_EXTENSIONS.contains(&ext) {
         PreviewKind::Text
     } else {
@@ -307,6 +314,7 @@ pub fn default_preview_rules() -> Vec<PreviewRule> {
         .chain(IMAGE_EXTENSIONS.iter())
         .chain(SVG_EXTENSIONS.iter())
         .chain(PDF_EXTENSIONS.iter())
+        .chain(MESH_EXTENSIONS.iter())
         .map(mk)
         .collect()
 }
@@ -327,6 +335,7 @@ pub fn rules_from_csv(csv: &str) -> Vec<PreviewRule> {
         .iter()
         .chain(SVG_EXTENSIONS.iter())
         .chain(PDF_EXTENSIONS.iter())
+        .chain(MESH_EXTENSIONS.iter())
     {
         if !rules.iter().any(|r| r.ext == *ext) {
             rules.push(PreviewRule {
@@ -363,6 +372,9 @@ pub fn classify(path: &std::path::Path, text_exts: &[String]) -> PreviewKind {
     if PDF_EXTENSIONS.contains(&ext.as_str()) {
         return PreviewKind::Pdf;
     }
+    if MESH_EXTENSIONS.contains(&ext.as_str()) {
+        return PreviewKind::Mesh;
+    }
     if text_exts.iter().any(|e| e == &ext) {
         return PreviewKind::Text;
     }
@@ -391,6 +403,71 @@ pub struct TruncatedText {
     pub truncated: bool,
 }
 
+/// Decodifica texto para la vista previa sin asumir que todo `.txt` moderno es UTF-8. Orden:
+/// UTF-8 válido, UTF-16 con BOM y finalmente Windows-1252 (la codificación histórica de la gran
+/// mayoría de TXT creados por aplicaciones Windows en español). Así `Peñalolén` no termina como
+/// `Pe�alol�n`; los bytes inválidos aislados quedan reemplazados solo cuando CP-1252 no los define.
+pub fn decode_text_bytes(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes
+        .strip_prefix(&[0xff, 0xfe])
+        .filter(|rest| rest.len() % 2 == 0)
+    {
+        let words: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return String::from_utf16_lossy(&words);
+    }
+    if let Some(rest) = bytes
+        .strip_prefix(&[0xfe, 0xff])
+        .filter(|rest| rest.len() % 2 == 0)
+    {
+        let words: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect();
+        return String::from_utf16_lossy(&words);
+    }
+    if let Ok(utf8) = std::str::from_utf8(bytes) {
+        return utf8.strip_prefix('\u{feff}').unwrap_or(utf8).to_owned();
+    }
+    bytes.iter().map(|&b| windows_1252_char(b)).collect()
+}
+
+fn windows_1252_char(byte: u8) -> char {
+    match byte {
+        0x80 => '€',
+        0x82 => '‚',
+        0x83 => 'ƒ',
+        0x84 => '„',
+        0x85 => '…',
+        0x86 => '†',
+        0x87 => '‡',
+        0x88 => 'ˆ',
+        0x89 => '‰',
+        0x8a => 'Š',
+        0x8b => '‹',
+        0x8c => 'Œ',
+        0x8e => 'Ž',
+        0x91 => '‘',
+        0x92 => '’',
+        0x93 => '“',
+        0x94 => '”',
+        0x95 => '•',
+        0x96 => '–',
+        0x97 => '—',
+        0x98 => '˜',
+        0x99 => '™',
+        0x9a => 'š',
+        0x9b => '›',
+        0x9c => 'œ',
+        0x9e => 'ž',
+        0x9f => 'Ÿ',
+        0x81 | 0x8d | 0x8f | 0x90 | 0x9d => '\u{fffd}',
+        _ => byte as char,
+    }
+}
+
 /// Recorta cada línea de `s` a `TEXT_MAX_LINE_CHARS` caracteres (añadiendo `…` a las
 /// recortadas). Devuelve el texto resultante y si recortó alguna línea. Defensa contra el
 /// desborde i16 del renderizador por software de Slint con líneas larguísimas. Útil para
@@ -413,11 +490,11 @@ pub fn clip_long_lines(s: &str) -> (String, bool) {
     (out, clipped)
 }
 
-/// Trunca `bytes` (conversión lossy desde UTF-8) a las primeras `TEXT_MAX_LINES` líneas.
+/// Trunca `bytes` ya decodificados de forma tolerante a las primeras `TEXT_MAX_LINES` líneas.
 /// Marca `truncated` si había más líneas que el tope O si el buffer ya venía cortado por
 /// bytes (`hit_byte_cap`). No agrega el aviso: eso es presentación (i18n) de la UI.
 pub fn truncate_text(bytes: &[u8], hit_byte_cap: bool) -> TruncatedText {
-    let s = String::from_utf8_lossy(bytes);
+    let s = decode_text_bytes(bytes);
     let mut out = String::new();
     let mut more_lines = false;
     let mut clipped_line = false;
@@ -482,6 +559,18 @@ mod tests {
     fn parse_extensiones_normaliza() {
         let v = parse_text_extensions("  TXT , .md ,, json ,");
         assert_eq!(v, vec!["txt", "md", "json"]);
+    }
+
+    #[test]
+    fn texto_windows_1252_preserva_tildes_y_enies() {
+        let text = decode_text_bytes(b"Pe\xf1alol\xe9n: coraz\xf3n");
+        assert_eq!(text, "Peñalolén: corazón");
+    }
+
+    #[test]
+    fn texto_utf16_con_bom_se_decodifica() {
+        let bytes = [0xff, 0xfe, b'H', 0, b'o', 0, b'l', 0, b'a', 0];
+        assert_eq!(decode_text_bytes(&bytes), "Hola");
     }
 
     #[test]

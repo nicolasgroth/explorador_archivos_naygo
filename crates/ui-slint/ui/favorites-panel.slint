@@ -19,8 +19,8 @@ component FavMenuItem inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 26px;
-    background: fmi-touch.has-hover ? Theme.selection-bg : transparent;
-    border-radius: 4px;
+    background: fmi-touch.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
     Text {
         text: root.label;
         color: Theme.text;
@@ -34,7 +34,6 @@ component FavMenuItem inherits Rectangle {
 export component FavoritesPanel inherits Rectangle {
     in property <bool> active;
     in property <[FavTreeRow]> fav-tree;       // árbol de favoritos aplanado (grupos + hojas)
-    in property <[NavRow]> recents;            // carpetas recientes (sección inferior)
     in property <[PathSeg]> group-options;     // grupos para "Mover a…" (label=ruta, path=group-id)
     // Destinos VÁLIDOS para "Mover a…" del nodo seleccionado (ya filtrado por Rust: sin el propio
     // grupo ni sus descendientes). Se rellena al abrir el submenú vía `request-move-targets`.
@@ -44,14 +43,15 @@ export component FavoritesPanel inherits Rectangle {
     callback toggle-expand(string);            // expandir/colapsar un grupo por su ruta de nombres
     callback new-group(string, string);        // crear grupo: (parent-group-id, nombre)
     callback rename-group(string, string);     // renombrar grupo: (group-id, nombre nuevo)
+    callback rename-favorite(string, string);  // cambiar alias: (ruta, alias nuevo)
     callback delete-node(bool, string, string);// eliminar: (is-group, group-id, path)
     callback move-node(bool, string, string, string); // mover: (is-group, src-gid, src-path, dest-gid)
     callback pin-current();                    // anclar la carpeta del panel activo como favorita
     callback focus-pane();                     // marcar este panel como activo al interactuar
 
-    background: Theme.panel-bg;
-    border-width: root.active ? 1.5px : 0px;
-    border-color: Theme.accent;
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     // --- Estado del menú contextual flotante (clic derecho sobre una fila) ---
     property <bool> menu-open: false;
@@ -67,7 +67,9 @@ export component FavoritesPanel inherits Rectangle {
     // --- Estado del mini-modal de nombre (nuevo grupo / renombrar) ---
     property <bool> name-modal-open: false;
     property <bool> name-modal-rename: false;  // true=renombrar, false=nuevo grupo
+    property <bool> name-modal-favorite: false; // true=cambiar el alias de una hoja favorita
     property <string> name-modal-gid: "";      // group-id objetivo (renombrar) o padre (nuevo)
+    property <string> name-modal-path: "";     // ruta objetivo al cambiar alias
     property <string> name-modal-title: "";
     property <string> name-modal-text: "";     // texto en edición (el LineEdit lo refleja)
 
@@ -77,13 +79,24 @@ export component FavoritesPanel inherits Rectangle {
     }
     function open-name-modal(rename: bool, gid: string, title: string, initial: string) {
         root.name-modal-rename = rename;
+        root.name-modal-favorite = false;
         root.name-modal-gid = gid;
         root.name-modal-title = title;
         root.name-modal-text = initial;
         root.name-modal-open = true;
     }
+    function open-favorite-alias(path: string, initial: string) {
+        root.name-modal-rename = false;
+        root.name-modal-favorite = true;
+        root.name-modal-path = path;
+        root.name-modal-title = Tr.fav-rename;
+        root.name-modal-text = initial;
+        root.name-modal-open = true;
+    }
     function confirm-name() {
-        if (root.name-modal-rename) {
+        if (root.name-modal-favorite) {
+            root.rename-favorite(root.name-modal-path, root.name-modal-text);
+        } else if (root.name-modal-rename) {
             root.rename-group(root.name-modal-gid, root.name-modal-text);
         } else {
             root.new-group(root.name-modal-gid, root.name-modal-text);
@@ -107,8 +120,8 @@ export component FavoritesPanel inherits Rectangle {
             }
             Rectangle {
                 width: 52px;
-                background: pin-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
-                border-radius: 3px;
+                background: pin-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                border-radius: Theme.radius-sm;
                 Text { text: Tr.fav-pin; color: Theme.highlight; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
@@ -125,9 +138,9 @@ export component FavoritesPanel inherits Rectangle {
         ListView {
             vertical-stretch: 1;
             for f[i] in root.fav-tree: Rectangle {
-                height: 22px;
-                background: row-touch.has-hover ? Theme.row-alt-bg : transparent;
-                border-radius: 3px;
+                height: 26px;
+                background: row-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
                 HorizontalLayout {
                     // Sangría por nivel (12px por nivel) + base.
                     padding-left: 6px + f.depth * 12px;
@@ -165,13 +178,23 @@ export component FavoritesPanel inherits Rectangle {
                         vertical-alignment: center;
                         image-rendering: smooth;
                     }
-                    // Nombre (grupo: negrita; favorito: color resaltado).
+                    // Alias (grupo: nombre de grupo; favorito: alias editable). La identidad
+                    // del favorito continúa siendo su ruta absoluta, mostrada a la derecha.
                     Text {
                         text: f.name;
                         color: f.is-group ? Theme.text : Theme.highlight;
                         font-weight: f.is-group ? 700 : 400;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    if !f.is-group: Text {
+                        width: max(100px, min(240px, root.width * 0.42));
+                        text: f.path-hint;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
                         overflow: elide;
                     }
                 }
@@ -204,43 +227,6 @@ export component FavoritesPanel inherits Rectangle {
             }
         }
 
-        // Sección de recientes.
-        Text {
-            text: Tr.fav-recents;
-            color: Theme.text-dim;
-            font-weight: 700;
-            height: 20px;
-            vertical-alignment: center;
-        }
-        ListView {
-            vertical-stretch: 1;
-            for r[i] in root.recents: Rectangle {
-                height: 22px;
-                background: rec-touch.has-hover ? Theme.row-alt-bg : transparent;
-                border-radius: 3px;
-                HorizontalLayout {
-                    padding-left: 6px;
-                    spacing: 4px;
-                    Image {
-                        source: r.icon;
-                        width: 16px;
-                        height: 16px;
-                        vertical-alignment: center;
-                        image-rendering: smooth;
-                    }
-                    Text {
-                        text: r.label;
-                        color: Theme.text;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
-                    }
-                }
-                rec-touch := TouchArea {
-                    clicked => { root.focus-pane(); root.navigate(r.path); }
-                }
-            }
-        }
     }
 
     // --- Menú contextual flotante (clic derecho) ---
@@ -277,11 +263,18 @@ export component FavoritesPanel inherits Rectangle {
                     root.close-menu();
                 }
             }
-            // Renombrar (solo grupos).
+            // Renombrar: los grupos cambian su nombre y las hojas cambian solo su alias.
             if root.menu-is-group: FavMenuItem {
                 label: Tr.fav-rename;
                 clicked => {
                     root.open-name-modal(true, root.menu-group-id, Tr.fav-rename, root.menu-name);
+                    root.close-menu();
+                }
+            }
+            if !root.menu-is-group: FavMenuItem {
+                label: Tr.fav-rename;
+                clicked => {
+                    root.open-favorite-alias(root.menu-path, root.menu-name);
                     root.close-menu();
                 }
             }

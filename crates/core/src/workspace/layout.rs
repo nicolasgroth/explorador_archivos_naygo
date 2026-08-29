@@ -490,6 +490,46 @@ impl SerializableDockLayout {
         }
     }
 
+    /// Reemplaza una hoja por un split BINARIO propio, sin aplanarlo con el padre aunque
+    /// tenga la misma dirección. Sirve para que dos paneles semánticamente enlazados formen
+    /// un bloque visual estable. `fraction` es el ancho/alto del panel existente.
+    pub fn split_leaf_grouped(
+        &mut self,
+        leaf: PaneId,
+        dir: SplitDir,
+        new_id: PaneId,
+        fraction: f32,
+    ) {
+        fn replace(
+            node: &mut DockNode,
+            leaf: PaneId,
+            dir: SplitDir,
+            new_id: PaneId,
+            fraction: f32,
+        ) -> bool {
+            match node {
+                DockNode::Leaf(id) if *id == leaf => {
+                    let f = fraction.clamp(0.05, 0.95);
+                    *node = DockNode::Split {
+                        dir,
+                        children: vec![DockNode::Leaf(leaf), DockNode::Leaf(new_id)],
+                        weights: vec![f, 1.0 - f],
+                    };
+                    true
+                }
+                DockNode::Split { children, .. } => children
+                    .iter_mut()
+                    .any(|child| replace(child, leaf, dir, new_id, fraction)),
+                // Un miembro de Tabs representa el grupo completo; no debe reemplazarse por
+                // un split porque rompería la semántica del tab group.
+                DockNode::Tabs { .. } | DockNode::Leaf(_) => false,
+            }
+        }
+        if let Some(root) = self.root.as_mut() {
+            replace(root, leaf, dir, new_id, fraction);
+        }
+    }
+
     /// Quita la hoja `id` y colapsa el split que la contenía (el hermano sube a su lugar).
     /// Si era la única hoja, el layout queda vacío. Si `id` era miembro de un grupo de
     /// pestañas, se quita del grupo (que se colapsa a hoja si queda uno solo).

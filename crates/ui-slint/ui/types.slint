@@ -12,6 +12,8 @@ export struct RowData {
     cut: bool,
     // Apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
     highlight: bool,
+    // Comparación de paneles: 0=normal/igual, 1=distinto, 2=solo en este panel.
+    compare-state: int,
     // Matchea el filtro visual por tipeo ("contiene", sin caso/tildes): se pinta
     // con un tinte de acento mientras el filtro esté activo (persiste hasta Esc
     // o navegar). Sin filtro activo siempre es false.
@@ -131,6 +133,7 @@ export struct FavTreeRow {
     is-group: bool,
     name: string,
     path: string,
+    path-hint: string, // ruta absoluta comprimida por el medio; vacía para grupos
     group-id: string,
     name-path: string,
     expanded: bool,
@@ -154,6 +157,7 @@ export struct OpDialogVm {
     // Confirmar borrado:
     del-count: int,
     del-permanent: bool,
+    del-preview: string,
     // Conflicto (por-ítem):
     conflict-name: string,
     // Tipo de la operación EN CONFLICTO (para anteponer la acción al encabezado del modal):
@@ -231,6 +235,10 @@ export struct ContextMenuVm {
     // único target (clic sobre una fila) es un directorio. Habilita el submenú "Abrir ▸" con
     // Abrir / Abrir en otro panel / Abrir en panel nuevo / Abrir en el Explorador de Windows.
     target-is-folder: bool,
+    // Folder-mode con una ruta EXPLÍCITA (breadcrumb/árbol): permite navegar "Abrir aquí".
+    show-open-here: bool,
+    // El objetivo único es un .exe/.com: habilita "Ejecutar como administrador".
+    target-is-executable: bool,
 }
 
 // Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
@@ -280,13 +288,16 @@ export struct SearchHitVm {
     icon: image,
 }
 
-// Estado del panel de búsqueda recursiva (Ctrl+F / lupa). `active` lo muestra; `query` es el
-// texto buscado; `root-label` la carpeta raíz (para el encabezado); `hits` las coincidencias en
-// vivo; `status` el resumen ("Buscando…", "N resultados", "parcial", "tope alcanzado").
+// Estado del panel de búsqueda F3. Sus criterios se conservan mientras el panel está abierto,
+// de modo que el usuario puede ajustar y relanzar sin perder la raíz ni las opciones.
 export struct SearchVm {
     active: bool,
     query: string,
     root-label: string,
+    content-query: string,
+    ignore-case: bool,
+    use-wildcards: bool,
+    recursive: bool,
     running: bool,       // worker aún en vuelo (muestra el spinner/Detener)
     hits: [SearchHitVm],
     status: string,
@@ -376,6 +387,8 @@ export struct TreeRow {
     disk-percent: int,
     // Texto de espacio del disco ("120 GB libre / 500 GB · 76%"); vacío si no es disco / sin dato.
     disk-detail: string,
+    // Acceso especial físico: desktop/documents/downloads/pictures/music/videos/cloud; vacío = normal.
+    special-icon: string,
     // Ícono de color cacheado (carpeta o disco) (6A).
     icon: image,
 }
@@ -432,6 +445,53 @@ export struct PreviewVm {
     // Vacío para tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
     meta: [MetaFieldVm],
     meta-loading: bool,
+    // STL/3MF: la imagen puede girarse con arrastre y acercarse con rueda/touchpad.
+    mesh-interactive: bool,
+    mesh-busy: bool,
+    // Mientras el worker todavía no entrega contenido para el archivo enfocado, la UI muestra
+    // una señal discreta. `can-cancel` recién se activa tras cinco segundos.
+    loading: bool,
+    can-cancel: bool,
+}
+
+// Una ruta reunida en la bandeja temporal.
+export struct BasketRowVm {
+    name: string,
+    path: string,
+    icon: image,
+}
+
+export struct SyncRowVm {
+    path: string,
+    action: string,
+    selected: bool,
+    enabled: bool,
+}
+
+export struct SyncVm {
+    active: bool,
+    left: string,
+    right: string,
+    mode: int,
+    delete-extras: bool,
+    planning: bool,
+    error: string,
+    rows: [SyncRowVm],
+    can-apply: bool,
+}
+
+export struct TextTransformVm {
+    active: bool,
+    count: int,
+    source: string,
+    target-line: int,
+    target-encoding: int,
+    final-newline: int,
+    trim: bool,
+    running: bool,
+    finished: bool,
+    status: string,
+    can-apply: bool,
 }
 
 // Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.
@@ -549,7 +609,7 @@ export struct SplitVm {
 }
 
 // Un panel colocado. El tipo (espejo de PanePurpose de core) elige qué datos usar:
-// 0=Files 1=Tree 2=Inspector 3=History 4=Favorites 5=Preview.
+// 0=Files 1=Tree 2=Inspector 3=History 4=Favorites 5=Preview 6=Operations 7=Basket.
 export struct PaneVm {
     id: int,
     x: length,
@@ -565,6 +625,9 @@ export struct PaneVm {
     drag-over: bool,
     purpose: int,
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
+    link-member: bool,        // participa en una pareja Tree↔Files
+    tree-linked: bool,        // Tree dedicado (false = árbol común)
+    tree-link-label: string,  // "Común" o el panel Files enlazado
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
     rows: [RowData],          // Files
     // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`; el
@@ -588,17 +651,28 @@ export struct PaneVm {
     missing-ejected: bool,
     deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
     footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
+    // Espacio de la unidad del panel, separado para poder alinearlo a la derecha sin comprimir el
+    // resumen de selección. Vacío cuando el preset ya lo incorpora o el volumen no responde.
+    footer-disk-text: string,
+    // Historial propio del panel. Cada FilePanel usa estos flags en sus controles compactos de ruta;
+    // no depende del panel que esté activo globalmente.
+    can-go-back: bool,
+    can-go-forward: bool,
     // Files: etiqueta del filtro visual por tipeo activo en este panel (p. ej. `filtro: "beta"
     // · 2 coincidencias`), ya traducida. Vacío = sin filtro → la mini-barra no se muestra.
     filter-label: string,
+    // El filtro visual dejó fuera de la vista las no-coincidencias.
+    filter-hiding: bool,
     segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
     tree-rows: [TreeRow],     // Tree
     favs: [NavRow],           // Favorites (sección favoritos — sin usar; reemplazado por fav-tree)
-    recents: [NavRow],        // Favorites (sección recientes)
+    recents: [NavRow],        // Historial global de carpetas recientes
+    frequent-dirs: [NavRow],  // Ranking de carpetas más usadas
     fav-tree: [FavTreeRow],   // Favorites (árbol editable de favoritos con grupos)
     hist-rows: [HistRow],     // History
     inspector: InspectorVm,   // Inspector
     preview: PreviewVm,       // Preview
+    basket-rows: [BasketRowVm], // Basket
     // Si este panel es la pestaña ACTIVA de un grupo, `tabs` lista las pestañas del grupo
     // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
     tabs: [TabVm],

@@ -20,7 +20,7 @@ use naygo_core::theme::{
 use std::path::PathBuf;
 
 /// Cantidad de tokens de color editables de un tema (orden fijo, ver `set_token_color`).
-pub const THEME_TOKEN_COUNT: usize = 12;
+pub const THEME_TOKEN_COUNT: usize = 14;
 
 /// Estado del tema que se está editando (duplicado de un builtin o de uno de usuario). El editor
 /// muta este `Theme` en memoria, aplica el preview en vivo, y al guardar lo escribe a disco.
@@ -135,10 +135,11 @@ impl ConfigCtrl {
 
     // --- Editor de temas (galería de Apariencia) ---
     //
-    // Los 12 tokens de color de un `Theme` se exponen por un índice estable 0..12. El ORDEN ES
+    // Los 14 tokens de color de un `Theme` se exponen por un índice estable 0..14. El ORDEN ES
     // FIJO y debe coincidir entre `editing_token_hex` y `set_token_color` (y con la lista de la
     // UI): 0=accent, 1=panel_bg, 2=row_bg, 3=row_alt_bg, 4=text, 5=text_dim, 6=selection_bg,
-    // 7=active_bar, 8=error, 9=highlight, 10=border, 11=row_inactive_bg.
+    // 7=active_bar, 8=error, 9=highlight, 10=border, 11=row_inactive_bg,
+    // 12=active_panel_bg, 13=inactive_panel_bg.
 
     /// Lee el token `idx` (0..12) de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
     fn token_of(theme: &Theme, idx: usize) -> ThemeColor {
@@ -155,6 +156,8 @@ impl ConfigCtrl {
             9 => theme.highlight,
             10 => theme.border,
             11 => theme.row_inactive_bg,
+            12 => theme.active_panel_bg,
+            13 => theme.inactive_panel_bg,
             _ => theme.accent,
         }
     }
@@ -174,6 +177,8 @@ impl ConfigCtrl {
             9 => theme.highlight = c,
             10 => theme.border = c,
             11 => theme.row_inactive_bg = c,
+            12 => theme.active_panel_bg = c,
+            13 => theme.inactive_panel_bg = c,
             _ => {}
         }
     }
@@ -304,7 +309,7 @@ impl ConfigCtrl {
             .unwrap_or((0, 0, 0))
     }
 
-    /// Fija el token `idx` (0..11) del tema en edición desde un hex "#rrggbb". Si el hex es
+    /// Fija el token `idx` (0..13) del tema en edición desde un hex "#rrggbb". Si el hex es
     /// inválido o no hay editor, no hace nada. El llamador (main) re-aplica el preview en vivo
     /// leyendo `editing_theme()` tras esta llamada.
     pub fn set_token_color(&mut self, idx: usize, hex: &str) {
@@ -328,6 +333,21 @@ impl ConfigCtrl {
     pub fn set_editing_flat_inactive(&mut self, v: bool) {
         if let Some(e) = self.editing.as_mut() {
             e.theme.flat_inactive_panels = v;
+        }
+    }
+
+    /// Si las filas inactivas usan un color propio. Al desactivarlo, vuelven a la cebra neutra:
+    /// es la opción explícita "sin color" del editor de temas.
+    pub fn editing_use_inactive_row_color(&self) -> bool {
+        self.editing
+            .as_ref()
+            .map(|e| e.theme.use_inactive_row_color)
+            .unwrap_or(true)
+    }
+
+    pub fn set_editing_use_inactive_row_color(&mut self, v: bool) {
+        if let Some(e) = self.editing.as_mut() {
+            e.theme.use_inactive_row_color = v;
         }
     }
 
@@ -409,6 +429,8 @@ impl ConfigCtrl {
         };
         e.theme.accent = factory.accent;
         e.theme.panel_bg = factory.panel_bg;
+        e.theme.active_panel_bg = factory.active_panel_bg;
+        e.theme.inactive_panel_bg = factory.inactive_panel_bg;
         e.theme.row_bg = factory.row_bg;
         e.theme.row_alt_bg = factory.row_alt_bg;
         e.theme.row_inactive_bg = factory.row_inactive_bg;
@@ -420,6 +442,7 @@ impl ConfigCtrl {
         e.theme.highlight = factory.highlight;
         e.theme.border = factory.border;
         e.theme.flat_inactive_panels = factory.flat_inactive_panels;
+        e.theme.use_inactive_row_color = factory.use_inactive_row_color;
         e.theme.base = factory.base;
     }
 

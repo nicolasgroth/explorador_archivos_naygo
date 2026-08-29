@@ -1,7 +1,16 @@
-# Repro scroll: rueda sobre el panel ngrot (204 ítems) y comparar antes/después.
+# Naygo — reproducción interactiva de selección y scroll (smoke de UI).
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+#
+# Lanza una instancia aislada, simula entrada Windows y deja capturas para revisión.
+[CmdletBinding()]
+param(
+    [string]$Exe = (Join-Path (Split-Path -Parent $PSScriptRoot) 'target\debug\naygo.exe'),
+    [string]$Shots = (Join-Path (Split-Path -Parent $PSScriptRoot) 'target\ui-smoke\scroll')
+)
+
 $ErrorActionPreference = "Stop"
-$exe = "D:\Empresas\ISGroth\explorador_de_archivos\target\debug\naygo.exe"
-$shots = "D:\Empresas\ISGroth\explorador_de_archivos\target\agent-out"
+if (-not (Test-Path -LiteralPath $Exe)) { throw "No existe Naygo: $Exe" }
+New-Item -ItemType Directory -Path $Shots -Force | Out-Null
 $env:NAYGO_DEBUG_MULTI_INSTANCE = "1"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -24,11 +33,13 @@ function Shot($name) {
     $g.CopyFromScreen(0, 0, 0, 0, $b.Size)
     $b.Save("$shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $b.Dispose()
+    if (-not (Test-Path -LiteralPath "$shots\$name.png")) { throw "No se creó la captura $name" }
     Write-Host "shot: $name"
 }
-$proc = Start-Process -FilePath $exe -PassThru
+$proc = Start-Process -FilePath $Exe -PassThru
 for ($i = 0; $i -lt 40; $i++) { Start-Sleep -Milliseconds 500; $proc.Refresh(); if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { break } }
 Start-Sleep -Seconds 3
+if ($proc.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Naygo no abrió una ventana interactiva.' }
 [System.Windows.Forms.SendKeys]::SendWait("^%z")
 Start-Sleep -Seconds 2
 $proc.Refresh()

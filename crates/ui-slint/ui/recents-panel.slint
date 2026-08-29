@@ -1,0 +1,50 @@
+// Naygo — panel de carpetas recientes y más usadas.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { ListView } from "std-widgets.slint";
+import { NavRow } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component FolderRows inherits Rectangle {
+    in property <[NavRow]> rows;
+    callback navigate(string);
+    callback focus-pane();
+    ListView {
+        for r[i] in root.rows: Rectangle {
+            height: 28px;
+            background: row-touch.has-hover ? Theme.hover-bg : transparent;
+            border-radius: Theme.radius-sm;
+            HorizontalLayout {
+                padding-left: Theme.space-md;
+                padding-right: Theme.space-md;
+                spacing: Theme.space-sm;
+                Image { source: r.icon; width: 16px; height: 16px; vertical-alignment: center; image-rendering: smooth; }
+                Text { text: r.label; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Text { text: r.path; color: Theme.text-dim; font-size: Theme.font-xs; vertical-alignment: center; horizontal-alignment: right; width: min(root.width * 0.42, 280px); overflow: elide; }
+            }
+            row-touch := TouchArea { clicked => { root.focus-pane(); root.navigate(r.path); } }
+        }
+    }
+}
+
+export component RecentsPanel inherits Rectangle {
+    in property <bool> active;
+    in property <[NavRow]> recents;
+    in property <[NavRow]> frequent-dirs;
+    callback navigate(string);
+    callback focus-pane();
+    background: Theme.inactive-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
+    VerticalLayout {
+        padding: Theme.space-md;
+        spacing: Theme.space-sm;
+        Text { text: Tr.recents-most-used; color: Theme.text-dim; font-weight: 700; height: 20px; vertical-alignment: center; }
+        if root.frequent-dirs.length == 0: Text { text: Tr.history-recent-empty; color: Theme.text-dim; height: 22px; }
+        FolderRows { height: min(root.height * 0.40, max(32px, root.frequent-dirs.length * 28px)); rows: root.frequent-dirs; navigate(path) => { root.navigate(path); } focus-pane => { root.focus-pane(); } }
+        Rectangle { height: 1px; background: Theme.divider; }
+        Text { text: Tr.fav-recents; color: Theme.text-dim; font-weight: 700; height: 20px; vertical-alignment: center; }
+        FolderRows { vertical-stretch: 1; rows: root.recents; navigate(path) => { root.navigate(path); } focus-pane => { root.focus-pane(); } }
+    }
+}

@@ -101,7 +101,13 @@ component HeaderCell inherits Rectangle {
     callback context-menu(length, length);
     // Redimensionar: `delta` en px arrastrados sobre el asa del borde derecho (6C).
     callback resize(length);
-    background: hcell-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+    background: hcell-touch.has-hover ? Theme.hover-bg : Theme.header-bg;
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: parent.height;
+        background: Theme.divider;
+    }
     HorizontalLayout {
         x: 6px;
         width: parent.width - 12px;
@@ -110,13 +116,14 @@ component HeaderCell inherits Rectangle {
         if root.has-filter: Text {
             text: "⏷";
             color: Theme.accent;
-            font-size: 11px;
+            font-size: Theme.font-sm;
             vertical-alignment: center;
         }
         Text {
             text: root.text;
             color: Theme.text-dim;
-            font-weight: 700;
+            font-weight: 600;
+            font-size: Theme.font-sm;
             vertical-alignment: center;
             horizontal-alignment: root.align-right ? right : left;
             horizontal-stretch: 1;
@@ -126,7 +133,7 @@ component HeaderCell inherits Rectangle {
         if root.sort-dir != 0: Text {
             text: root.sort-dir == 1 ? "▲" : "▼";
             color: Theme.accent;
-            font-size: 10px;
+            font-size: Theme.font-xs;
             vertical-alignment: center;
         }
     }
@@ -167,6 +174,71 @@ component HeaderCell inherits Rectangle {
     }
 }
 
+// Botón de navegación compacto de cada FilePanel. Mantiene los controles junto a la ruta a la
+// que pertenecen sin duplicar una barra completa; 20px conserva un blanco cómodo aun en layouts
+// densos. Los glifos se limitan a flechas básicas que el renderer por software maneja bien.
+component PanelNavButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> tip;
+    in property <bool> enabled: true;
+    callback clicked();
+    callback history-menu(length);
+    callback hover-tip(string, length, length);
+    width: 20px;
+    height: 22px;
+    border-radius: Theme.radius-sm;
+    background: nav-touch.has-hover && root.enabled ? Theme.hover-bg : transparent;
+    Text {
+        text: root.glyph;
+        color: root.enabled ? Theme.text : Theme.text-dim.with-alpha(0.45);
+        font-size: 15px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    nav-touch := TouchArea {
+        enabled: root.enabled;
+        property <bool> holding: false;
+        property <bool> opened-history: false;
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                self.holding = true;
+                self.opened-history = false;
+                hold-timer.running = true;
+            }
+            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                hold-timer.running = false;
+                if (self.holding && !self.opened-history) { root.clicked(); }
+                self.holding = false;
+            }
+            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                hold-timer.running = false;
+                self.holding = false;
+                root.history-menu(root.absolute-position.x + root.width / 2);
+            }
+            if (ev.kind == PointerEventKind.cancel) {
+                hold-timer.running = false;
+                self.holding = false;
+            }
+        }
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tip : "",
+                root.absolute-position.x + root.width / 2,
+                root.absolute-position.y + root.height);
+        }
+    }
+    hold-timer := Timer {
+        interval: 480ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if (nav-touch.holding) {
+                nav-touch.opened-history = true;
+                root.history-menu(root.absolute-position.x + root.width / 2);
+            }
+        }
+    }
+}
+
 // Una opción del aviso "carpeta no encontrada" (reintentar / subir / elegir / cerrar).
 // Encapsula el recuadro con hover + texto + TouchArea para no duplicar el markup entre el
 // `for` de las opciones y el botón "subir" que va aparte (condicionado por missing-has-ancestor).
@@ -174,10 +246,10 @@ component MissingOpButton inherits Rectangle {
     in property <string> label;
     callback clicked();
     height: 32px;
-    border-radius: 5px;
+    border-radius: Theme.radius-md;
     border-width: 1px;
-    border-color: opt-touch.has-hover ? Theme.accent : Theme.border;
-    background: opt-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+    border-color: opt-touch.has-hover ? Theme.active-pane-border : Theme.divider;
+    background: opt-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
     Text {
         text: root.label;
         color: Theme.text;
@@ -221,57 +293,84 @@ export component FilePanel inherits FocusScope {
     // que NO debe mover el scroll del usuario.
     in property <string> nav-key;
     // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`. Al
-    // cambiar, el cuerpo ajusta `wheel-scroll` para REVELAR esa fila (ver `changed focused-row`):
+    // cambiar, el cuerpo ajusta el viewport nativo para REVELAR esa fila:
     // así navegar con ↑↓/Re-Av Pág/Inicio-Fin/typeahead/paleta vuelve a arrastrar la vista tras
     // el cursor. La ListView dejó de ser interactiva y ya no auto-scrollea sola.
     in property <int> focused-row: -1;
-    // Desplazamiento por rueda del cuerpo de la lista. El ListView va con `interactive: false`
-    // (su Flickable se tragaba los `move` con botón apretado y cancelaba el TouchArea hijo, así
-    // que ni el arrastre ni el rubber-band funcionaban). Ahora un único TouchArea exterior
-    // captura todo y la rueda mueve `wheel-scroll`; `viewport-y` lo lee de una sola vía (sin
-    // ciclo de binding). 0 = arriba; crece hacia abajo (viewport-y es su negativo). Es la ÚNICA
-    // fuente de scroll del cuerpo: la rueda lo mueve por delta y el auto-scroll por teclado lo
-    // clampa para revelar la fila enfocada (una sola verdad → rueda y teclado no se pelean).
-    property <length> wheel-scroll: 0;
+    // El ListView se deja no-interactivo para que no cancele los gestos de arrastre/rubber-band,
+    // pero la rueda y el teclado escriben DIRECTO en su `viewport-y` nativo. Antes manteníamos un
+    // `wheel-scroll` paralelo y lo enlazábamos al viewport: en listados virtualizados ambos podían
+    // quedar desfasados y el foco continuaba "por detrás" de la vista. El viewport nativo es ahora
+    // la única fuente de verdad (0 arriba; valores negativos hacia abajo).
+    property <int> revealed-focus-row: -1;
+    // Espejo reactivo del alto útil de la lista. Tras navegar, el foco puede llegar desde Rust
+    // antes del primer layout (cuando `list.visible-height` todavía es 0); observar esta
+    // propiedad vuelve a intentar revelar la fila apenas Slint conoce el alto real. También
+    // mantiene visible el foco al redimensionar el panel o abrir/cerrar paneles vecinos.
+    property <length> list-visible-height: list.visible-height;
     // Fila bajo el cursor según el TouchArea exterior (-1 = ninguna/zona vacía). La pinta el
     // fondo de cada fila para el efecto hover (antes lo daba el `has-hover` del row-touch).
     property <int> hover-row: -1;
-    // Al NAVEGAR (cambia la carpeta del panel), el scroll vuelve a arriba: si no, la carpeta
-    // nueva quedaría desplazada con el offset de la anterior.
-    changed nav-key => { root.wheel-scroll = 0; }
+    // Al NAVEGAR (cambia la carpeta del panel), el viewport vuelve arriba y el próximo foco se
+    // revela otra vez: si no, la carpeta nueva heredaría el offset de la anterior.
+    changed nav-key => {
+        list.viewport-y = 0px;
+        root.revealed-focus-row = -1;
+    }
     // NOTA (medido en vivo): un `changed rows` aquí NO dispara con `set_vec` (mutar el
     // contenido del VecModel no cambia el valor de la propiedad-modelo), así que el reset del
     // scroll debe colgarse de `nav-key` (arriba) y NO de `rows` — el reset-en-rows que había
     // antes era código muerto y la carpeta nueva heredaba el scroll de la anterior.
-    // Auto-scroll por teclado (C1): cuando el foco se mueve, ajusta `wheel-scroll` lo mínimo para
+    // Auto-scroll por teclado: cuando el foco se mueve, ajusta `list.viewport-y` lo mínimo para
     // que la fila enfocada quede completamente visible dentro del viewport del ListView.
-    //   · ventana visible = [wheel-scroll, wheel-scroll + visible-height]
+    //   · ventana visible = [-viewport-y, -viewport-y + visible-height]
     //   · borde superior de la fila = focused-row * row-h ; inferior = (focused-row + 1) * row-h
     // Si la fila está por ENCIMA de la ventana → llevar el scroll a su borde superior; si está por
     // DEBAJO → llevar el fondo de la fila al borde inferior. Si ya se ve, no se toca. Todo se
-    // recorta a [0, alto-total - alto-visible]. `visible-height` puede ser 0 antes del primer
-    // layout: en ese caso no movemos nada (al asentarse, el siguiente movimiento de foco corrige).
-    changed focused-row => {
+    // recorta a [0, alto-total - alto-visible]. Si `visible-height` vale 0 antes del primer
+    // layout, `changed list-visible-height` vuelve a llamar esta función al asentarse.
+    function reveal-focused-row() {
         if (root.focused-row >= 0 && list.visible-height > 0px) {
             // Tope inferior posible del scroll (no pasar del final de la lista).
-            root.wheel-scroll = clamp(
+            list.viewport-y = -clamp(
                 // ¿La fila cae por debajo del borde inferior? Empujar para revelarla por abajo.
-                ((root.focused-row + 1) * root.row-h > root.wheel-scroll + list.visible-height)
+                ((root.focused-row + 1) * root.row-h > -list.viewport-y + list.visible-height)
                     ? (root.focused-row + 1) * root.row-h - list.visible-height
                     // ¿Por encima del borde superior? Subir hasta su borde superior.
-                    : (root.focused-row * root.row-h < root.wheel-scroll
+                    : (root.focused-row * root.row-h < -list.viewport-y
                         ? root.focused-row * root.row-h
                         // Ya visible: dejar el scroll como está.
-                        : root.wheel-scroll),
+                        : -list.viewport-y),
                 0px,
                 max(0px, root.rows.length * root.row-h - list.visible-height));
         }
     }
+    // El foco y las filas llegan desde modelos distintos: al abrir una carpeta grande puede
+    // llegar el foco antes de que ListView haya recalculado su alto virtual. Diferimos un turno
+    // para revelar contra la geometría final; mientras el foco no cambie no toca la rueda manual.
+    Timer {
+        interval: 0ms;
+        running: root.focused-row >= 0 && root.revealed-focus-row != root.focused-row;
+        triggered => {
+            root.reveal-focused-row();
+            root.revealed-focus-row = root.focused-row;
+        }
+    }
+    changed list-visible-height => { root.revealed-focus-row = -1; }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
     in property <bool> editing;              // este panel está editando su ruta
-    in property <string> edit-text;          // texto del editor (lo controla Rust)
+    // Flujo bidireccional: el LineEdit conserva su propio caret mientras se escribe y Rust
+    // aún puede reemplazar el buffer al aceptar una sugerencia. Un binding de una sola vía
+    // reescribía el texto tras cada `edited`, dejando el cursor a mitad de la ruta.
+    in-out property <string> edit-text;
     in property <[string]> suggestions;      // autocompletado del editor
+    // Offset UTF-8 a restaurar tras completar una sugerencia. -1 = no forzar el caret.
+    in property <int> edit-caret: -1;
+    in property <int> edit-caret-revision: 0;
+    // Candidato de autocompletado resaltado por teclado (-1 = ninguno). Mantener el
+    // foco en el LineEdit permite escribir, ↑/↓ elegir y Enter completar sin tocar el mouse.
+    property <int> suggestion-index: -1;
     in property <bool> is-favorite;          // la carpeta actual está en favoritos (★ llena)
     in property <bool> no-matches;           // filtro activo que vació la vista → aviso (F2)
     // Carpeta no encontrada / ilegible: muestra el aviso IN-PLACE con opciones.
@@ -315,6 +414,7 @@ export component FilePanel inherits FocusScope {
                                                // (nombre → extensión → todo → nombre)
     callback rename-cancel();                // Esc → cerrar
     callback segment-clicked(int, string);   // (pane-id, ruta) clic en un breadcrumb → navegar
+    callback segment-context(int, string, length, length); // clic derecho → menú de esa carpeta
     callback path-edit-start(int);           // (pane-id) entrar a modo edición
     callback path-edit-changed(int, string); // (pane-id, texto) recalcular autocompletado
     callback path-edit-commit(int, string);  // (pane-id, texto) Enter → navegar
@@ -346,29 +446,61 @@ export component FilePanel inherits FocusScope {
     // Botones laterales del mouse (atrás/adelante) sobre este panel: navegan su historial.
     callback nav-back(int);                  // (pane-id)
     callback nav-forward(int);               // (pane-id)
+    callback nav-up(int);                    // (pane-id)
+    // Los ▾ muestran el historial DE ESTE panel, incluso si otro panel era el activo antes del clic.
+    callback open-back-history(int, length); // (pane-id, x de anclaje)
+    callback open-forward-history(int, length);
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
     // Vista profunda (recursiva): toggle en la barra + estado on/off.
     in property <bool> deep-active: false;
     callback toggle-deep(int);               // (pane-id)
     // Barra inferior (footer): texto de selección/espacio de disco. Vacío = barra oculta.
     in property <string> footer-text;
+    // Texto del volumen separado para alinearlo a la derecha (libre / total / % usado).
+    in property <string> footer-disk-text;
     // Etiqueta del filtro visual por tipeo activo en ESTE panel (`filtro: "x" · N`, ya
     // traducida). Vacío = sin filtro → la mini-barra no se muestra.
     in property <string> filter-label;
     callback filter-clear(int);              // (pane-id) clic en la ✕ de la mini-barra de filtro
+    in property <bool> filter-hiding;
+    callback filter-toggle-hide(int);        // alterna marcar/ocultar no-coincidencias
+
+    function move-suggestion(delta: int) {
+        if (root.suggestions.length == 0) { return; }
+        if (root.suggestion-index < 0) {
+            root.suggestion-index = delta > 0 ? 0 : root.suggestions.length - 1;
+        } else {
+            root.suggestion-index = Math.mod(
+                root.suggestion-index + delta + root.suggestions.length,
+                root.suggestions.length);
+        }
+    }
+
+    function accept-suggestion() {
+        if (root.suggestion-index >= 0 && root.suggestion-index < root.suggestions.length) {
+            root.suggestion-clicked(root.pane-id, root.suggestions[root.suggestion-index]);
+            root.suggestion-index = -1;
+        }
+    }
+
+    changed suggestions => { root.suggestion-index = -1; }
 
     key-pressed(event) => {
-        root.activate(root.pane-id);
         // Mientras un editor de texto tiene el foco (rename inline o edición de ruta), las
         // teclas son de ESE editor: hay que RECHAZAR el evento para que el LineEdit aplique
         // su manejo por defecto (mover el caret con flechas/Home/End, borrar con
         // Backspace/Delete). Un `accept` aquí se COMÍA esas teclas (bug: no se podía editar
         // a mitad del nombre; el caret quedaba pegado). Rechazar NO reenvía nada a Rust,
         // así que el typeahead/atajos tampoco se gatillan con el editor abierto.
-        if (root.rename-pos == -1 && !root.editing) {
-            root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
-            return accept;
+        // Hacerlo ANTES de `activate` garantiza que AltGr (Ctrl+Alt) inserte «\\» en una
+        // ruta, en vez de exponerlo al manejador global de atajos del panel.
+        if (root.rename-pos != -1 || root.editing) {
+            return reject;
         }
-        reject
+        root.activate(root.pane-id);
+        root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt);
+        return accept;
     }
 
     // Al soltar una tecla, reportamos el estado vigente de los modificadores. Cuando se suelta
@@ -425,31 +557,74 @@ export component FilePanel inherits FocusScope {
     // DRAG-OVER (arrastrando un archivo sobre este panel): borde AÚN más grueso (3px) de acento a
     // plena intensidad + bruma más notoria, para gritar "aquí soltarás". Manda sobre `active`.
     Rectangle {
-        border-width: root.drag-over ? 3px : (root.active ? 2px : 1px);
-        border-color: (root.drag-over || root.active) ? Theme.accent : Theme.border;
-        border-radius: 4px;
-        background: root.drag-over
-            ? Theme.accent.with-alpha(0.14)
-            : (root.active ? Theme.accent.with-alpha(0.05) : transparent);
+        border-width: root.drag-over ? 2px : 1px;
+        border-color: (root.drag-over || root.active) ? Theme.active-pane-border : Theme.divider;
+        border-radius: Theme.radius-sm;
+        background: root.active ? Theme.active-panel-bg : Theme.inactive-panel-bg;
         VerticalLayout {
             // --- Barra de ruta: breadcrumbs (modo normal) o editor con autocompletado. ---
             Rectangle {
-                height: 26px;
+                height: 28px;
                 // Cuando el panel está activo, la path-bar lleva un fondo de acento tenue para
                 // resaltar dónde está el foco. Al arrastrar encima (drag-over) se remarca más fuerte
                 // para reforzar que ese es el destino del drop.
                 background: root.drag-over
-                    ? Theme.accent.with-alpha(0.32)
-                    : (root.active ? Theme.accent.with-alpha(0.18) : Theme.row-bg);
-                border-radius: 4px;
+                    ? Theme.accent.with-alpha(0.30)
+                    : (root.active ? Theme.active-pane-bg : Theme.header-bg);
+                border-radius: Theme.radius-sm;
+                Rectangle {
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: root.active ? Theme.active-pane-border : Theme.divider;
+                }
                 // Modo BREADCRUMB: segmentos clicables; clic en el hueco entra a edición.
                 if !root.editing: HorizontalLayout {
                     padding-left: 4px;
                     spacing: 0px;
+                    // Navegación local: cada panel conserva su propio historial. Los botones se
+                    // sitúan junto a la ruta para que un panel secundario no obligue a mirar la
+                    // toolbar global ni a activarlo antes de usar Atrás/Adelante.
+                    PanelNavButton {
+                        glyph: "‹";
+                        tip: Tr.nav-back-tip;
+                        enabled: root.can-go-back;
+                        clicked => { root.nav-back(root.pane-id); }
+                        history-menu(x) => { root.open-back-history(root.pane-id, x); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
+                        glyph: "⌄";
+                        tip: Tr.nav-back-history-tip;
+                        enabled: root.can-go-back;
+                        clicked => { root.open-back-history(root.pane-id, self.absolute-position.x + self.width / 2); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
+                        glyph: "›";
+                        tip: Tr.nav-forward-tip;
+                        enabled: root.can-go-forward;
+                        clicked => { root.nav-forward(root.pane-id); }
+                        history-menu(x) => { root.open-forward-history(root.pane-id, x); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
+                        glyph: "⌄";
+                        tip: Tr.nav-forward-history-tip;
+                        enabled: root.can-go-forward;
+                        clicked => { root.open-forward-history(root.pane-id, self.absolute-position.x + self.width / 2); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
+                        glyph: "↑";
+                        tip: Tr.toolbar-up-tip;
+                        clicked => { root.nav-up(root.pane-id); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
                     for seg[i] in root.segments: Rectangle {
                         width: seg-label.preferred-width + 10px;
-                        background: seg-touch.has-hover ? Theme.selection-bg : transparent;
-                        border-radius: 3px;
+                        background: seg-touch.has-hover ? Theme.hover-bg : transparent;
+                        border-radius: Theme.radius-sm;
                         seg-label := Text {
                             text: (i == 0 ? "" : "› ") + seg.label;
                             color: Theme.text;
@@ -461,6 +636,12 @@ export component FilePanel inherits FocusScope {
                                 if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
                                     root.activate(root.pane-id);
                                     root.segment-clicked(root.pane-id, seg.path);
+                                }
+                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
+                                    root.activate(root.pane-id);
+                                    root.segment-context(root.pane-id, seg.path,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
@@ -480,8 +661,8 @@ export component FilePanel inherits FocusScope {
                     // ★ favorito (toggle): lleno si la carpeta ya está anclada.
                     Rectangle {
                         width: 24px;
-                        background: fav-touch.has-hover ? Theme.selection-bg : transparent;
-                        border-radius: 3px;
+                        background: fav-touch.has-hover ? Theme.hover-bg : transparent;
+                        border-radius: Theme.radius-sm;
                         StarIcon {
                             width: 100%;
                             height: 100%;
@@ -505,8 +686,8 @@ export component FilePanel inherits FocusScope {
                     // a ✓ por ~1s (feedback inmediato en el lugar del clic).
                     copy-box := Rectangle {
                         width: 26px;
-                        background: copy-touch.has-hover ? Theme.selection-bg : transparent;
-                        border-radius: 3px;
+                        background: copy-touch.has-hover ? Theme.hover-bg : transparent;
+                        border-radius: Theme.radius-sm;
                         property <bool> flashed: false;
                         // ✓ al copiar, si no el portapapeles. Ambos dibujados con Path.
                         if copy-box.flashed: CheckIcon { width: 100%; height: 100%; tint: Theme.highlight; }
@@ -536,8 +717,10 @@ export component FilePanel inherits FocusScope {
                     Rectangle {
                         width: 26px;
                         height: 22px;
-                        border-radius: 4px;
-                        background: deep-touch.has-hover || root.deep-active ? Theme.accent : transparent;
+                        border-radius: Theme.radius-sm;
+                        background: root.deep-active
+                            ? Theme.pressed-bg
+                            : (deep-touch.has-hover ? Theme.hover-bg : transparent);
                         Path {
                             width: 14px;
                             height: 14px;
@@ -586,11 +769,30 @@ export component FilePanel inherits FocusScope {
                             path-edit.select-all();
                         }
                     }
+                    // Completar una sugerencia cambia el texto DESDE el callback Rust. El
+                    // toolkit conserva a veces el offset anterior (que cae dentro del nombre
+                    // recién insertado); diferimos un tick y lo dejamos inequívocamente al final.
+                    // El Timer no corre durante la escritura normal: solo cambia la revisión al
+                    // aceptar una sugerencia, por lo que Home/End/flechas siguen editando libremente.
+                    caret-timer := Timer {
+                        interval: 0ms;
+                        property <int> applied: -1;
+                        running: root.edit-caret >= 0 && self.applied != root.edit-caret-revision;
+                        triggered => {
+                            self.running = false;
+                            self.applied = root.edit-caret-revision;
+                            path-edit.focus();
+                            path-edit.set-selection-offsets(root.edit-caret, root.edit-caret);
+                        }
+                    }
                     path-edit := LineEdit {
                         horizontal-stretch: 1;
-                        text: root.edit-text;
+                        text <=> root.edit-text;
                         placeholder-text: "C:\\…";
-                        edited(t) => { root.path-edit-changed(root.pane-id, t); }
+                        edited(t) => {
+                            root.suggestion-index = -1;
+                            root.path-edit-changed(root.pane-id, t);
+                        }
                         accepted(t) => { root.path-edit-commit(root.pane-id, t); }
                         // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
                         changed has-focus => {
@@ -603,6 +805,31 @@ export component FilePanel inherits FocusScope {
                                 root.path-edit-cancel(root.pane-id);
                                 return accept;
                             }
+                            if (ev.text == Key.DownArrow) {
+                                root.move-suggestion(1);
+                                return accept;
+                            }
+                            if (ev.text == Key.UpArrow) {
+                                root.move-suggestion(-1);
+                                return accept;
+                            }
+                            if (ev.text == Key.Return && root.suggestion-index >= 0) {
+                                root.accept-suggestion();
+                                return accept;
+                            }
+                            // En algunos teclados Windows «\\» llega como AltGr (Ctrl+Alt).
+                            // El TextInput de Slint trata esa combinación como atajo y no la
+                            // inserta. La incorporamos explícitamente y la enviamos al mismo
+                            // flujo async de autocompletado. Es el único carácter interceptado.
+                            if (ev.text == "\\") {
+                                root.suggestion-index = -1;
+                                // Actualizar el buffer LOCAL primero: el siguiente carácter se
+                                // inserta sobre la ruta ya extendida, aun si el callback Rust aún
+                                // está preparando las sugerencias en su worker.
+                                self.text = self.text + "\\";
+                                root.path-edit-changed(root.pane-id, self.text);
+                                return accept;
+                            }
                             return reject;
                         }
                     }
@@ -611,14 +838,15 @@ export component FilePanel inherits FocusScope {
             // Autocompletado: lista flotante de candidatos bajo el editor (solo en edición).
             if root.editing && root.suggestions.length > 0: Rectangle {
                 height: min(root.suggestions.length * 22px + 4px, 132px);
-                background: Theme.row-bg;
+                background: Theme.surface-floating;
                 border-width: 1px;
-                border-color: Theme.selection-bg;
-                border-radius: 4px;
+                border-color: Theme.divider;
+                border-radius: Theme.radius-md;
                 ListView {
                     for s[i] in root.suggestions: Rectangle {
                         height: 22px;
-                        background: sug-touch.has-hover ? Theme.selection-bg : transparent;
+                        background: i == root.suggestion-index ? Theme.selection-bg
+                            : (sug-touch.has-hover ? Theme.hover-bg : transparent);
                         Text {
                             text: "📁 " + s;
                             color: Theme.text;
@@ -639,7 +867,7 @@ export component FilePanel inherits FocusScope {
             // Clic = ordenar por esa columna; arrastrar el borde derecho = redimensionar (6C).
             // El botón "≡" al final abre el menú de columnas (agregar/quitar).
             HorizontalLayout {
-                height: 22px;
+                height: 24px;
                 for col[ci] in root.columns: HeaderCell {
                     width: col.width;
                     text: col.label;
@@ -659,7 +887,9 @@ export component FilePanel inherits FocusScope {
                 // Botón de menú de columnas (al final, ancho fijo).
                 Rectangle {
                     width: 24px;
-                    background: colbtn-touch.has-hover ? Theme.row-alt-bg : Theme.row-bg;
+                    background: colbtn-touch.has-hover ? Theme.hover-bg : Theme.header-bg;
+                    border-width: 1px;
+                    border-color: Theme.divider;
                     Text { text: "≡"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
                     colbtn-touch := TouchArea {
                         clicked => { root.col-menu-open = !root.col-menu-open; }
@@ -672,7 +902,7 @@ export component FilePanel inherits FocusScope {
             // `move` (el clic sí, porque el Flickable reenvía press+release sin movimiento). Ahora
             // un único TouchArea exterior (`body-touch`, hermano POSTERIOR del ListView, por
             // ENCIMA en z-order) captura TODOS los eventos crudos y deduce la fila por la `y` + el
-            // scroll. La rueda se re-implementa con `scroll-event` moviendo `wheel-scroll`.
+            // scroll. La rueda se re-implementa con `scroll-event` sobre el viewport nativo.
             Rectangle {
                 // I5: durante el rename, un TouchArea de fondo de BAJA prioridad (primer hijo → por
                 // DEBAJO del ListView en z-order) que existe SOLO mientras se edita. La fila-editor
@@ -696,8 +926,6 @@ export component FilePanel inherits FocusScope {
                 // del TouchArea hijo. La solución es el `body-touch` exterior (abajo): al estar por
                 // ENCIMA en z-order, agarra el puntero antes que el Flickable y le quita los
                 // eventos. El scroll lo maneja `body-touch` por la rueda; `viewport-y` lee
-                // `wheel-scroll` de una sola vía (0 arriba, NEGATIVO al bajar) sin ciclo de binding.
-                viewport-y: -root.wheel-scroll;
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
                     // Fondo de la cebra para un panel NO activo. Tres casos:
@@ -706,29 +934,35 @@ export component FilePanel inherits FocusScope {
                     //  - flat OFF                 → cebra con row-inactive-bg de base + la franja sutil
                     //    en las impares (igual estructura que el panel activo, pero sobre el color de
                     //    inactivo). Con el default (row-inactive-bg = row-bg) no se nota el cambio.
-                    property <brush> inactive-zebra: Theme.flat-inactive-panels
-                        ? Theme.row-inactive-bg
-                        : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : Theme.row-inactive-bg);
-                    // Fondo: selección > filtro por tipeo > resaltado (recién aparecido) > hover
+                    property <brush> inactive-zebra: Theme.use-inactive-row-color
+                        ? (Theme.flat-inactive-panels
+                            ? Theme.row-inactive-bg
+                            : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.22) : Theme.row-inactive-bg))
+                        : (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.22) : transparent);
+                    // Fondo: selección > filtro > comparación > resaltado reciente > hover.
                     // > cebra de base. La selección, el filtro, el resaltado y el hover MANDAN por
                     // encima de activo/inactivo. La cebra de base depende de si el panel está
                     // activo: activo = cebra clásica (par transparente sobre el panel); inactivo =
                     // `inactive-zebra` (atenuable o plana). El tinte del filtro es discreto (alfa
                     // bajo) para no pelear con la selección ni con el texto.
                     background: row.selected
-                        ? Theme.selection-bg
+                        ? (root.active ? Theme.selection-bg : Theme.selection-inactive-bg)
                         : (row.filter-match
                             ? Theme.accent.with-alpha(0.18)
-                            : (row.highlight
-                                ? Theme.highlight.with-alpha(0.22)
-                                : (i == root.hover-row
-                                    ? Theme.row-alt-bg
-                                    : (root.active
-                                        ? (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.35) : transparent)
-                                        : self.inactive-zebra))));
+                            : (row.compare-state == 2
+                                ? #d97706aa.with-alpha(0.30)
+                                : (row.compare-state == 1
+                                    ? #dc2626aa.with-alpha(0.24)
+                                    : (row.highlight
+                                        ? Theme.highlight.with-alpha(0.22)
+                                        : (i == root.hover-row
+                                            ? Theme.hover-bg
+                                            : (root.active
+                                                ? (mod(i, 2) == 1 ? Theme.row-alt-bg.with-alpha(0.22) : transparent)
+                                                : self.inactive-zebra))))));
                     border-width: row.focused ? 1px : 0px;
-                    border-color: Theme.accent;
-                    border-radius: 3px;
+                    border-color: root.active ? Theme.active-pane-border : Theme.text-dim;
+                    border-radius: Theme.radius-sm;
                     HorizontalLayout {
                         padding-left: 6px;
                         // Atenuar las filas cortadas (Ctrl+X) hasta pegar.
@@ -738,7 +972,12 @@ export component FilePanel inherits FocusScope {
                         // El ícono cacheado (6A) cuesta como un glifo: no se re-rasteriza por frame.
                         for col[ci] in root.columns: HorizontalLayout {
                             width: col.width;
-                            spacing: 6px;
+                            // Las columnas numéricas/fechas necesitan aire propio; no tocar el
+                            // ancho persistido, solo separar el contenido para que "Tamaño" y
+                            // "Modificado" no se lean como una sola columna en paneles estrechos.
+                            spacing: col.kind == 2 || col.kind == 3 || col.kind == 4 ? 10px : 6px;
+                            padding-left: col.kind == 3 || col.kind == 4 ? 8px : 0px;
+                            padding-right: col.kind == 2 ? 6px : 0px;
                             // Sangría por profundidad (vista profunda). depth=0 => sin efecto.
                             if col.kind == 0 && row.depth > 0: Rectangle { width: row.depth * 14px; }
                             if col.kind == 0: Image {
@@ -861,7 +1100,7 @@ export component FilePanel inherits FocusScope {
                                 padding: 0;
                                 Text {
                                     text: row.match-pre;
-                                    color: row.is-dir ? Theme.highlight : Theme.text;
+                                    color: row.is-dir ? Theme.folder-text : Theme.text;
                                     vertical-alignment: center;
                                     horizontal-stretch: 0;
                                     overflow: elide;
@@ -875,7 +1114,7 @@ export component FilePanel inherits FocusScope {
                                 }
                                 Text {
                                     text: row.match-post;
-                                    color: row.is-dir ? Theme.highlight : Theme.text;
+                                    color: row.is-dir ? Theme.folder-text : Theme.text;
                                     vertical-alignment: center;
                                     horizontal-stretch: 0;
                                     overflow: elide;
@@ -884,7 +1123,7 @@ export component FilePanel inherits FocusScope {
                             if !(col.kind == 0 && root.rename-pos == i) && !(col.kind == 0 && row.filter-match): Text {
                                 text: row.cells[ci];
                                 color: col.kind == 0
-                                    ? (row.is-dir ? Theme.highlight : Theme.text)
+                                    ? (row.is-dir ? Theme.folder-text : Theme.text)
                                     : Theme.text-dim;
                                 vertical-alignment: center;
                                 horizontal-alignment: col.align-right ? right : left;
@@ -1033,35 +1272,32 @@ export component FilePanel inherits FocusScope {
                         }
                     }
                     // Scroll por rueda: el ListView ya no lo hace (interactive:false). Movemos
-                    // `wheel-scroll` en [0, alto-total - alto-visible]. `delta-y` es negativo al
-                    // rodar hacia abajo, así que restarlo BAJA (aumenta wheel-scroll). Si el
-                    // contenido cabe entero, el clamp deja el valor en 0.
+                    // `viewport-y` queda en [-alto-scrollable, 0]. `delta-y` es negativo al rodar
+                    // hacia abajo, así que sumarlo BAJA el viewport. Si el contenido cabe entero,
+                    // el clamp deja el valor en 0.
                     scroll-event(ev) => {
-                        // Tope con `list.visible-height` (alto real del ListView), igual que el
-                        // auto-scroll por teclado; verificado en vivo: el scroll de rueda mueve
-                        // `wheel-scroll` en [0, contenido - visible] sin bloquearse.
-                        root.wheel-scroll = clamp(
-                            root.wheel-scroll - ev.delta-y,
-                            0px,
-                            max(0px, root.rows.length * root.row-h - list.visible-height));
+                        list.viewport-y = clamp(
+                            list.viewport-y + ev.delta-y,
+                            -max(0px, root.rows.length * root.row-h - list.visible-height),
+                            0px);
                         return accept;
                     }
                 }
                 // Barra de scroll del cuerpo: pista + manija arrastrable, visible solo cuando el
                 // contenido excede lo visible. Da idea del tamaño de la carpeta y de la posición
                 // en ella. Va como ÚLTIMO hijo (por encima del body-touch, que si no se traga el
-                // arrastre). La manija refleja `wheel-scroll` (una sola fuente de verdad: rueda,
-                // teclado y arrastre convergen ahí).
+                // arrastre). La manija refleja `viewport-y`: rueda, teclado y arrastre convergen
+                // en la misma propiedad nativa.
                 if root.rows.length * root.row-h > list.visible-height: Rectangle {
                     x: parent.width - 7px;
                     y: 0;
                     width: 7px;
                     height: parent.height;
-                    background: Theme.row-alt-bg.with-alpha(0.35);
+                    background: Theme.row-alt-bg.with-alpha(0.22);
                     property <length> total: root.rows.length * root.row-h;
                     property <length> visible-h: list.visible-height;
                     property <length> handle-h: max(24px, parent.height * (visible-h / total));
-                    property <length> handle-y: root.wheel-scroll / (total - visible-h) * (parent.height - handle-h);
+                    property <length> handle-y: -list.viewport-y / (total - visible-h) * (parent.height - handle-h);
                     handle := Rectangle {
                         x: 1px;
                         y: handle-y;
@@ -1078,12 +1314,12 @@ export component FilePanel inherits FocusScope {
                         pointer-event(ev) => {
                             if (ev.kind == PointerEventKind.down) {
                                 grab-y = self.mouse-y;
-                                grab-scroll = root.wheel-scroll;
+                                grab-scroll = -list.viewport-y;
                             }
                         }
                         moved => {
                             if (self.pressed) {
-                                root.wheel-scroll = clamp(
+                                list.viewport-y = -clamp(
                                     grab-scroll + (self.mouse-y - grab-y) * (total / parent.height),
                                     0px,
                                     total - visible-h);
@@ -1099,15 +1335,15 @@ export component FilePanel inherits FocusScope {
                 height: 22px;
                 background: Theme.accent.with-alpha(0.12);
                 // Borde superior fino que la separa del contenido (igual que el footer).
-                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.border; }
+                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.divider; }
                 Text {
                     x: 8px;
-                    width: parent.width - 40px;
+                    width: parent.width - 66px;
                     height: parent.height;
                     vertical-alignment: center;
                     text: root.filter-label;
                     color: Theme.text;
-                    font-size: 12px;
+                    font-size: Theme.font-md;
                     overflow: elide;
                 }
                 clear-touch := TouchArea {
@@ -1123,23 +1359,55 @@ export component FilePanel inherits FocusScope {
                         vertical-alignment: center;
                     }
                 }
+                // Toggle compacto: lleno = la vista muestra solamente las coincidencias.
+                hide-touch := TouchArea {
+                    x: parent.width - 52px;
+                    width: 26px;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.filter-toggle-hide(root.pane-id); }
+                    Text {
+                        text: root.filter-hiding ? "●" : "○";
+                        color: hide-touch.has-hover ? Theme.accent : Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    changed has-hover => {
+                        root.hover-tip(self.has-hover ? Tr.filter-toggle-hide-tip : "",
+                            self.absolute-position.x + self.width / 2,
+                            self.absolute-position.y);
+                    }
+                }
             }
             // Barra inferior (footer): resumen de selección / espacio de disco. Va al FONDO del
             // panel como último hijo del VerticalLayout; alto fijo de 22px (la lista de arriba se
             // queda con el resto del alto). Solo se pinta si hay texto que mostrar.
             if root.footer-text != "": Rectangle {
                 height: 22px;
-                background: Theme.row-alt-bg;
+                background: Theme.header-bg;
                 // Borde superior fino que separa el footer del contenido.
-                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.border; }
+                Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.divider; }
                 Text {
                     x: 8px;
-                    width: parent.width - 16px;
+                    width: root.footer-disk-text == "" ? parent.width - 16px : parent.width * 0.58 - 10px;
                     height: parent.height;
                     vertical-alignment: center;
                     text: root.footer-text;
                     color: Theme.text-dim;
-                    font-size: 12px;
+                    font-size: Theme.font-md;
+                    overflow: elide;
+                }
+                // La información del volumen vive al extremo opuesto: queda siempre legible y
+                // no empuja el contador de selección al achicar un panel.
+                if root.footer-disk-text != "": Text {
+                    x: parent.width * 0.58;
+                    width: parent.width * 0.42 - 8px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    text: root.footer-disk-text;
+                    color: Theme.text-dim;
+                    font-size: Theme.font-md;
                     overflow: elide;
                 }
             }
@@ -1151,17 +1419,17 @@ export component FilePanel inherits FocusScope {
             y: 50px;
             width: 180px;
             height: menu-col.preferred-height + 8px;
-            background: Theme.panel-bg;
-            border-color: Theme.selection-bg;
+            background: Theme.surface-floating;
+            border-color: Theme.divider;
             border-width: 1px;
-            border-radius: 4px;
+            border-radius: Theme.radius-md;
             menu-col := VerticalLayout {
                 padding: 4px;
                 spacing: 2px;
                 for item in root.col-menu: Rectangle {
                     height: 24px;
-                    background: item-touch.has-hover && !item.fixed ? Theme.selection-bg : transparent;
-                    border-radius: 3px;
+                    background: item-touch.has-hover && !item.fixed ? Theme.hover-bg : transparent;
+                    border-radius: Theme.radius-sm;
                     HorizontalLayout {
                         padding-left: 6px;
                         spacing: 6px;

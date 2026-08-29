@@ -69,6 +69,37 @@ pub(crate) fn wire_config(
             refresh();
         });
     }
+    // Casilla "sin color" para filas inactivas: mismo preview en vivo que el resto del tema.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        cfg_win.on_theme_set_use_inactive_row_color(move |v| {
+            ctrl.borrow_mut()
+                .config
+                .set_editing_use_inactive_row_color(v);
+            let c = ctrl.borrow();
+            if let Some(t) = c.config.editing_theme() {
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, t);
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, t);
+                }
+            }
+            drop(c);
+            refresh();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_frequent_dirs_limit_changed(move |v| {
+            ctrl.borrow_mut().set_frequent_dirs_limit(v as usize);
+            refresh();
+        });
+    }
     cfg_setter!(on_set_confirm_trash, bool, set_confirm_trash);
     cfg_setter!(on_set_window_title_mode, i32, set_window_title_mode);
     cfg_setter!(

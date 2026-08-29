@@ -115,6 +115,10 @@ pub enum Action {
     Activate,
     Open,
     OpenWith,
+    /// Ejecutar el archivo enfocado con elevación UAC. Sin atajo por defecto; configurable.
+    RunAsAdministrator,
+    /// Comparar los dos paneles de archivos cargados por nombre, tamaño y fecha.
+    ComparePanels,
     GoUp,
     GoBack,
     GoForward,
@@ -123,6 +127,7 @@ pub enum Action {
     SwitchPane,
     CancelListing,
     Copy,
+    Duplicate,
     Cut,
     Paste,
     Delete,
@@ -136,9 +141,9 @@ pub enum Action {
     MoveToOther,
     /// Refrescar (re-listar) la carpeta del panel activo — estilo navegador (F5).
     Refresh,
-    /// Buscar archivos por nombre en la carpeta del panel activo y todas sus subcarpetas (Ctrl+F).
+    /// Buscar archivos por nombre/contenido desde la carpeta del panel activo (F3 / Ctrl+F).
     Find,
-    /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing).
+    /// Calcular el tamaño de la carpeta enfocada/seleccionada (fase sizing, sin atajo inicial).
     ComputeSize,
     /// Coincidencia ANTERIOR del filtro visual por tipeo (Shift+F3). La siguiente es F3
     /// con filtro activo (contexto sobre ComputeSize; sin filtro, F3 calcula tamaño).
@@ -199,7 +204,7 @@ pub enum Action {
     RefreshDrives,
     /// Mostrar/ocultar los archivos ocultos en todos los paneles (Ctrl+H).
     ToggleHidden,
-    /// Abrir el menú de favoritos de la toolbar (Ctrl+D).
+    /// Abrir el menú de favoritos de la toolbar.
     FavoritesMenu,
     /// Abrir la ventana de configuración (Ctrl+Shift+O).
     OpenConfig,
@@ -221,6 +226,8 @@ impl Action {
             Activate,
             Open,
             OpenWith,
+            RunAsAdministrator,
+            ComparePanels,
             GoUp,
             GoBack,
             GoForward,
@@ -228,6 +235,7 @@ impl Action {
             SwitchPane,
             CancelListing,
             Copy,
+            Duplicate,
             Cut,
             Paste,
             Delete,
@@ -290,6 +298,8 @@ impl Action {
             Activate => "action.activate",
             Open => "action.open",
             OpenWith => "action.open_with",
+            RunAsAdministrator => "action.run_as_administrator",
+            ComparePanels => "action.compare_panels",
             GoUp => "action.go_up",
             GoBack => "action.go_back",
             GoForward => "action.go_forward",
@@ -297,6 +307,7 @@ impl Action {
             SwitchPane => "action.switch_pane",
             CancelListing => "action.cancel_listing",
             Copy => "action.copy",
+            Duplicate => "action.duplicate",
             Cut => "action.cut",
             Paste => "action.paste",
             Delete => "action.delete",
@@ -390,9 +401,13 @@ impl KeyMap {
             (GoForward, vec![Chord::alt(ArrowRight)]),
             // Home: ir a la carpeta de inicio. Alt+Home (Home a secas es FocusHome).
             (GoHome, vec![Chord::alt(Home)]),
-            (SwitchPane, vec![Chord::plain(Tab)]),
+            // Tab y Ctrl+Tab ciclan entre los paneles Files. Ambos se mantienen: Tab es
+            // inmediato estilo Commander y Ctrl+Tab resulta familiar para usuarios de apps
+            // con paneles/pestañas. La acción sigue siendo configurable desde Ajustes.
+            (SwitchPane, vec![Chord::plain(Tab), Chord::ctrl(Tab)]),
             (CancelListing, vec![Chord::plain(Escape)]),
             (Copy, vec![Chord::ctrl(Char('c'))]),
+            (Duplicate, vec![Chord::ctrl(Char('d'))]),
             (Cut, vec![Chord::ctrl(Char('x'))]),
             (Paste, vec![Chord::ctrl(Char('v'))]),
             (Action::Delete, vec![Chord::plain(KeyCode::Delete)]),
@@ -406,8 +421,8 @@ impl KeyMap {
             (CopyToOther, vec![]),
             (MoveToOther, vec![Chord::plain(F6)]),
             (Refresh, vec![Chord::plain(F5)]),
-            (Find, vec![Chord::ctrl(Char('f'))]),
-            (ComputeSize, vec![Chord::plain(F3)]),
+            (Find, vec![Chord::plain(F3), Chord::ctrl(Char('f'))]),
+            (ComputeSize, vec![]),
             (FilterPrevMatch, vec![Chord::shift(F3)]),
             (SelectAll, vec![Chord::ctrl(Char('a'))]),
             (ExtendUp, vec![Chord::shift(ArrowUp)]),
@@ -450,7 +465,7 @@ impl KeyMap {
             (SplitPanel, vec![Chord::ctrl_shift(Char('t'))]),
             (RefreshDrives, vec![Chord::ctrl_shift(Char('r'))]),
             (ToggleHidden, vec![Chord::ctrl(Char('h'))]),
-            (FavoritesMenu, vec![Chord::ctrl(Char('d'))]),
+            (FavoritesMenu, vec![]),
             (OpenConfig, vec![Chord::ctrl_shift(Char('o'))]),
             (LayoutsMenu, vec![Chord::ctrl_shift(Char('l'))]),
             // Shift+Enter: abrir la carpeta enfocada en OTRO panel (Activate usa Enter a secas).
@@ -544,6 +559,41 @@ impl KeyMap {
         }
         km
     }
+
+    /// Migra el mapa de versiones anteriores donde F3 calculaba tamaño y Ctrl+F abría la
+    /// búsqueda. Solo toca exactamente ese par de valores de fábrica, por lo que no altera
+    /// reasignaciones deliberadas del usuario.
+    pub fn migrate_legacy_f3_search(&mut self) {
+        let legacy_find = [Chord::ctrl(KeyCode::Char('f'))];
+        let legacy_size = [Chord::plain(KeyCode::F3)];
+        if self.chords_for(Action::Find) == legacy_find
+            && self.chords_for(Action::ComputeSize) == legacy_size
+        {
+            *self.slot_mut(Action::Find) = vec![Chord::plain(KeyCode::F3), legacy_find[0]];
+            self.slot_mut(Action::ComputeSize).clear();
+        }
+    }
+
+    /// Agrega Ctrl+Tab a instalaciones que conservan exactamente el antiguo atajo por defecto
+    /// (Tab). No toca una reasignación deliberada del usuario ni una acción que haya sido
+    /// desactivada: solo moderniza el valor histórico intacto.
+    pub fn migrate_ctrl_tab_switch_pane(&mut self) {
+        let legacy = [Chord::plain(KeyCode::Tab)];
+        if self.chords_for(Action::SwitchPane) == legacy {
+            self.slot_mut(Action::SwitchPane)
+                .push(Chord::ctrl(KeyCode::Tab));
+        }
+    }
+
+    /// Libera `Ctrl+D` del menú de favoritos de instalaciones anteriores para que la acción
+    /// Duplicar pueda ocupar su atajo estándar. Solo toca el valor histórico exacto; un menú
+    /// de favoritos reasignado por el usuario permanece intacto.
+    pub fn migrate_legacy_ctrl_d_favorites(&mut self) {
+        let legacy = [Chord::ctrl(KeyCode::Char('d'))];
+        if self.chords_for(Action::FavoritesMenu) == legacy {
+            self.slot_mut(Action::FavoritesMenu).clear();
+        }
+    }
 }
 
 /// Forma serializable del keymap: lista de (acción, chords). Lo que va al json.
@@ -579,13 +629,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_62_acciones_con_clave_i18n_unica() {
+    fn all_tiene_65_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 62);
+        assert_eq!(all.len(), 65);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 62, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 65, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -598,7 +648,7 @@ mod tests {
             (Chord::ctrl_shift(KeyCode::Char('t')), Action::SplitPanel),
             (Chord::ctrl_shift(KeyCode::Char('r')), Action::RefreshDrives),
             (Chord::ctrl(KeyCode::Char('h')), Action::ToggleHidden),
-            (Chord::ctrl(KeyCode::Char('d')), Action::FavoritesMenu),
+            (Chord::ctrl(KeyCode::Char('d')), Action::Duplicate),
             (Chord::ctrl_shift(KeyCode::Char('o')), Action::OpenConfig),
             (Chord::ctrl_shift(KeyCode::Char('l')), Action::LayoutsMenu),
         ] {
@@ -744,7 +794,7 @@ mod tests {
         );
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::F3)),
-            Some(Action::ComputeSize)
+            Some(Action::Find)
         );
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::F5)),
@@ -785,6 +835,10 @@ mod tests {
             Some(Action::SwitchPane)
         );
         assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Tab)),
+            Some(Action::SwitchPane)
+        );
+        assert_eq!(
             km.action_for(&Chord::plain(KeyCode::Escape)),
             Some(Action::CancelListing)
         );
@@ -819,6 +873,56 @@ mod tests {
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::Space)),
             Some(Action::ToggleSelect)
+        );
+    }
+
+    #[test]
+    fn migra_el_default_antiguo_de_f3_a_busqueda() {
+        let mut km = KeyMap::defaults();
+        *km.slot_mut(Action::Find) = vec![Chord::ctrl(KeyCode::Char('f'))];
+        *km.slot_mut(Action::ComputeSize) = vec![Chord::plain(KeyCode::F3)];
+        km.migrate_legacy_f3_search();
+        assert_eq!(
+            km.action_for(&Chord::plain(KeyCode::F3)),
+            Some(Action::Find)
+        );
+        assert!(km.chords_for(Action::ComputeSize).is_empty());
+    }
+
+    #[test]
+    fn migra_tab_historico_agregando_ctrl_tab_sin_tocar_custom() {
+        let mut km = KeyMap::defaults();
+        *km.slot_mut(Action::SwitchPane) = vec![Chord::plain(KeyCode::Tab)];
+        km.migrate_ctrl_tab_switch_pane();
+        assert_eq!(
+            km.chords_for(Action::SwitchPane),
+            &[Chord::plain(KeyCode::Tab), Chord::ctrl(KeyCode::Tab)]
+        );
+
+        *km.slot_mut(Action::SwitchPane) = vec![Chord::ctrl(KeyCode::Char('q'))];
+        km.migrate_ctrl_tab_switch_pane();
+        assert_eq!(
+            km.chords_for(Action::SwitchPane),
+            &[Chord::ctrl(KeyCode::Char('q'))]
+        );
+    }
+
+    #[test]
+    fn migra_ctrl_d_historico_de_favoritos_sin_tocar_un_favorito_custom() {
+        let mut km = KeyMap::defaults();
+        *km.slot_mut(Action::FavoritesMenu) = vec![Chord::ctrl(KeyCode::Char('d'))];
+        km.migrate_legacy_ctrl_d_favorites();
+        assert!(km.chords_for(Action::FavoritesMenu).is_empty());
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('d'))),
+            Some(Action::Duplicate)
+        );
+
+        *km.slot_mut(Action::FavoritesMenu) = vec![Chord::ctrl(KeyCode::Char('g'))];
+        km.migrate_legacy_ctrl_d_favorites();
+        assert_eq!(
+            km.chords_for(Action::FavoritesMenu),
+            &[Chord::ctrl(KeyCode::Char('g'))]
         );
     }
 

@@ -185,6 +185,26 @@ impl WorkspaceCtrl {
         self.autocomplete.cancel();
     }
 
+    /// Pide autocompletado para «Buscar desde», usando un worker separado de la path-bar.
+    pub fn request_search_path_autocomplete(&mut self, buffer: String, now: Instant) {
+        self.search_autocomplete.request(buffer, now);
+    }
+
+    /// Impulsa el debounce/worker de autocompletado del panel Search.
+    pub fn drive_search_autocomplete(&mut self, now: Instant) -> bool {
+        self.search_autocomplete.drive(now)
+    }
+
+    /// Recoge sugerencias válidas de la raíz de búsqueda, sin bloquear el hilo de UI.
+    pub fn poll_search_autocomplete(&mut self) -> Option<(String, Vec<String>)> {
+        self.search_autocomplete.poll()
+    }
+
+    /// Cancela sugerencias pendientes al cerrar el panel Search.
+    pub fn cancel_search_autocomplete(&mut self) {
+        self.search_autocomplete.cancel();
+    }
+
     /// Consume la petición de "editar ruta" (Ctrl+L / F4), si la hay. La UI la llama tras
     /// procesar una tecla para abrir el editor de la path-bar del panel devuelto.
     pub fn take_edit_path_request(&mut self) -> Option<PaneId> {
@@ -235,12 +255,24 @@ impl WorkspaceCtrl {
             || self.help_open // ayuda (F1)
             || self.context_menu.is_some() // menú contextual (clic derecho)
             || self.column_menu.is_some() // menú/editor de columna (clic derecho en header)
+            || self.sync_assistant.is_some() // asistente de sincronización
+            || self.text_transform.is_some() // transformación de texto
     }
 
     /// Tecla sobre el panel activo (reusa el keymap). Devuelve true si navegó.
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
         self.ctrl_down = ctrl;
         self.shift_down = shift;
+        // Un menú contextual es una capa transitoria: Esc debe cerrarlo antes de que la misma
+        // tecla cancele un listado, limpie typeahead o active otra acción por debajo. Incluye el
+        // menú contextual de archivos/árbol/breadcrumbs y el menú del encabezado de columnas.
+        if text.starts_with(crate::keys::escape_char())
+            && (self.context_menu.is_some() || self.column_menu.is_some())
+        {
+            self.close_context_menu();
+            self.column_menu_close();
+            return true;
+        }
         // Si hay un modal de operaciones abierto (confirmar borrado, conflicto, pedir nombre,
         // pegar, retomar), el teclado lo controla el modal Slint (Enter confirma, Esc cancela);
         // aquí suspendemos las acciones globales para que un Enter NO abra el archivo
@@ -295,6 +327,16 @@ impl WorkspaceCtrl {
             chord.key,
             action
         ));
+        // Tab conserva el recorrido Commander entre paneles de archivos. Ctrl+Tab, en
+        // cambio, es el recorrido global del workspace: incluye Árbol, Favoritos,
+        // Operaciones, vista previa, búsqueda, etc. Se decide desde el chord (y no como
+        // una segunda Action) para mantener retrocompatibilidad con los keybindings ya
+        // guardados, donde ambos chords pertenecen a `SwitchPane`.
+        if action == Action::SwitchPane
+            && chord == naygo_core::keymap::Chord::ctrl(naygo_core::keymap::KeyCode::Tab)
+        {
+            return self.switch_all_panes();
+        }
         self.run_action(action)
     }
 
@@ -365,7 +407,7 @@ impl WorkspaceCtrl {
                     if let Some(cur) = active {
                         let i = files.iter().position(|&p| p == cur).unwrap_or(0);
                         let next = files[(i + 1) % files.len()];
-                        self.ws.set_active(next);
+                        self.set_active(next);
                     }
                 }
             }
@@ -374,17 +416,13 @@ impl WorkspaceCtrl {
             Action::GoForward => return self.on_go_forward(),
             Action::GoHome => return self.on_go_home(),
             Action::Refresh => return self.refresh_active(),
-            // Ctrl+F: alterna el panel de búsqueda recursiva (abre vacío / cierra).
+            // F3 (y Ctrl+F): abre o enfoca el panel de búsqueda recursiva.
             Action::Find => {
-                if self.search_open() {
-                    self.close_search();
-                } else {
-                    self.open_empty_search();
-                }
+                self.open_search_pane(self.last_area);
             }
             Action::ComputeSize => {
-                // F3 con filtro activo = "buscar siguiente" (estilo Notepad++); sin filtro,
-                // su rol clásico: calcular el tamaño de la carpeta enfocada/seleccionada.
+                // Acción configurable sin atajo de fábrica: conserva el cálculo de tamaño para
+                // quien lo asigne. Con filtro activo mantiene el salto a la siguiente coincidencia.
                 if self.filter_active() {
                     self.jump_filter_match(1);
                 } else {
@@ -404,8 +442,12 @@ impl WorkspaceCtrl {
                 if self.clear_filter() {
                     return true;
                 }
-                // Esc cierra primero el panel de búsqueda si está abierto (caso más común).
-                if self.search_open() {
+                // Esc cierra primero el trabajo de búsqueda cuando el foco está en su panel;
+                // una búsqueda que queda de fondo no debe interceptar Esc en otro explorador.
+                if self.ws.active_id().is_some_and(|id| {
+                    self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Search)
+                }) && self.search_open()
+                {
                     self.close_search();
                     return false;
                 }
@@ -426,8 +468,8 @@ impl WorkspaceCtrl {
                     return self.on_row_double_clicked(id, pos);
                 }
             }
-            // Shift+Enter: abrir la carpeta ENFOCADA del panel activo en OTRO panel (el origen
-            // no navega). Si no es carpeta, no hace nada. Mismo camino que Ctrl+doble-clic
+            // Shift+Enter: abre la carpeta ENFOCADA en OTRO panel; si es un ejecutable, lo
+            // lanza elevado. Así conservamos el atajo Commander existente sin sumar otro chord.
             // (`request_action`): 1 otro panel → directo; 2+ → selector; 0 → divide y usa el nuevo.
             Action::OpenFocusedOtherPane => {
                 let Some(origin) = active else {
@@ -437,12 +479,36 @@ impl WorkspaceCtrl {
                     .ws
                     .active_files()
                     .and_then(|f| f.focused_view_entry())
-                    .filter(|e| e.kind == EntryKind::Directory)
-                    .map(|e| e.path.clone());
-                let Some(dir) = target else {
+                    .cloned();
+                let Some(target) = target else {
                     return false;
                 };
-                return self.request_action(PaneAction::OpenDir(dir), origin, self.last_area);
+                if target.kind == EntryKind::Directory {
+                    return self.request_action(
+                        PaneAction::OpenDir(target.path),
+                        origin,
+                        self.last_area,
+                    );
+                }
+                if naygo_platform::open::can_run_as_administrator(&target.path) {
+                    let result = naygo_platform::open::run_as_administrator(&target.path);
+                    self.report_shell_result(result);
+                }
+                return false;
+            }
+            Action::RunAsAdministrator => {
+                let target = self
+                    .ws
+                    .active_files()
+                    .and_then(|f| f.focused_view_entry())
+                    .map(|e| e.path.clone());
+                if let Some(path) = target {
+                    if naygo_platform::open::can_run_as_administrator(&path) {
+                        let result = naygo_platform::open::run_as_administrator(&path);
+                        self.report_shell_result(result);
+                    }
+                }
+                return false;
             }
             Action::GoFavorite1 => return self.go_favorite(0),
             Action::GoFavorite2 => return self.go_favorite(1),
@@ -455,6 +521,7 @@ impl WorkspaceCtrl {
             Action::GoFavorite9 => return self.go_favorite(8),
             // --- Operaciones de archivo (F3) ---
             Action::Copy => self.op_copy(),
+            Action::Duplicate => return self.op_duplicate(),
             Action::Cut => self.op_cut(),
             Action::Paste => return self.op_paste(),
             Action::Delete => self.op_delete(false),
@@ -475,6 +542,7 @@ impl WorkspaceCtrl {
                 self.open_palette_requested = true;
                 return true;
             }
+            Action::ComparePanels => return self.toggle_compare_panels(),
             // --- Atajos de botones de la toolbar (configurables) ---
             // Terminal (Ctrl+T): abre PowerShell directo en la carpeta del panel activo (acción
             // directa, no el combo de terminales). term_int 0 = PowerShell, ver `term_from_int`.
@@ -515,6 +583,32 @@ impl WorkspaceCtrl {
         false
     }
 
+    /// Avanza por TODOS los paneles del layout, no solo por los de archivos. Se usa con
+    /// Ctrl+Tab: los paneles especiales también reciben el foco visual y el siguiente Ctrl+Tab
+    /// continúa desde ellos. El orden es el del árbol de docking, por lo que respeta la
+    /// disposición que ve el usuario; los miembros ocultos de una pila de pestañas se activan
+    /// mediante `set_active_tab` para hacerse visibles antes de recibir el foco.
+    fn switch_all_panes(&mut self) -> bool {
+        let panes: Vec<PaneId> = self
+            .ws
+            .layout
+            .pane_ids()
+            .into_iter()
+            .filter(|id| self.ws.pane(*id).is_some())
+            .collect();
+        if panes.len() < 2 {
+            return false;
+        }
+        let index = self
+            .ws
+            .active_id()
+            .and_then(|id| panes.iter().position(|candidate| *candidate == id))
+            .unwrap_or(0);
+        let next = panes[(index + 1) % panes.len()];
+        self.set_active_tab(next);
+        true
+    }
+
     /// Navega el panel Files activo al favorito en el índice `idx` (Ctrl+1..9). No-op si no
     /// hay tantos favoritos. Devuelve true si navegó.
     pub fn go_favorite(&mut self, idx: usize) -> bool {
@@ -539,6 +633,8 @@ impl WorkspaceCtrl {
         // 1) Acciones CURADAS: las más útiles, en orden de presentación. (Se omiten las de
         // micro-navegación —mover foco, extender selección— que no tienen sentido en una paleta.)
         const CURATED: &[Action] = &[
+            Action::RunAsAdministrator,
+            Action::ComparePanels,
             Action::Copy,
             Action::Cut,
             Action::Paste,
@@ -635,6 +731,93 @@ impl WorkspaceCtrl {
         out
     }
 
+    /// Compara el panel Files activo con el siguiente panel Files disponible usando solamente
+    /// las entradas ya cargadas (cero I/O en el hilo UI). Una segunda ejecución limpia las
+    /// marcas. Se compara el nombre sin distinguir mayúsculas; para archivos también tamaño y
+    /// fecha de modificación. Las carpetas se comparan por presencia/tipo, sin recorrerlas.
+    pub(super) fn toggle_compare_panels(&mut self) -> bool {
+        if !self.comparison.is_empty() {
+            self.comparison.clear();
+            self.comparison_revision = self.comparison_revision.wrapping_add(1);
+            return true;
+        }
+
+        let Some(active) = self.active_files_id() else {
+            return false;
+        };
+        let Some(other) = self
+            .ws
+            .panes()
+            .iter()
+            .find(|p| p.id != active && p.files.is_some())
+            .map(|p| p.id)
+        else {
+            return false;
+        };
+
+        #[derive(Clone)]
+        struct Comparable {
+            path: std::path::PathBuf,
+            is_dir: bool,
+            size: Option<u64>,
+            modified: Option<std::time::SystemTime>,
+        }
+
+        let snapshot = |id: naygo_core::workspace::PaneId,
+                        ws: &naygo_core::workspace::Workspace| {
+            ws.pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| {
+                    f.entries
+                        .iter()
+                        .map(|e| {
+                            (
+                                e.name.to_lowercase(),
+                                Comparable {
+                                    path: e.path.clone(),
+                                    is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
+                                    size: e.size,
+                                    modified: e.modified,
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default()
+        };
+        let left = snapshot(active, &self.ws);
+        let right = snapshot(other, &self.ws);
+        let mut left_marks = HashMap::new();
+        let mut right_marks = HashMap::new();
+
+        for (name, item) in &left {
+            match right.get(name) {
+                None => {
+                    left_marks.insert(item.path.clone(), 2);
+                }
+                Some(peer)
+                    if item.is_dir != peer.is_dir
+                        || (!item.is_dir
+                            && (item.size != peer.size || item.modified != peer.modified)) =>
+                {
+                    left_marks.insert(item.path.clone(), 1);
+                    right_marks.insert(peer.path.clone(), 1);
+                }
+                Some(_) => {}
+            }
+        }
+        for (name, item) in &right {
+            if !left.contains_key(name) {
+                right_marks.insert(item.path.clone(), 2);
+            }
+        }
+
+        self.comparison.insert(active, left_marks);
+        self.comparison.insert(other, right_marks);
+        self.comparison_revision = self.comparison_revision.wrapping_add(1);
+        true
+    }
+
     /// Ejecuta el comando en `index` de la lista que devolvió `build_palette_commands`. Devuelve
     /// `true` si algo cambió (para refrescar). El llamador (la UI) cierra la paleta. Lo consume la
     /// UI de la paleta (Task 6/7).
@@ -690,7 +873,27 @@ impl WorkspaceCtrl {
         self.typeahead.clear();
         self.typeahead_at = None;
         self.filter_match_count = 0;
+        self.sync_visual_filter();
         had
+    }
+
+    /// Alterna entre marcar coincidencias y dejar solamente esas filas en la vista. No toca los
+    /// filtros persistentes por columna; solo acompaña el buffer efímero de typeahead.
+    pub fn toggle_filter_hide_nonmatches(&mut self) -> bool {
+        self.filter_hide_nonmatches = !self.filter_hide_nonmatches;
+        self.sync_visual_filter();
+        self.filter_active()
+    }
+
+    /// Empuja el typeahead a la vista del panel activo solamente cuando corresponde ocultar.
+    /// Los otros paneles mantienen su listado completo y, al activarse, `set_active` aplica el
+    /// mismo buffer vigente de forma consistente.
+    pub(crate) fn sync_visual_filter(&mut self) {
+        let needle = (self.filter_hide_nonmatches && self.filter_active())
+            .then(|| naygo_core::text_match::fold_for_match(&self.typeahead));
+        if let Some(files) = self.ws.active_files_mut() {
+            files.set_visual_filter(needle);
+        }
     }
 
     /// Aguja del filtro YA PLEGADA (`text_match::fold_for_match`) para pintar las filas del
@@ -756,6 +959,7 @@ impl WorkspaceCtrl {
         }
         self.typeahead_at = Some(now);
         self.typeahead.push(ch);
+        self.sync_visual_filter();
         // Salto de foco: a la PRIMERA aparición en orden de vista que CONTIENE la aguja
         // (prefijo incluido: es un "contiene" al inicio). Pedido del usuario: si los matches
         // están más abajo, el foco va a la primera aparición. Las coincidencias siguientes

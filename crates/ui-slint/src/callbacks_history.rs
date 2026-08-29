@@ -39,6 +39,23 @@ pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dy
             sync_layout();
         });
     }
+    {
+        // Clic derecho en el árbol: reutiliza el menú de carpeta del Files, con la ruta física
+        // de la fila elegida. `last_active_files` conserva el destino correcto para abrir aquí.
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tree_context(move |id, path, x, y| {
+            ctrl.borrow_mut().open_path_folder_context_menu(
+                PaneId(id as u64),
+                std::path::PathBuf::from(path.as_str()),
+                x,
+                y,
+            );
+            sync_rows();
+            start_timer();
+        });
+    }
     // Navegación por teclado del árbol (↑↓←→/Enter): mueve el cursor, expande/colapsa o navega.
     {
         let ctrl = ctrl.clone();
@@ -54,11 +71,22 @@ pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dy
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_tree_navigate(move |path| {
+        ui.on_tree_navigate(move |id, path| {
             if ctrl
                 .borrow_mut()
-                .navigate_active_to(std::path::PathBuf::from(path.as_str()))
+                .navigate_tree_to(PaneId(id as u64), std::path::PathBuf::from(path.as_str()))
             {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_tree_link_toggle(move |id| {
+            if ctrl.borrow_mut().toggle_tree_link(PaneId(id as u64)) {
                 start_timer();
             }
             sync_layout();

@@ -59,6 +59,45 @@ export global Tr {
     in property <string> add-favorites: "Favoritos";
     in property <string> add-preview: "Vista previa";
     in property <string> add-operations: "Operaciones";
+    in property <string> add-basket: "Bandeja temporal";
+    in property <string> add-search: "Buscar archivos";
+    in property <string> add-linked-browser: "Explorador enlazado (Árbol + Archivos)";
+    in property <string> tree-link-tip: "Alternar entre árbol común y enlazado al panel activo";
+
+    in property <string> basket-title: "Bandeja temporal";
+    in property <string> basket-empty: "Agrega archivos desde cualquier panel con el menú contextual o la paleta de comandos.";
+    in property <string> basket-copy: "Copiar en…";
+    in property <string> basket-move: "Mover a…";
+    in property <string> basket-delete: "Eliminar";
+    in property <string> basket-clear: "Vaciar";
+
+    in property <string> sync-title: "Sincronizar paneles";
+    in property <string> sync-left: "Panel izquierdo";
+    in property <string> sync-right: "Panel derecho";
+    in property <string> sync-left-to-right: "Izquierda → derecha";
+    in property <string> sync-right-to-left: "Derecha → izquierda";
+    in property <string> sync-bidirectional: "Bidireccional";
+    in property <string> sync-delete-extras: "Enviar a la papelera los elementos que sobran en el destino";
+    in property <string> sync-planning: "Comparando carpetas…";
+    in property <string> sync-no-changes: "Las carpetas ya están sincronizadas.";
+    in property <string> sync-apply: "Ejecutar plan";
+    in property <string> ctx-synchronize: "Sincronizar con otro panel…";
+    in property <string> ctx-add-basket: "Agregar a la bandeja temporal";
+    in property <string> ctx-transform-text: "Transformar archivo de texto…";
+    in property <string> text-transform-title: "Transformar texto";
+    in property <string> text-transform-files: "archivo(s) seleccionado(s)";
+    in property <string> text-transform-detected: "Formato detectado en el primer archivo";
+    in property <string> text-transform-line-ending: "Finales de línea";
+    in property <string> text-transform-encoding: "Codificación de destino";
+    in property <string> text-transform-final: "Salto de línea final";
+    in property <string> text-transform-preserve: "Conservar";
+    in property <string> text-transform-ensure: "Asegurar";
+    in property <string> text-transform-remove: "Quitar";
+    in property <string> text-transform-trim: "Quitar espacios y tabulaciones al final de cada línea";
+    in property <string> text-transform-apply: "Transformar";
+    in property <string> text-transform-windows: "Windows CRLF";
+    in property <string> text-transform-unix: "Unix/macOS LF";
+    in property <string> text-transform-mac-classic: "Mac clásico CR";
 
     // Panel rico de operaciones (en curso / en cola / historial).
     in property <string> ops-title: "Operaciones";
@@ -178,6 +217,7 @@ export global Tr {
     in property <string> ctx-open-other-pane: "Abrir en otro panel";
     in property <string> ctx-open-new-pane: "Abrir en panel nuevo";
     in property <string> ctx-open-with: "Abrir con…";
+    in property <string> ctx-run-as-administrator: "Ejecutar como administrador";
     in property <string> ctx-copy: "Copiar";
     in property <string> ctx-cut: "Cortar";
     in property <string> ctx-paste: "Pegar";
@@ -214,14 +254,22 @@ export global Tr {
     in property <string> view-show-hidden: "Mostrar archivos ocultos";
     in property <string> view-show-system: "Mostrar archivos de sistema";
     in property <string> view-hide-dotfiles: "Ocultar los que empiezan con punto";
+    in property <string> filter-toggle-hide-tip: "Mostrar solo coincidencias";
 
-    // Panel de búsqueda recursiva (Ctrl+F / lupa).
+    // Panel de búsqueda recursiva (F3 / lupa).
     in property <string> search-title: "Buscar en la carpeta y subcarpetas";
-    in property <string> search-tip: "Buscar archivos (Ctrl+F)";
-    in property <string> search-placeholder: "Nombre o parte del nombre (admite *)";
+    in property <string> search-tip: "Buscar archivos (F3)";
+    in property <string> search-placeholder: "Nombre o patrón (p. ej. *cosa*.txt)";
+    in property <string> search-root: "Buscar desde:";
+    in property <string> search-content: "Texto dentro del archivo:";
+    in property <string> search-content-placeholder: "Opcional";
+    in property <string> search-ignore-case: "Ignorar mayúsculas y minúsculas";
+    in property <string> search-wildcards: "Usar comodines * y ?";
+    in property <string> search-recursive: "Buscar en todas las subcarpetas";
     in property <string> search-go: "Buscar";
     in property <string> search-stop: "Detener";
     in property <string> search-empty: "Sin coincidencias";
+    in property <string> search-open-folder: "Abrir carpeta";
 
     // Modal "nueva(s) carpeta(s)".
     in property <string> newfolder-title: "Nueva(s) carpeta(s)";
@@ -329,6 +377,10 @@ export global Tr {
     in property <string> fav-title: "Favoritos";
     in property <string> fav-empty: "Sin favoritos (Ctrl+D)";
     in property <string> fav-recents: "Recientes";
+    in property <string> recents-most-used: "Carpetas más usadas";
+    in property <string> add-recents: "Recientes";
+    in property <string> cfg-frequent-dirs-limit: "Carpetas más usadas a mostrar";
+    in property <string> cfg-tip-frequent-dirs-limit: "Cantidad de resultados del ranking de uso (1–50).";
     // Favoritos editables (panel árbol + menú ▾ del toolbar).
     in property <string> fav-menu-tip: "Favoritos";
     in property <string> fav-new-group: "Nuevo grupo";
@@ -382,6 +434,13 @@ export global Tr {
     in property <string> preview-lang: "Lenguaje";
     // Botón "abrir con el programa del sistema" del panel de vista previa.
     in property <string> preview-open-tip: "Abrir con el programa predeterminado";
+    in property <string> preview-loading: "Cargando vista previa…";
+    in property <string> preview-cancel: "Cancelar";
+    in property <string> preview-cancel-tip: "Detener esta vista previa";
+    in property <string> preview-copy-tip: "Copiar todo el texto";
+    in property <string> preview-wrap-on-tip: "Activar ajuste de línea";
+    in property <string> preview-wrap-off-tip: "Desactivar ajuste de línea";
+    in property <string> preview-reset-view-tip: "Restaurar vista 3D";
     // Sección Avanzado.
     in property <string> cfg-ops-display: "Mostrar progreso de operaciones";
     in property <string> cfg-ops-display-panel: "Panel acoplado";
@@ -466,7 +525,7 @@ export global Tr {
     in property <string> theme-base-dark: "Oscuro";
     in property <string> theme-base-light: "Claro";
     in property <string> theme-cancel: "Cancelar";
-    // Nombres de los 12 tokens de color (mismo orden que el índice 0..12 del editor).
+    // Nombres de los tokens de color (mismo orden que el índice del editor).
     in property <string> theme-tok-accent: "Acento";
     in property <string> theme-tok-panel-bg: "Fondo del panel";
     in property <string> theme-tok-row-bg: "Fila";
@@ -479,7 +538,10 @@ export global Tr {
     in property <string> theme-tok-highlight: "Resaltado";
     in property <string> theme-tok-border: "Borde";
     in property <string> theme-tok-row-inactive-bg: "Fila de panel inactivo";
+    in property <string> theme-tok-active-panel-bg: "Fondo del panel activo";
+    in property <string> theme-tok-inactive-panel-bg: "Fondo del panel inactivo";
     in property <string> theme-flat-inactive: "Paneles inactivos planos";
+    in property <string> theme-use-inactive-row-color: "Color propio para filas inactivas";
     in property <string> cfg-language: "Idioma";
     in property <string> cfg-icon-set: "Set de íconos";
     in property <string> cfg-date-format: "Formato de fecha";

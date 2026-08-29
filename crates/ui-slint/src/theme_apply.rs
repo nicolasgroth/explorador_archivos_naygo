@@ -24,6 +24,8 @@ where
     let theme = ui.global::<Theme>();
     theme.set_accent(col(t.accent));
     theme.set_panel_bg(col(t.panel_bg));
+    theme.set_active_panel_bg(col(t.active_panel_bg));
+    theme.set_inactive_panel_bg(col(t.inactive_panel_bg));
     theme.set_row_bg(col(t.row_bg));
     theme.set_row_alt_bg(col(t.row_alt_bg));
     theme.set_row_inactive_bg(col(t.row_inactive_bg));
@@ -35,4 +37,5 @@ where
     theme.set_highlight(col(t.highlight));
     theme.set_border(col(t.border));
     theme.set_flat_inactive_panels(t.flat_inactive_panels);
+    theme.set_use_inactive_row_color(t.use_inactive_row_color);
 }

@@ -20,6 +20,16 @@ pub enum ShellError {
     Failed(String),
 }
 
+impl std::fmt::Display for ShellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShellError::NotSupported => write!(f, "operación no soportada"),
+            ShellError::NoAssociation => write!(f, "no hay una aplicación asociada"),
+            ShellError::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Qué terminal abrir en una carpeta. `WindowsTerminal` solo está disponible si `wt.exe` está
 /// instalado (es opcional en Windows 10); usar [`windows_terminal_available`] para decidir si
 /// ofrecerlo en el menú.
@@ -54,6 +64,11 @@ pub fn open_with_dialog(_path: &Path) -> Result<(), ShellError> {
 }
 
 #[cfg(not(windows))]
+pub fn run_as_administrator(_path: &Path) -> Result<(), ShellError> {
+    Err(ShellError::NotSupported)
+}
+
+#[cfg(not(windows))]
 pub fn open_terminal(_dir: &Path, _term: Terminal) -> Result<(), ShellError> {
     Err(ShellError::NotSupported)
 }
@@ -76,6 +91,21 @@ pub fn open_default(path: &Path) -> Result<(), ShellError> {
 #[cfg(windows)]
 pub fn open_with_dialog(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "openas")
+}
+
+/// Solicita al Shell que lance un ejecutable con elevación UAC. El prompt y la eventual
+/// cancelación pertenecen a Windows; Naygo nunca intenta elevarse a sí mismo.
+#[cfg(windows)]
+pub fn run_as_administrator(path: &Path) -> Result<(), ShellError> {
+    windows_impl::shell_execute(path, "runas")
+}
+
+/// Indica si una ruta representa un ejecutable que Naygo puede ofrecer para elevación.
+/// Es una comprobación puramente léxica (sin I/O), segura incluso sobre shares lentos.
+pub fn can_run_as_administrator(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("com"))
 }
 
 /// Abre `term` con la carpeta de trabajo en `dir`. Para Windows Terminal se pasa `-d <dir>`
@@ -204,6 +234,14 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elevacion_solo_para_ejecutables_windows() {
+        assert!(can_run_as_administrator(Path::new("C:/Apps/tool.exe")));
+        assert!(can_run_as_administrator(Path::new("C:/Apps/TOOL.COM")));
+        assert!(!can_run_as_administrator(Path::new("C:/Apps/tool.msi")));
+        assert!(!can_run_as_administrator(Path::new("C:/Apps/readme.txt")));
+    }
 
     #[cfg(windows)]
     #[test]
