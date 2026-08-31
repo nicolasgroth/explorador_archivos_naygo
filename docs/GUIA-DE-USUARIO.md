@@ -231,7 +231,7 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 | **F2** | Renombrar (en línea) |
 | **Shift+F2** | Renombrar por lotes (ventana) |
 | **F6** | Mover la selección al otro panel |
-| **Ctrl+N / Ctrl+Shift+N** | Nuevo archivo / nueva carpeta |
+| **Ctrl+N / Ctrl+Shift+N** | Nueva carpeta / nuevo archivo |
 | **Ctrl+Z** | Deshacer la última operación |
 
 Toda operación larga es **cancelable** y queda en el **Historial de acciones** con
@@ -476,7 +476,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | Ctrl+C / X / V | Copiar / cortar / pegar |
 | Ctrl+D | Duplicar la selección en su misma carpeta |
 | Supr / Shift+Supr | Papelera / eliminar permanente |
-| Ctrl+N / Ctrl+Shift+N | Nuevo archivo / carpeta |
+| Ctrl+N / Ctrl+Shift+N | Nueva carpeta / archivo |
 | Ctrl+A | Seleccionar todo |
 | Espacio / Ctrl+Espacio | Marcar / marcar dejando el resto |
 | Ctrl+L, F4 | Editar la ruta |

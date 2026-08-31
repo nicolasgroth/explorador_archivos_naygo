@@ -815,6 +815,7 @@ pub fn load_keymap(dir: &Path) -> crate::keymap::KeyMap {
     keymap.migrate_legacy_f3_search();
     keymap.migrate_ctrl_tab_switch_pane();
     keymap.migrate_legacy_ctrl_d_favorites();
+    keymap.migrate_legacy_new_item_shortcuts();
     keymap
 }
 

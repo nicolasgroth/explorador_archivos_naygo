@@ -39,6 +39,8 @@
   nombres seguros (` - copia`, ` - copia (2)`, …), planificación asíncrona, journal y deshacer.
   Las configuraciones heredadas liberan el antiguo `Ctrl+D` de Favoritos solo cuando conservan
   exactamente ese valor histórico; los atajos personalizados distintos se respetan.
+- **Cierre funcional 2026-08-29 (C-1):** `Ctrl+N` crea carpeta y `Ctrl+Shift+N` crea archivo.
+  La carga del keymap migra únicamente el par de defaults anterior, sin alterar reasignaciones.
 
 ---
 
@@ -113,16 +115,6 @@ Integrar con búsqueda, filtros, exportación y operaciones por lote. Definir pr
 JSON versionado, pequeño, inspeccionable y sin metadatos privados innecesarios.
 
 ---
-
-## C. Cambios de atajos y diálogo de creación
-
-### C-1. Intercambiar atajos de creación: Ctrl+N = carpeta
-Hoy: `Ctrl+N` = nuevo archivo, `Ctrl+Shift+N` = nueva carpeta. El usuario prefiere:
-**`Ctrl+N` = nueva carpeta**, y el archivo pasa a otra combinación (propuesta: `Ctrl+Shift+N`,
-o sea, intercambiar los defaults). Cambiar en `crates/core/src/keymap.rs` (entradas `NewFile`/
-`NewDir` en `defaults()`), documentarlo en la ayuda (F1) y en `docs/GUIA-DE-USUARIO.md`. Ojo:
-el keymap del usuario ya persistido en `keybindings.json` tiene el valor viejo — decidir si se
-migra o solo aplica a instalaciones nuevas (el sistema de keymap tiene `reset_action`).
 
 ---
 

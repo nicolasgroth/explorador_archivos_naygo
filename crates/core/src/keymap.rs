@@ -414,8 +414,8 @@ impl KeyMap {
             (DeletePermanent, vec![Chord::shift(KeyCode::Delete)]),
             (Rename, vec![Chord::plain(F2)]),
             (BatchRename, vec![Chord::shift(F2)]),
-            (NewFile, vec![Chord::ctrl(Char('n'))]),
-            (NewDir, vec![Chord::ctrl_shift(Char('n'))]),
+            (NewFile, vec![Chord::ctrl_shift(Char('n'))]),
+            (NewDir, vec![Chord::ctrl(Char('n'))]),
             // F5 es REFRESCAR (estilo navegador), decisión de Nicolás. CopyToOther queda sin
             // atajo por defecto (asignable en el editor); MoveToOther conserva F6.
             (CopyToOther, vec![]),
@@ -592,6 +592,20 @@ impl KeyMap {
         let legacy = [Chord::ctrl(KeyCode::Char('d'))];
         if self.chords_for(Action::FavoritesMenu) == legacy {
             self.slot_mut(Action::FavoritesMenu).clear();
+        }
+    }
+
+    /// Intercambia los defaults históricos de creación para que Ctrl+N cree una carpeta. Solo
+    /// transforma el par exacto de fábrica anterior; cualquier atajo que el usuario haya
+    /// personalizado queda intacto.
+    pub fn migrate_legacy_new_item_shortcuts(&mut self) {
+        let old_file = [Chord::ctrl(KeyCode::Char('n'))];
+        let old_dir = [Chord::ctrl_shift(KeyCode::Char('n'))];
+        if self.chords_for(Action::NewFile) == old_file
+            && self.chords_for(Action::NewDir) == old_dir
+        {
+            *self.slot_mut(Action::NewFile) = old_dir.to_vec();
+            *self.slot_mut(Action::NewDir) = old_file.to_vec();
         }
     }
 }
@@ -812,11 +826,11 @@ mod tests {
         );
         assert_eq!(
             km.action_for(&Chord::ctrl_shift(KeyCode::Char('n'))),
-            Some(Action::NewDir)
+            Some(Action::NewFile)
         );
         assert_eq!(
             km.action_for(&Chord::ctrl(KeyCode::Char('n'))),
-            Some(Action::NewFile)
+            Some(Action::NewDir)
         );
         assert_eq!(
             km.action_for(&Chord::shift(KeyCode::Delete)),
@@ -923,6 +937,29 @@ mod tests {
         assert_eq!(
             km.chords_for(Action::FavoritesMenu),
             &[Chord::ctrl(KeyCode::Char('g'))]
+        );
+    }
+
+    #[test]
+    fn migra_los_atajos_historicos_de_creacion_sin_tocar_custom() {
+        let mut km = KeyMap::defaults();
+        *km.slot_mut(Action::NewFile) = vec![Chord::ctrl(KeyCode::Char('n'))];
+        *km.slot_mut(Action::NewDir) = vec![Chord::ctrl_shift(KeyCode::Char('n'))];
+        km.migrate_legacy_new_item_shortcuts();
+        assert_eq!(
+            km.action_for(&Chord::ctrl(KeyCode::Char('n'))),
+            Some(Action::NewDir)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl_shift(KeyCode::Char('n'))),
+            Some(Action::NewFile)
+        );
+
+        *km.slot_mut(Action::NewFile) = vec![Chord::ctrl(KeyCode::Char('q'))];
+        km.migrate_legacy_new_item_shortcuts();
+        assert_eq!(
+            km.chords_for(Action::NewFile),
+            &[Chord::ctrl(KeyCode::Char('q'))]
         );
     }
 

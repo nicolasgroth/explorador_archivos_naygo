@@ -15,7 +15,7 @@
 //! los modales (confirmar nombre, confirmar borrado, resolver conflicto) se hace por la API de
 //! `OpsCtrl`, porque `on_key` SUSPENDE las acciones globales mientras hay un modal abierto (igual
 //! que en la app: el teclado lo controla el modal Slint). Por eso el teclado simula el DISPARO del
-//! gesto (p. ej. Ctrl+Shift+N abre el modal de carpeta nueva) y el "Aceptar" del modal va por
+//! gesto (p. ej. Ctrl+N abre el modal de carpeta nueva) y el "Aceptar" del modal va por
 //! `name_confirm()` / `delete_confirm()` / `resolve_conflict()`, espejando el cableado de `main.rs`.
 
 use super::*;
@@ -340,18 +340,18 @@ fn split_a(c: &mut WorkspaceCtrl, dir: &std::path::Path) -> (PaneId, PaneId) {
     (origin, dest)
 }
 
-// ============================ 1. Crear carpeta con Ctrl+Shift+N ============================
+// ================================ 1. Crear carpeta con Ctrl+N ================================
 
-/// GESTO: el usuario pulsa Ctrl+Shift+N (atajo de "nueva carpeta"), escribe el nombre y
+/// GESTO: el usuario pulsa Ctrl+N (atajo de "nueva carpeta"), escribe el nombre y
 /// confirma. RESULTADO: la carpeta existe en disco. Cubre on_key(chord NewDir) → modal
 /// NameInput(NewDir) → name_changed → name_confirm → motor → refresh.
 #[test]
-fn crear_carpeta_con_ctrl_shift_n() {
+fn crear_carpeta_con_ctrl_n() {
     let work = tempfile::tempdir().unwrap();
     let (mut c, _cfg) = ctrl_en(work.path());
 
-    // Atajo Ctrl+Shift+N: abre el modal de nombre para NUEVA CARPETA.
-    c.on_key("n", true, true, false);
+    // Atajo Ctrl+N: abre el modal de nombre para NUEVA CARPETA.
+    c.on_key("n", true, false, false);
     assert!(
         matches!(
             c.ops.pending_dialog,
@@ -360,7 +360,7 @@ fn crear_carpeta_con_ctrl_shift_n() {
                 ..
             })
         ),
-        "Ctrl+Shift+N debe abrir el modal de NUEVA CARPETA"
+        "Ctrl+N debe abrir el modal de NUEVA CARPETA"
     );
 
     // El usuario escribe el nombre y confirma (Aceptar / Enter del modal).
@@ -562,15 +562,15 @@ fn eliminar_y_refrescar_baja_el_conteo() {
     );
 }
 
-// ============================== 2. Crear archivo con Ctrl+N ===============================
+// =========================== 2. Crear archivo con Ctrl+Shift+N ===========================
 
-/// GESTO: Ctrl+N (atajo "nuevo archivo"), nombre, confirmar. RESULTADO: el archivo existe.
+/// GESTO: Ctrl+Shift+N (atajo "nuevo archivo"), nombre, confirmar. RESULTADO: el archivo existe.
 #[test]
-fn crear_archivo_con_ctrl_n() {
+fn crear_archivo_con_ctrl_shift_n() {
     let work = tempfile::tempdir().unwrap();
     let (mut c, _cfg) = ctrl_en(work.path());
 
-    c.on_key("n", true, false, false); // Ctrl+N → nuevo archivo
+    c.on_key("n", true, true, false); // Ctrl+Shift+N → nuevo archivo
     assert!(
         matches!(
             c.ops.pending_dialog,
@@ -579,7 +579,7 @@ fn crear_archivo_con_ctrl_n() {
                 ..
             })
         ),
-        "Ctrl+N debe abrir el modal de NUEVO ARCHIVO"
+        "Ctrl+Shift+N debe abrir el modal de NUEVO ARCHIVO"
     );
 
     c.ops.name_changed("apuntes.txt".into());
