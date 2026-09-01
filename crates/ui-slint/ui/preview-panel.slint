@@ -64,6 +64,33 @@ component CopyIcon inherits Rectangle {
     }
 }
 
+// Borde de papel rasgado para indicar que el texto termina aquí sólo porque la vista previa está
+// acotada. Es vectorial (Path), por lo que no agrega recursos ni peso al binario.
+component TruncatedPaperEdge inherits Rectangle {
+    height: 30px;
+    background: transparent;
+    Path {
+        x: 0px; y: 1px; width: parent.width; height: 8px;
+        stroke: Theme.text-dim.with-alpha(0.72);
+        stroke-width: 1px;
+        viewbox-width: 80;
+        viewbox-height: 8;
+        MoveTo { x: 0; y: 3; } LineTo { x: 5; y: 6; } LineTo { x: 10; y: 2; }
+        LineTo { x: 15; y: 6; } LineTo { x: 20; y: 2; } LineTo { x: 25; y: 6; }
+        LineTo { x: 30; y: 2; } LineTo { x: 35; y: 6; } LineTo { x: 40; y: 2; }
+        LineTo { x: 45; y: 6; } LineTo { x: 50; y: 2; } LineTo { x: 55; y: 6; }
+        LineTo { x: 60; y: 2; } LineTo { x: 65; y: 6; } LineTo { x: 70; y: 2; }
+        LineTo { x: 75; y: 6; } LineTo { x: 80; y: 3; }
+    }
+    Text {
+        y: 11px;
+        text: Tr.preview-truncated;
+        color: Theme.text-dim;
+        font-size: 11px;
+        horizontal-alignment: center;
+    }
+}
+
 // Flecha circular: devuelve el modelo 3D a su orientación y zoom iniciales.
 component ResetViewIcon inherits Rectangle {
     in property <color> tint: Theme.text;
@@ -155,7 +182,7 @@ export component PreviewPanel inherits Rectangle {
                 }
             }
             // El botón de wrap es un control de lectura, no modifica el archivo ni la configuración.
-            if root.view.mode == 1 && !root.view.highlighted: Rectangle {
+            if root.view.mode == 1: Rectangle {
                 width: 26px; height: 20px;
                 background: wrap-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
@@ -214,61 +241,46 @@ export component PreviewPanel inherits Rectangle {
             spacing: 2px;
             sv := ScrollView {
                 vertical-stretch: 1;
-                // Al cambiar de archivo previsualizado, el ScrollView conservaba el scroll del
-                // anterior y un comprimido largo salía mostrado por el final. Reseteamos el
-                // viewport al inicio cuando cambia la ruta del archivo (espejo de view.path).
-                property <string> for-path: root.view.path;
-                changed for-path => { self.viewport-y = 0; }
-                // Código resaltado: una fila por línea (un Text por segmento, sin ajuste), con
-                // SCROLL HORIZONTAL como un editor — respeta la indentación y conserva el color.
-                // El viewport toma el ancho natural del contenido; si supera el visible, el
-                // ScrollView ofrece la barra horizontal. Las líneas ya vienen recortadas a
-                // TEXT_MAX_LINE_CHARS, así que ningún glifo sale del rango i16 del render software.
-                if root.view.highlighted: hl-col := VerticalLayout {
-                    alignment: start;
+                // Cada entrega de texto es una vista NUEVA: tanto el path como el contenido
+                // participan en la clave. Antes sólo se observaba la ruta; el ScrollView podía
+                // conservar su offset al llegar el payload y mostrar un texto recién abierto por
+                // el medio. La misma señal reinicia selección/caret del editor de sólo lectura.
+                property <string> content-key: root.view.path + "\u{0}" + root.view.text;
+                changed content-key => { self.viewport-y = 0; }
+                // El viewport se define explícitamente con el tamaño real del editor. Sin esta
+                // pareja de propiedades Slint no conoce el alto total y no habilita scroll al
+                // seleccionar un bloque largo. El mismo editor se usa también para XML/código:
+                // mantener selección parcial y Ctrl+C es más útil que colorear un texto que no
+                // se puede copiar por fragmento.
+                viewport-width: root.wrap-text ? self.visible-width : max(self.visible-width, text-editor.preferred-width + 16px);
+                viewport-height: max(self.visible-height, text-editor.preferred-height);
+                text-editor := TextInput {
+                    text: root.view.text;
+                    read-only: true;
+                    single-line: false;
+                    color: Theme.text;
+                    font-family: "Consolas";
+                    wrap: root.wrap-text ? word-wrap : no-wrap;
+                    selection-background-color: Theme.accent.with-alpha(0.75);
+                    selection-foreground-color: Theme.text;
                     x: 8px;
-                    for line in root.view.hl-lines: HorizontalLayout {
-                        alignment: start;
-                        // Espaciador para que las líneas vacías ocupen alto.
-                        Rectangle {
-                            height: 16px;
-                            width: 0px;
-                        }
-                        for seg in line.spans: Text {
-                            text: seg.text;
-                            color: seg.color;
-                            font-family: "Consolas";
-                            vertical-alignment: center;
-                        }
+                    width: root.wrap-text ? parent.width - 16px : max(parent.width - 16px, self.preferred-width);
+                    height: self.preferred-height;
+                    page-height: sv.visible-height;
+                    // `TextInput` conserva selección y caret cuando su propiedad `text` cambia.
+                    // Al navegar, eso podía dejar seleccionada una posición del archivo anterior
+                    // —fuera del viewport y aparentemente inexistente. Reasignar tras vaciarlo
+                    // reinicia ese estado interno, manteniendo la selección normal sólo dentro
+                    // del archivo actualmente mostrado.
+                    property <string> content-key: root.view.path + "\u{0}" + root.view.text;
+                    changed content-key => {
+                        self.text = "";
+                        self.text = root.view.text;
+                        sv.viewport-y = 0;
                     }
                 }
-                // Texto plano con ajuste de línea e indentación. `TextEdit` read-only permitiría
-                // selección nativa, pero el renderer por SOFTWARE que Naygo fuerza no lo
-                // rasteriza correctamente; usar Text conserva estabilidad en VMs y equipos sin GPU.
-                if !root.view.highlighted && root.wrap-text: Text {
-                    text: root.view.text;
-                    color: Theme.text;
-                    font-family: "Consolas";
-                    // Ajuste de línea: el renderizador por software de Slint posiciona cada glifo en
-                    // i16 (~32767px). Una línea larguísima sin ajuste empujaba un glifo fuera de rango
-                    // y la app caía al pintar. El core ya recorta cada línea; el wrap es 2ª defensa.
-                    wrap: word-wrap;
-                    x: 8px;
-                    width: parent.width - 16px;
-                }
-                if !root.view.highlighted && !root.wrap-text: Text {
-                    text: root.view.text;
-                    color: Theme.text;
-                    font-family: "Consolas";
-                    wrap: no-wrap;
-                    x: 8px;
-                }
             }
-            if root.view.truncated: Text {
-                text: Tr.preview-truncated;
-                color: Theme.text-dim;
-                font-size: 11px;
-            }
+            if root.view.truncated: TruncatedPaperEdge { }
         }
 
         if root.view.mode == 2: Rectangle {

@@ -1,0 +1,55 @@
+// Naygo — radar de destinos para copiar y mover sin navegar.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { DestinationRadarRowVm } from "types.slint";
+import { Theme } from "theme.slint";
+
+export component DestinationRadar inherits Rectangle {
+    in property <[DestinationRadarRowVm]> rows;
+    in property <string> title;
+    callback choose(int);
+    callback dismiss();
+    background: #00000070;
+    TouchArea { clicked => { root.dismiss(); } }
+    card := FocusScope {
+        x: (parent.width - self.width) / 2;
+        y: max(20px, (parent.height - self.height) / 3);
+        width: min(620px, parent.width - 40px);
+        height: min(parent.height - 40px, 74px + root.rows.length * 48px);
+        key-pressed(ev) => {
+            if (ev.text == Key.Escape) { root.dismiss(); return accept; }
+            if (ev.text == "1") { root.choose(0); return accept; }
+            if (ev.text == "2") { root.choose(1); return accept; }
+            if (ev.text == "3") { root.choose(2); return accept; }
+            if (ev.text == "4") { root.choose(3); return accept; }
+            if (ev.text == "5") { root.choose(4); return accept; }
+            if (ev.text == "6") { root.choose(5); return accept; }
+            if (ev.text == "7") { root.choose(6); return accept; }
+            if (ev.text == "8") { root.choose(7); return accept; }
+            if (ev.text == "9") { root.choose(8); return accept; }
+            reject
+        }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            width: 100%; height: 100%; background: Theme.panel-bg; border-width: 1px;
+            border-color: Theme.border; border-radius: 8px; TouchArea {}
+            VerticalLayout {
+                padding: 12px; spacing: 4px;
+                Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 700; height: 26px; }
+                for row in root.rows: Rectangle {
+                    height: 42px; border-radius: 4px;
+                    background: touch.has-hover ? Theme.row-alt-bg : transparent;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: row.number + ""; color: Theme.accent; font-size: 18px; width: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                        VerticalLayout { spacing: 0px; vertical-stretch: 1;
+                            Text { text: row.label; color: Theme.text; overflow: elide; }
+                            Text { text: row.path; color: Theme.text-dim; font-size: 11px; overflow: elide; }
+                        }
+                    }
+                    touch := TouchArea { mouse-cursor: pointer; clicked => { root.choose(row.number - 1); } }
+                }
+            }
+        }
+    }
+}

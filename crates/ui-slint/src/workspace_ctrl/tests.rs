@@ -50,6 +50,26 @@ fn drain_text_transform(c: &mut WorkspaceCtrl) -> bool {
 }
 
 #[test]
+fn exportar_listado_usa_vista_o_seleccion_y_columnas_visibles() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("a;uno.txt"), b"a").unwrap();
+    std::fs::write(work.path().join("b.txt"), b"bb").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+
+    let all = c.export_listing_csv(';').expect("panel activo");
+    assert_eq!(all.lines().count(), 3, "encabezado + dos filas");
+    assert_eq!(all.lines().next().unwrap().matches(';').count(), 4);
+    assert!(all.contains("\"a;uno.txt\""), "CSV escapa el separador");
+    assert!(all.contains("b.txt"));
+
+    c.ws.active_files_mut().unwrap().select_single(0);
+    let selected = c.export_listing_csv(';').unwrap();
+    assert_eq!(selected.lines().count(), 2, "encabezado + una fila");
+}
+
+#[test]
 fn bandeja_reune_seleccion_y_la_deduplica() {
     let cfg = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -497,8 +517,32 @@ fn comparar_paneles_marca_distintos_y_exclusivos_y_luego_limpia() {
     );
     assert!(!c.comparison[&left].contains_key(&left_dir.path().join("igual.txt")));
 
+    // Las acciones deben usar el panel que originó el clic, aun si el otro sigue activo.
+    assert!(c.comparison_select_for(right, 2));
+    let selected_right = c.selected_paths_of(right);
+    assert_eq!(selected_right, vec![right_dir.path().join("solo-der.txt")]);
+    assert!(c.comparison_toggle_link(right));
+    assert!(c.comparison_link_enabled);
+
     assert!(c.toggle_compare_panels());
     assert!(c.comparison.is_empty());
+    assert!(c.comparison_pair.is_none());
+    assert!(!c.comparison_link_enabled);
+}
+
+#[test]
+fn bandeja_naygolist_preserva_referencias_ausentes() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    let missing = dir.path().join("ya-no-esta.txt");
+    c.basket.add([missing.clone()]);
+    let text = c
+        .basket_naygolist_json(Some(dir.path().to_path_buf()))
+        .unwrap();
+    c.basket_clear();
+    assert_eq!(c.basket_import_naygolist_json(&text).unwrap(), 1);
+    assert_eq!(c.basket.items(), &[missing]);
 }
 
 /// C3: agregar/alternar/aliasar/quitar reglas de previsualización; persisten.
@@ -966,6 +1010,7 @@ fn mover_al_otro_panel_con_dos_paneles() {
     // Seleccionar el archivo y copiarlo al otro panel (move=false).
     c.ws.active_files_mut().unwrap().select_all();
     c.op_to_other(false);
+    c.destination_radar_resolve(0);
     for _ in 0..2000 {
         if c.ops.pump_ops() {
             break;
@@ -1335,6 +1380,97 @@ fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
     assert!(!c.set_drag_over(Some(dest)), "mismo valor: no cambia");
     assert!(c.set_drag_over(None), "limpiar: cambia");
     assert_eq!(c.drag_over_pane(), None);
+}
+
+/// D-1: al soltar dentro del MISMO panel sobre una fila-carpeta, el hit-test de FilePanel deja
+/// esa subcarpeta como destino. Debe seguir usando el flujo normal: Ctrl fuerza copiar, el drop
+/// queda pendiente de confirmación y solo al confirmar toca el filesystem.
+#[test]
+fn drop_at_mismo_panel_sobre_subcarpeta_usa_la_carpeta_como_destino() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("documento.txt"), b"contenido").unwrap();
+    std::fs::create_dir(work.path().join("archivo")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.ws.active_id().unwrap();
+    let area = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 800.0,
+        h: 600.0,
+    };
+    c.set_area(area);
+    let (_, rect) = c
+        .pane_rects(area)
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .expect("rect del panel activo");
+    // Simula el reporte del callback `drop-target-row`: el índice es de VISTA, por lo que no
+    // depende de cómo el listado ordene internamente las entries.
+    let folder_row = active_pos_of(&c, "archivo").expect("subcarpeta visible");
+    c.set_drag_over_at(Some(pane), Some(140.0));
+    c.set_drag_over_row(pane, folder_row as i32);
+    let routed = c.drop_at(
+        rect.x + rect.w / 2.0,
+        rect.y + rect.h / 2.0,
+        false,
+        true,
+        vec![work.path().join("documento.txt")],
+    );
+    assert!(routed, "el drop intra-panel sobre carpeta se enruta");
+    let pending = c.pending_drop.as_ref().expect("espera confirmación");
+    assert_eq!(pending.dest_dir, work.path().join("archivo"));
+    assert!(!pending.is_move, "Ctrl conserva la regla de copiar");
+    assert!(c.confirm_pending_drop());
+    for _ in 0..2000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(work.path().join("archivo/documento.txt").exists());
+    assert!(work.path().join("documento.txt").exists());
+}
+
+/// D-1 no debe permitir una operación imposible: una carpeta nunca puede soltarse sobre sí
+/// misma (la misma protección de rutas también cubre descendientes).
+#[test]
+fn drop_at_mismo_panel_rechaza_carpeta_sobre_si_misma() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir(work.path().join("origen")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.ws.active_id().unwrap();
+    let area = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 800.0,
+        h: 600.0,
+    };
+    c.set_area(area);
+    let (_, rect) = c
+        .pane_rects(area)
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .expect("rect del panel activo");
+    let origin = work.path().join("origen");
+    // Validar el caso exacto (origen sobre sí mismo) que sí tiene fila en la vista.
+    let origin_row = active_pos_of(&c, "origen").unwrap();
+    c.set_drag_over_at(Some(pane), Some(140.0));
+    c.set_drag_over_row(pane, origin_row as i32);
+    assert!(
+        !c.drop_at(
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
+            false,
+            false,
+            vec![origin]
+        ),
+        "soltar carpeta sobre sí misma es no-op"
+    );
+    assert!(c.pending_drop.is_none());
 }
 
 /// El `move_hint` del OLE (Shift presionado al SOLTAR) fuerza MOVER aunque los flags de

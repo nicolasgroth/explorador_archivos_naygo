@@ -6,16 +6,81 @@ use super::*;
 use crate::BasketRowVm;
 use slint::SharedString;
 
+/// Resultado de leer una `.naygolist`, preparado enteramente fuera del hilo de UI. La existencia
+/// se consulta aquí —no al pintar filas— para que un disco de red lento no congele la navegación.
+pub struct BasketImport {
+    paths: Vec<PathBuf>,
+    missing: std::collections::HashSet<PathBuf>,
+}
+
 impl WorkspaceCtrl {
+    /// Serializa la bandeja sin tocar el filesystem. El callback de UI decide dónde escribirlo
+    /// en un worker; así el formato también se puede reutilizar desde pruebas/automatización.
+    pub fn basket_naygolist_json(&self, root: Option<PathBuf>) -> Result<String, String> {
+        naygo_core::naygolist::NaygoList::from_paths(self.basket.items().iter().cloned(), root)
+            .to_json()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Importa referencias incluso si ya no existen. No ejecuta metadata/exists y por tanto
+    /// conserva el carácter portable de .naygolist; la bandeja las muestra como rutas ausentes.
+    #[cfg(test)]
+    pub fn basket_import_naygolist_json(&mut self, text: &str) -> Result<usize, String> {
+        let list = naygo_core::naygolist::NaygoList::from_json(text)?;
+        Ok(self.basket.add(list.resolve_paths()?))
+    }
+
+    pub fn start_basket_import(&mut self, path: PathBuf) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+                let list = naygo_core::naygolist::NaygoList::from_json(&text)?;
+                let paths = list.resolve_paths()?;
+                let missing = paths
+                    .iter()
+                    .filter(|path| !path.exists())
+                    .cloned()
+                    .collect();
+                Ok(BasketImport { paths, missing })
+            })();
+            let _ = tx.send(result);
+        });
+        self.basket_import_rx = Some(rx);
+    }
+
+    pub fn pump_basket_import(&mut self) -> bool {
+        let Some(rx) = self.basket_import_rx.as_ref() else {
+            return true;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return false;
+        };
+        self.basket_import_rx = None;
+        match result {
+            Ok(import) => {
+                self.basket.add(import.paths);
+                self.basket_missing.extend(import.missing);
+            }
+            Err(error) => self.pending_shell_error = Some(error),
+        }
+        true
+    }
+
     pub fn basket_add_selected(&mut self) -> usize {
         let paths = self.selected_paths();
         self.basket.add(paths)
     }
 
     pub fn basket_remove(&mut self, index: usize) -> bool {
+        let removed_path = self.basket.items().get(index).cloned();
         let removed = self.basket.remove_indices(&[index]) > 0;
+        if let Some(path) = removed_path {
+            self.basket_missing.remove(&path);
+        }
         if self.basket.is_empty() {
             self.basket_staging.clear();
+            self.basket_missing.clear();
         }
         removed
     }
@@ -23,6 +88,7 @@ impl WorkspaceCtrl {
     pub fn basket_clear(&mut self) {
         self.basket.clear();
         self.basket_staging.clear();
+        self.basket_missing.clear();
     }
 
     pub fn basket_rows(&mut self) -> Vec<BasketRowVm> {
@@ -44,6 +110,7 @@ impl WorkspaceCtrl {
                 BasketRowVm {
                     name: SharedString::from(name),
                     path: SharedString::from(path.to_string_lossy().as_ref()),
+                    missing: self.basket_missing.contains(&path),
                     icon,
                 }
             })
@@ -70,6 +137,7 @@ impl WorkspaceCtrl {
         if move_files {
             self.basket.clear();
             self.basket_staging.clear();
+            self.basket_missing.clear();
         }
         true
     }
@@ -94,6 +162,7 @@ impl WorkspaceCtrl {
         if paths.is_empty() {
             self.basket.clear();
             self.basket_staging.clear();
+            self.basket_missing.clear();
             return had_items;
         }
         self.ensure_ops_pane();
@@ -102,6 +171,7 @@ impl WorkspaceCtrl {
             .start_op(naygo_core::ops::delete(paths, true), label, true);
         self.basket.clear();
         self.basket_staging.clear();
+        self.basket_missing.clear();
         true
     }
 }

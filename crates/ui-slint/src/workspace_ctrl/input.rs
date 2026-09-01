@@ -524,10 +524,15 @@ impl WorkspaceCtrl {
             Action::Duplicate => return self.op_duplicate(),
             Action::Cut => self.op_cut(),
             Action::Paste => return self.op_paste(),
+            Action::PasteHistory => return self.op_paste_history(),
             Action::Delete => self.op_delete(false),
             Action::DeletePermanent => self.op_delete(true),
             Action::NewFile => self.op_new(false),
-            Action::NewDir => self.op_new(true),
+            // Ctrl+N debe abrir el mismo editor multilínea que el botón y el menú contextual.
+            // Antes conservaba el diálogo histórico de un nombre único: además de ocultar la
+            // creación simultánea, mostraba "Nombre no válido" para un buffer vacío, que es una
+            // validación correcta pero una explicación equivocada para el estado inicial.
+            Action::NewDir => self.new_folder_open_active(),
             Action::Rename => self.op_rename(),
             Action::BatchRename => self.batch_open(),
             Action::Undo => return self.op_undo_last(),
@@ -638,6 +643,7 @@ impl WorkspaceCtrl {
             Action::Copy,
             Action::Cut,
             Action::Paste,
+            Action::PasteHistory,
             Action::Rename,
             Action::BatchRename,
             Action::NewFile,
@@ -738,6 +744,8 @@ impl WorkspaceCtrl {
     pub(super) fn toggle_compare_panels(&mut self) -> bool {
         if !self.comparison.is_empty() {
             self.comparison.clear();
+            self.comparison_pair = None;
+            self.comparison_link_enabled = false;
             self.comparison_revision = self.comparison_revision.wrapping_add(1);
             return true;
         }
@@ -814,7 +822,99 @@ impl WorkspaceCtrl {
 
         self.comparison.insert(active, left_marks);
         self.comparison.insert(other, right_marks);
+        self.comparison_pair = Some((active, other));
+        self.comparison_link_enabled = false;
         self.comparison_revision = self.comparison_revision.wrapping_add(1);
+        true
+    }
+
+    /// Selecciona desde el panel indicado en vez de depender del orden entre callbacks de UI.
+    pub fn comparison_select_for(&mut self, id: PaneId, state: i32) -> bool {
+        let Some(marks) = self.comparison.get(&id) else {
+            return false;
+        };
+        let Some(f) = self.ws.pane_mut(id).and_then(|pane| pane.files.as_mut()) else {
+            return false;
+        };
+        if state == 3 {
+            let hidden = f
+                .entries
+                .iter()
+                .filter(|entry| !marks.contains_key(&entry.path))
+                .map(|entry| entry.path.clone())
+                .collect();
+            f.set_hidden_paths(hidden);
+            return true;
+        }
+        let selected: Vec<usize> = f
+            .view_indices()
+            .iter()
+            .enumerate()
+            .filter_map(|(view_pos, real)| {
+                let mark = f
+                    .entries
+                    .get(*real)
+                    .and_then(|entry| marks.get(&entry.path))
+                    .copied()?;
+                (state == 0 || mark as i32 == state).then_some(view_pos)
+            })
+            .collect();
+        if selected.is_empty() {
+            return false;
+        }
+        f.focused = selected.first().copied();
+        f.selected = selected;
+        f.presentation_changed();
+        true
+    }
+
+    /// Copia o mueve desde un panel de origen explícito hacia su compañero comparado.
+    pub fn comparison_transfer_from(&mut self, origin: PaneId, move_files: bool) -> bool {
+        let Some((left, right)) = self.comparison_pair else {
+            return false;
+        };
+        let other = if origin == left {
+            right
+        } else if origin == right {
+            left
+        } else {
+            return false;
+        };
+        let Some(dest_dir) = self
+            .ws
+            .pane(other)
+            .and_then(|pane| pane.files.as_ref())
+            .map(|files| files.current_dir.clone())
+        else {
+            return false;
+        };
+        let sources = self.selected_paths_of(origin);
+        if sources.is_empty() {
+            return false;
+        }
+        let label = if move_files {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
+        self.ensure_ops_pane();
+        self.ops.start_op(
+            naygo_core::ops::transfer(move_files, sources, dest_dir),
+            label,
+            true,
+        );
+        true
+    }
+
+    /// Alterna el enlace de navegación relativa para un miembro del par comparado.
+    pub fn comparison_toggle_link(&mut self, id: PaneId) -> bool {
+        let Some((left, right)) = self.comparison_pair else {
+            return false;
+        };
+        if id != left && id != right {
+            return false;
+        }
+        self.comparison_link_enabled = !self.comparison_link_enabled;
         true
     }
 

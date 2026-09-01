@@ -37,6 +37,35 @@ impl WorkspaceCtrl {
     }
 
     fn navigate_files_to(&mut self, active_files_id: PaneId, dir: PathBuf) -> bool {
+        // F-8: comparación y enlace son estados diferentes. Al relistar se invalidan las marcas,
+        // pero un enlace que el usuario activó sigue intentando la misma subruta relativa.
+        let linked = self
+            .comparison_link_enabled
+            .then_some(self.comparison_pair)
+            .flatten()
+            .and_then(|(left, right)| {
+                let peer = if active_files_id == left {
+                    right
+                } else if active_files_id == right {
+                    left
+                } else {
+                    return None;
+                };
+                let previous = self
+                    .ws
+                    .pane(active_files_id)
+                    .and_then(|pane| pane.files.as_ref())
+                    .map(|files| files.current_dir.clone())?;
+                let peer_dir = self
+                    .ws
+                    .pane(peer)
+                    .and_then(|pane| pane.files.as_ref())
+                    .map(|files| files.current_dir.clone())?;
+                dir.strip_prefix(&previous)
+                    .ok()
+                    .filter(|relative| !relative.as_os_str().is_empty())
+                    .map(|relative| (peer, peer_dir.join(relative)))
+            });
         crate::logging::breadcrumb(&format!(
             "navegar panel {} → {}",
             active_files_id.0,
@@ -61,6 +90,9 @@ impl WorkspaceCtrl {
         self.start_listing(active_files_id, dir.clone());
         self.pending_recents.insert(active_files_id, dir.clone());
         self.sync_trees_for_files(active_files_id, dir);
+        if let Some((peer, peer_dir)) = linked {
+            let _ = self.navigate_pane_to(peer, peer_dir);
+        }
         true
     }
 

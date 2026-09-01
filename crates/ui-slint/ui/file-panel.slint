@@ -268,6 +268,13 @@ export component FilePanel inherits FocusScope {
     // Se está ARRASTRANDO un archivo sobre ESTE panel ahora mismo: borde marcado + path-bar
     // remarcada, para indicar dónde caerá el drop. Manda sobre `active` mientras dura el arrastre.
     in property <bool> drag-over: false;
+    // Coordenada Y lógica de cliente del cursor de un arrastre OLE. Viene del hit-test nativo y
+    // se compara con `list.absolute-position.y` para obtener la fila REAL aun con scroll. No se
+    // usa el TouchArea de la app durante DoDragDrop: Windows captura esos eventos en su loop OLE.
+    in property <length> drag-client-y: -10000px;
+    // Reporta -1 para encabezado/zona vacía/archivo y el índice de vista cuando hay una fila.
+    // Rust decide después si esa fila sigue siendo una carpeta y, solo entonces, la usa de destino.
+    callback drop-target-row(int, int);
     // Hay un MODAL de operación abierto (conflicto/eliminar/aviso, etc.). Mientras sea true se
     // DESMONTA el `body-touch` exterior (ver más abajo) para que NO robe hover/clic/arrastre al
     // velo del modal: sin esto el popup queda con el hover muerto hasta el primer clic, y arrastrar
@@ -297,12 +304,16 @@ export component FilePanel inherits FocusScope {
     // así navegar con ↑↓/Re-Av Pág/Inicio-Fin/typeahead/paleta vuelve a arrastrar la vista tras
     // el cursor. La ListView dejó de ser interactiva y ya no auto-scrollea sola.
     in property <int> focused-row: -1;
+    in property <int> restore-scroll-row: -1;
+    // Incluye la carpeta para volver a aplicar el mismo índice al visitar otra entrada histórica.
+    in property <string> restore-scroll-key;
     // El ListView se deja no-interactivo para que no cancele los gestos de arrastre/rubber-band,
     // pero la rueda y el teclado escriben DIRECTO en su `viewport-y` nativo. Antes manteníamos un
     // `wheel-scroll` paralelo y lo enlazábamos al viewport: en listados virtualizados ambos podían
     // quedar desfasados y el foco continuaba "por detrás" de la vista. El viewport nativo es ahora
     // la única fuente de verdad (0 arriba; valores negativos hacia abajo).
     property <int> revealed-focus-row: -1;
+    property <string> applied-scroll-key;
     // Espejo reactivo del alto útil de la lista. Tras navegar, el foco puede llegar desde Rust
     // antes del primer layout (cuando `list.visible-height` todavía es 0); observar esta
     // propiedad vuelve a intentar revelar la fila apenas Slint conoce el alto real. También
@@ -311,6 +322,15 @@ export component FilePanel inherits FocusScope {
     // Fila bajo el cursor según el TouchArea exterior (-1 = ninguna/zona vacía). La pinta el
     // fondo de cada fila para el efecto hover (antes lo daba el `has-hover` del row-touch).
     property <int> hover-row: -1;
+    // Hit-test para D-1. `absolute-position` y `drag-client-y` comparten el sistema de
+    // coordenadas lógico de cliente; `viewport-y` es negativo al bajar, igual que en body-touch.
+    // Se ejecuta con cada DragOver que Rust recibe de OLE, no durante el listado ni en el UI thread
+    // haciendo I/O. La comprobación de rango impide convertir el espacio vacío en un destino.
+    changed drag-client-y => {
+        let row = floor((root.drag-client-y - list.absolute-position.y - list.viewport-y) / root.row-h);
+        root.drop-target-row(root.pane-id,
+            row >= 0 && row < root.rows.length ? row : -1);
+    }
     // Al NAVEGAR (cambia la carpeta del panel), el viewport vuelve arriba y el próximo foco se
     // revela otra vez: si no, la carpeta nueva heredaría el offset de la anterior.
     changed nav-key => {
@@ -343,6 +363,7 @@ export component FilePanel inherits FocusScope {
                         : -list.viewport-y),
                 0px,
                 max(0px, root.rows.length * root.row-h - list.visible-height));
+            root.scroll-position-changed(root.pane-id, floor(-list.viewport-y / root.row-h));
         }
     }
     // El foco y las filas llegan desde modelos distintos: al abrir una carpeta grande puede
@@ -357,6 +378,23 @@ export component FilePanel inherits FocusScope {
         }
     }
     changed list-visible-height => { root.revealed-focus-row = -1; }
+    // La restauración espera al layout definitivo del ListView. Marca el foco como ya revelado:
+    // foco y scroll son contexto independiente y un foco fuera de pantalla no debe pisar el
+    // scroll manual que el usuario dejó en esa visita.
+    Timer {
+        interval: 0ms;
+        running: root.restore-scroll-row >= 0
+            && root.restore-scroll-key != root.applied-scroll-key
+            && list.visible-height > 0px;
+        triggered => {
+            list.viewport-y = -clamp(
+                root.restore-scroll-row * root.row-h,
+                0px,
+                max(0px, root.rows.length * root.row-h - list.visible-height));
+            root.applied-scroll-key = root.restore-scroll-key;
+            root.revealed-focus-row = root.focused-row;
+        }
+    }
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     in property <[PathSeg]> segments;        // breadcrumbs de la carpeta actual
     in property <bool> editing;              // este panel está editando su ruta
@@ -424,6 +462,7 @@ export component FilePanel inherits FocusScope {
     callback row-double-clicked(int, int);
     callback row-middle-clicked(int, int);   // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
+    callback scroll-position-changed(int, int); // (pane-id, primera fila visible)
     callback rubber-band(int, int, int);     // (pane-id, from-pos, to-pos) selección por rectángulo
     callback row-context(int, int, length, length); // (pane-id, pos, x-ventana, y-ventana)
     // Clic derecho en la ZONA VACÍA del panel: menú contextual de la CARPETA (Explorador,
@@ -455,6 +494,12 @@ export component FilePanel inherits FocusScope {
     // Vista profunda (recursiva): toggle en la barra + estado on/off.
     in property <bool> deep-active: false;
     callback toggle-deep(int);               // (pane-id)
+    in property <bool> comparison-active: false;
+    in property <bool> comparison-link-available: false;
+    in property <bool> comparison-link-active: false;
+    callback comparison-select(int, int);    // (pane-id, 0=todos 1=distintos 2=solo aquí)
+    callback comparison-transfer(int, bool); // (pane-id, false=copiar true=mover)
+    callback comparison-toggle-link(int);
     // Barra inferior (footer): texto de selección/espacio de disco. Vacío = barra oculta.
     in property <string> footer-text;
     // Texto del volumen separado para alinearlo a la derecha (libre / total / % usado).
@@ -742,6 +787,54 @@ export component FilePanel inherits FocusScope {
                                 root.hover-tip(self.has-hover ? Tr.deep-view-tip : "",
                                     self.absolute-position.x + self.width / 2,
                                     self.absolute-position.y + self.height);
+                            }
+                        }
+                    }
+                    // Acciones F-8, visibles solo para una comparación viva. Los glifos cortos
+                    // no compiten con los breadcrumbs en paneles angostos: ≠ selecciona los
+                    // distintos, ⊘ los que existen solo aquí, C/M los transfiere al otro lado.
+                    if root.comparison-active || root.comparison-link-available: Rectangle {
+                        width: root.comparison-active ? 130px : 24px; height: 22px;
+                        HorizontalLayout {
+                            spacing: 1px;
+                            if root.comparison-active: Rectangle {
+                                width: 64px;
+                                HorizontalLayout {
+                                    spacing: 1px;
+                                    for action in [1, 2, 3]: Rectangle {
+                                width: 20px; height: 22px; border-radius: Theme.radius-sm;
+                                background: action-touch.has-hover ? Theme.hover-bg : transparent;
+                                Text { text: action == 1 ? "≠" : (action == 2 ? "⊘" : "="); color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                                action-touch := TouchArea {
+                                    clicked => { root.comparison-select(root.pane-id, action); }
+                                    changed has-hover => { root.hover-tip(self.has-hover ? (action == 1 ? Tr.comparison-select-different-tip : (action == 2 ? Tr.comparison-select-only-here-tip : Tr.comparison-hide-equal-tip)) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                                }
+                                    }
+                                }
+                            }
+                            if root.comparison-active: Rectangle {
+                                width: 42px;
+                                HorizontalLayout {
+                                    spacing: 1px;
+                                    for move-files in [false, true]: Rectangle {
+                                width: 20px; height: 22px; border-radius: Theme.radius-sm;
+                                background: transfer-touch.has-hover ? Theme.hover-bg : transparent;
+                                Text { text: move-files ? "M" : "C"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+                                transfer-touch := TouchArea {
+                                    clicked => { root.comparison-transfer(root.pane-id, move-files); }
+                                    changed has-hover => { root.hover-tip(self.has-hover ? (move-files ? Tr.comparison-move-tip : Tr.comparison-copy-tip) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                                }
+                                    }
+                                }
+                            }
+                            if root.comparison-link-available: Rectangle {
+                                width: 20px; height: 22px; border-radius: Theme.radius-sm;
+                                background: root.comparison-link-active ? Theme.pressed-bg : (link-touch.has-hover ? Theme.hover-bg : transparent);
+                                Text { text: "↔"; color: root.comparison-link-active ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+                                link-touch := TouchArea {
+                                    clicked => { root.comparison-toggle-link(root.pane-id); }
+                                    changed has-hover => { root.hover-tip(self.has-hover ? (root.comparison-link-active ? Tr.comparison-link-off-tip : Tr.comparison-link-on-tip) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                                }
                             }
                         }
                     }
@@ -1280,6 +1373,7 @@ export component FilePanel inherits FocusScope {
                             list.viewport-y + ev.delta-y,
                             -max(0px, root.rows.length * root.row-h - list.visible-height),
                             0px);
+                        root.scroll-position-changed(root.pane-id, floor(-list.viewport-y / root.row-h));
                         return accept;
                     }
                 }
@@ -1323,6 +1417,7 @@ export component FilePanel inherits FocusScope {
                                     grab-scroll + (self.mouse-y - grab-y) * (total / parent.height),
                                     0px,
                                     total - visible-h);
+                                root.scroll-position-changed(root.pane-id, floor(-list.viewport-y / root.row-h));
                             }
                         }
                     }

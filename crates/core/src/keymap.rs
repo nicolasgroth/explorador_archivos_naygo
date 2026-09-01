@@ -130,6 +130,8 @@ pub enum Action {
     Duplicate,
     Cut,
     Paste,
+    /// Elegir un conjunto del historial interno de portapapeles (Ctrl+Shift+V).
+    PasteHistory,
     Delete,
     DeletePermanent,
     Rename,
@@ -238,6 +240,7 @@ impl Action {
             Duplicate,
             Cut,
             Paste,
+            PasteHistory,
             Delete,
             DeletePermanent,
             Rename,
@@ -310,6 +313,7 @@ impl Action {
             Duplicate => "action.duplicate",
             Cut => "action.cut",
             Paste => "action.paste",
+            PasteHistory => "action.paste_history",
             Delete => "action.delete",
             DeletePermanent => "action.delete_permanent",
             Rename => "action.rename",
@@ -410,6 +414,7 @@ impl KeyMap {
             (Duplicate, vec![Chord::ctrl(Char('d'))]),
             (Cut, vec![Chord::ctrl(Char('x'))]),
             (Paste, vec![Chord::ctrl(Char('v'))]),
+            (PasteHistory, vec![Chord::ctrl_shift(Char('v'))]),
             (Action::Delete, vec![Chord::plain(KeyCode::Delete)]),
             (DeletePermanent, vec![Chord::shift(KeyCode::Delete)]),
             (Rename, vec![Chord::plain(F2)]),
@@ -643,13 +648,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_65_acciones_con_clave_i18n_unica() {
+    fn all_tiene_66_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 65);
+        assert_eq!(all.len(), 66);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 65, "cada acción tiene una clave i18n única");
+        assert_eq!(keys.len(), 66, "cada acción tiene una clave i18n única");
     }
 
     #[test]
@@ -801,6 +806,10 @@ mod tests {
         assert_eq!(
             km.action_for(&Chord::ctrl(KeyCode::Char('v'))),
             Some(Action::Paste)
+        );
+        assert_eq!(
+            km.action_for(&Chord::ctrl_shift(KeyCode::Char('v'))),
+            Some(Action::PasteHistory)
         );
         assert_eq!(
             km.action_for(&Chord::plain(KeyCode::F2)),

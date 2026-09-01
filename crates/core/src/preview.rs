@@ -48,8 +48,10 @@ pub const DEFAULT_TEXT_EXTENSIONS: &[&str] = &[
     "sql", "kt", "swift", "lua",
 ];
 
-/// Tope de líneas que se muestran de un archivo de texto.
-pub const TEXT_MAX_LINES: usize = 100;
+/// Tope de líneas que se muestran de un archivo de texto. 250 líneas deja recorrer un bloque
+/// útil de letras, logs y README sin transformar la vista previa en un editor ni aumentar el
+/// límite de lectura en memoria (que continúa fijo en `TEXT_MAX_BYTES`).
+pub const TEXT_MAX_LINES: usize = 250;
 /// Tope de bytes que se leen de un archivo de texto (lo que llegue primero con las líneas).
 pub const TEXT_MAX_BYTES: usize = 64 * 1024;
 /// Tope de caracteres por línea. Una línea más larga se recorta (con marcador). Defensa dura:
@@ -584,8 +586,8 @@ mod tests {
 
     #[test]
     fn trunca_por_lineas() {
-        // 150 líneas → se muestran 100 y se marca truncado.
-        let src: String = (0..150).map(|i| format!("línea {i}\n")).collect();
+        // 350 líneas → se muestran 250 y se marca truncado.
+        let src: String = (0..350).map(|i| format!("línea {i}\n")).collect();
         let t = truncate_text(src.as_bytes(), false);
         assert_eq!(t.text.lines().count(), TEXT_MAX_LINES);
         assert!(t.truncated);

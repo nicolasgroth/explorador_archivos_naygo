@@ -435,6 +435,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
     ui.set_splits(ModelRc::from(models.borrow().splits.clone()));
     ui.set_picks(ModelRc::from(models.borrow().picks.clone()));
+    ui.set_destination_radar_rows(ModelRc::from(models.borrow().destination_radar.clone()));
 
     let area_of: Rc<dyn Fn() -> Rect> = Rc::new({
         let ui_weak = ui.as_weak();

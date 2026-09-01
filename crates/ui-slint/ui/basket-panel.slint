@@ -16,6 +16,8 @@ export component BasketPanel inherits Rectangle {
     callback copy();
     callback move-files();
     callback delete-files();
+    callback save-list();
+    callback open-list();
     background: Theme.inactive-panel-bg;
     border-width: 1px;
     border-color: root.active ? Theme.active-pane-border : Theme.divider;
@@ -43,7 +45,12 @@ export component BasketPanel inherits Rectangle {
                     VerticalLayout {
                         alignment: center; spacing: 0px; horizontal-stretch: 1;
                         Text { text: row.name; color: Theme.text; overflow: elide; }
-                        Text { text: row.path; color: Theme.text-dim; font-size: 10px; overflow: elide; }
+                        Text {
+                            text: (row.missing ? "[!] " : "") + row.path;
+                            color: row.missing ? Theme.error : Theme.text-dim;
+                            font-size: 10px;
+                            overflow: elide;
+                        }
                     }
                     Rectangle {
                         width: 24px; height: 24px; border-radius: Theme.radius-sm;
@@ -60,6 +67,8 @@ export component BasketPanel inherits Rectangle {
             Button { text: Tr.basket-copy; enabled: root.rows.length > 0; clicked => { root.copy(); } }
             Button { text: Tr.basket-move; enabled: root.rows.length > 0; clicked => { root.move-files(); } }
             Button { text: Tr.basket-delete; enabled: root.rows.length > 0; clicked => { root.delete-files(); } }
+            Button { text: "💾"; enabled: root.rows.length > 0; clicked => { root.save-list(); } }
+            Button { text: "📂"; clicked => { root.open-list(); } }
             Rectangle { horizontal-stretch: 1; }
             Button { text: Tr.basket-clear; enabled: root.rows.length > 0; clicked => { root.clear(); } }
         }

@@ -103,6 +103,11 @@ pub(crate) fn build_sync(
                 ui.set_window_title(title.into());
             }
             let active = c.active_id();
+            ui.set_destination_radar_move(
+                c.destination_radar
+                    .as_ref()
+                    .is_some_and(|radar| radar.move_files),
+            );
             // Panel resaltado por arrastre (hover de drop): se refleja en `PaneVm.drag-over`.
             let drag_over = c.drag_over_pane();
             let hl_secs = c.highlight_secs();
@@ -148,6 +153,7 @@ pub(crate) fn build_sync(
             }
             inspector.meta = meta_fields_model(&c);
             inspector.meta_loading = c.meta_loading();
+            inspector.has_provenance = c.has_provenance();
 
             // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
             // y para el submenú "Mover a…" del panel (lista de grupos destino).
@@ -289,6 +295,27 @@ pub(crate) fn build_sync(
                         pv.drag_over = is_drag_over;
                         changed = true;
                     }
+                    let drag_client_y = c.drag_over_client_y_for(id);
+                    if pv.drag_client_y != drag_client_y {
+                        pv.drag_client_y = drag_client_y;
+                        changed = true;
+                    }
+                    let comparison_active = !c.comparison.is_empty();
+                    if pv.comparison_active != comparison_active {
+                        pv.comparison_active = comparison_active;
+                        changed = true;
+                    }
+                    let comparison_link_available = c
+                        .comparison_pair
+                        .is_some_and(|(left, right)| id == left || id == right);
+                    if pv.comparison_link_available != comparison_link_available {
+                        pv.comparison_link_available = comparison_link_available;
+                        changed = true;
+                    }
+                    if pv.comparison_link_active != c.comparison_link_enabled {
+                        pv.comparison_link_active = c.comparison_link_enabled;
+                        changed = true;
+                    }
                     if pv.path != path {
                         pv.path = path;
                         // Los breadcrumbs y el título dependen de la carpeta: hay que
@@ -356,6 +383,11 @@ pub(crate) fn build_sync(
                         let focused = c.focused_view_of(id);
                         if pv.focused_row != focused {
                             pv.focused_row = focused;
+                            changed = true;
+                        }
+                        let restored_scroll = c.restored_scroll_row_of(id);
+                        if pv.restore_scroll_row != restored_scroll {
+                            pv.restore_scroll_row = restored_scroll;
                             changed = true;
                         }
                         let can_back = c.can_go_back_for(id);
@@ -457,6 +489,34 @@ pub(crate) fn build_sync(
                 })
                 .collect();
             ui.set_resume_rows(ModelRc::from(Rc::new(VecModel::from(resume_rows))));
+            let clipboard_rows: Vec<ClipboardHistoryRowVm> = c
+                .ops
+                .clipboard_history()
+                .iter()
+                .map(|entry| {
+                    let label = entry
+                        .paths
+                        .first()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let parent = entry.paths[0]
+                        .parent()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
+                    let detail = if entry.paths.len() == 1 {
+                        parent
+                    } else {
+                        format!("{parent}  +{}", entry.paths.len() - 1)
+                    };
+                    ClipboardHistoryRowVm {
+                        label: label.into(),
+                        detail: detail.into(),
+                        cut: entry.cut,
+                    }
+                })
+                .collect();
+            ui.set_clipboard_history_rows(ModelRc::from(Rc::new(VecModel::from(clipboard_rows))));
             // Menú contextual: posición + si hay menú nativo disponible (hay HWND).
             let ctx = match &c.context_menu {
                 Some(cm) => ContextMenuVm {
@@ -733,6 +793,13 @@ pub(crate) fn build_sync(
                             // se arrastran archivos encima. `drag_over_pane()` es transitorio (lo
                             // setea el drenado del canal de hover en el tick).
                             drag_over: ctrl.borrow().drag_over_pane() == Some(*id),
+                            drag_client_y: ctrl.borrow().drag_over_client_y_for(*id),
+                            comparison_active: !ctrl.borrow().comparison.is_empty(),
+                            comparison_link_available: ctrl
+                                .borrow()
+                                .comparison_pair
+                                .is_some_and(|(left, right)| *id == left || *id == right),
+                            comparison_link_active: ctrl.borrow().comparison_link_enabled,
                             purpose,
                             title: SharedString::from(ctrl.borrow().pane_label(*id).as_str()),
                             link_member: ctrl.borrow().is_link_member(*id),
@@ -754,6 +821,7 @@ pub(crate) fn build_sync(
                             missing_ejected: ctrl.borrow().pane_was_ejected(*id),
                             // Fila enfocada (índice de vista) para el auto-scroll por teclado (C1).
                             focused_row: ctrl.borrow().focused_view_of(*id),
+                            restore_scroll_row: ctrl.borrow().restored_scroll_row_of(*id),
                             deep_active: ctrl.borrow().is_deep_active(*id),
                             // El footer se llena en el primer `sync_rows` (necesita `&mut` por la
                             // caché de disco). Aquí nace vacío.
@@ -887,6 +955,24 @@ pub(crate) fn build_sync(
                 }
             };
             m.picks.set_vec(picks);
+            let radar_rows: Vec<DestinationRadarRowVm> = ctrl
+                .borrow()
+                .destination_radar
+                .as_ref()
+                .map(|radar| {
+                    radar
+                        .candidates
+                        .iter()
+                        .enumerate()
+                        .map(|(i, candidate)| DestinationRadarRowVm {
+                            number: (i + 1) as i32,
+                            label: SharedString::from(candidate.label.as_str()),
+                            path: SharedString::from(candidate.path.to_string_lossy().as_ref()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            m.destination_radar.set_vec(radar_rows);
 
             drop(m);
             sync_rows();

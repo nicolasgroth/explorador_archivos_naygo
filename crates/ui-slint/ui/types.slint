@@ -247,6 +247,13 @@ export struct ResumeRowVm {
     label: string,
 }
 
+// Entrada del historial interno de portapapeles: resumen visible y semántica copia/corte.
+export struct ClipboardHistoryRowVm {
+    label: string,
+    detail: string,
+    cut: bool,
+}
+
 // Una tarjeta de set en la galería (preview estilo temas).
 export struct IconSetCardVm {
     id: string,
@@ -415,6 +422,8 @@ export struct InspectorVm {
     // tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
     meta: [MetaFieldVm],
     meta-loading: bool,
+    // Hay al menos un dato real de Zone.Identifier; no confundir con metadata de imagen/EXE.
+    has-provenance: bool,
 }
 
 // Un segmento coloreado de una línea de código resaltado (un Text por segmento en la UI).
@@ -458,6 +467,9 @@ export struct PreviewVm {
 export struct BasketRowVm {
     name: string,
     path: string,
+    // La referencia fue leída desde .naygolist, pero ya no existe según el worker de importación.
+    // Sigue siendo operable/visible: la marca evita perderla de forma silenciosa.
+    missing: bool,
     icon: image,
 }
 
@@ -508,6 +520,13 @@ export struct PickVm {
     w: length,
     h: length,
     number: int,
+}
+
+// Una opción del radar de destinos: máximo nueve, elegible con 1..9 o clic.
+export struct DestinationRadarRowVm {
+    number: int,
+    label: string,
+    path: string,
 }
 
 // Una opción del selector de ícono: el mismo objeto renderizado en un set de fábrica.
@@ -623,6 +642,12 @@ export struct PaneVm {
     // panel bajo el cursor durante el arrastre; se limpia al salir/soltar. Lo puebla `sync_rows`
     // desde `drag_over_pane` del controlador (true sii el id coincide).
     drag-over: bool,
+    // Y de cliente lógica del cursor OLE. FilePanel la cruza con la geometría real de su ListView
+    // para detectar una carpeta destino dentro del mismo panel (D-1).
+    drag-client-y: length,
+    comparison-active: bool,
+    comparison-link-available: bool,
+    comparison-link-active: bool,
     purpose: int,
     title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
     link-member: bool,        // participa en una pareja Tree↔Files
@@ -634,6 +659,9 @@ export struct PaneVm {
     // FilePanel observa su cambio (`changed focused-row`) para que el scroll siga al cursor al
     // navegar por teclado (la ListView ya no es interactiva, así que no auto-scrollea sola).
     focused-row: int,
+    // Fila que debe quedar en el borde superior al volver por historial (-1 = sin restauración).
+    // Se calcula por la ruta del ancla guardada, por lo que tolera reordenamientos del listado.
+    restore-scroll-row: int,
     columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
     col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
     is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)

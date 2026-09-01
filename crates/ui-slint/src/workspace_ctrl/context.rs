@@ -339,6 +339,83 @@ impl WorkspaceCtrl {
         self.close_context_menu();
     }
 
+    /// Construye el CSV desde el estado YA CARGADO del panel: selección si existe, o toda la
+    /// vista filtrada. Usa las columnas visibles en su orden actual y agrega la ruta completa.
+    pub fn export_listing_csv(&self, separator: char) -> Option<String> {
+        let pane = self.ws.active_files()?;
+        let columns: Vec<naygo_core::columns::ColumnKind> = pane
+            .table
+            .visible_columns()
+            .map(|column| column.kind)
+            .collect();
+        let mut headers: Vec<String> = columns
+            .iter()
+            .map(|kind| {
+                use naygo_core::columns::ColumnKind::*;
+                self.config.t(match kind {
+                    Name => "col.name",
+                    Extension => "col.extension",
+                    Size => "col.size",
+                    Modified => "col.modified",
+                    Created => "col.created",
+                })
+            })
+            .collect();
+        headers.push(self.config.t("export.path"));
+
+        let view = pane.view_indices();
+        let positions: Vec<usize> = if pane.selected.is_empty() {
+            (0..view.len()).collect()
+        } else {
+            pane.selected.to_vec()
+        };
+        let rows: Vec<Vec<String>> = positions
+            .into_iter()
+            .filter_map(|position| view.get(position).and_then(|real| pane.entries.get(*real)))
+            .map(|entry| {
+                let mut row: Vec<String> = columns
+                    .iter()
+                    .map(|kind| {
+                        crate::bridge::cell_value(
+                            entry,
+                            *kind,
+                            self.config.settings.size_format,
+                            self.config.settings.date_format,
+                            crate::logging::tz_offset_secs(),
+                        )
+                    })
+                    .collect();
+                row.push(entry.path.display().to_string());
+                row
+            })
+            .collect();
+        Some(naygo_core::listing_export::to_csv(
+            &headers, &rows, separator,
+        ))
+    }
+
+    pub fn ctx_export_listing_clipboard(&mut self) {
+        if let Some(csv) = self.export_listing_csv(';') {
+            let _ = naygo_platform::clipboard::write_text(&csv);
+        }
+        self.close_context_menu();
+    }
+
+    pub fn ctx_export_listing_clipboard_comma(&mut self) {
+        if let Some(csv) = self.export_listing_csv(',') {
+            let _ = naygo_platform::clipboard::write_text(&csv);
+        }
+        self.close_context_menu();
+    }
+
+    pub fn export_listing_file_bytes(&self, separator: char) -> Option<Vec<u8>> {
+        let csv = self.export_listing_csv(separator)?;
+        let mut bytes = Vec::with_capacity(csv.len() + 3);
+        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        bytes.extend_from_slice(csv.as_bytes());
+        Some(bytes)
+    }
+
     /// Abre la carpeta objetivo del menú contextual en OTRO panel. Reusa `request_action`:
     /// 1 otro panel → directo; 2+ → selector 1..9; 0 → crea panel nuevo (split por lado largo).
     /// `area` es el área de contenido (la UI la pasa).

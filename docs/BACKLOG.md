@@ -2,7 +2,7 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
-> Última actualización: 2026-08-29.
+> Última actualización: 2026-09-01.
 
 ## Estado de partida
 
@@ -41,6 +41,33 @@
   exactamente ese valor histórico; los atajos personalizados distintos se respetan.
 - **Cierre funcional 2026-08-29 (C-1):** `Ctrl+N` crea carpeta y `Ctrl+Shift+N` crea archivo.
   La carga del keymap migra únicamente el par de defaults anterior, sin alterar reasignaciones.
+- **Corrección 2026-09-01 (C-1):** `Ctrl+N` vuelve a abrir el editor multilínea de
+  «Nueva(s) carpeta(s)», idéntico al botón y al menú contextual. Así el estado vacío explica que
+  falta una carpeta en vez de marcar un nombre inexistente como inválido, y se recupera la
+  creación simultánea (incluidas rutas anidadas con `\\`).
+- **Corrección 2026-09-01 (Papelera + preview):** la capa Shell de Papelera ahora valida el
+  resultado de cada `DeleteItem` y que las rutas hayan desaparecido; si `IFileOperation` informa
+  éxito sin retirar el archivo, reintenta mediante `SHFileOperationW` y nunca muestra una
+  operación falsa como completada. El preview de texto reinicia viewport, selección y caret cada
+  vez que llega contenido nuevo, por lo que abre desde el inicio y no mantiene una selección
+  invisible del archivo anterior.
+- **Ajuste 2026-09-01 (Papelera + preview):** el callback de resultado se corrigió a
+  `PostDeleteItem` (no `PostMoveItem`) y un rechazo ahora queda registrado por archivo como
+  fallido, en vez de aparecer engañosamente como «hecho: 0». Para lectura, la vista previa pasa
+  de 100 a 250 líneas dentro del mismo máximo de 64 KiB y remata el contenido recortado con un
+  borde vectorial de papel rasgado; ambos cambios mantienen el costo de memoria acotado.
+- **Ajuste 2026-09-01 (Papelera + preview, segunda validación):** las rutas internas de Naygo
+  del tipo `D:carpeta\\archivo` son válidas para `std::fs`, pero Shell las rechaza como
+  `E_INVALIDARG`; antes de invocar la Papelera se resuelven ahora a rutas físicas con formato
+  Shell (sin el prefijo extendido `\\?\\`). El preview usa un único editor multilínea de sólo
+  lectura también para XML/código, con viewport explícito: permite rueda, barra de scroll,
+  selección parcial y `Ctrl+C` en cualquier texto que se despliegue.
+- **Cierre funcional 2026-08-31 (F-4):** `Ctrl+Shift+V` abre el historial interno de los últimos
+  10 conjuntos copiados/cortados dentro de Naygo. Es efímero, deduplica entradas, no guarda rutas
+  privadas en disco y pega mediante el mismo motor cancelable de operaciones.
+- **Cierre funcional 2026-08-31 (F-1):** el menú contextual exporta la selección —o toda la vista
+  filtrada si no hay selección— al portapapeles o a CSV. Respeta columnas visibles y su orden,
+  agrega ruta completa, permite separador `;` o `,` y escribe BOM UTF-8 en archivos para Excel.
 
 ---
 
@@ -58,26 +85,17 @@ usar una sin esa autorización. Mientras tanto, el bypass de SmartScreen está d
 
 ## B. Funcionalidades aprobadas para implementar
 
-### F-1. Exportar listado a CSV/texto
-De la selección (o la vista completa) al portapapeles o a un archivo, con columnas
-configurables (nombre, extensión, tamaño, fechas, ruta). Punteros: la construcción de celdas
-ya existe en `crates/ui-slint/src/bridge.rs` (`cell_value`); añadir acción en menú contextual
-(`crates/ui-slint/src/workspace_ctrl/context.rs`) + `Action` de keymap si se quiere atajo.
-Pensado para flujo Excel/CSV del usuario. Formato CSV con `;` o `,` configurable, BOM UTF-8
-para que Excel lo abra bien.
-
-### F-4. Historial de portapapeles interno (Ctrl+Shift+V)
-Los últimos N (p. ej. 10) conjuntos de rutas copiados/cortados **dentro de Naygo**, con
-popup para elegir y pegar. Solo rutas de archivos (no texto/imágenes del portapapeles de
-Windows). Punteros: el pipeline de copiar/cortar/pegar vive en `workspace_ctrl/ops.rs` y
-`ops_ctrl.rs`; guardar el historial en memoria (o en `workspace.json` si se quiere persistente).
-
 ### F-5. Historial de navegación con memoria de contexto («Atrás de verdad»)
 Al volver Atrás/Adelante, restaurar no solo la ruta sino también el archivo enfocado, selección,
 posición de scroll y filtros activos de esa visita. El objetivo es retomar exactamente donde se
 estaba sin reconstruir visualmente el contexto. Extender `core::workspace::NavHistory` con una
 entrada de navegación compacta; no debe persistir listados ni provocar I/O adicional. Definir qué
 parte del contexto sobrevive al reinicio y cómo degradar si los archivos ya no existen.
+
+- **Cierre funcional 2026-08-31:** cada entrada conserva durante la sesión foco, selección,
+  primera fila visible, filtros de columna y filtro visual. Se referencia por ruta (no por índice):
+  al volver se reubica tras ordenar y se omiten archivos ausentes. Tras reiniciar solo sobrevive
+  el estado de tabla/ruta ya persistido; no se guardan listados ni contexto efímero adicional.
 
 ### F-6. Radar de destinos para copiar/mover
 Overlay navegable íntegramente por teclado que reúna paneles abiertos numerados, favoritos,
@@ -86,12 +104,23 @@ y ejecutar copiar/mover sin navegar primero hasta él. Reutilizar el selector nu
 `RecentDirs`, Favoritos y el historial de operaciones; el ranking debe ser local, determinista y
 sin escaneo ni servicio residente.
 
+- **Cierre funcional 2026-08-31:** F5/F6 (o las acciones configuradas de copiar/mover al otro
+  panel) muestran un radar con hasta nueve destinos. Prioriza paneles abiertos, últimos destinos
+  de operación, favoritos, frecuentes y recientes; deduplica rutas sin consultar disco. Se elige
+  con 1–9, clic o Escape y reutiliza el motor cancelable de operaciones.
+
 ### F-7. Vista «qué cambió desde mi última visita»
 Comparar el último listado completo conservado en memoria con el listado actual al volver a una
 carpeta y marcar elementos nuevos, modificados y desaparecidos. Primera versión solo durante la
 sesión, usando metadatos ya listados (nombre, tamaño y fecha), sin indexador ni vigilancia global.
 Los desaparecidos se presentan como información, no como filas operables. Evaluar persistencia
 opt-in únicamente después de medir memoria y utilidad real.
+
+- **Cierre funcional 2026-08-31:** Naygo conserva el último snapshot completo de cada carpeta
+  solo en memoria y compara nombre, tamaño, fecha y tipo al volver/listar otra vez. Las filas
+  nuevas o modificadas se resaltan; el footer indica `+n ~m -d`, donde los ausentes (`-d`) son
+  únicamente información y nunca se convierten en filas operables. No hay indexador, watcher
+  global ni persistencia entre reinicios.
 
 ### F-8. Comparación entre paneles accionable
 Extender la comparación rápida actual con acciones para ocultar iguales, seleccionar «solo aquí»
@@ -100,6 +129,10 @@ opcional entre dos raíces: entrar a `sub/a` en un lado intenta abrir `sub/a` en
 discretamente si no existe. La comparación superficial debe seguir usando solo las entradas ya
 cargadas; cualquier comparación recursiva pertenece al asistente cancelable de sincronización.
 
+**Cierre funcional 2026-09-01:** permite seleccionar distintos/exclusivos, ocultar iguales de
+la vista real y copiar/mover la selección desde el panel que originó la acción. El botón ↔ activa
+opcionalmente el enlace relativo; sus marcas se invalidan al recargar, pero la relación persiste.
+
 ### F-9. Lente de procedencia de archivos de Windows
 Mostrar bajo demanda los datos de `Zone.Identifier` (zona, URL de origen y referente cuando
 existan) en Propiedades/Inspector, con acciones explícitas para copiar la información y desbloquear
@@ -107,12 +140,31 @@ el archivo. Implementar la lectura/escritura de ADS exclusivamente en `naygo-pla
 listar carpetas: solo para la selección activa y en worker. Informar las limitaciones en volúmenes
 sin ADS y exigir confirmación antes de quitar la marca de procedencia.
 
+**Cierre funcional 2026-08-31 (F-9):** Inspector carga Zone.Identifier solo para el archivo
+enfocado y desde worker. Permite copiar los datos resueltos y quitar explícitamente la marca tras
+confirmación; la escritura ADS también ocurre en worker y luego refresca la metadata.
+
+**Ajuste 2026-09-01:** un ADS presente sin ZoneId/URLs legibles igual mantiene habilitado el
+desbloqueo; la confirmación nativa quedó localizada.
+
 ### F-10. Bandejas guardables como conjuntos de trabajo (`.naygolist`)
 Guardar y abrir una bandeja como lista portable de referencias a archivos dispersos, sin copiar
 los datos. Debe admitir rutas absolutas y, cuando haya una raíz común declarada, rutas relativas;
 al cargar, conservar entradas ausentes marcadas como tales en vez de descartarlas silenciosamente.
 Integrar con búsqueda, filtros, exportación y operaciones por lote. Definir primero un formato
 JSON versionado, pequeño, inspeccionable y sin metadatos privados innecesarios.
+
+**Cierre funcional 2026-08-31 (F-10):** `.naygolist` usa JSON versionado, admite raíz con rutas
+relativas y conserva referencias ausentes. Al importar, un worker verifica disponibilidad y la
+bandeja marca visualmente las rutas faltantes sin eliminarlas ni bloquear la UI.
+
+**Ajuste 2026-09-01:** al guardar, la raíz se selecciona explícitamente y ya no se infiere del
+panel activo.
+
+### Preview de texto seleccionable
+
+**Cierre funcional 2026-09-01:** el texto plano de Vista previa es solo lectura, pero permite
+seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conserva copiar todo.
 
 ---
 
@@ -127,6 +179,12 @@ derecho si aplica). Punteros: el drop entre paneles está resuelto en
 `crates/ui-slint/src/workspace_ctrl/ops.rs` (`drop_at` y siguientes); extender el hit-test de
 `body-touch` en `file-panel.slint` para detectar «fila carpeta destino» dentro del mismo panel.
 
+**Cierre funcional 2026-08-31 (D-1):** el hover OLE ahora cruza su coordenada real con el
+`ListView` del `FilePanel`, incluyendo scroll, y reporta la fila de vista bajo el cursor. Si es
+una carpeta, `drop_at` la resuelve como destino antes de evaluar las reglas existentes; por tanto
+Ctrl/Shift, mover por mismo volumen, confirmación y conflictos se comportan igual que entre
+paneles. Se rechaza una carpeta sobre sí misma o dentro de su propio árbol.
+
 ---
 
 ## Notas de operación para la próxima sesión
@@ -136,8 +194,14 @@ derecho si aplica). Punteros: el drop entre paneles está resuelto en
   `scripts/check_i18n_lang.py` para los 10 idiomas al tocar claves.
 - Tras cada fix que afecte la app: rebuild de `dist` con `scripts/build-release.ps1` (el
   usuario prueba instalando desde `dist/`; ver el punto «Cómo trabajar» en AGENTS.md).
-- Validación manual del D-2 cerrado en código: arrastrar archivo + carpeta desde 7-Zip y WinRAR,
-  probar conflicto/cancelación y repetir desde Explorer para confirmar que `CF_HDROP` no regresó.
+- **Corrección 2026-09-01 (D-2):** 7-Zip en esta máquina entrega `CF_HDROP` con archivos
+  temporales `Temp\\7zE…`, no contenido virtual; borra esa ruta al salir de `Drop`. Naygo ahora
+  abre esos handles antes de retornar al archivador y un worker los copia a staging propio, por
+  lo que la planificación asíncrona no depende de una ruta efímera. Si una fuente ofrece contenido
+  virtual también se prioriza y materializa. Se corrigió además un préstamo `RefCell` en el toast
+  de error que podía cerrar Naygo al informar `SourceUnreadable`. Revalidar manualmente archivo +
+  carpeta desde 7-Zip y WinRAR, conflicto/cancelación y Explorer (`CF_HDROP`) con el build de
+  distribución resultante.
 - La máquina del usuario estuvo bajo presión de RAM (~700 MB libres): correr builds pesados
   (release con LTO) SOLOS, sin otros trabajos en paralelo.
 - `scripts/run-logged.sh` envuelve comandos pesados (deja salida + curva de RAM en

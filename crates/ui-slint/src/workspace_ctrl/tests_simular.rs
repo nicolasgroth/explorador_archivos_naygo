@@ -342,36 +342,34 @@ fn split_a(c: &mut WorkspaceCtrl, dir: &std::path::Path) -> (PaneId, PaneId) {
 
 // ================================ 1. Crear carpeta con Ctrl+N ================================
 
-/// GESTO: el usuario pulsa Ctrl+N (atajo de "nueva carpeta"), escribe el nombre y
-/// confirma. RESULTADO: la carpeta existe en disco. Cubre on_key(chord NewDir) → modal
-/// NameInput(NewDir) → name_changed → name_confirm → motor → refresh.
+/// GESTO: el usuario pulsa Ctrl+N (atajo de "nueva carpeta"), escribe varias líneas y
+/// confirma. RESULTADO: las carpetas existen en disco. Debe abrir el MISMO modal multilínea
+/// del botón y menú contextual, no el diálogo histórico de nombre único.
 #[test]
 fn crear_carpeta_con_ctrl_n() {
     let work = tempfile::tempdir().unwrap();
     let (mut c, _cfg) = ctrl_en(work.path());
 
-    // Atajo Ctrl+N: abre el modal de nombre para NUEVA CARPETA.
+    // Atajo Ctrl+N: abre el editor de nuevas carpetas multilínea.
     c.on_key("n", true, false, false);
     assert!(
-        matches!(
-            c.ops.pending_dialog,
-            Some(crate::ops_ctrl::OpDialog::NameInput {
-                purpose: crate::ops_ctrl::NamePurpose::NewDir { .. },
-                ..
-            })
-        ),
-        "Ctrl+N debe abrir el modal de NUEVA CARPETA"
+        c.new_folder_open(),
+        "Ctrl+N debe abrir el modal multilínea de NUEVAS CARPETAS"
     );
 
-    // El usuario escribe el nombre y confirma (Aceptar / Enter del modal).
-    c.ops.name_changed("Documentos".into());
-    c.ops.name_confirm("Comprimir");
-    assert!(drain_ops(&mut c), "la creación de la carpeta debe terminar");
+    // Dos carpetas simples y una anidada, como se escribe en el editor real.
+    c.new_folder_set_text("Documentos\nProyectos\\Naygo");
+    c.new_folder_apply();
+    assert!(drain_ops(&mut c), "la creación de carpetas debe terminar");
     c.refresh_active();
     assert!(drain(&mut c));
 
     let creada = work.path().join("Documentos");
     assert!(creada.is_dir(), "la carpeta nueva debe existir en disco");
+    assert!(
+        work.path().join("Proyectos").join("Naygo").is_dir(),
+        "Ctrl+N conserva la creación anidada del editor multilínea"
+    );
     assert!(
         active_pos_of(&c, "Documentos").is_some(),
         "la carpeta nueva aparece en la vista tras refrescar"
@@ -516,6 +514,7 @@ fn copiar_al_otro_panel_y_refrescar_destino_no_duplica() {
     // Copiar al otro panel.
     c.ws.active_files_mut().unwrap().select_all();
     c.op_to_other(false);
+    c.destination_radar_resolve(0);
     assert!(drain_ops(&mut c));
 
     // Refrescar el destino dos veces: la fila copiada aparece UNA sola vez.
@@ -677,6 +676,7 @@ fn mover_archivo_al_otro_panel_con_f6() {
 
     // F6 = MoveToOther. Con dos paneles, el destino se resuelve directo y la op arranca.
     c.on_key(&key_char(slint::platform::Key::F6), false, false, false);
+    c.destination_radar_resolve(0);
     assert!(drain_ops(&mut c), "el movimiento debe terminar");
 
     assert!(
@@ -710,6 +710,7 @@ fn copiar_archivo_al_otro_panel() {
     // igual que el botón/menú lo cablea en main.rs). `op_to_other` devuelve false para Transfer
     // por diseño (no arranca un LISTADO), así que la op se verifica por el resultado en disco.
     c.op_to_other(false);
+    c.destination_radar_resolve(0);
     assert!(drain_ops(&mut c), "la copia debe terminar");
 
     assert!(
@@ -956,6 +957,7 @@ fn conflicto_al_mover_sobrescribir() {
     // Mover al otro panel (F6 / op_to_other(true)): arranca la op, que chocará en el destino.
     // (op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.)
     c.op_to_other(true);
+    c.destination_radar_resolve(0);
 
     // Bucle de drenado que resuelve el conflicto por ítem con Sobrescribir en cuanto aparece.
     let mut resuelto = false;
@@ -1011,6 +1013,7 @@ fn conflicto_al_mover_renombrar_con_nombre_nuevo() {
     c.on_row_clicked(origin, pos, false, false, std::time::Instant::now());
     // op_to_other devuelve false para Transfer por diseño; el efecto se ve en el conflicto/disco.
     c.op_to_other(true);
+    c.destination_radar_resolve(0);
 
     let mut resuelto = false;
     let mut termino = false;

@@ -9,6 +9,17 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Contexto efímero de una visita. Usa rutas estables en vez de posiciones: al volver tras un
+/// cambio del directorio, los elementos ausentes se omiten y los restantes se reubican.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NavContext {
+    pub focused_path: Option<PathBuf>,
+    pub selected_paths: Vec<PathBuf>,
+    pub scroll_anchor_path: Option<PathBuf>,
+    pub table: Option<crate::columns::TableState>,
+    pub visual_filter: Option<String>,
+}
+
 /// Tope de profundidad: más allá, se descartan las entradas más viejas.
 const MAX_DEPTH: usize = 256;
 
@@ -17,6 +28,8 @@ const MAX_DEPTH: usize = 256;
 pub struct NavHistory {
     /// Rutas visitadas, de la más vieja a la más nueva.
     stack: Vec<PathBuf>,
+    #[serde(skip)]
+    contexts: Vec<NavContext>,
     /// Índice de la ruta "actual" dentro de `stack`. `None` si está vacío.
     cursor: Option<usize>,
 }
@@ -42,14 +55,29 @@ impl NavHistory {
             self.stack.clear();
         }
         self.stack.push(path);
+        self.contexts.truncate(self.stack.len().saturating_sub(1));
+        self.contexts.push(NavContext::default());
         self.cursor = Some(self.stack.len() - 1);
 
         // Respetar el tope de profundidad descartando las más viejas.
         if self.stack.len() > MAX_DEPTH {
             let overflow = self.stack.len() - MAX_DEPTH;
             self.stack.drain(0..overflow);
+            self.contexts.drain(0..overflow);
             self.cursor = Some(self.stack.len() - 1);
         }
+    }
+
+    pub fn set_current_context(&mut self, context: NavContext) {
+        if let Some(index) = self.cursor {
+            if let Some(slot) = self.contexts.get_mut(index) {
+                *slot = context;
+            }
+        }
+    }
+
+    pub fn current_context(&self) -> Option<&NavContext> {
+        self.cursor.and_then(|index| self.contexts.get(index))
     }
 
     /// `true` si hay a dónde ir atrás.
@@ -188,6 +216,27 @@ mod tests {
         h.push(p("C:/a/b/x")); // navegar a algo nuevo trunca "c"
         assert_eq!(h.current(), Some(p("C:/a/b/x").as_path()));
         assert!(!h.can_forward(), "la rama de adelante (c) se truncó");
+    }
+
+    #[test]
+    fn contexto_pertenece_a_cada_visita_y_se_trunca_con_su_rama() {
+        let mut h = NavHistory::new();
+        h.push(p("A"));
+        h.set_current_context(NavContext {
+            focused_path: Some(p("A/uno")),
+            ..NavContext::default()
+        });
+        h.push(p("B"));
+        h.set_current_context(NavContext {
+            focused_path: Some(p("B/dos")),
+            ..NavContext::default()
+        });
+
+        h.back();
+        assert_eq!(h.current_context().unwrap().focused_path, Some(p("A/uno")));
+        h.push(p("C"));
+        assert!(!h.can_forward());
+        assert_eq!(h.current_context(), Some(&NavContext::default()));
     }
 
     #[test]

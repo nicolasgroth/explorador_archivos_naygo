@@ -62,9 +62,6 @@ pub enum PaneAction {
     Clone,
     /// Apilar el origen como pestaña sobre el destino (agruparlos).
     Stack,
-    /// Copiar (`move_files=false`) o mover (`true`) la selección del origen a la carpeta del
-    /// destino (F5/F6 estilo Commander). La selección se lee al resolver el destino.
-    Transfer { move_files: bool },
 }
 
 /// Estado del selector numérico de panel destino (overlay 1..9).
@@ -74,6 +71,12 @@ pub struct PanePick {
     pub origin: PaneId,
     /// Candidatos en orden visual; la posición 0 es el número "1".
     pub candidates: Vec<PaneId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DestinationRadar {
+    pub move_files: bool,
+    pub candidates: Vec<naygo_core::destination_radar::DestinationCandidate>,
 }
 
 /// Estado estable de una sesión de renombrado inline.
@@ -131,6 +134,11 @@ pub struct WorkspaceCtrl {
     /// Stagings virtuales referenciados por ítems de la bandeja. Se conservan mientras haya
     /// elementos en ella y se transfieren al motor al copiar/mover/borrar desde la bandeja.
     pub basket_staging: Vec<naygo_platform::drop_target::StagedDrop>,
+    /// Lectura async de una bandeja .naygolist elegida por el usuario.
+    pub basket_import_rx: Option<std::sync::mpsc::Receiver<Result<basket::BasketImport, String>>>,
+    /// Referencias importadas que ya no existen. Se calcula en el worker de importación y se
+    /// conserva para que la bandeja las muestre, en vez de descartarlas silenciosamente.
+    pub basket_missing: std::collections::HashSet<PathBuf>,
     /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
     /// su worker y se cancela al cerrar o cambiar opciones.
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
@@ -138,6 +146,8 @@ pub struct WorkspaceCtrl {
     pub text_transform: Option<text_transform::TextTransformState>,
     /// Selector de panel destino en curso (overlay 1..9), si lo hay.
     pub pending_pick: Option<PanePick>,
+    /// Radar F-6 de destinos no limitado a paneles abiertos.
+    pub destination_radar: Option<DestinationRadar>,
     /// Última área de contenido conocida (la setea la UI en cada layout) para resolver
     /// destinos por orden visual desde gestos que no traen el área (p. ej. teclado).
     pub last_area: Rect,
@@ -147,6 +157,14 @@ pub struct WorkspaceCtrl {
     /// sobre ningún panel Files. Estado de UI transitorio: no se persiste. La UI lo refleja en
     /// `PaneVm.drag-over` (true solo para el panel cuyo id coincide).
     pub drag_over_pane: Option<PaneId>,
+    /// Posición Y lógica de cliente del cursor durante el último `DragOver`. Se entrega a Slint
+    /// para que `FilePanel` determine la fila que está bajo el cursor sin hacer I/O ni aproximar
+    /// la geometría interna de la tabla. Estado efímero, solo de la interacción actual.
+    pub drag_over_client_y: Option<f32>,
+    /// Fila de vista bajo el cursor durante el arrastre OLE. La reporta `FilePanel` mediante su
+    /// hit-test de `body-touch`; `drop_at` la transforma a una carpeta destino si corresponde.
+    /// `None` representa encabezado, zona vacía o un panel que no es Files.
+    pub drag_over_row: Option<(PaneId, usize)>,
     /// Drop intra-app (entre paneles) en ESPERA de confirmación del usuario (decisión de Nicolás:
     /// "confirmar al soltar"). `drop_at` ya validó (destino Files, no es la propia carpeta) y guardó
     /// aquí la operación; la UI muestra un modal "¿Copiar/Mover N a «destino»?" y, al confirmar,
@@ -199,6 +217,9 @@ pub struct WorkspaceCtrl {
     /// en un hilo worker. Un solo job a la vez: enfocar otro archivo cancela y reemplaza. `None`
     /// = sin metadata (carpeta o nada enfocado). Ver `MetaJob` y `meta.rs`.
     pub meta_job: Option<meta::MetaJob>,
+    /// Resultado de quitar Zone.Identifier. La escritura ADS ocurre exclusivamente en un worker;
+    /// el tick vuelve a pedir metadata al terminar para refrescar el Inspector.
+    pub zone_unblock_rx: Option<std::sync::mpsc::Receiver<(PathBuf, Result<bool, String>)>>,
     /// Búsqueda recursiva en curso/terminada (F3 / Ctrl+F / lupa), si la hay. Mientras esté presente
     /// la UI muestra el panel de resultados; `None` = sin búsqueda. Ver `SearchJob`.
     pub search_job: Option<SearchJob>,
@@ -249,8 +270,18 @@ pub struct WorkspaceCtrl {
     /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
     /// metadatos diferentes (1) de un nombre presente solo en ese lado (2).
     pub comparison: HashMap<PaneId, HashMap<PathBuf, u8>>,
+    /// Paneles comparados por última vez. Esta relación sobrevive a invalidar las marcas: el
+    /// enlace relativo no debe reutilizar un snapshot viejo, pero sí puede seguir activo.
+    pub comparison_pair: Option<(PaneId, PaneId)>,
+    /// Enlace relativo opcional de `comparison_pair` (F-8).
+    pub comparison_link_enabled: bool,
     /// Revisión O(1) que invalida el modelo de filas al comparar o limpiar la comparación.
     pub comparison_revision: u64,
+    /// Snapshots completos ya listados, solo durante esta sesión (F-7).
+    pub listing_snapshots: HashMap<PathBuf, Vec<naygo_core::fs_model::Entry>>,
+    /// Cambios de la última visita por panel; los ausentes son solo informativos.
+    pub visit_changes: HashMap<PaneId, Vec<naygo_core::listing_changes::ListingChange>>,
+    pub visit_changes_revision: u64,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
     /// configuración (Apariencia → Set de íconos). Ver `crate::icons::IconCache`.
@@ -591,9 +622,12 @@ impl WorkspaceCtrl {
             preview: crate::preview::PreviewState::new(),
             basket: naygo_core::basket::SelectionBasket::new(),
             basket_staging: Vec::new(),
+            basket_import_rx: None,
+            basket_missing: std::collections::HashSet::new(),
             sync_assistant: None,
             text_transform: None,
             pending_pick: None,
+            destination_radar: None,
             last_area: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -601,6 +635,8 @@ impl WorkspaceCtrl {
                 h: 0.0,
             },
             drag_over_pane: None,
+            drag_over_client_y: None,
+            drag_over_row: None,
             pending_drop: None,
             last_click: None,
             last_open: None,
@@ -619,6 +655,7 @@ impl WorkspaceCtrl {
             help_open: false,
             size_job: None,
             meta_job: None,
+            zone_unblock_rx: None,
             search_job: None,
             deep_job: None,
             last_saved_fingerprint: None,
@@ -634,7 +671,12 @@ impl WorkspaceCtrl {
             toolbar_menu_requested: None,
             pending_shell_error: None,
             comparison: HashMap::new(),
+            comparison_pair: None,
+            comparison_link_enabled: false,
             comparison_revision: 0,
+            listing_snapshots: HashMap::new(),
+            visit_changes: HashMap::new(),
+            visit_changes_revision: 0,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
             footer_disk_pending: std::collections::HashSet::new(),

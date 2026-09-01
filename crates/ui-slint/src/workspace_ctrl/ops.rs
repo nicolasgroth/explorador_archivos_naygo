@@ -157,6 +157,34 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Abre el selector del historial interno; sus entradas ya están en memoria.
+    pub fn op_paste_history(&mut self) -> bool {
+        self.ops.open_clipboard_history()
+    }
+
+    /// Pega una entrada del historial mediante el mismo motor cancelable usado por Ctrl+V.
+    pub fn paste_history_entry(&mut self, index: usize) -> bool {
+        let Some(dir) = self.active_dir() else {
+            self.ops.pending_dialog = None;
+            return false;
+        };
+        let Some(entry) = self.ops.take_clipboard_history_entry(index) else {
+            return false;
+        };
+        let label = if entry.cut {
+            self.config.t("ops.file_kind_move")
+        } else {
+            self.config.t("ops.file_kind_copy")
+        };
+        let req = naygo_core::ops::transfer(entry.cut, entry.paths, dir);
+        self.ensure_ops_pane();
+        self.ops.start_op(req, label, true);
+        if entry.cut {
+            self.ops.clear_cut();
+        }
+        true
+    }
+
     /// Escribe el archivo pegado en `path` (en un hilo worker: el `fs::write` no bloquea la UI
     /// y un fallo se reporta con toast), o —si `Settings.paste_confirm` está activo— abre el
     /// modal de confirmación de nombre (NameInput con purpose Paste) con el nombre propuesto
@@ -337,16 +365,47 @@ impl WorkspaceCtrl {
             return true;
         }
 
-        // El resto de destinos debe ser un panel Files con carpeta resoluble.
-        let Some(dest_dir) = self
-            .ws
-            .pane(target)
-            .and_then(|p| p.files.as_ref())
-            .map(|f| f.current_dir.clone())
+        // El resto de destinos debe ser un panel Files con carpeta resoluble. D-1: si el
+        // `body-touch` de Slint detectó que el cursor cayó SOBRE una fila-carpeta de ESTE panel,
+        // esa carpeta pasa a ser el destino. Así el arrastre dentro del mismo panel conserva todo
+        // el flujo habitual (decisión copiar/mover, confirmación y conflictos) y deja de ser un
+        // no-op por comparar contra la carpeta actualmente abierta.
+        let Some((panel_dir, row_dest)) =
+            self.ws
+                .pane(target)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| {
+                    let row_dest = self
+                        .drag_over_row
+                        .filter(|(pane, _)| *pane == target)
+                        .and_then(|(_, row)| f.view_indices().get(row).copied())
+                        .and_then(|entry_idx| f.entries.get(entry_idx))
+                        .filter(|entry| entry.is_dir())
+                        .map(|entry| entry.path.clone());
+                    (f.current_dir.clone(), row_dest)
+                })
         else {
             crate::logging::breadcrumb("drop_at: el panel destino no es Files, no-op");
             return false;
         };
+        let dropped_on_folder = row_dest.is_some();
+        let dest_dir = row_dest.unwrap_or(panel_dir);
+        if dropped_on_folder {
+            crate::logging::breadcrumb(&format!(
+                "drop_at: fila-carpeta destino detectada → {}",
+                dest_dir.display()
+            ));
+        }
+        // No permitir soltar una carpeta sobre sí misma ni dentro de uno de sus descendientes.
+        // `Path::starts_with` compara componentes, no prefijos de texto, y también cubre el caso
+        // de la carpeta exacta. Esta defensa es previa al motor: evita requests imposibles y
+        // conserva los archivos de origen intactos.
+        if paths.iter().any(|source| dest_dir.starts_with(source)) {
+            crate::logging::breadcrumb(
+                "drop_at: destino dentro del origen (carpeta sobre sí misma), no-op",
+            );
+            return false;
+        }
         // Soltar sobre la propia carpeta de origen es no-op: si todas las rutas ya viven en
         // `dest_dir`, no hay nada que copiar/mover. (Comparar el padre de cada ruta con el
         // destino; basta con que alguna venga de otra carpeta para proceder.)

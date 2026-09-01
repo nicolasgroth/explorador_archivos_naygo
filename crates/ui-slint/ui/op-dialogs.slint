@@ -6,7 +6,7 @@
 // (0=ninguno). Overlay con velo (clic fuera cancela). Las decisiones salen por callbacks
 // al controlador. Sin glifos Unicode raros (el render por software no los dibuja): solo
 // texto. Los modales: confirmar borrado, conflicto por-ítem, pedir nombre, pegar preview.
-import { OpDialogVm, ResumeRowVm } from "types.slint";
+import { OpDialogVm, ResumeRowVm, ClipboardHistoryRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
@@ -137,6 +137,7 @@ component ConflictCol inherits Rectangle {
 export component OpDialogs inherits Rectangle {
     in property <OpDialogVm> vm;
     in property <[ResumeRowVm]> resume-rows;
+    in property <[ClipboardHistoryRowVm]> clipboard-history-rows;
     // Confirmar borrado:
     callback delete-confirm();
     callback delete-cancel();
@@ -160,6 +161,8 @@ export component OpDialogs inherits Rectangle {
     callback paste-cancel();
     // Retomar: decide por id; action 0=retomar 1=descartar.
     callback resume-decide(string, int);
+    callback clipboard-history-pick(int);
+    callback clipboard-history-cancel();
 
     // Índice del botón con el FOCO dentro del modal activo. TAB lo avanza, Shift+TAB
     // lo retrocede (módulo el número de botones del kind). El botón cuyo índice coincide
@@ -220,6 +223,7 @@ export component OpDialogs inherits Rectangle {
             if (root.vm.kind == 3) { root.name-cancel(); }
             if (root.vm.kind == 4) { root.paste-cancel(); }
             if (root.vm.kind == 6) { root.folder-conflict-cancel(); } // fuera = cancelar la operación
+            if (root.vm.kind == 7) { root.clipboard-history-cancel(); }
         }
     }
 
@@ -638,6 +642,31 @@ export component OpDialogs inherits Rectangle {
                     DlgBtn { label: Tr.dlg-discard; clicked => { root.resume-decide(r.id, 1); } }
                 }
             }
+
+            // --- 7: Historial interno de portapapeles ---
+            if root.vm.kind == 7: VerticalLayout {
+                spacing: 10px;
+                Text { text: Tr.dlg-clipboard-history; color: white; font-weight: 700; }
+                for r[i] in root.clipboard-history-rows: Rectangle {
+                    height: 44px;
+                    background: i == root.focus-idx ? Theme.selection-bg : Theme.row-bg;
+                    border-radius: 4px;
+                    HorizontalLayout {
+                        padding: 7px;
+                        spacing: 8px;
+                        Text {
+                            text: r.cut ? Tr.dlg-move : Tr.dlg-copy;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            Text { text: r.label; color: Theme.text; overflow: elide; }
+                            Text { text: r.detail; color: Theme.text-dim; font-size: 11px; overflow: elide; }
+                        }
+                    }
+                    TouchArea { clicked => { root.clipboard-history-pick(i); } }
+                }
+            }
         }
     }
 
@@ -669,6 +698,7 @@ export component OpDialogs inherits Rectangle {
             if (root.vm.kind == 2) { root.focus-idx = 1; }
             if (root.vm.kind == 4) { root.focus-idx = 1; }
             if (root.vm.kind == 6) { root.focus-idx = 1; }
+            if (root.vm.kind == 7) { root.focus-idx = 0; }
         }
     }
 
@@ -691,6 +721,7 @@ export component OpDialogs inherits Rectangle {
                 if (root.vm.kind == 3) { root.name-cancel(); }
                 if (root.vm.kind == 4) { root.paste-cancel(); }
                 if (root.vm.kind == 6) { root.folder-conflict-cancel(); }
+                if (root.vm.kind == 7) { root.clipboard-history-cancel(); }
                 return accept;
             }
             // Tab / Shift+Tab: navegar el foco entre botones (módulo la cantidad del kind).
@@ -706,7 +737,16 @@ export component OpDialogs inherits Rectangle {
             }
             // Enter activa el botón enfocado. En "pedir nombre" (3) el TextInput maneja Enter.
             if (event.text == Key.Return) {
-                if (root.vm.kind != 3) { root.activate-focused(); }
+                if (root.vm.kind == 7) { root.clipboard-history-pick(root.focus-idx); }
+                else if (root.vm.kind != 3) { root.activate-focused(); }
+                return accept;
+            }
+            if (root.vm.kind == 7 && event.text == Key.DownArrow) {
+                root.focus-idx = min(root.clipboard-history-rows.length - 1, root.focus-idx + 1);
+                return accept;
+            }
+            if (root.vm.kind == 7 && event.text == Key.UpArrow) {
+                root.focus-idx = max(0, root.focus-idx - 1);
                 return accept;
             }
             // Letras de atajo (comparación en minúscula, fija, independiente del idioma).

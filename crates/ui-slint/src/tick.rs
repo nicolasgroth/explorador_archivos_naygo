@@ -215,14 +215,19 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                         let cx = client_x as f32 / scale;
                                         let cy = client_y as f32 / scale - TOP_BAR_H;
                                         // `pane_at` es &self; el Ref temporal muere al ligar el let.
-                                        ctrl.borrow().pane_at(cx, cy)
+                                        ctrl.borrow()
+                                            .pane_at(cx, cy)
+                                            .map(|pane| (pane, client_y as f32 / scale))
                                     })
                                 })
                             }
                         };
-                        // Si cambió el panel resaltado, repintar (sync_rows lo refleja en cada
-                        // PaneVm). El borrow_mut va solo, tras soltar el borrow de arriba.
-                        let changed = ctrl.borrow_mut().set_drag_over(new_over);
+                        // Además del panel, refrescamos la Y que consume FilePanel para hit-test
+                        // de filas D-1. El borrow_mut va solo, tras soltar el borrow de arriba.
+                        let (pane, client_y) = new_over
+                            .map(|(pane, y)| (Some(pane), Some(y)))
+                            .unwrap_or((None, None));
+                        let changed = ctrl.borrow_mut().set_drag_over_at(pane, client_y);
                         if changed {
                             sync_rows();
                         }
@@ -545,11 +550,20 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 let ops_done = ctrl.borrow_mut().ops.pump_ops();
                 let sync_done = ctrl.borrow_mut().pump_sync();
                 let text_transform_done = ctrl.borrow_mut().pump_text_transform();
-                let plan_failed = ctrl.borrow_mut().ops.take_plan_error().is_some();
-                if plan_failed {
+                // Extraer el error en una sentencia separada. Un `if let` sobre `borrow_mut()`
+                // mantiene vivo el préstamo mutable durante TODO el cuerpo, por lo que leer la
+                // configuración para el toast provocaba `RefCell already mutably borrowed`.
+                let plan_error = ctrl.borrow_mut().ops.take_plan_error();
+                if let Some(error) = plan_error {
                     let message = ctrl.borrow().config.t("ops.plan_failed");
+                    // El texto genérico era insuficiente para drops de 7-Zip/WinRAR: la causa
+                    // tipada incluye si el archivo temporal materializado dejó de poder leerse,
+                    // o si el destino cae dentro del origen. Mantener ese detalle permite
+                    // diagnosticar la fuente real sin hacer I/O adicional en el hilo de UI.
+                    let detail = format!("{error:?}");
+                    crate::logging::log_line(&format!("operación no preparada: {detail}"));
                     if let Some(ui) = ui_weak.upgrade() {
-                        ui.invoke_show_toast(message.into());
+                        ui.invoke_show_toast(format!("{message}: {detail}").into());
                     }
                 }
                 // Un pegado de texto/imagen cuya escritura async falló (disco lleno,
@@ -575,6 +589,8 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // un job nuevo al enfocar otro archivo): si aquí ya está drenado pero sync_rows
                 // lanza uno, `meta_done` recalculado abajo lo detecta y mantiene el timer vivo.
                 ctrl.borrow_mut().pump_meta();
+                let zone_unblock_done = ctrl.borrow_mut().pump_zone_unblock();
+                let basket_import_done = ctrl.borrow_mut().pump_basket_import();
                 // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
                 let search_done = ctrl.borrow_mut().pump_search();
                 // Drenar el listado profundo en vuelo (vista profunda / toggle).
@@ -635,6 +651,8 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && text_transform_done
                     && size_done
                     && meta_done
+                    && zone_unblock_done
+                    && basket_import_done
                     && search_done
                     && !deep_changed
                     && !fresh_pending

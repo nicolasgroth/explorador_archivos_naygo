@@ -8,6 +8,14 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [Sin publicar]
 
 ### Añadido
+- Indicador por sesión de archivos nuevos, modificados y desaparecidos desde la visita anterior.
+- Radar de destinos para copiar/mover: permite elegir con 1–9 entre paneles, favoritos, recientes
+  y destinos de operaciones sin navegar antes a la carpeta.
+- Atrás/Adelante restaura foco, selección, scroll y filtros de cada visita durante la sesión.
+- Historial interno de portapapeles con `Ctrl+Shift+V`: conserva hasta 10 conjuntos de rutas
+  copiados/cortados durante la sesión y permite elegir cuál pegar.
+- Exportación del listado visible o seleccionado al portapapeles/CSV, con columnas actuales,
+  ruta completa, separador `;` o `,` y BOM UTF-8 para Excel.
 - **Buscador F3 ampliado**: raíz editable desde el panel activo, coincidencia opcional sensible
   a mayúsculas, comodines Windows `*`/`?`, recorrido recursivo configurable y texto dentro de
   archivos de texto. Los resultados llegan en vivo con ruta relativa y acción para abrir su

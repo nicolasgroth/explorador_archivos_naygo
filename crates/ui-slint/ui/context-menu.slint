@@ -39,6 +39,10 @@ export component ContextMenu inherits Rectangle {
     callback delete();
     callback copy-names();   // copiar nombre(s) de la selección
     callback copy-path();    // copiar ruta(s) completa(s)
+    callback export-clipboard();
+    callback export-file();
+    callback export-clipboard-comma();
+    callback export-file-comma();
     callback compress();     // comprimir la selección en un .zip (abre el modal de nombre)
     callback extract-here(); // extraer el .zip seleccionado en una subcarpeta aquí
     callback extract-to();   // extraer el .zip seleccionado en una carpeta elegida
@@ -126,6 +130,10 @@ export component ContextMenu inherits Rectangle {
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard; clicked => { root.export-clipboard(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file; clicked => { root.export-file(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard-comma; clicked => { root.export-clipboard-comma(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file-comma; clicked => { root.export-file-comma(); } }
             if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
             // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
@@ -144,6 +152,10 @@ export component ContextMenu inherits Rectangle {
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard; clicked => { root.export-clipboard(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file; clicked => { root.export-file(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard-comma; clicked => { root.export-clipboard-comma(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file-comma; clicked => { root.export-file-comma(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-add-basket; clicked => { root.add-to-basket(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-transform-text; clicked => { root.transform-text(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }

@@ -20,6 +20,53 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
     } = ctx;
     {
         let ctrl = ctrl.clone();
+        ui.on_scroll_position_changed(move |id, pos| {
+            ctrl.borrow_mut()
+                .set_scroll_top_position(PaneId(id as u64), pos.max(0) as usize);
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_comparison_select(move |id, state| {
+            ctrl.borrow_mut()
+                .comparison_select_for(PaneId(id as u64), state);
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_comparison_transfer(move |id, move_files| {
+            if ctrl
+                .borrow_mut()
+                .comparison_transfer_from(PaneId(id as u64), move_files)
+            {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_comparison_toggle_link(move |id| {
+            ctrl.borrow_mut().comparison_toggle_link(PaneId(id as u64));
+            sync_rows();
+        });
+    }
+    {
+        // D-1: `FilePanel` conoce la geometría exacta de su ListView (incluido scroll) y reporta
+        // la fila bajo el cursor OLE. Solo guardamos el dato efímero; la resolución de carpeta y
+        // todas las reglas copiar/mover/conflicto quedan centralizadas en `drop_at`.
+        let ctrl = ctrl.clone();
+        ui.on_drop_target_row(move |id, row| {
+            ctrl.borrow_mut().set_drag_over_row(PaneId(id as u64), row);
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         let sync_layout = sync_layout.clone();

@@ -50,6 +50,23 @@ impl WorkspaceCtrl {
             .unwrap_or(-1)
     }
 
+    /// Fila de vista que era la primera visible en la visita histórica restaurada.
+    pub fn restored_scroll_row_of(&self, id: PaneId) -> i32 {
+        self.ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .and_then(|f| f.restored_scroll_row)
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Conserva el ancla del scroll por ruta; no realiza I/O y se puede llamar desde Slint.
+    pub fn set_scroll_top_position(&mut self, id: PaneId, pos: usize) {
+        if let Some(files) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            files.set_scroll_top_position(pos);
+        }
+    }
+
     /// ¿La carpeta del panel `id` dejó de existir / es ilegible? Lee del CACHÉ (sin I/O), que
     /// se recalcula async en eventos reales (`refresh_missing_cache` + `pump_missing_probe`).
     /// Antes hacía un `read_dir` síncrono en el hilo de UI en cada tick, lo que congelaba la
@@ -232,6 +249,11 @@ impl WorkspaceCtrl {
             self.comparison.clear();
             self.comparison_revision = self.comparison_revision.wrapping_add(1);
         }
+        // "Ocultar iguales" pertenece al mismo snapshot: una navegación o refresh no puede
+        // seguir escondiendo rutas basadas en una comparación ya invalidada.
+        if let Some(files) = self.ws.pane_mut(id).and_then(|pane| pane.files.as_mut()) {
+            files.set_hidden_paths(std::collections::HashSet::new());
+        }
         // Navegar a OTRA carpeta limpia el filtro visual por tipeo (decisión de diseño:
         // persiste hasta Esc o navegar). Un refresh de la MISMA carpeta (F5) lo conserva.
         // La referencia es `last_listing_dirs` (lo último PEDIDO para el panel), NO
@@ -352,11 +374,25 @@ impl WorkspaceCtrl {
         // tipea): ` · filtro: "texto" · N coincidencias`. Hace el filtro visible (el buffer
         // de tipeo no se ve en ninguna otra parte) y da feedback de cuánto matchea.
         let suffix = self.filter_label_of(id);
-        if suffix.is_empty() {
-            base
-        } else {
-            format!("{base} · {suffix}")
-        }
+        let changes = self
+            .visit_changes
+            .get(&id)
+            .map(|all| {
+                use naygo_core::listing_changes::ChangeKind;
+                let n = all.iter().filter(|c| c.kind == ChangeKind::New).count();
+                let m = all
+                    .iter()
+                    .filter(|c| c.kind == ChangeKind::Modified)
+                    .count();
+                let d = all.iter().filter(|c| c.kind == ChangeKind::Missing).count();
+                format!("+{n} ~{m} -{d}")
+            })
+            .unwrap_or_default();
+        [base, suffix, changes]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ")
     }
 
     /// Texto del volumen para el extremo derecho del footer. El preset Completa/Solo disco ya
@@ -461,13 +497,15 @@ impl WorkspaceCtrl {
                     }
                     let spec = f.sort;
                     naygo_core::sort::sort_entries(&mut f.entries, &spec);
-                    if f.focused.is_none() && !f.entries.is_empty() {
+                    let restored = f.apply_pending_nav_context();
+                    if !restored && f.focused.is_none() && !f.entries.is_empty() {
                         f.focused = Some(0);
                         f.presentation_changed();
                     }
                 }
             }
             if done {
+                self.record_listing_changes(id);
                 self.listings.remove(&id);
                 // Reciente diferido (navegación sin chequeo síncrono de `dir_is_navigable`):
                 // se registra SOLO si el listado terminó con éxito, así una ruta muerta (red
@@ -482,6 +520,29 @@ impl WorkspaceCtrl {
             }
         }
         self.listings.is_empty()
+    }
+
+    fn record_listing_changes(&mut self, id: PaneId) {
+        let Some((dir, entries)) = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| (f.current_dir.clone(), f.entries.clone()))
+        else {
+            return;
+        };
+        let changes = self
+            .listing_snapshots
+            .get(&dir)
+            .map(|before| naygo_core::listing_changes::compare(before, &entries))
+            .unwrap_or_default();
+        self.listing_snapshots.insert(dir, entries);
+        if changes.is_empty() {
+            self.visit_changes.remove(&id);
+        } else {
+            self.visit_changes.insert(id, changes);
+        }
+        self.visit_changes_revision = self.visit_changes_revision.wrapping_add(1);
     }
 
     /// Segundos que dura el resaltado de archivos nuevos, según el ajuste. `FadeSeconds(n)`→n;
@@ -632,6 +693,15 @@ impl WorkspaceCtrl {
                 }
             }
         }
+        if let Some(changes) = self.visit_changes.get(&id) {
+            for row in &mut rows {
+                row.highlight |= changes.iter().any(|change| {
+                    change.kind != naygo_core::listing_changes::ChangeKind::Missing
+                        && change.path.file_name().and_then(|name| name.to_str())
+                            == Some(row.name.as_str())
+                });
+            }
+        }
         if filter_needle.is_some() {
             self.filter_match_count = rows.iter().filter(|r| r.filter_match).count();
         }
@@ -700,6 +770,7 @@ impl WorkspaceCtrl {
         // --- Íconos (set activo + tinte + overrides): cambia el ícono de cada fila ---
         self.icons.signature().hash(&mut h);
         self.comparison_revision.hash(&mut h);
+        self.visit_changes_revision.hash(&mut h);
 
         // --- Selección/foco: revisión O(1), incluso con "seleccionar todo" en 100k filas. ---
         f.presentation_revision().hash(&mut h);

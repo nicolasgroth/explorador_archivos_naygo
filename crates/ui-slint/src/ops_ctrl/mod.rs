@@ -90,6 +90,8 @@ pub enum OpDialog {
     },
     /// Retomar operaciones journaleadas tras un cierre inesperado.
     Resume { items: Vec<OpJournal> },
+    /// Elegir un conjunto copiado/cortado dentro de Naygo durante esta sesión.
+    ClipboardHistory,
 }
 
 /// Estado de una op detenida en el conflicto de CARPETA (P3): tras el escaneo se detectó que
@@ -229,6 +231,9 @@ pub struct OpsCtrl {
     pub next_undo_id: u64,
     /// Rutas marcadas como "cortadas" (se pintan atenuadas hasta pegar/cancelar).
     pub cut_set: HashSet<PathBuf>,
+    /// Conjuntos copiados/cortados dentro de Naygo, más reciente primero. Es efímero para no
+    /// persistir rutas privadas y nunca requiere consultar el portapapeles para mostrarlo.
+    clipboard_history: Vec<ClipboardHistoryEntry>,
     pub ops_mode: OpsMode,
     pub config_dir: PathBuf,
     /// Secuencia para ids de journal únicos en la sesión (`op-N`).
@@ -249,6 +254,12 @@ pub struct OpsCtrl {
     pending_paste_error: Option<(PathBuf, String)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardHistoryEntry {
+    pub paths: Vec<PathBuf>,
+    pub cut: bool,
+}
+
 impl OpsCtrl {
     pub fn new(config_dir: PathBuf) -> OpsCtrl {
         OpsCtrl {
@@ -257,6 +268,7 @@ impl OpsCtrl {
             undo_history: Vec::new(),
             next_undo_id: 1,
             cut_set: HashSet::new(),
+            clipboard_history: Vec::new(),
             ops_mode: OpsMode::Parallel,
             config_dir,
             next_journal_seq: 1,
@@ -265,6 +277,21 @@ impl OpsCtrl {
             paste_write_rx: None,
             pending_paste_error: None,
         }
+    }
+
+    pub fn last_transfer_destinations(&self, limit: usize) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for op in self.active_ops.iter().rev() {
+            if let Some(dest) = op.request.as_ref().and_then(|r| r.dest_dir.clone()) {
+                if !out.contains(&dest) {
+                    out.push(dest);
+                }
+                if out.len() == limit {
+                    break;
+                }
+            }
+        }
+        out
     }
 
     /// Escribe el archivo de un pegado de texto/imagen en un hilo worker (el `fs::write` puede
@@ -323,14 +350,52 @@ impl OpsCtrl {
 
     /// Copia `paths` al portapapeles del SO; limpia la marca de corte.
     pub fn set_copy(&mut self, paths: &[PathBuf]) {
-        let _ = naygo_platform::clipboard::write_files(paths, false);
+        if naygo_platform::clipboard::write_files(paths, false).is_ok() {
+            self.remember_clipboard(paths, false);
+        }
         self.cut_set.clear();
     }
 
     /// Corta `paths`: escribe al portapapeles con efecto MOVE y los marca como cortados.
     pub fn set_cut(&mut self, paths: &[PathBuf]) {
-        let _ = naygo_platform::clipboard::write_files(paths, true);
-        self.cut_set = paths.iter().cloned().collect();
+        if naygo_platform::clipboard::write_files(paths, true).is_ok() {
+            self.remember_clipboard(paths, true);
+            self.cut_set = paths.iter().cloned().collect();
+        }
+    }
+
+    fn remember_clipboard(&mut self, paths: &[PathBuf], cut: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        self.clipboard_history
+            .retain(|entry| entry.paths != paths || entry.cut != cut);
+        self.clipboard_history.insert(
+            0,
+            ClipboardHistoryEntry {
+                paths: paths.to_vec(),
+                cut,
+            },
+        );
+        self.clipboard_history.truncate(10);
+    }
+
+    pub fn open_clipboard_history(&mut self) -> bool {
+        if self.clipboard_history.is_empty() {
+            return false;
+        }
+        self.pending_dialog = Some(OpDialog::ClipboardHistory);
+        true
+    }
+
+    pub fn clipboard_history(&self) -> &[ClipboardHistoryEntry] {
+        &self.clipboard_history
+    }
+
+    pub fn take_clipboard_history_entry(&mut self, index: usize) -> Option<ClipboardHistoryEntry> {
+        let entry = self.clipboard_history.get(index)?.clone();
+        self.pending_dialog = None;
+        Some(entry)
     }
 
     /// Limpia la marca de corte (tras pegar, o al cancelar con Esc).
@@ -1434,6 +1499,10 @@ impl OpsCtrl {
             },
             Some(OpDialog::Resume { .. }) => OpDialogVmData {
                 kind: 5,
+                ..Default::default()
+            },
+            Some(OpDialog::ClipboardHistory) => OpDialogVmData {
+                kind: 7,
                 ..Default::default()
             },
             _ => OpDialogVmData::default(),
@@ -3759,5 +3828,31 @@ mod tests {
         let (path, err) = c.take_paste_error().expect("el fallo se reporta");
         assert_eq!(path, imposible);
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn historial_portapapeles_deduplica_limita_y_abre_selector() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+
+        for index in 0..12 {
+            c.remember_clipboard(&[PathBuf::from(format!("C:/src/{index}.txt"))], false);
+        }
+        assert_eq!(c.clipboard_history().len(), 10);
+        assert_eq!(
+            c.clipboard_history()[0].paths,
+            vec![PathBuf::from("C:/src/11.txt")]
+        );
+
+        let repeated = vec![PathBuf::from("C:/src/5.txt")];
+        c.remember_clipboard(&repeated, false);
+        assert_eq!(c.clipboard_history().len(), 10);
+        assert_eq!(c.clipboard_history()[0].paths, repeated);
+
+        assert!(c.open_clipboard_history());
+        assert_eq!(c.dialog_vm().kind, 7);
+        let chosen = c.take_clipboard_history_entry(0).expect("entrada elegida");
+        assert_eq!(chosen.paths, vec![PathBuf::from("C:/src/5.txt")]);
+        assert!(c.pending_dialog.is_none());
     }
 }

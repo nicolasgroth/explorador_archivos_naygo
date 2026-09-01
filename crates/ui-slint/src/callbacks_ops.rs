@@ -150,6 +150,38 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
             sync_rows();
         });
     }
+    {
+        let ctrl = ctrl.clone();
+        ui.on_copy_provenance(move || {
+            let _ = ctrl.borrow().copy_provenance();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let start_timer = start_timer.clone();
+        ui.on_unblock_provenance(move || {
+            // Confirmación explícita: quitar Zone.Identifier cambia la política de seguridad de
+            // Windows. El diálogo es modal, pero la eliminación real sigue en worker.
+            let (title, description) = {
+                let c = ctrl.borrow();
+                (
+                    c.config.t("provenance.unblock_title"),
+                    c.config.t("provenance.unblock_confirm"),
+                )
+            };
+            let accepted = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(&title)
+                .set_description(&description)
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show();
+            if accepted == rfd::MessageDialogResult::Yes {
+                if ctrl.borrow_mut().unblock_provenance() {
+                    start_timer();
+                }
+            }
+        });
+    }
     // --- Diálogos modales y panel de progreso de operaciones (F3) ---
     {
         let ctrl = ctrl.clone();
@@ -446,6 +478,25 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                 ui.set_op_file_context(to_op_file_context_vm(context));
                 ui.set_op_file_list_open(true);
             }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_clipboard_history_pick(move |index| {
+            if index >= 0 && ctrl.borrow_mut().paste_history_entry(index as usize) {
+                start_timer();
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_clipboard_history_cancel(move || {
+            ctrl.borrow_mut().ops.pending_dialog = None;
+            sync_rows();
         });
     }
     {

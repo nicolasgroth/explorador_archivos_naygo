@@ -30,6 +30,97 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        ui.on_ctx_export_clipboard(move || {
+            ctrl.borrow_mut().ctx_export_listing_clipboard();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_export_clipboard_comma(move || {
+            ctrl.borrow_mut().ctx_export_listing_clipboard_comma();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_export_file(move || {
+            let (bytes, default_name) = {
+                let mut c = ctrl.borrow_mut();
+                let bytes = c.export_listing_file_bytes(';');
+                let default_name = c
+                    .active_dir()
+                    .and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "naygo-listado".to_string());
+                c.close_context_menu();
+                (bytes, default_name)
+            };
+            if let Some(bytes) = bytes {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("CSV", &["csv"])
+                    .set_file_name(format!("{default_name}.csv"))
+                    .save_file()
+                {
+                    // La escritura corre fuera del hilo UI; el diálogo del sistema ya terminó.
+                    std::thread::spawn(move || {
+                        if let Err(error) = std::fs::write(&path, bytes) {
+                            crate::logging::log_line(&format!(
+                                "exportar listado: no se pudo escribir {}: {error}",
+                                path.display()
+                            ));
+                        }
+                    });
+                }
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        ui.on_ctx_export_file_comma(move || {
+            let (bytes, default_name) = {
+                let mut c = ctrl.borrow_mut();
+                let bytes = c.export_listing_file_bytes(',');
+                let default_name = c
+                    .active_dir()
+                    .and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "naygo-listado".to_string());
+                c.close_context_menu();
+                (bytes, default_name)
+            };
+            if let Some(bytes) = bytes {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("CSV", &["csv"])
+                    .set_file_name(format!("{default_name}.csv"))
+                    .save_file()
+                {
+                    std::thread::spawn(move || {
+                        if let Err(error) = std::fs::write(&path, bytes) {
+                            crate::logging::log_line(&format!(
+                                "exportar listado: no se pudo escribir {}: {error}",
+                                path.display()
+                            ));
+                        }
+                    });
+                }
+            }
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         ui.on_row_context(move |id, _pos, x, y| {
             ctrl.borrow_mut().open_context_menu(PaneId(id as u64), x, y);

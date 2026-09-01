@@ -752,6 +752,7 @@ pub(crate) fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
         // (ahí está el ctrl con la traducción i18n); aquí van los valores por defecto.
         meta: ModelRc::default(),
         meta_loading: false,
+        has_provenance: false,
     }
 }
 

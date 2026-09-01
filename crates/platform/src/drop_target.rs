@@ -17,10 +17,12 @@
 //! El SO, durante un arrastre, busca en la ventana bajo el cursor un `IDropTarget` registrado
 //! con `RegisterDragDrop`. Llama a `DragEnter`/`DragOver` para que indiquemos el efecto
 //! (copiar/mover) y así pintar el cursor correcto, y a `Drop` cuando el usuario suelta. En
-//! `Drop` priorizamos `CF_HDROP` (rutas reales) y extraemos las rutas con el helper compartido
-//! `clipboard::extract_hdrop_paths`. Fuentes como 7-Zip/WinRAR también pueden ofrecer archivos
-//! virtuales (`CFSTR_FILEDESCRIPTORW` + `CFSTR_FILECONTENTS`): esos streams se marshalean a un
-//! worker COM, se materializan en un staging temporal y recién entonces se entregan a la UI.
+//! `Drop` priorizamos archivos virtuales (`CFSTR_FILEDESCRIPTORW` + `CFSTR_FILECONTENTS`) cuando
+//! están disponibles: 7-Zip/WinRAR pueden publicar además un `CF_HDROP` temporal y retirarlo al
+//! volver de `Drop`, antes de que nuestra planificación asíncrona alcance a leerlo. Los streams
+//! virtuales se marshalean a un worker COM, se materializan en un staging propio y recién entonces
+//! se entregan a la UI. Si la fuente solo ofrece `CF_HDROP` (Explorer/escritorio), extraemos esas
+//! rutas con el helper compartido `clipboard::extract_hdrop_paths`.
 
 use crate::dir_watch::Waker;
 use std::path::PathBuf;
@@ -173,7 +175,10 @@ mod windows_impl {
     use std::io::Write;
     use std::path::{Component, Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-    use std::sync::{mpsc::Sender, Arc};
+    use std::sync::{
+        mpsc::{sync_channel, Sender},
+        Arc,
+    };
     use windows::core::{implement, Interface, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
     use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
@@ -265,6 +270,40 @@ mod windows_impl {
             ACCEPT_VIRTUAL => DROPEFFECT_COPY,
             _ => DROPEFFECT(0),
         }
+    }
+
+    /// Elige el formato que se conserva durante el ciclo asíncrono de Naygo.
+    ///
+    /// Cuando un archivador entrega ambos, `CF_HDROP` puede ser una extracción de vida corta.
+    /// `CFSTR_FILEDESCRIPTORW` permite pedir los streams y escribir nuestro staging antes de
+    /// planificar, por lo que tiene prioridad. El helper es puro para proteger esa prioridad con
+    /// una regresión sin necesitar un IDataObject COM falso.
+    fn preferred_drop_kind(has_virtual: bool, has_hdrop: bool) -> u8 {
+        if has_virtual {
+            ACCEPT_VIRTUAL
+        } else if has_hdrop {
+            ACCEPT_HDROP
+        } else {
+            ACCEPT_NONE
+        }
+    }
+
+    /// `CF_HDROP` de 7-Zip no siempre representa una ruta estable: el archivador extrae cada
+    /// selección a `Temp\\7zE…` y puede borrar ese archivo al volver de `IDropTarget::Drop`.
+    /// El planificador de Naygo corre después, por lo que recibir esa ruta directamente equivale
+    /// a una carrera y termina como `SourceUnreadable`.
+    fn is_7zip_temporary_hdrop(path: &Path) -> bool {
+        let temp = std::env::temp_dir();
+        path.starts_with(&temp)
+            && path.parent().and_then(Path::file_name).is_some_and(|name| {
+                name.to_string_lossy()
+                    .to_ascii_lowercase()
+                    .starts_with("7ze")
+            })
+    }
+
+    fn needs_ephemeral_hdrop_staging(paths: &[PathBuf]) -> bool {
+        paths.iter().any(|path| is_7zip_temporary_hdrop(path))
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -472,6 +511,135 @@ mod windows_impl {
         Ok((paths, guard))
     }
 
+    /// Archivo de 7-Zip ya abierto mientras el `Drop` OLE todavía está activo. El handle mantiene
+    /// legible el contenido aunque 7-Zip retire su nombre temporal inmediatamente después.
+    struct OpenedHdropFile {
+        source: PathBuf,
+        file: std::fs::File,
+    }
+
+    fn open_ephemeral_hdrop_files(paths: &[PathBuf]) -> Result<Vec<OpenedHdropFile>, String> {
+        let mut opened = Vec::with_capacity(paths.len());
+        let mut names = HashSet::with_capacity(paths.len());
+        for source in paths {
+            let metadata = std::fs::metadata(source).map_err(|error| {
+                format!(
+                    "no se pudo abrir el temporal de 7-Zip {}: {error}",
+                    source.display()
+                )
+            })?;
+            if !metadata.is_file() {
+                return Err(format!(
+                    "el temporal de 7-Zip no es un archivo: {}",
+                    source.display()
+                ));
+            }
+            let name = source.file_name().ok_or_else(|| {
+                format!("el temporal de 7-Zip no tiene nombre: {}", source.display())
+            })?;
+            let identity = name.to_string_lossy().to_ascii_lowercase();
+            if !names.insert(identity) {
+                return Err(format!(
+                    "7-Zip entregó dos temporales con el mismo nombre: {}",
+                    name.to_string_lossy()
+                ));
+            }
+            let file = std::fs::File::open(source).map_err(|error| {
+                format!(
+                    "no se pudo retener el temporal de 7-Zip {}: {error}",
+                    source.display()
+                )
+            })?;
+            opened.push(OpenedHdropFile {
+                source: source.clone(),
+                file,
+            });
+        }
+        Ok(opened)
+    }
+
+    fn stage_opened_hdrop_files(
+        files: Vec<OpenedHdropFile>,
+    ) -> Result<(Vec<PathBuf>, Arc<StagedDropGuard>), String> {
+        let root = create_staging_dir()?;
+        let guard = Arc::new(StagedDropGuard::new(root.clone()));
+        let mut paths = Vec::with_capacity(files.len());
+        for mut source in files {
+            let name = source.source.file_name().ok_or_else(|| {
+                format!(
+                    "el temporal retenido de 7-Zip no tiene nombre: {}",
+                    source.source.display()
+                )
+            })?;
+            let destination = root.join(name);
+            let mut output = std::fs::File::create(&destination).map_err(|error| {
+                format!(
+                    "no se pudo crear el staging para {}: {error}",
+                    source.source.display()
+                )
+            })?;
+            std::io::copy(&mut source.file, &mut output).map_err(|error| {
+                format!(
+                    "no se pudo copiar el temporal de 7-Zip {}: {error}",
+                    source.source.display()
+                )
+            })?;
+            output.flush().map_err(|error| {
+                format!("no se pudo finalizar {}: {error}", destination.display())
+            })?;
+            paths.push(destination);
+        }
+        Ok((paths, guard))
+    }
+
+    /// Inicia el snapshot de una ruta temporal de 7-Zip en un worker. La espera de dos segundos
+    /// es SOLO hasta que el worker abrió los handles (no hasta copiar bytes); sin ese acuse, el
+    /// proveedor puede borrar el temporal antes de que el worker alcance a abrirlo. La copia de
+    /// verdad, potencialmente grande, sigue fuera del callback OLE y del hilo de UI.
+    fn spawn_ephemeral_hdrop_staging(
+        paths: Vec<PathBuf>,
+        screen_x: i32,
+        screen_y: i32,
+        tx: Sender<DropPayload>,
+        waker: Waker,
+    ) {
+        let (ready_tx, ready_rx) = sync_channel::<()>(1);
+        std::thread::spawn(move || {
+            let opened = open_ephemeral_hdrop_files(&paths);
+            // Aunque el receptor ya haya agotado el timeout, enviar no bloquea y el worker aún
+            // puede informar el error concreto a la UI.
+            let _ = ready_tx.send(());
+            let payload = match opened.and_then(stage_opened_hdrop_files) {
+                Ok((paths, staging)) => DropPayload {
+                    paths,
+                    move_: false,
+                    copy_forced: true,
+                    screen_x,
+                    screen_y,
+                    staging: Some(staging),
+                    error: None,
+                },
+                Err(error) => DropPayload {
+                    paths: Vec::new(),
+                    move_: false,
+                    copy_forced: true,
+                    screen_x,
+                    screen_y,
+                    staging: None,
+                    error: Some(error),
+                },
+            };
+            let _ = tx.send(payload);
+            (waker)();
+        });
+        if ready_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_err()
+        {
+            tracing::warn!("el worker no alcanzó a abrir el temporal de 7-Zip durante Drop");
+        }
+    }
+
     fn create_staging_dir() -> Result<PathBuf, String> {
         let base = std::env::temp_dir().join("Naygo").join("virtual-drops");
         std::fs::create_dir_all(&base)
@@ -626,15 +794,16 @@ mod windows_impl {
         ) -> windows::core::Result<()> {
             // SAFETY: el SO entrega un puntero válido a un DROPEFFECT escribible.
             let kind = pdataobj.as_ref().map_or(ACCEPT_NONE, |data| {
-                if unsafe { data.QueryGetData(&hdrop_formatetc()).is_ok() } {
-                    ACCEPT_HDROP
-                } else if descriptor_formatetc()
-                    .is_some_and(|format| unsafe { data.QueryGetData(&format).is_ok() })
-                {
-                    ACCEPT_VIRTUAL
-                } else {
-                    ACCEPT_NONE
-                }
+                // Un archivador puede ofrecer AMBOS formatos. Su CF_HDROP suele apuntar a una
+                // extracción temporal que desaparece apenas `Drop` retorna; como Naygo planifica
+                // en un worker, esa ruta llega tarde y falla con SourceUnreadable. El formato
+                // virtual entrega el contenido de forma estable y se materializa en un staging
+                // propio ANTES de iniciar la operación. Explorer normalmente solo ofrece HDROP,
+                // por lo que conserva el camino rápido de rutas reales.
+                let has_virtual = descriptor_formatetc()
+                    .is_some_and(|format| unsafe { data.QueryGetData(&format).is_ok() });
+                let has_hdrop = unsafe { data.QueryGetData(&hdrop_formatetc()).is_ok() };
+                preferred_drop_kind(has_virtual, has_hdrop)
             });
             self.accepted_kind.store(kind, Ordering::Relaxed);
             unsafe {
@@ -671,9 +840,10 @@ mod windows_impl {
             Ok(())
         }
 
-        /// El usuario suelta: priorizamos CF_HDROP; si la fuente solo ofrece archivos virtuales,
-        /// leemos sus descriptores livianos y marshaleamos el IDataObject a un worker. El método
-        /// vuelve enseguida: los streams y el disco nunca bloquean el hilo de UI.
+        /// El usuario suelta: priorizamos la variante virtual si está disponible; así evitamos
+        /// rutas temporales efímeras de archivadores. Si la fuente solo ofrece `CF_HDROP`, usamos
+        /// sus rutas reales. El método vuelve enseguida: los streams y el disco nunca bloquean el
+        /// hilo de UI.
         fn Drop(
             &self,
             pdataobj: Ref<IDataObject>,
@@ -708,8 +878,9 @@ mod windows_impl {
                 None => return Ok(()),
             };
 
-            // Camino normal: rutas reales del Explorer/escritorio y de cualquier fuente que
-            // materialice por su cuenta. Se conserva exactamente la semántica histórica.
+            // Camino de rutas reales. Explorer/escritorio entregan rutas persistentes y siguen
+            // directo al planificador. 7-Zip, en cambio, entrega un `CF_HDROP` a un archivo
+            // efímero en Temp: lo snapshotteamos antes de retornar de Drop.
             if accepted_kind == ACCEPT_HDROP {
                 let format = hdrop_formatetc();
                 // SAFETY: `format` vive durante GetData; liberamos el medio antes de retornar.
@@ -722,15 +893,25 @@ mod windows_impl {
                             crate::clipboard::windows_impl::extract_hdrop_paths(hdrop)
                         };
                         if !paths.is_empty() {
-                            self.send_payload(DropPayload {
-                                paths,
-                                move_,
-                                copy_forced,
-                                screen_x,
-                                screen_y,
-                                staging: None,
-                                error: None,
-                            });
+                            if needs_ephemeral_hdrop_staging(&paths) {
+                                spawn_ephemeral_hdrop_staging(
+                                    paths,
+                                    screen_x,
+                                    screen_y,
+                                    self.tx.clone(),
+                                    self.waker.clone(),
+                                );
+                            } else {
+                                self.send_payload(DropPayload {
+                                    paths,
+                                    move_,
+                                    copy_forced,
+                                    screen_x,
+                                    screen_y,
+                                    staging: None,
+                                    error: None,
+                                });
+                            }
                         }
                     }
                     // SAFETY: medio devuelto por GetData, aún no liberado.
@@ -914,6 +1095,33 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn archivador_con_ambos_formatos_prefiere_staging_virtual() {
+            assert_eq!(preferred_drop_kind(true, true), ACCEPT_VIRTUAL);
+            assert_eq!(preferred_drop_kind(true, false), ACCEPT_VIRTUAL);
+            assert_eq!(preferred_drop_kind(false, true), ACCEPT_HDROP);
+            assert_eq!(preferred_drop_kind(false, false), ACCEPT_NONE);
+        }
+
+        #[test]
+        fn hdrop_temporal_de_7zip_se_detecta_y_se_snapshottea() {
+            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
+            let seven_zip_dir = temp.path().join("7zE1234567");
+            std::fs::create_dir(&seven_zip_dir).unwrap();
+            let source = seven_zip_dir.join("LEEME.txt");
+            std::fs::write(&source, b"contenido de prueba").unwrap();
+
+            assert!(is_7zip_temporary_hdrop(&source));
+            assert!(needs_ephemeral_hdrop_staging(std::slice::from_ref(&source)));
+
+            let opened = open_ephemeral_hdrop_files(std::slice::from_ref(&source)).unwrap();
+            // El staging se construye desde el handle abierto, no desde la ruta de 7-Zip.
+            std::fs::remove_file(&source).unwrap();
+            let (paths, _guard) = stage_opened_hdrop_files(opened).unwrap();
+            assert_eq!(paths.len(), 1);
+            assert_eq!(std::fs::read(&paths[0]).unwrap(), b"contenido de prueba");
+        }
 
         #[test]
         fn virtual_path_rechaza_traversal_ads_y_dispositivos() {

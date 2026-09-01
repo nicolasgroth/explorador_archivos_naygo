@@ -89,16 +89,32 @@ impl OpsCtrl {
             .map(|r| r.sources.clone())
             .unwrap_or_default();
         let total_bytes = plan.total_bytes;
-        let total_items = plan.total_files;
-        let completed_items: Vec<OpItem> = plan
-            .steps
+        // IFileOperation recibe y recicla los ORÍGENES de primer nivel de manera atómica. El
+        // plan recursivo sirve para estimar bytes, pero no puede ser la fuente de verdad del
+        // resumen: si el Shell rechaza el directorio raíz, no se deben informar sus hijos como
+        // eliminados. Además, este vector conserva el diagnóstico aunque el plan sea vacío.
+        let total_items = sources.len();
+        let completed_items: Vec<OpItem> = sources
             .iter()
-            .map(|step| OpItem {
-                dest: step.to.clone(),
+            .cloned()
+            .map(|path| OpItem {
+                dest: path.clone(),
                 outcome: OpOutcome::Done,
-                src: step.from.clone(),
+                src: Some(path),
             })
             .collect();
+        let failed_sources = sources.clone();
+        let failed_items = move |error: &str| {
+            failed_sources
+                .iter()
+                .cloned()
+                .map(|path| OpItem {
+                    dest: path.clone(),
+                    outcome: OpOutcome::Failed(error.to_string()),
+                    src: Some(path),
+                })
+                .collect::<Vec<_>>()
+        };
         let current = sources.first().cloned().unwrap_or_default();
         let (tx, rx) = std::sync::mpsc::channel::<OpMsg>();
         let (receipt_tx, receipt_rx) = std::sync::mpsc::channel();
@@ -155,7 +171,20 @@ impl OpsCtrl {
                             let _ = tx.send(OpMsg::Done(summary));
                         }
                         Err(error) => {
-                            let _ = tx.send(OpMsg::Failed(format!("{error:?}")));
+                            // No enviar `OpMsg::Failed` pelado: el panel sólo recibe un resumen
+                            // por ítem y antes lo convertía en «hecho: 0» sin indicar que la
+                            // Papelera había fallado. Mantener el motivo por ruta evita una
+                            // confirmación falsa y deja el detalle disponible en el historial.
+                            let detail = format!("{error:?}");
+                            crate::logging::log_line(&format!(
+                                "Papelera no completó {} ítem(s): {detail}",
+                                sources.len()
+                            ));
+                            let _ = tx.send(OpMsg::Done(OpSummary {
+                                bytes_done: 0,
+                                elapsed_secs: 0.0,
+                                items: failed_items(&detail),
+                            }));
                         }
                     }
                 }

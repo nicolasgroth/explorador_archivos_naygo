@@ -9,22 +9,95 @@
 
 use super::*;
 
+/// Resultado del worker de metadata. La presencia del ADS se mantiene separada de sus campos:
+/// Windows puede crear un Zone.Identifier sin ZoneId/URLs legibles y aun así debe poder quitarse.
+pub(crate) struct MetaResult {
+    fields: Vec<naygo_core::metadata::MetadataField>,
+    has_zone_identifier: bool,
+}
+
 /// Lectura de metadata en curso/terminada para el archivo actualmente enfocado.
 pub struct MetaJob {
     /// Archivo cuya metadata se pidió (clave para no relanzar el mismo job en cada tick).
     pub path: std::path::PathBuf,
     /// Canal por el que el worker envía los campos leídos (una sola vez).
-    pub rx: std::sync::mpsc::Receiver<Vec<naygo_core::metadata::MetadataField>>,
+    pub rx: std::sync::mpsc::Receiver<MetaResult>,
     /// Token para descartar el resultado si se enfoca otro archivo antes de que termine.
     pub token: naygo_core::CancellationToken,
     /// Campos ya recibidos: (clave i18n de la etiqueta, valor formateado). La traducción de la
     /// etiqueta ocurre al construir el VM (main.rs, con `config.t`), no aquí.
     pub fields: Vec<(String, String)>,
+    /// El stream `Zone.Identifier` existe aunque no haya entregado valores que mostrar.
+    pub has_zone_identifier: bool,
     /// El worker ya entregó su resultado.
     pub done: bool,
 }
 
 impl WorkspaceCtrl {
+    /// Copia al portapapeles los campos de procedencia ya resueltos. No relee ADS ni toca disco:
+    /// si todavía no existe un resultado, el botón simplemente no hace nada.
+    pub fn copy_provenance(&self) -> bool {
+        let Some(job) = self.meta_job.as_ref() else {
+            return false;
+        };
+        let text = job
+            .fields
+            .iter()
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "meta.zone" | "meta.host_url" | "meta.referrer_url"
+                )
+            })
+            .map(|(key, value)| format!("{}: {value}", self.config.t(key)))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        if text.is_empty() {
+            return false;
+        }
+        naygo_platform::clipboard::write_text(&text).is_ok()
+    }
+
+    /// Inicia la eliminación explícita de la marca de procedencia. El caller ya mostró la
+    /// confirmación; esta función solo encola la escritura ADS en un worker y no bloquea la UI.
+    pub fn unblock_provenance(&mut self) -> bool {
+        if self.zone_unblock_rx.is_some() {
+            return false;
+        }
+        let Some(path) = self.metadata_target() else {
+            return false;
+        };
+        let worker_path = path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = naygo_platform::zone_identifier::remove(&worker_path)
+                .map_err(|error| error.to_string());
+            let _ = tx.send((worker_path, result));
+        });
+        self.zone_unblock_rx = Some(rx);
+        true
+    }
+
+    /// Drena el desbloqueo. Tras éxito (incluso si ya no había ADS) vuelve a leer metadata en
+    /// worker para que el Inspector desaparezca la procedencia sin hacer I/O en el hilo UI.
+    pub fn pump_zone_unblock(&mut self) -> bool {
+        let Some(rx) = self.zone_unblock_rx.as_ref() else {
+            return true;
+        };
+        let Ok((path, result)) = rx.try_recv() else {
+            return false;
+        };
+        self.zone_unblock_rx = None;
+        match result {
+            Ok(_) => {
+                self.clear_metadata();
+                self.request_metadata(path);
+            }
+            Err(error) => self.pending_shell_error = Some(error),
+        }
+        true
+    }
+
     /// Pide la metadata del archivo `path`. Si ya hay un job VIVO para ese mismo `path`, no
     /// relanza (evita re-lanzar en cada tick mientras se muestra el mismo archivo). Si es otro
     /// path, cancela el job anterior y lanza uno nuevo en un hilo worker.
@@ -48,11 +121,43 @@ impl WorkspaceCtrl {
         let worker_path = path.clone();
         let worker_token = token.clone();
         std::thread::spawn(move || {
-            let fields = naygo_core::metadata::metadata_for(&worker_path);
+            let mut fields = naygo_core::metadata::metadata_for(&worker_path);
+            let mut has_zone_identifier = false;
+            match naygo_platform::zone_identifier::read(&worker_path) {
+                Ok(Some(zone)) => {
+                    has_zone_identifier = true;
+                    if let Some(id) = zone.zone_id {
+                        fields.push(naygo_core::metadata::MetadataField {
+                            label_key: "meta.zone",
+                            value: id.to_string(),
+                        });
+                    }
+                    if let Some(url) = zone.host_url {
+                        fields.push(naygo_core::metadata::MetadataField {
+                            label_key: "meta.host_url",
+                            value: url,
+                        });
+                    }
+                    if let Some(url) = zone.referrer_url {
+                        fields.push(naygo_core::metadata::MetadataField {
+                            label_key: "meta.referrer_url",
+                            value: url,
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => fields.push(naygo_core::metadata::MetadataField {
+                    label_key: "meta.zone_status",
+                    value: error.to_string(),
+                }),
+            }
             // Si ya se enfocó otro archivo, el receptor descarta el mensaje; no importa si el
             // send falla (canal cerrado porque el job fue reemplazado).
             if !worker_token.is_cancelled() {
-                let _ = tx.send(fields);
+                let _ = tx.send(MetaResult {
+                    fields,
+                    has_zone_identifier,
+                });
             }
         });
         self.meta_job = Some(MetaJob {
@@ -60,6 +165,7 @@ impl WorkspaceCtrl {
             rx,
             token,
             fields: Vec::new(),
+            has_zone_identifier: false,
             done: false,
         });
     }
@@ -83,11 +189,13 @@ impl WorkspaceCtrl {
             return true;
         }
         // El worker envía una sola vez; `try_recv` no bloquea el hilo de UI.
-        if let Ok(fields) = job.rx.try_recv() {
-            job.fields = fields
+        if let Ok(result) = job.rx.try_recv() {
+            job.fields = result
+                .fields
                 .into_iter()
                 .map(|f| (f.label_key.to_string(), f.value))
                 .collect();
+            job.has_zone_identifier = result.has_zone_identifier;
             job.done = true;
         }
         job.done
@@ -105,6 +213,12 @@ impl WorkspaceCtrl {
     /// `true` si hay una lectura de metadata en vuelo (el VM muestra "Leyendo…").
     pub fn meta_loading(&self) -> bool {
         matches!(self.meta_job.as_ref(), Some(job) if !job.done)
+    }
+
+    /// `true` si el archivo tiene un stream Zone.Identifier, incluso cuando Windows no expone
+    /// ZoneId, HostUrl ni ReferrerUrl. Así la acción de desbloquear nunca queda inaccesible.
+    pub fn has_provenance(&self) -> bool {
+        matches!(self.meta_job.as_ref(), Some(job) if job.done && job.has_zone_identifier)
     }
 
     /// Archivo cuya metadata debe mostrarse, o `None` si no aplica (carpeta / nada enfocado).

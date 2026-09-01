@@ -10,6 +10,13 @@ la forma más rápida de trabajar.
 
 ---
 
+Al usar **Atrás** o **Adelante**, Naygo recupera durante la sesión la selección, el archivo
+enfocado, los filtros y la posición que tenía el listado en esa visita. Los archivos que ya no
+existen se omiten. Este contexto no se guarda al cerrar Naygo.
+
+Al copiar o mover a otro panel, aparece el **radar de destinos**. Pulsa **1–9** para elegir
+rápidamente entre paneles, favoritos, destinos recientes y carpetas frecuentes; **Esc** cancela.
+
 ## 1. La ventana
 
 La ventana se divide en:
@@ -225,6 +232,7 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 | Atajo | Acción |
 |-------|--------|
 | **Ctrl+C / Ctrl+X / Ctrl+V** | Copiar / cortar / pegar |
+| **Ctrl+Shift+V** | Elegir entre los últimos 10 conjuntos copiados/cortados en Naygo |
 | **Ctrl+D** | Duplicar en la misma carpeta (` - copia`, ` - copia (2)`, …) |
 | **Supr** | Enviar a la papelera |
 | **Shift+Supr** | Eliminar permanente |
@@ -237,6 +245,13 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 Toda operación larga es **cancelable** y queda en el **Historial de acciones** con
 opción de deshacer. Pegar un **texto** o una **imagen** del portapapeles crea un
 archivo (formato y nombre configurables en *Configuración → Pegado / Avanzado*).
+El historial de `Ctrl+Shift+V` vive solo durante la sesión y guarda rutas de archivos;
+no incorpora textos ni imágenes del portapapeles de Windows.
+
+**Exportar listados:** en el menú contextual elige exportar al portapapeles o a CSV, con
+separador punto y coma o coma. Si hay selección exporta solo esa selección; si no, exporta la
+vista filtrada completa. Usa las columnas visibles en su orden actual, agrega la ruta completa
+y los archivos CSV incluyen BOM UTF-8 para abrir correctamente en Excel.
 
 **Abrir terminal aquí:** clic derecho → *Abrir PowerShell / CMD / Windows Terminal
 aquí* (abre en la carpeta seleccionada o, si no hay, la del panel). Desde la
@@ -474,6 +489,7 @@ Todos son configurables en *Configuración → Atajos*. Por defecto:
 | F6 | Mover al otro panel |
 | Esc | Cancelar listado |
 | Ctrl+C / X / V | Copiar / cortar / pegar |
+| Ctrl+Shift+V | Historial interno del portapapeles |
 | Ctrl+D | Duplicar la selección en su misma carpeta |
 | Supr / Shift+Supr | Papelera / eliminar permanente |
 | Ctrl+N / Ctrl+Shift+N | Nueva carpeta / archivo |

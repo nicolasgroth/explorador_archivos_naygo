@@ -7,6 +7,8 @@
 //! Tolerante: errores se reportan en el `Result`, no tumban el proceso.
 
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
 
 /// Identidad de un ítem que el Shell acaba de enviar a Papelera. Al deshacer se
 /// busca dentro de Papelera por su ubicación y nombre originales.
@@ -54,12 +56,18 @@ pub fn move_to_trash_with_progress(
     use windows::Win32::UI::Shell::{
         FileOperation, IFileOperation, IFileOperationProgressSink, IShellItem,
         SHCreateItemFromParsingName, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
-        FOF_SILENT,
+        FOF_NOERRORUI, FOF_SILENT,
     };
 
     if paths.is_empty() {
         return Ok(Vec::new());
     }
+
+    // `std::fs` acepta una ruta Windows "D:carpeta\\archivo" relativa al directorio actual de
+    // esa unidad, pero `SHCreateItemFromParsingName` la rechaza con E_INVALIDARG (0x80070057).
+    // Canonicalizar ocurre en este worker, antes de entrar a COM, y entrega al Shell una ruta
+    // física absoluta ("D:\\carpeta\\archivo"). También verifica que el origen aún exista.
+    let paths = absolute_existing_paths(paths)?;
 
     // SAFETY: toda la secuencia COM se ejecuta dentro de un único bloque unsafe.
     // CoUninitialize SOLO se llama si CoInitializeEx realmente inicializó COM en este
@@ -80,20 +88,26 @@ pub fn move_to_trash_with_progress(
 
             // Reciclar (no borrar), sin confirmación ni UI.
             op.SetOperationFlags(
-                FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOFX_RECYCLEONDELETE,
+                FOF_ALLOWUNDO
+                    | FOF_NOCONFIRMATION
+                    | FOF_NOERRORUI
+                    | FOF_SILENT
+                    | FOFX_RECYCLEONDELETE,
             )
             .map_err(|e| TrashError::Failed(e.to_string()))?;
 
+            let delete_failures = Arc::new(Mutex::new(Vec::new()));
             let sink: IFileOperationProgressSink = ProgressSink {
                 progress,
                 cancelled,
+                delete_failures: delete_failures.clone(),
             }
             .into();
             let cookie = op
                 .Advise(&sink)
                 .map_err(|e| TrashError::Failed(e.to_string()))?;
 
-            for path in paths {
+            for path in &paths {
                 let wide: Vec<u16> = path
                     .as_os_str()
                     .encode_wide()
@@ -118,6 +132,29 @@ pub fn move_to_trash_with_progress(
                     "Windows canceló una o más eliminaciones".to_string(),
                 ));
             }
+            let failures = delete_failures.lock().map_or_else(
+                |_| vec!["no se pudo leer el resultado de la Papelera".to_string()],
+                |values| values.clone(),
+            );
+            let still_present: Vec<PathBuf> =
+                paths.iter().filter(|path| path.exists()).cloned().collect();
+            if !failures.is_empty() {
+                return Err(TrashError::Failed(format!(
+                    "IFileOperation no pudo enviar a Papelera: {}",
+                    failures.join("; ")
+                )));
+            }
+            if !still_present.is_empty() {
+                // Algunos volúmenes/configuraciones del Shell reportan `PerformOperations` OK
+                // aunque `PostDeleteItem` no eliminó el archivo. Reintentar por la API Shell
+                // clásica evita marcar una operación falsa como hecha; si tampoco resulta,
+                // devolvemos un error visible y conservamos el archivo intacto.
+                recycle_with_legacy_shell(&still_present).map_err(|fallback| {
+                    TrashError::Failed(format!(
+                        "el Shell no retiró todos los archivos; fallback de Papelera: {fallback}"
+                    ))
+                })?;
+            }
             Ok(paths
                 .iter()
                 .cloned()
@@ -132,11 +169,97 @@ pub fn move_to_trash_with_progress(
     }
 }
 
+/// Convierte rutas existentes a su forma absoluta para las API Shell, que no comparten la
+/// tolerancia de `std::fs` a las rutas dependientes de unidad como `D:archivo.txt`.
+#[cfg(windows)]
+fn absolute_existing_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, TrashError> {
+    paths
+        .iter()
+        .map(|path| {
+            std::fs::canonicalize(path)
+                .map(|path| shell_parsing_path(path))
+                .map_err(|error| {
+                    TrashError::Failed(format!(
+                        "no se pudo resolver la ruta para Papelera ({}): {error}",
+                        path.display()
+                    ))
+                })
+        })
+        .collect()
+}
+
+/// `canonicalize` en Windows devuelve normalmente el prefijo extendido `\\?\\`, útil para
+/// `std::fs` pero no aceptado por `SHCreateItemFromParsingName`. El Shell necesita su forma de
+/// parsing habitual; en UNC se conserva el doble backslash de red.
+#[cfg(windows)]
+fn shell_parsing_path(path: PathBuf) -> PathBuf {
+    let rendered = path.to_string_lossy();
+    if let Some(unc) = rendered.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(normal) = rendered.strip_prefix(r"\\?\") {
+        PathBuf::from(normal)
+    } else {
+        path
+    }
+}
+
+/// Fallback para un `IFileOperation` que el Shell reportó como correcto pero dejó archivos en
+/// su lugar. La API histórica `SHFileOperationW` sigue usando la Papelera cuando se combina
+/// `FO_DELETE` con `FOF_ALLOWUNDO`; sólo se llama en ese caso excepcional.
+#[cfg(windows)]
+fn recycle_with_legacy_shell(paths: &[PathBuf]) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
+        SHFILEOPSTRUCTW,
+    };
+
+    let mut from: Vec<u16> = Vec::new();
+    for path in paths {
+        from.extend(path.as_os_str().encode_wide());
+        from.push(0);
+    }
+    // SHFileOperation exige una lista MULTI_SZ: cada ruta termina en NUL y la lista completa en
+    // un segundo NUL. Incluso para una sola ruta, el último `push` es obligatorio.
+    from.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(from.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
+        ..Default::default()
+    };
+    // SAFETY: `from` vive hasta después de la llamada y es una MULTI_SZ válida; `op` está
+    // inicializado con una estructura compatible con la ABI de Shell32.
+    let result = unsafe { SHFileOperationW(&mut op) };
+    if result != 0 {
+        return Err(format!("SHFileOperationW devolvió {result}"));
+    }
+    if op.fAnyOperationsAborted.as_bool() {
+        return Err("Windows canceló la eliminación".to_string());
+    }
+    let remaining: Vec<String> = paths
+        .iter()
+        .filter(|path| path.exists())
+        .map(|path| path.display().to_string())
+        .collect();
+    if !remaining.is_empty() {
+        return Err(format!(
+            "los archivos siguen presentes: {}",
+            remaining.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 #[windows::core::implement(windows::Win32::UI::Shell::IFileOperationProgressSink)]
 struct ProgressSink {
     progress: std::sync::mpsc::Sender<TrashProgress>,
     cancelled: CancelProbe,
+    /// `PerformOperations` puede devolver éxito pese a que un ítem individual falle. Esta
+    /// colección se revisa después para no cerrar la operación como hecha por error.
+    delete_failures: Arc<Mutex<Vec<String>>>,
 }
 
 #[cfg(windows)]
@@ -223,9 +346,14 @@ impl windows::Win32::UI::Shell::IFileOperationProgressSink_Impl for ProgressSink
         &self,
         _: u32,
         _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
-        _: windows_core::HRESULT,
+        hrresult: windows_core::HRESULT,
         _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
     ) -> windows_core::Result<()> {
+        if hrresult.is_err() {
+            if let Ok(mut failures) = self.delete_failures.lock() {
+                failures.push(format!("DeleteItem falló ({hrresult})"));
+            }
+        }
         Ok(())
     }
     fn PreNewItem(

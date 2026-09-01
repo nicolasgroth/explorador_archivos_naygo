@@ -32,21 +32,51 @@ impl WorkspaceCtrl {
         })
     }
 
-    /// Fija el panel resaltado por arrastre (hover de drop). Devuelve `true` si CAMBIÓ respecto del
-    /// valor anterior (la UI solo re-pinta cuando cambia, para no inundar con cada `DragOver`).
+    /// Fija el panel resaltado por arrastre (hover de drop). Conserva esta API pequeña para los
+    /// callers que no traen coordenadas (y para las pruebas); el camino OLE usa
+    /// `set_drag_over_at` para además informar la fila destino a `FilePanel`.
     pub fn set_drag_over(&mut self, pane: Option<PaneId>) -> bool {
+        self.set_drag_over_at(pane, None)
+    }
+
+    /// Actualiza el hover OLE y su Y de cliente lógica. Al cambiar de panel o salir, invalida la
+    /// fila previamente detectada: una fila de otro panel nunca puede convertirse en destino.
+    /// Devuelve `true` cuando Slint debe refrescar los `PaneVm`.
+    pub fn set_drag_over_at(&mut self, pane: Option<PaneId>, client_y: Option<f32>) -> bool {
+        let changed = self.drag_over_pane != pane || self.drag_over_client_y != client_y;
         if self.drag_over_pane != pane {
-            self.drag_over_pane = pane;
-            true
-        } else {
-            false
+            self.drag_over_row = None;
         }
+        if pane.is_none() {
+            self.drag_over_row = None;
+        }
+        self.drag_over_pane = pane;
+        self.drag_over_client_y = client_y;
+        changed
     }
 
     /// El panel actualmente resaltado por arrastre, si lo hay. Lo lee `sync_rows` para poblar el
     /// `drag-over` de cada `PaneVm`.
     pub fn drag_over_pane(&self) -> Option<PaneId> {
         self.drag_over_pane
+    }
+
+    /// Y de cliente que consume el `FilePanel` del panel indicado. Un valor muy negativo es una
+    /// coordenada fuera de la ventana y evita que un panel no-hover reporte una fila accidental.
+    pub fn drag_over_client_y_for(&self, pane: PaneId) -> f32 {
+        if self.drag_over_pane == Some(pane) {
+            self.drag_over_client_y.unwrap_or(-10_000.0)
+        } else {
+            -10_000.0
+        }
+    }
+
+    /// Recibe la fila de vista detectada por `FilePanel` mientras un `IDropTarget::DragOver` está
+    /// activo. La validación final de que siga siendo una carpeta se hace al soltar, contra el
+    /// modelo actual (un watcher puede haber refrescado la carpeta entre hover y drop).
+    pub fn set_drag_over_row(&mut self, pane: PaneId, row: i32) {
+        self.drag_over_row =
+            (self.drag_over_pane == Some(pane) && row >= 0).then_some((pane, row as usize));
     }
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
@@ -702,28 +732,13 @@ impl WorkspaceCtrl {
                 self.stack_into(origin, dest);
                 false
             }
-            PaneAction::Transfer { move_files } => {
-                self.transfer_to(origin, dest, move_files);
-                false
-            }
         }
     }
 
-    /// Copia/mueve la selección del panel `origin` a la carpeta del panel `dest`. Lanza una op
-    /// (deshacible) por el motor; el conflicto se resuelve por ítem si choca.
-    fn transfer_to(&mut self, _origin: PaneId, dest: PaneId, move_files: bool) {
-        let sources = self.selected_paths();
+    fn transfer_to_dir(&mut self, sources: Vec<PathBuf>, dest_dir: PathBuf, move_files: bool) {
         if sources.is_empty() {
             return;
         }
-        let Some(dest_dir) = self
-            .ws
-            .pane(dest)
-            .and_then(|p| p.files.as_ref())
-            .map(|f| f.current_dir.clone())
-        else {
-            return;
-        };
         let req = naygo_core::ops::transfer(move_files, sources, dest_dir);
         let label = if move_files {
             self.config.t("ops.file_kind_move")
@@ -743,7 +758,116 @@ impl WorkspaceCtrl {
         let Some(origin) = self.active_files_id() else {
             return false;
         };
-        self.request_action(PaneAction::Transfer { move_files }, origin, self.last_area)
+        let origin_dir = self
+            .ws
+            .pane(origin)
+            .and_then(|p| p.files.as_ref())
+            .map(|f| f.current_dir.clone());
+        if self.selected_paths().is_empty() {
+            return false;
+        }
+        use naygo_core::destination_radar::{
+            rank, DestinationCandidate as C, DestinationSource as S,
+        };
+        let open = self
+            .pane_rects(self.last_area)
+            .into_iter()
+            .filter_map(|(id, _)| {
+                if id == origin {
+                    return None;
+                }
+                let f = self.ws.pane(id)?.files.as_ref()?;
+                Some(C {
+                    path: f.current_dir.clone(),
+                    label: self.pane_label(id),
+                    source: S::OpenPanel,
+                })
+            })
+            .collect();
+        let last = self
+            .ops
+            .last_transfer_destinations(10)
+            .into_iter()
+            .map(|path| C {
+                label: path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| path.to_string_lossy().to_string()),
+                path,
+                source: S::LastOperation,
+            })
+            .collect();
+        let favorites = self
+            .favorites
+            .list_flat()
+            .into_iter()
+            .map(|f| C {
+                path: f.path,
+                label: f.label,
+                source: S::Favorite,
+            })
+            .collect();
+        let frequent = self
+            .recents
+            .most_used(self.config.settings.frequent_dirs_limit)
+            .into_iter()
+            .map(|f| C {
+                label: f
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| f.path.to_string_lossy().to_string()),
+                path: f.path,
+                source: S::Frequent,
+            })
+            .collect();
+        let recent = self
+            .recents
+            .list()
+            .iter()
+            .cloned()
+            .map(|path| C {
+                label: path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| path.to_string_lossy().to_string()),
+                path,
+                source: S::Recent,
+            })
+            .collect();
+        let candidates: Vec<C> = rank([open, last, favorites, frequent, recent], 9)
+            .into_iter()
+            .filter(|c| Some(&c.path) != origin_dir.as_ref())
+            .collect();
+        if candidates.is_empty() {
+            return false;
+        }
+        self.destination_radar = Some(DestinationRadar {
+            move_files,
+            candidates,
+        });
+        false
+    }
+
+    pub fn destination_radar_resolve(&mut self, index: usize) {
+        let Some(radar) = self.destination_radar.take() else {
+            return;
+        };
+        let Some(candidate) = radar.candidates.get(index) else {
+            return;
+        };
+        self.transfer_to_dir(
+            self.selected_paths(),
+            candidate.path.clone(),
+            radar.move_files,
+        );
+    }
+
+    pub fn destination_radar_cancel(&mut self) {
+        self.destination_radar = None;
     }
 
     /// Apila el panel `origin` como pestaña sobre el grupo/hoja de `dest` (los agrupa). El

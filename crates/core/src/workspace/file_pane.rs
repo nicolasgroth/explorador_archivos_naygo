@@ -11,7 +11,7 @@ use crate::filter::matches as filter_matches;
 use crate::filter::ColumnFilter;
 use crate::filter::VisibilityFlags;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
-use crate::workspace::nav_history::NavHistory;
+use crate::workspace::nav_history::{NavContext, NavHistory};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,12 @@ pub struct FilePaneState {
     /// Ancla de la selección por rango (Shift). Efímero, NO se persiste.
     pub anchor: Option<usize>,
     pub history: NavHistory,
+    /// Contexto recuperado al mover el cursor del historial; se aplica cuando termina el listado.
+    pending_nav_context: Option<NavContext>,
+    /// Primera fila visible aproximada, reportada por Slint como ruta estable.
+    pub scroll_anchor_path: Option<PathBuf>,
+    /// Fila de vista que Slint debe colocar arriba tras restaurar; se consume desde la UI.
+    pub restored_scroll_row: Option<usize>,
     /// Si es `false`, el panel oculta las carpetas (muestra solo archivos).
     pub show_dirs: bool,
     /// Estado de tabla: columnas (orden/visibilidad/ancho) + filtros por columna.
@@ -48,6 +54,9 @@ pub struct FilePaneState {
     /// plegado para comparación case/acento-insensible; no se persiste ni reemplaza los filtros
     /// configurables por columna.
     pub visual_filter: Option<String>,
+    /// Rutas ocultas temporalmente por una comparación entre paneles. No se persiste ni afecta
+    /// los filtros configurables; vive aquí para que vista, foco y selección sigan alineados.
+    pub hidden_paths: std::collections::HashSet<std::path::PathBuf>,
     /// Caché de los índices de vista (filtrados+ordenados). Recompute PEREZOSO bajo
     /// `&self` vía `RefCell`; se invalida comparando una firma O(1) de los inputs. NO se
     /// clona (cada panel reconstruye el suyo) ni se persiste. Efímero de presentación.
@@ -80,12 +89,16 @@ impl Clone for FilePaneState {
             selected: self.selected.clone(),
             anchor: self.anchor,
             history: self.history.clone(),
+            pending_nav_context: self.pending_nav_context.clone(),
+            scroll_anchor_path: self.scroll_anchor_path.clone(),
+            restored_scroll_row: self.restored_scroll_row,
             show_dirs: self.show_dirs,
             table: self.table.clone(),
             highlighted: self.highlighted.clone(),
             group_new_at_end: self.group_new_at_end,
             visibility: self.visibility,
             visual_filter: self.visual_filter.clone(),
+            hidden_paths: self.hidden_paths.clone(),
             // El caché NO se arrastra: el clon lo reconstruye a demanda.
             view_cache: std::cell::RefCell::new(None),
             entries_revision: std::cell::Cell::new(self.entries_revision.get()),
@@ -126,12 +139,16 @@ impl FilePaneState {
             selected: Vec::new(),
             anchor: None,
             history,
+            pending_nav_context: None,
+            scroll_anchor_path: None,
+            restored_scroll_row: None,
             show_dirs: true,
             table: TableState::default(),
             highlighted: std::collections::HashSet::new(),
             group_new_at_end: false,
             visibility: VisibilityFlags::default(),
             visual_filter: None,
+            hidden_paths: std::collections::HashSet::new(),
             view_cache: std::cell::RefCell::new(None),
             entries_revision: std::cell::Cell::new(1),
             presentation_revision: std::cell::Cell::new(1),
@@ -151,6 +168,17 @@ impl FilePaneState {
         self.entries_revision
             .set(self.entries_revision.get().wrapping_add(1));
         *self.view_cache.borrow_mut() = None;
+    }
+
+    /// Oculta exactamente las rutas indicadas de la vista actual. Reubica foco/selección con el
+    /// mismo mecanismo que el resto de filtros para no dejar índices de vista inválidos.
+    pub fn set_hidden_paths(&mut self, paths: std::collections::HashSet<std::path::PathBuf>) {
+        if self.hidden_paths == paths {
+            return;
+        }
+        self.hidden_paths = paths;
+        self.entries_changed();
+        self.clamp_selection_to_view();
     }
 
     /// Revisión barata para cachés externos de presentación.
@@ -387,6 +415,7 @@ impl FilePaneState {
             .iter()
             .enumerate()
             .filter(|(_, e)| self.visibility.allows(e))
+            .filter(|(_, e)| !self.hidden_paths.contains(&e.path))
             .filter(|(_, e)| !has_col_filters || filter_matches(e, &self.table.filters))
             .filter(|(_, e)| {
                 self.visual_filter
@@ -428,20 +457,25 @@ impl FilePaneState {
     /// Navega a una carpeta nueva: registra en el historial y limpia entries/foco.
     /// (La UI lanzará el listado de `dir` tras llamar esto.)
     pub fn navigate_to(&mut self, dir: PathBuf) {
+        self.capture_current_nav_context();
         self.history.push(dir.clone());
         self.enter(dir);
     }
 
     /// Va atrás en el historial. Devuelve la nueva carpeta si se movió.
     pub fn go_back(&mut self) -> Option<PathBuf> {
+        self.capture_current_nav_context();
         let path = self.history.back().map(Path::to_path_buf)?;
+        self.pending_nav_context = self.history.current_context().cloned();
         self.enter(path.clone());
         Some(path)
     }
 
     /// Va adelante en el historial. Devuelve la nueva carpeta si se movió.
     pub fn go_forward(&mut self) -> Option<PathBuf> {
+        self.capture_current_nav_context();
         let path = self.history.forward().map(Path::to_path_buf)?;
+        self.pending_nav_context = self.history.current_context().cloned();
         self.enter(path.clone());
         Some(path)
     }
@@ -449,7 +483,9 @@ impl FilePaneState {
     /// Salta directo a la posición `index` del historial (menú del botón atrás/
     /// adelante). Devuelve la nueva carpeta si se movió.
     pub fn go_to_history(&mut self, index: usize) -> Option<PathBuf> {
+        self.capture_current_nav_context();
         let path = self.history.jump_to(index).map(Path::to_path_buf)?;
+        self.pending_nav_context = self.history.current_context().cloned();
         self.enter(path.clone());
         Some(path)
     }
@@ -479,7 +515,70 @@ impl FilePaneState {
         self.focused = None;
         self.selected.clear();
         self.anchor = None;
+        self.scroll_anchor_path = None;
+        self.restored_scroll_row = None;
         self.presentation_changed();
+    }
+
+    fn capture_current_nav_context(&mut self) {
+        let view = self.view_indices();
+        let path_at = |position: usize| {
+            view.get(position)
+                .and_then(|real| self.entries.get(*real))
+                .map(|entry| entry.path.clone())
+        };
+        let context = NavContext {
+            focused_path: self.focused.and_then(path_at),
+            selected_paths: self
+                .selected
+                .iter()
+                .filter_map(|position| path_at(*position))
+                .collect(),
+            scroll_anchor_path: self.scroll_anchor_path.clone(),
+            table: Some(self.table.clone()),
+            visual_filter: self.visual_filter.clone(),
+        };
+        self.history.set_current_context(context);
+    }
+
+    /// Aplica el contexto pendiente después de ordenar el listado nuevo. Las rutas desaparecidas
+    /// se descartan; si el foco ya no existe se usa la primera selección superviviente.
+    pub fn apply_pending_nav_context(&mut self) -> bool {
+        let Some(context) = self.pending_nav_context.take() else {
+            return false;
+        };
+        if let Some(table) = context.table {
+            self.table = table;
+        }
+        self.visual_filter = context.visual_filter;
+        let view = self.view_indices();
+        let position_of = |path: &Path| {
+            view.iter().position(|real| {
+                self.entries
+                    .get(*real)
+                    .is_some_and(|entry| entry.path == path)
+            })
+        };
+        self.selected = context
+            .selected_paths
+            .iter()
+            .filter_map(|path| position_of(path))
+            .collect();
+        self.focused = context
+            .focused_path
+            .as_deref()
+            .and_then(position_of)
+            .or_else(|| self.selected.first().copied())
+            .or_else(|| (!view.is_empty()).then_some(0));
+        self.anchor = self.focused;
+        self.restored_scroll_row = context.scroll_anchor_path.as_deref().and_then(position_of);
+        self.scroll_anchor_path = context.scroll_anchor_path;
+        self.presentation_changed();
+        true
+    }
+
+    pub fn set_scroll_top_position(&mut self, position: usize) {
+        self.scroll_anchor_path = self.view_entry_at(position).map(|entry| entry.path.clone());
     }
 
     /// Posición válida en la vista (clamp a [0, len-1]); None si la vista está vacía.
@@ -1149,6 +1248,46 @@ mod tests {
         let mut p = FilePaneState::new(PathBuf::from("C:/"));
         p.entries = (0..n).map(|i| mk(&format!("f{i}.txt"))).collect();
         p
+    }
+
+    #[test]
+    fn historial_restaura_contexto_por_ruta_y_descarta_ausentes() {
+        let mut pane = pane_n(4);
+        pane.selected = vec![1, 2];
+        pane.focused = Some(2);
+        pane.anchor = Some(2);
+        pane.set_scroll_top_position(3);
+        pane.table.set_width(ColumnKind::Name, 377.0);
+        pane.table.set_filter(
+            ColumnKind::Name,
+            ColumnFilter::Text {
+                contains: "f".into(),
+                case_sensitive: false,
+            },
+        );
+        pane.set_visual_filter(Some("f".into()));
+
+        pane.navigate_to(PathBuf::from("C:/b"));
+        pane.entries = pane_n(2).entries;
+        pane.entries_changed();
+
+        assert_eq!(pane.go_back(), Some(PathBuf::from("C:/")));
+        // f2 desapareció y el orden cambió mientras no estábamos en la carpeta.
+        let old = pane_n(4).entries;
+        pane.entries = vec![old[3].clone(), old[1].clone(), old[0].clone()];
+        pane.entries_changed();
+        assert!(pane.apply_pending_nav_context());
+
+        assert_eq!(pane.selected, vec![1], "solo sobrevive f1 por su ruta");
+        assert_eq!(pane.focused, Some(1), "el foco ausente cae en la selección");
+        assert_eq!(
+            pane.restored_scroll_row,
+            Some(2),
+            "f3 vuelve al borde superior"
+        );
+        assert_eq!(pane.visual_filter.as_deref(), Some("f"));
+        assert_eq!(pane.table.columns[0].width, 377.0);
+        assert!(pane.table.filters.contains_key(&ColumnKind::Name));
     }
 
     #[test]

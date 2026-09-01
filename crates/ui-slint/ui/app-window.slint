@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 import { LineEdit, ListView } from "std-widgets.slint";
-import { RowData, PaneVm, SplitVm, PickVm, TabVm, OpDialogVm, OpRowVm, OpFileVm, OpFileContextVm, ResumeRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
+import { RowData, PaneVm, SplitVm, PickVm, DestinationRadarRowVm, TabVm, OpDialogVm, OpRowVm, OpFileVm, OpFileContextVm, ResumeRowVm, ClipboardHistoryRowVm, ContextMenuVm, ColumnMenuVm, NavRow, LayoutRow, MessageVm, FavTreeRow, PathSeg } from "types.slint";
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
+import { DestinationRadar } from "destination-radar.slint";
 import { ColumnMenu } from "column-menu.slint";
 import { TreePanel } from "tree-panel.slint";
 import { InspectorPanel } from "inspector-panel.slint";
@@ -503,6 +504,8 @@ export component AppWindow inherits Window {
     callback basket-copy();
     callback basket-move();
     callback basket-delete();
+    callback basket-save-list();
+    callback basket-open-list();
     in property <SyncVm> sync-vm;
     callback sync-set-mode(int);
     callback sync-set-delete(bool);
@@ -521,6 +524,8 @@ export component AppWindow inherits Window {
     callback row-middle-clicked(int, int);  // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
+    callback drop-target-row(int, int);   // fila bajo el cursor OLE (D-1: subcarpeta destino)
+    callback scroll-position-changed(int, int); // (pane-id, primera fila visible)
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     // El panel que está editando su ruta (-1 = ninguno), su texto y sus candidatos. Rust los
@@ -634,6 +639,11 @@ export component AppWindow inherits Window {
     callback preview-copy-text(string);   // copiar el texto cargado explícitamente
     callback undo-entry(int);            // deshacer la entrada del historial
     callback calc-size();                 // Inspector: pedir el cálculo del tamaño de la carpeta enfocada
+    callback copy-provenance();           // Inspector: copiar Zone.Identifier ya leído
+    callback unblock-provenance();        // Inspector: quitar Zone.Identifier tras confirmar
+    callback comparison-select(int, int);
+    callback comparison-transfer(int, bool);
+    callback comparison-toggle-link(int);
     // Acciones multi-panel (toolbar):
     callback swap-panes();               // intercambiar el activo con el otro panel
     callback clone-pane();               // clonar la carpeta del activo en otro panel
@@ -657,6 +667,10 @@ export component AppWindow inherits Window {
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elige el panel número N (clic)
     callback pick-cancel();              // cancelar (clic fuera)
+    in property <[DestinationRadarRowVm]> destination-radar-rows;
+    in property <bool> destination-radar-move;
+    callback destination-radar-choose(int);
+    callback destination-radar-cancel();
     // Texto de la barra de estado (carpeta activa + recuento de ítems/selección).
     in property <string> status;
     // Operaciones de archivo (Fase 3): modal activo + filas de progreso.
@@ -702,7 +716,10 @@ export component AppWindow inherits Window {
     in property <OpFileContextVm> op-file-context;
     in-out property <bool> op-file-list-open;
     in property <[ResumeRowVm]> resume-rows;
+    in property <[ClipboardHistoryRowVm]> clipboard-history-rows;
     callback resume-decide(string, int);
+    callback clipboard-history-pick(int);
+    callback clipboard-history-cancel();
     callback delete-confirm();
     callback delete-cancel();
     callback conflict-decide(int, bool);   // (action, apply-all)
@@ -731,6 +748,10 @@ export component AppWindow inherits Window {
     callback ctx-delete();
     callback ctx-copy-names();
     callback ctx-copy-path();
+    callback ctx-export-clipboard();
+    callback ctx-export-file();
+    callback ctx-export-clipboard-comma();
+    callback ctx-export-file-comma();
     callback ctx-compress();
     callback ctx-extract-here();
     callback ctx-extract-to();
@@ -1342,6 +1363,10 @@ export component AppWindow inherits Window {
                         pane-id: p.id;
                         active: p.active;
                         drag-over: p.drag-over;
+                        drag-client-y: p.drag-client-y;
+                        comparison-active: p.comparison-active;
+                        comparison-link-available: p.comparison-link-available;
+                        comparison-link-active: p.comparison-link-active;
                         // Mientras haya un modal de operación (conflicto/eliminar/nombre/carpeta) o un
                         // aviso (USB/errores) abierto, el panel DESMONTA su TouchArea exterior para no
                         // robarle hover/clic al velo del modal (si no, el popup tiene el hover muerto
@@ -1357,10 +1382,12 @@ export component AppWindow inherits Window {
                         // Fila enfocada: Rust la actualiza en sync (teclado/typeahead/paleta);
                         // el panel observa su cambio para arrastrar el scroll y revelarla (C1).
                         focused-row: p.focused-row;
+                        restore-scroll-row: p.restore-scroll-row;
                         row-h: root.settings-vm.row-h;
                         // Clave de navegación: resetea el scroll a arriba SOLO al cambiar de
                         // carpeta (Rust actualiza `p.path` únicamente cuando la ruta difiere).
                         nav-key: p.path;
+                        restore-scroll-key: p.path + ":" + p.restore-scroll-row;
                         segments: p.segments;
                         editing: root.edit-pane == p.id;
                         edit-text <=> root.edit-text;
@@ -1417,6 +1444,13 @@ export component AppWindow inherits Window {
                         row-double-clicked(id, pos) => { root.row-double-clicked(id, pos); }
                         row-middle-clicked(id, pos) => { root.row-middle-clicked(id, pos); }
                         row-drag-out(id) => { root.row-drag-out(id); }
+                        // Las acciones de comparación pertenecen al panel desde el que se
+                        // clickean, no al último Files activo de forma accidental.
+                        comparison-select(id, state) => { root.comparison-select(id, state); }
+                        comparison-transfer(id, move-files) => { root.comparison-transfer(id, move-files); }
+                        comparison-toggle-link(id) => { root.comparison-toggle-link(id); }
+                        drop-target-row(id, row) => { root.drop-target-row(id, row); }
+                        scroll-position-changed(id, pos) => { root.scroll-position-changed(id, pos); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
                         empty-context(id, cx, cy) => { root.empty-context(id, cx, cy); }
@@ -1459,6 +1493,8 @@ export component AppWindow inherits Window {
                         info: p.inspector;
                         focus-pane() => { root.activate(p.id); }
                         calc-size() => { root.calc-size(); }
+                        copy-provenance() => { root.copy-provenance(); }
+                        unblock-provenance() => { root.unblock-provenance(); }
                     }
                     if p.purpose == 3: HistoryPanel {
                         width: 100%;
@@ -1538,6 +1574,8 @@ export component AppWindow inherits Window {
                         copy() => { root.basket-copy(); }
                         move-files() => { root.basket-move(); }
                         delete-files() => { root.basket-delete(); }
+                        save-list() => { root.basket-save-list(); }
+                        open-list() => { root.basket-open-list(); }
                     }
                     if p.purpose == 8: SearchPanel {
                         width: 100%;
@@ -1733,6 +1771,10 @@ export component AppWindow inherits Window {
         delete() => { root.ctx-delete(); }
         copy-names() => { root.ctx-copy-names(); }
         copy-path() => { root.ctx-copy-path(); }
+        export-clipboard() => { root.ctx-export-clipboard(); }
+        export-file() => { root.ctx-export-file(); }
+        export-clipboard-comma() => { root.ctx-export-clipboard-comma(); }
+        export-file-comma() => { root.ctx-export-file-comma(); }
         compress() => { root.ctx-compress(); }
         extract-here() => { root.ctx-extract-here(); }
         extract-to() => { root.ctx-extract-to(); }
@@ -2264,6 +2306,13 @@ export component AppWindow inherits Window {
     if root.picks.length > 0: TouchArea {
         clicked => { root.pick-cancel(); }
     }
+
+    if root.destination-radar-rows.length > 0: DestinationRadar {
+        width: 100%; height: 100%; rows: root.destination-radar-rows;
+        title: (root.destination-radar-move ? Tr.ops-file-kind-move : Tr.ops-file-kind-copy) + "…";
+        choose(index) => { root.destination-radar-choose(index); }
+        dismiss => { root.destination-radar-cancel(); }
+    }
     for p in root.picks: Rectangle {
         x: p.x;
         y: root.top-bar-h + p.y;
@@ -2328,7 +2377,10 @@ export component AppWindow inherits Window {
         height: 100%;
         vm: root.op-dialog;
         resume-rows: root.resume-rows;
+        clipboard-history-rows: root.clipboard-history-rows;
         resume-decide(id, a) => { root.resume-decide(id, a); }
+        clipboard-history-pick(index) => { root.clipboard-history-pick(index); }
+        clipboard-history-cancel() => { root.clipboard-history-cancel(); }
         delete-confirm() => { root.delete-confirm(); }
         delete-cancel() => { root.delete-cancel(); }
         conflict-decide(a, all) => { root.conflict-decide(a, all); }

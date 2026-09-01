@@ -70,6 +70,50 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
     }
     {
         let ctrl = ctrl.clone();
+        ui.on_basket_save_list(move || {
+            // La raíz no se infiere silenciosamente: el usuario la elige. Las referencias bajo
+            // ella se guardan relativas y las externas siguen absolutas, tal como exige el
+            // formato portable. Cancelar cualquiera de los dos selectores no modifica nada.
+            let initial_root = ctrl.borrow().active_dir();
+            let mut root_dialog = rfd::FileDialog::new();
+            if let Some(initial_root) = initial_root.as_deref() {
+                root_dialog = root_dialog.set_directory(initial_root);
+            }
+            let Some(root) = root_dialog.pick_folder() else {
+                return;
+            };
+            let text = ctrl.borrow().basket_naygolist_json(Some(root)).ok();
+            if let (Some(text), Some(path)) = (
+                text,
+                rfd::FileDialog::new()
+                    .add_filter("Naygo list", &["naygolist"])
+                    .set_file_name("bandeja.naygolist")
+                    .save_file(),
+            ) {
+                std::thread::spawn(move || {
+                    let _ = std::fs::write(path, text);
+                });
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_basket_open_list(move || {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Naygo list", &["naygolist"])
+                .pick_file()
+            else {
+                return;
+            };
+            ctrl.borrow_mut().start_basket_import(path);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_sync_set_mode(move |mode| {
@@ -259,6 +303,25 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         let sync_layout = sync_layout.clone();
         ui.on_pick_cancel(move || {
             ctrl.borrow_mut().pick_cancel();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_destination_radar_choose(move |index| {
+            ctrl.borrow_mut()
+                .destination_radar_resolve(index.max(0) as usize);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_destination_radar_cancel(move || {
+            ctrl.borrow_mut().destination_radar_cancel();
             sync_layout();
         });
     }

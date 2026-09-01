@@ -98,6 +98,13 @@ where
     tr.set_basket_move(c.t("basket.move").into());
     tr.set_basket_delete(c.t("basket.delete").into());
     tr.set_basket_clear(c.t("basket.clear").into());
+    tr.set_comparison_select_different_tip(c.t("slint.comparison.select_different_tip").into());
+    tr.set_comparison_select_only_here_tip(c.t("slint.comparison.select_only_here_tip").into());
+    tr.set_comparison_copy_tip(c.t("slint.comparison.copy_tip").into());
+    tr.set_comparison_move_tip(c.t("slint.comparison.move_tip").into());
+    tr.set_comparison_link_on_tip(c.t("slint.comparison.link_on_tip").into());
+    tr.set_comparison_link_off_tip(c.t("slint.comparison.link_off_tip").into());
+    tr.set_comparison_hide_equal_tip(c.t("slint.comparison.hide_equal_tip").into());
     tr.set_sync_title(c.t("sync.title").into());
     tr.set_sync_left(c.t("sync.left").into());
     tr.set_sync_right(c.t("sync.right").into());
@@ -177,6 +184,11 @@ where
     // Diálogos de operaciones.
     tr.set_dlg_no_undo(c.t("slint.dialog.no_undo").into());
     tr.set_dlg_cancel(c.t("slint.dialog.cancel").into());
+    tr.set_dlg_clipboard_history(c.t("action.paste_history").into());
+    tr.set_ctx_export_clipboard(c.t("export.clipboard").into());
+    tr.set_ctx_export_file(c.t("export.file").into());
+    tr.set_ctx_export_clipboard_comma(c.t("export.clipboard_comma").into());
+    tr.set_ctx_export_file_comma(c.t("export.file_comma").into());
     tr.set_dlg_delete(c.t("slint.dialog.delete").into());
     tr.set_dlg_apply_all(c.t("slint.dialog.apply_all").into());
     tr.set_dlg_skip(c.t("slint.dialog.skip").into());

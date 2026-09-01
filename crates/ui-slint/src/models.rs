@@ -54,6 +54,7 @@ pub(crate) struct Models {
     pub(crate) splits: Rc<VecModel<SplitVm>>,
     /// Candidatos del selector de panel destino (vacío = sin selector).
     pub(crate) picks: Rc<VecModel<PickVm>>,
+    pub(crate) destination_radar: Rc<VecModel<DestinationRadarRowVm>>,
     /// Modelos de lista estables por panel (se actualizan in situ, no se recrean).
     pub(crate) per_pane: HashMap<PaneId, PaneModels>,
     /// IDs de panel VISIBLES en el orden actual del modelo `panes`.
@@ -71,6 +72,7 @@ impl Models {
             panes: Rc::new(VecModel::default()),
             splits: Rc::new(VecModel::default()),
             picks: Rc::new(VecModel::default()),
+            destination_radar: Rc::new(VecModel::default()),
             per_pane: HashMap::new(),
             pane_ids: Vec::new(),
             groups: Vec::new(),
