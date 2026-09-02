@@ -200,26 +200,32 @@ export component PreviewPanel inherits Rectangle {
             }
             // Escala de imágenes estáticas. Las mallas siguen teniendo sus propios gestos de
             // cámara; no se mezclan con este control de tamaño natural.
+            // Un único conmutador de escala: muestra el modo activo (↔ ajustada, 1:1 natural)
+            // y alterna al otro. Evita dos botones que representaban estados mutuamente excluyentes.
             if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
                 width: 26px; height: 20px;
-                background: root.fit-image || image-fit-touch.has-hover ? Theme.hover-bg : transparent;
+                background: image-scale-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
-                Text { text: "↔"; color: root.fit-image || image-fit-touch.has-hover ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
-                image-fit-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.fit-image = true; }
-                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-image-fit-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                Text {
+                    text: root.fit-image ? "↔" : "1:1";
+                    color: image-scale-touch.has-hover ? Theme.text : Theme.text-dim;
+                    font-size: root.fit-image ? Theme.font-md : Theme.font-xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
-            }
-            if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
-                width: 26px; height: 20px;
-                background: !root.fit-image || image-natural-touch.has-hover ? Theme.hover-bg : transparent;
-                border-radius: Theme.radius-sm;
-                Text { text: "1:1"; color: !root.fit-image || image-natural-touch.has-hover ? Theme.text : Theme.text-dim; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
-                image-natural-touch := TouchArea {
+                image-scale-touch := TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { root.fit-image = false; }
-                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-image-natural-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                    clicked => { root.fit-image = !root.fit-image; }
+                    // El símbolo muestra el estado actual; el tooltip describe la acción siguiente.
+                    changed has-hover => {
+                        root.hover-tip(
+                            self.has-hover
+                                ? (root.fit-image ? Tr.preview-image-natural-tip : Tr.preview-image-fit-tip)
+                                : "",
+                            self.absolute-position.x + self.width / 2,
+                            self.absolute-position.y + self.height
+                        );
+                    }
                 }
             }
             if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {

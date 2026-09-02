@@ -103,6 +103,9 @@ set_table!(MONO, "mono");
 // Selección compacta CC0 de Kenney: 39 claves por set, no la colección completa.
 set_table!(KENNEY_GAME, "kenney-game");
 set_table!(KENNEY_BOARD, "kenney-board");
+// Variantes multicolor semánticas derivadas de los glifos CC0 compactos anteriores.
+set_table!(VIVID, "vivid");
+set_table!(PASTEL, "pastel");
 
 /// Set de fábrica usado como último fallback (su `unknown` siempre existe embebido).
 const FALLBACK_SET: &str = "lucide";
@@ -118,6 +121,8 @@ fn table_for_id(set_id: &str) -> Option<&'static [(&'static str, &'static [u8])]
         "mono" => Some(MONO),
         "kenney-game" => Some(KENNEY_GAME),
         "kenney-board" => Some(KENNEY_BOARD),
+        "vivid" => Some(VIVID),
+        "pastel" => Some(PASTEL),
         _ => None,
     }
 }
@@ -407,6 +412,8 @@ mod tests {
             "mono",
             "kenney-game",
             "kenney-board",
+            "vivid",
+            "pastel",
         ] {
             for key in all_keys() {
                 assert!(
@@ -431,6 +438,8 @@ mod tests {
             "mono",
             "kenney-game",
             "kenney-board",
+            "vivid",
+            "pastel",
         ] {
             let table = table_for_id(set).expect("set embebido existe");
             for key in all_keys() {

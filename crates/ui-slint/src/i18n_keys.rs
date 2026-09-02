@@ -545,6 +545,11 @@ where
     tr.set_theme_tok_active_panel_bg(c.t("slint.theme.tok.active_panel_bg").into());
     tr.set_theme_tok_inactive_panel_bg(c.t("slint.theme.tok.inactive_panel_bg").into());
     tr.set_theme_tok_toolbar_bg(c.t("slint.theme.tok.toolbar_bg").into());
+    tr.set_theme_group_surfaces(c.t("slint.theme.group.surfaces").into());
+    tr.set_theme_group_rows(c.t("slint.theme.group.rows").into());
+    tr.set_theme_group_text(c.t("slint.theme.group.text").into());
+    tr.set_theme_group_interaction(c.t("slint.theme.group.interaction").into());
+    tr.set_theme_group_alerts(c.t("slint.theme.group.alerts").into());
     tr.set_theme_flat_inactive(c.t("slint.theme.flat_inactive").into());
     tr.set_theme_use_inactive_row_color(c.t("slint.theme.use_inactive_row_color").into());
     tr.set_cfg_language(c.t("slint.cfg.language").into());

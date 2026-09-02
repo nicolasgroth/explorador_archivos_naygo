@@ -384,6 +384,15 @@ export component ConfigWindow inherits Window {
         Tr.theme-tok-active-panel-bg, Tr.theme-tok-inactive-panel-bg,
         Tr.theme-tok-toolbar-bg,
     ];
+    // Orden visual del editor. Los índices siguen siendo los índices estables del tema para que
+    // los perfiles existentes y el callback `theme-set-token` no cambien de significado.
+    property <[int]> token-order: [
+        1, 14, 10, 12, 13, // superficies y paneles
+        2, 3, 11,          // filas y tablas
+        4, 5,              // texto
+        0, 6, 7, 9,        // interacción y foco
+        8,                 // alertas
+    ];
     // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
     // edición).
     in property <bool> editing-flat-inactive: false;
@@ -967,9 +976,40 @@ export component ConfigWindow inherits Window {
                                                 selected => { root.theme-set-base(self.current-index); }
                                             }
                                         }
-                                        // Los tokens. Cada fila: muestra + nombre + hex; clic abre/cierra el picker.
-                                        for tname[ti] in root.token-names: VerticalLayout {
+                                        // Los tokens se agrupan por la superficie o estado que afectan. `ti` conserva
+                                        // el índice de almacenamiento, aunque la visualización ya no sea el orden interno.
+                                        for ti in root.token-order: VerticalLayout {
                                             spacing: 4px;
+                                            if ti == 1: Text {
+                                                text: Tr.theme-group-surfaces;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 2: Text {
+                                                text: Tr.theme-group-rows;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 4: Text {
+                                                text: Tr.theme-group-text;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 0: Text {
+                                                text: Tr.theme-group-interaction;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 8: Text {
+                                                text: Tr.theme-group-alerts;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
                                             Rectangle {
                                                 height: 30px;
                                                 border-radius: 4px;
@@ -991,7 +1031,7 @@ export component ConfigWindow inherits Window {
                                                             : black;
                                                     }
                                                     Text {
-                                                        text: tname;
+                                                        text: root.token-names[ti];
                                                         color: Theme.text;
                                                         font-size: 12px;
                                                         vertical-alignment: center;

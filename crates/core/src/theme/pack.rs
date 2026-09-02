@@ -103,6 +103,8 @@ mod tests {
             "mono",
             "kenney-game",
             "kenney-board",
+            "vivid",
+            "pastel",
         ];
         let cat = PackCatalog::load(Path::new("Z:/no/existe"));
         for pack in cat.packs() {

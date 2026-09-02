@@ -175,9 +175,9 @@ seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conser
   recortado.
 - Los sets Fluent y de color conservan su identificador al reiniciar. El editor de temas incorpora
   un token independiente para el fondo de la barra de herramientas, compatible con temas previos.
-- Se incorporaron los sets compactos y tintables `Kenney Game` y `Kenney Board`: 39 íconos por set,
-  con licencia CC0 documentada en `assets/icons/KENNEY-SOURCES.md`; la colección fuente de `tmp/`
-  no se empaqueta.
+- Se incorporaron los sets compactos tintables Outline y Tiles (IDs estables `kenney-game` y
+  `kenney-board`): 39 íconos por set, con licencia CC0 documentada en
+  `assets/icons/KENNEY-SOURCES.md`; la colección fuente de `tmp/` no se empaqueta.
 
 ### Cierre funcional 2026-09-02 (SVG, imágenes y ZIP)
 
@@ -191,6 +191,18 @@ seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conser
 - El árbol de ZIP/TAR alinea los tamaños en una columna monoespaciada a la derecha, calculada a
   partir de todas las rutas mostradas. Se mantuvo el árbol ASCII y se descartaron puntos de relleno
   para conservar una lectura limpia.
+
+### Cierre funcional 2026-09-02 (ajustes de controles y configuración)
+
+- El control de escala del preview de imagen es ahora un conmutador único: muestra ↔ cuando la
+  imagen está ajustada y `1:1` cuando se ve a tamaño natural; el tooltip anuncia el modo que se
+  activará al pulsarlo.
+- El editor de temas agrupa los tokens por superficies y paneles, filas y tablas, texto,
+  interacción/foco y alertas. La representación no altera los índices internos ni los temas ya
+  guardados.
+- Los sets antes rotulados por su fuente se presentan como Outline y Tiles, manteniendo sus IDs
+  persistentes. Se añadieron Vivid y Pastel: dos sets CC0 de 39 íconos multicolor, con paleta
+  semántica por tipo de archivo o acción y sin tintado por tema.
 
 ---
 

@@ -69,15 +69,29 @@ impl IconSetCatalog {
             },
             IconSetInfo {
                 id: "kenney-game".into(),
-                label: "Kenney Game".into(),
+                // El ID permanece estable para no invalidar configuraciones existentes.
+                // La etiqueta describe el estilo, sin exponer el proveedor del recurso.
+                label: "Outline".into(),
                 builtin: true,
                 tintable: true,
             },
             IconSetInfo {
                 id: "kenney-board".into(),
-                label: "Kenney Board".into(),
+                label: "Tiles".into(),
                 builtin: true,
                 tintable: true,
+            },
+            IconSetInfo {
+                id: "vivid".into(),
+                label: "Vivid".into(),
+                builtin: true,
+                tintable: false,
+            },
+            IconSetInfo {
+                id: "pastel".into(),
+                label: "Pastel".into(),
+                builtin: true,
+                tintable: false,
             },
         ];
         // Mantener en sync con el vec! de sets de fábrica de arriba: si agregas un set
@@ -91,6 +105,8 @@ impl IconSetCatalog {
             "mono",
             "kenney-game",
             "kenney-board",
+            "vivid",
+            "pastel",
         ];
         let icons_dir = dir.join("icons");
         if let Ok(entries) = std::fs::read_dir(&icons_dir) {
@@ -147,7 +163,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ocho_sets_de_fabrica_presentes_incluyendo_kenney() {
+    fn diez_sets_de_fabrica_presentes_incluyendo_las_paletas_de_color() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
         for id in [
@@ -159,10 +175,12 @@ mod tests {
             "mono",
             "kenney-game",
             "kenney-board",
+            "vivid",
+            "pastel",
         ] {
             assert!(cat.contains(id), "falta el set de fábrica {id}");
         }
-        assert_eq!(cat.available().len(), 8);
+        assert_eq!(cat.available().len(), 10);
     }
 
     #[test]
@@ -183,6 +201,8 @@ mod tests {
         assert!(by("kenney-game"));
         assert!(by("kenney-board"));
         assert!(!by("flat-color")); // trae su propio color
+        assert!(!by("vivid")); // trae una paleta semántica propia
+        assert!(!by("pastel"));
     }
 
     #[test]
@@ -217,7 +237,7 @@ mod tests {
     fn icons_dir_ausente_solo_fabrica() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        assert_eq!(cat.available().len(), 8);
+        assert_eq!(cat.available().len(), 10);
     }
 
     #[test]
