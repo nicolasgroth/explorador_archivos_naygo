@@ -145,7 +145,11 @@ pub fn render_archive_tree(
     ));
     out.push_str("──────────────────────────────\n");
     let root = build_tree(entries);
-    render_children(&root.children, "", &mut out, size_fmt);
+    // Las rutas y los conectores ya comunican la jerarquía. Reservar una columna para los
+    // tamaños permite recorrer rápidamente cuál pertenece a cada archivo, sin puntos de relleno
+    // que agreguen ruido visual al árbol ASCII.
+    let size_column = max_file_label_width(&root.children, "");
+    render_children(&root.children, "", &mut out, size_fmt, size_column);
     if summary.truncated {
         let extra = summary.total_entries.saturating_sub(entries.len());
         if extra > 0 {
@@ -162,7 +166,34 @@ pub fn render_archive_tree(
     out
 }
 
-fn render_children(children: &[TreeNode], prefix: &str, out: &mut String, size_fmt: SizeFormat) {
+/// Ancho visual de la etiqueta de archivo más larga, incluyendo el árbol ASCII que la precede.
+/// `chars()` cuenta los conectores box-drawing como una celda, a diferencia de `len()` (bytes).
+/// Esto mantiene la alineación estable para nombres UTF-8 comunes sin traer una dependencia extra.
+fn max_file_label_width(children: &[TreeNode], prefix: &str) -> usize {
+    let mut widest = 0;
+    let n = children.len();
+    for (i, node) in children.iter().enumerate() {
+        let last = i + 1 == n;
+        let connector = if last { "└─ " } else { "├─ " };
+        if node.is_dir {
+            let child_prefix = format!("{}{}", prefix, if last { "   " } else { "│  " });
+            widest = widest.max(max_file_label_width(&node.children, &child_prefix));
+        } else {
+            widest = widest.max(
+                prefix.chars().count() + connector.chars().count() + node.name.chars().count(),
+            );
+        }
+    }
+    widest
+}
+
+fn render_children(
+    children: &[TreeNode],
+    prefix: &str,
+    out: &mut String,
+    size_fmt: SizeFormat,
+    size_column: usize,
+) {
     let n = children.len();
     for (i, node) in children.iter().enumerate() {
         let last = i + 1 == n;
@@ -173,12 +204,16 @@ fn render_children(children: &[TreeNode], prefix: &str, out: &mut String, size_f
         if node.is_dir {
             out.push('/');
         } else {
-            out.push_str(&format!("  {}", format_size(node.size, size_fmt)));
+            let label_width =
+                prefix.chars().count() + connector.chars().count() + node.name.chars().count();
+            // Dos espacios mínimos preservan separación si justo coincide con la etiqueta mayor.
+            out.push_str(&" ".repeat(size_column.saturating_sub(label_width) + 2));
+            out.push_str(&format_size(node.size, size_fmt));
         }
         out.push('\n');
         if node.is_dir && !node.children.is_empty() {
             let child_prefix = format!("{}{}", prefix, if last { "   " } else { "│  " });
-            render_children(&node.children, &child_prefix, out, size_fmt);
+            render_children(&node.children, &child_prefix, out, size_fmt, size_column);
         }
     }
 }
@@ -241,6 +276,54 @@ mod tests {
         assert!(out.contains("main.rs"));
         assert!(out.contains("README.md"));
         assert!(out.contains("└─"));
+    }
+
+    #[test]
+    fn render_alinea_los_tamanos_sin_relleno_de_puntos() {
+        use crate::format::SizeFormat;
+        let entries = vec![
+            ArchiveEntry {
+                path: "corto.txt".into(),
+                is_dir: false,
+                size: 5,
+            },
+            ArchiveEntry {
+                path: "carpeta/con-un-nombre-largo.bin".into(),
+                is_dir: false,
+                size: 2048,
+            },
+        ];
+        let summary = ArchiveSummary {
+            files: 2,
+            dirs: 1,
+            total_uncompressed: 2053,
+            truncated: false,
+            total_entries: 2,
+        };
+        let out = render_archive_tree(
+            &entries,
+            &summary,
+            "demo.zip",
+            SizeFormat::Auto,
+            &labels_es(),
+        );
+        let short_value = format_size(5, SizeFormat::Auto);
+        let long_value = format_size(2048, SizeFormat::Auto);
+        let short_line = out.lines().find(|line| line.contains("corto.txt")).unwrap();
+        let long_line = out
+            .lines()
+            .find(|line| line.contains("con-un-nombre-largo.bin"))
+            .unwrap();
+        // `rfind` entrega byte offsets; convertirlos a caracteres para no contar los tres bytes
+        // UTF-8 de cada conector ├/└ como si ocuparan tres celdas en la fuente monoespaciada.
+        let short_size = short_line[..short_line.rfind(&short_value).unwrap()]
+            .chars()
+            .count();
+        let long_size = long_line[..long_line.rfind(&long_value).unwrap()]
+            .chars()
+            .count();
+        assert_eq!(short_size, long_size);
+        assert!(!out.contains("..."));
     }
 
     #[test]

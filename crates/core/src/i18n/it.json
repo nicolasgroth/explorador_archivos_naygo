@@ -756,6 +756,8 @@
   "slint.preview.cancel": "Annulla",
   "slint.preview.cancel_tip": "Interrompi questa anteprima",
   "slint.preview.copy_tip": "Copia tutto il testo",
+  "slint.preview.image_fit_tip": "Adatta l’immagine all’anteprima",
+  "slint.preview.image_natural_tip": "Visualizza l’immagine a dimensioni reali",
   "slint.preview.wrap_on_tip": "Attiva a capo automatico",
   "slint.preview.wrap_off_tip": "Disattiva a capo automatico",
   "slint.preview.reset_view_tip": "Ripristina vista 3D",

@@ -62,7 +62,11 @@ pub const TEXT_MAX_LINE_CHARS: usize = 1000;
 /// Tope de bytes de una imagen para intentar decodificarla (más grande → "muy grande").
 pub const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Lado máximo (px) de la textura de la imagen: si excede, se reescala antes de subirla.
-pub const IMAGE_MAX_SIDE: u32 = 1024;
+///
+/// 2048 px mantiene nítidas las vistas ajustadas y permite inspección a tamaño natural en la
+/// mayoría de capturas y gráficos, sin convertir la vista previa en un visor que cargue bitmaps
+/// enormes. El límite del archivo codificado continúa siendo `IMAGE_MAX_BYTES`.
+pub const IMAGE_MAX_SIDE: u32 = 2048;
 
 /// Lenguaje para el resaltado de sintaxis (set curado). `as_str` es la clave estable de
 /// serialización y el nombre que `core::highlight` mapea a la gramática de syntect.

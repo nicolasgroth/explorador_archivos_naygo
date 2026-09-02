@@ -756,6 +756,8 @@
   "slint.preview.cancel": "Abbrechen",
   "slint.preview.cancel_tip": "Diese Vorschau anhalten",
   "slint.preview.copy_tip": "Gesamten Text kopieren",
+  "slint.preview.image_fit_tip": "Bild an Vorschau anpassen",
+  "slint.preview.image_natural_tip": "Bild in Originalgröße anzeigen",
   "slint.preview.wrap_on_tip": "Zeilenumbruch aktivieren",
   "slint.preview.wrap_off_tip": "Zeilenumbruch deaktivieren",
   "slint.preview.reset_view_tip": "3D-Ansicht zurücksetzen",

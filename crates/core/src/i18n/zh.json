@@ -756,6 +756,8 @@
   "slint.preview.cancel": "取消",
   "slint.preview.cancel_tip": "停止此预览",
   "slint.preview.copy_tip": "复制全部文本",
+  "slint.preview.image_fit_tip": "使图像适合预览区域",
+  "slint.preview.image_natural_tip": "以原始大小查看图像",
   "slint.preview.wrap_on_tip": "启用自动换行",
   "slint.preview.wrap_off_tip": "禁用自动换行",
   "slint.preview.reset_view_tip": "重置3D视图",

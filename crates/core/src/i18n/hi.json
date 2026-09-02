@@ -756,6 +756,8 @@
   "slint.preview.cancel": "रद्द करें",
   "slint.preview.cancel_tip": "यह पूर्वावलोकन रोकें",
   "slint.preview.copy_tip": "सारा टेक्स्ट कॉपी करें",
+  "slint.preview.image_fit_tip": "छवि को पूर्वावलोकन में समायोजित करें",
+  "slint.preview.image_natural_tip": "छवि को वास्तविक आकार में देखें",
   "slint.preview.wrap_on_tip": "लाइन रैप सक्षम करें",
   "slint.preview.wrap_off_tip": "लाइन रैप अक्षम करें",
   "slint.preview.reset_view_tip": "3D दृश्य रीसेट करें",

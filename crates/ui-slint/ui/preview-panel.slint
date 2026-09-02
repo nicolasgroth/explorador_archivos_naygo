@@ -119,6 +119,11 @@ export component PreviewPanel inherits Rectangle {
     // El wrap parte activado para que los textos siempre sean legibles en paneles angostos. El
     // usuario puede apagarlo temporalmente si necesita respetar columnas/indentación exacta.
     property <bool> wrap-text: true;
+    // Las imágenes parten ajustadas, como hasta ahora. El segundo modo mantiene exactamente sus
+    // píxeles rasterizados y deja que ScrollView aparezca solo si no caben en el panel.
+    property <bool> fit-image: true;
+    property <string> image-content-key: root.view.path + "\u{0}" + root.view.image.width + "x" + root.view.image.height;
+    changed image-content-key => { root.fit-image = true; }
     background: Theme.inactive-panel-bg;
     border-width: 1px;
     border-color: root.active ? Theme.active-pane-border : Theme.divider;
@@ -191,6 +196,30 @@ export component PreviewPanel inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => { root.wrap-text = !root.wrap-text; }
                     changed has-hover => { root.hover-tip(self.has-hover ? (root.wrap-text ? Tr.preview-wrap-off-tip : Tr.preview-wrap-on-tip) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // Escala de imágenes estáticas. Las mallas siguen teniendo sus propios gestos de
+            // cámara; no se mezclan con este control de tamaño natural.
+            if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                background: root.fit-image || image-fit-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: "↔"; color: root.fit-image || image-fit-touch.has-hover ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                image-fit-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.fit-image = true; }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-image-fit-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                background: !root.fit-image || image-natural-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: "1:1"; color: !root.fit-image || image-natural-touch.has-hover ? Theme.text : Theme.text-dim; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+                image-natural-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.fit-image = false; }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-image-natural-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
                 }
             }
             if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
@@ -300,13 +329,33 @@ export component PreviewPanel inherits Rectangle {
 
         if root.view.mode == 2: Rectangle {
             vertical-stretch: 1;
-            // El renderer sigue siendo una imagen CPU; esta capa solo captura gestos y nunca
-            // transforma el modelo en el hilo de UI. Arrastrar rota, rueda/touchpad acerca.
-            Image {
+            // Ajustar al panel conserva el comportamiento por defecto. La calidad se decide en
+            // el worker y la UI solo reescala el bitmap ya listo, por lo que no hace I/O.
+            if root.fit-image || root.view.mesh-interactive: Image {
                 width: 100%;
                 height: 100%;
                 source: root.view.image;
                 image-fit: contain;
+                image-rendering: smooth;
+            }
+            // Tamaño natural: el canvas adopta las dimensiones reales de la imagen. Si caben,
+            // queda centrada sin ampliarla; si no, ScrollView aporta barras y rueda nativas.
+            if !root.fit-image && !root.view.mesh-interactive: sv-natural := ScrollView {
+                viewport-width: max(self.visible-width, root.view.image.width * 1px);
+                viewport-height: max(self.visible-height, root.view.image.height * 1px);
+                natural-canvas := Rectangle {
+                    width: max(sv-natural.visible-width, root.view.image.width * 1px);
+                    height: max(sv-natural.visible-height, root.view.image.height * 1px);
+                    Image {
+                        x: max(0px, (parent.width - root.view.image.width * 1px) / 2);
+                        y: max(0px, (parent.height - root.view.image.height * 1px) / 2);
+                        width: root.view.image.width * 1px;
+                        height: root.view.image.height * 1px;
+                        source: root.view.image;
+                        image-fit: contain;
+                        image-rendering: smooth;
+                    }
+                }
             }
             mesh-touch := TouchArea {
                 enabled: root.view.mesh-interactive;

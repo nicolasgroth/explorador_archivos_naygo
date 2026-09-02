@@ -756,6 +756,8 @@
   "slint.preview.cancel": "Cancel",
   "slint.preview.cancel_tip": "Stop this preview",
   "slint.preview.copy_tip": "Copy all text",
+  "slint.preview.image_fit_tip": "Fit image to preview",
+  "slint.preview.image_natural_tip": "View image at natural size",
   "slint.preview.wrap_on_tip": "Enable word wrap",
   "slint.preview.wrap_off_tip": "Disable word wrap",
   "slint.preview.reset_view_tip": "Reset 3D view",

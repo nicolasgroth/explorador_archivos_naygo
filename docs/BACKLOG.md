@@ -179,6 +179,19 @@ seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conser
   con licencia CC0 documentada en `assets/icons/KENNEY-SOURCES.md`; la colección fuente de `tmp/`
   no se empaqueta.
 
+### Cierre funcional 2026-09-02 (SVG, imágenes y ZIP)
+
+- Los SVG con `viewBox` o dimensiones declaradas respetan su canvas original. Si un export carece
+  de ambos —como algunos assets de Flash/Animate con coordenadas negativas— el preview encuadra
+  sus límites reales y evita el recorte. Al ser vectoriales se rasterizan hasta 2048 px para que
+  no se pixelicen al ajustar el panel; ese mismo tope limita la textura a ~16 MiB.
+- Las imágenes estáticas disponen de dos controles locales: ajustar al panel (inicial) y `1:1`.
+  El modo natural no amplía fotos pequeñas, las centra y habilita scroll solamente cuando exceden
+  el área visible. No hay I/O ni decodificación en el hilo de UI.
+- El árbol de ZIP/TAR alinea los tamaños en una columna monoespaciada a la derecha, calculada a
+  partir de todas las rutas mostradas. Se mantuvo el árbol ASCII y se descartaron puntos de relleno
+  para conservar una lectura limpia.
+
 ---
 
 ---

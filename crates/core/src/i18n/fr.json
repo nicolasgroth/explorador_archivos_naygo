@@ -756,6 +756,8 @@
   "slint.preview.cancel": "Annuler",
   "slint.preview.cancel_tip": "Arrêter cet aperçu",
   "slint.preview.copy_tip": "Copier tout le texte",
+  "slint.preview.image_fit_tip": "Ajuster l’image à l’aperçu",
+  "slint.preview.image_natural_tip": "Afficher l’image à sa taille réelle",
   "slint.preview.wrap_on_tip": "Activer le retour à la ligne",
   "slint.preview.wrap_off_tip": "Désactiver le retour à la ligne",
   "slint.preview.reset_view_tip": "Réinitialiser la vue 3D",

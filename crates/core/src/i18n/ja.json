@@ -756,6 +756,8 @@
   "slint.preview.cancel": "キャンセル",
   "slint.preview.cancel_tip": "このプレビューを停止",
   "slint.preview.copy_tip": "テキストをすべてコピー",
+  "slint.preview.image_fit_tip": "画像をプレビューに合わせる",
+  "slint.preview.image_natural_tip": "画像を原寸で表示",
   "slint.preview.wrap_on_tip": "折り返しを有効化",
   "slint.preview.wrap_off_tip": "折り返しを無効化",
   "slint.preview.reset_view_tip": "3Dビューをリセット",

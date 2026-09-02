@@ -420,6 +420,8 @@ where
     tr.set_preview_cancel(c.t("slint.preview.cancel").into());
     tr.set_preview_cancel_tip(c.t("slint.preview.cancel_tip").into());
     tr.set_preview_copy_tip(c.t("slint.preview.copy_tip").into());
+    tr.set_preview_image_fit_tip(c.t("slint.preview.image_fit_tip").into());
+    tr.set_preview_image_natural_tip(c.t("slint.preview.image_natural_tip").into());
     tr.set_preview_wrap_on_tip(c.t("slint.preview.wrap_on_tip").into());
     tr.set_preview_wrap_off_tip(c.t("slint.preview.wrap_off_tip").into());
     tr.set_preview_reset_view_tip(c.t("slint.preview.reset_view_tip").into());

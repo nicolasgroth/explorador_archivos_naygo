@@ -864,8 +864,11 @@ fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) ->
 }
 
 /// Rasteriza un SVG a RGBA con resvg (puro Rust, sin DLLs). Lo escala para que el lado mayor
-/// quede en ~`IMAGE_MAX_SIDE` px (nítido pero acotado). Como el SVG es vectorial, se respeta el
-/// tope de bytes del ARCHIVO fuente (no del bitmap resultante). Cancelable entre etapas.
+/// quede en `IMAGE_MAX_SIDE` px (nítido pero acotado). Un SVG sin `viewBox` ni dimensiones
+/// explícitas usa los límites reales de su contenido como canvas: varios assets exportados desde
+/// Flash/Animate usan coordenadas negativas y, con el canvas SVG implícito de 100×100, quedaban
+/// recortados en la vista previa. Como el SVG es vectorial, se respeta el tope de bytes del
+/// ARCHIVO fuente (no del bitmap resultante). Cancelable entre etapas.
 fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
     use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
     let bytes = match std::fs::metadata(path) {
@@ -889,18 +892,23 @@ fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> P
     if token.is_cancelled() {
         return Payload::Message(msgs.cancelled.clone());
     }
-    // Escala para encajar el lado mayor en IMAGE_MAX_SIDE (sin agrandar SVGs ya pequeños).
-    let size = tree.size();
-    let (sw, sh) = (size.width(), size.height());
+    let canvas = svg_canvas(&tree, &bytes);
+    // Un SVG es vectorial: incluso si declara 64×64, rasterizarlo a la resolución de preview
+    // evita que Slint deba ampliar un bitmap chico y produzca bordes pixelados. El lado mayor
+    // sigue estrictamente acotado por IMAGE_MAX_SIDE.
+    let (sw, sh) = (canvas.width, canvas.height);
     let longest = sw.max(sh).max(1.0);
-    let scale = (IMAGE_MAX_SIDE as f32 / longest).clamp(0.01, 1.0);
+    let scale = (IMAGE_MAX_SIDE as f32 / longest).max(0.01);
     let pw = (sw * scale).ceil().max(1.0) as u32;
     let ph = (sh * scale).ceil().max(1.0) as u32;
     let mut pixmap = match tiny_skia::Pixmap::new(pw, ph) {
         Some(p) => p,
         None => return Payload::Message(msgs.rasterize.clone()),
     };
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    // Primero trasladamos el contenido al origen (necesario para SVGs sin canvas explícito) y
+    // luego lo escalamos. `pre_translate` conserva justamente ese orden en tiny-skia.
+    let transform =
+        tiny_skia::Transform::from_scale(scale, scale).pre_translate(-canvas.x, -canvas.y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     if token.is_cancelled() {
         return Payload::Message(msgs.cancelled.clone());
@@ -914,6 +922,53 @@ fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> P
         height: ph,
         rgba,
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SvgCanvas {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+/// Selecciona el canvas de render. Los SVG con `viewBox` o dimensiones declaradas conservan su
+/// espacio de diseño (incluido cualquier margen intencional). Si faltan ambos, usvg debe aplicar
+/// el viewport HTML por defecto aunque el dibujo esté en coordenadas negativas; allí encuadramos
+/// el contenido real para no recortarlo.
+fn svg_canvas(tree: &usvg::Tree, bytes: &[u8]) -> SvgCanvas {
+    if svg_has_explicit_canvas(bytes) {
+        let size = tree.size();
+        return SvgCanvas {
+            x: 0.0,
+            y: 0.0,
+            width: size.width().max(1.0),
+            height: size.height().max(1.0),
+        };
+    }
+
+    let bounds = tree.root().abs_layer_bounding_box();
+    SvgCanvas {
+        x: bounds.x(),
+        y: bounds.y(),
+        width: bounds.width().max(1.0),
+        height: bounds.height().max(1.0),
+    }
+}
+
+/// Lee solo la etiqueta raíz. No pretendemos reemplazar un parser XML: usvg ya valida el SVG;
+/// este chequeo decide si debe respetarse su canvas o corregirse el viewport implícito.
+fn svg_has_explicit_canvas(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    let lower = text.to_ascii_lowercase();
+    let Some(start) = lower.find("<svg") else {
+        return true;
+    };
+    let Some(end_rel) = lower[start..].find('>') else {
+        return true;
+    };
+    let tag = &lower[start..start + end_rel];
+    tag.contains("viewbox") || (tag.contains("width") && tag.contains("height"))
 }
 
 /// Convierte RGBA premultiplicado (tiny-skia) a RGBA recto (lo que espera el panel). Divide cada
@@ -1025,6 +1080,48 @@ mod tests {
     /// Mensajes de error en español para los tests (valores por defecto del struct).
     fn msgs_es() -> PreviewMessages {
         PreviewMessages::default()
+    }
+
+    #[test]
+    fn svg_sin_canvas_expone_todo_su_contenido() {
+        // Export típico de Kenney/Flash: coordenadas negativas, sin width/height ni viewBox.
+        // El viewport implícito de SVG lo recortaría; el preview debe encuadrar el dibujo entero.
+        let source = br##"<svg xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M-64 -32H64V32H-64Z"/></svg>"##;
+        let tree = usvg::Tree::from_data(source, &usvg::Options::default()).unwrap();
+        let canvas = svg_canvas(&tree, source);
+        assert!(canvas.x <= -64.0);
+        assert!(canvas.y <= -32.0);
+        assert!(canvas.width >= 128.0);
+        assert!(canvas.height >= 64.0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sin-canvas.svg");
+        std::fs::write(&path, source).unwrap();
+        match read_svg(&path, &CancellationToken::new(), &msgs_es()) {
+            Payload::Image {
+                width,
+                height,
+                rgba,
+            } => {
+                assert_eq!((width, height), (2048, 1024));
+                assert_eq!(
+                    rgba[3], 255,
+                    "el dibujo llega al borde del canvas corregido"
+                );
+            }
+            other => panic!("esperaba SVG rasterizado, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn svg_con_viewbox_conserva_su_canvas_declarado() {
+        let source = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><path d="M20 20H40V40H20Z"/></svg>"#;
+        let tree = usvg::Tree::from_data(source, &usvg::Options::default()).unwrap();
+        let canvas = svg_canvas(&tree, source);
+        assert_eq!(canvas.x, 0.0);
+        assert_eq!(canvas.y, 0.0);
+        assert_eq!(canvas.width, 320.0);
+        assert_eq!(canvas.height, 180.0);
     }
 
     #[test]
