@@ -177,7 +177,7 @@ fn absolute_existing_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, TrashError
         .iter()
         .map(|path| {
             std::fs::canonicalize(path)
-                .map(|path| shell_parsing_path(path))
+                .map(shell_parsing_path)
                 .map_err(|error| {
                     TrashError::Failed(format!(
                         "no se pudo resolver la ruta para Papelera ({}): {error}",

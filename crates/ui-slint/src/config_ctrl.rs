@@ -20,12 +20,12 @@ use naygo_core::theme::{
 use std::path::PathBuf;
 
 /// Cantidad de tokens de color editables de un tema (orden fijo, ver `set_token_color`).
-pub const THEME_TOKEN_COUNT: usize = 14;
+pub const THEME_TOKEN_COUNT: usize = 15;
 
 /// Estado del tema que se está editando (duplicado de un builtin o de uno de usuario). El editor
 /// muta este `Theme` en memoria, aplica el preview en vivo, y al guardar lo escribe a disco.
 struct ThemeEditState {
-    /// El tema en construcción (sus 11 tokens + nombre + base se editan en vivo).
+    /// El tema en construcción (sus tokens + nombre + base se editan en vivo).
     theme: Theme,
     /// El tema activo ANTES de entrar al editor; al cancelar se re-aplica para revertir el preview.
     prev_theme_id: ThemeId,
@@ -135,13 +135,13 @@ impl ConfigCtrl {
 
     // --- Editor de temas (galería de Apariencia) ---
     //
-    // Los 14 tokens de color de un `Theme` se exponen por un índice estable 0..14. El ORDEN ES
+    // Los 15 tokens de color de un `Theme` se exponen por un índice estable 0..15. El ORDEN ES
     // FIJO y debe coincidir entre `editing_token_hex` y `set_token_color` (y con la lista de la
     // UI): 0=accent, 1=panel_bg, 2=row_bg, 3=row_alt_bg, 4=text, 5=text_dim, 6=selection_bg,
     // 7=active_bar, 8=error, 9=highlight, 10=border, 11=row_inactive_bg,
-    // 12=active_panel_bg, 13=inactive_panel_bg.
+    // 12=active_panel_bg, 13=inactive_panel_bg, 14=toolbar_bg.
 
-    /// Lee el token `idx` (0..12) de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
+    /// Lee el token `idx` de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
     fn token_of(theme: &Theme, idx: usize) -> ThemeColor {
         match idx {
             0 => theme.accent,
@@ -158,11 +158,12 @@ impl ConfigCtrl {
             11 => theme.row_inactive_bg,
             12 => theme.active_panel_bg,
             13 => theme.inactive_panel_bg,
+            14 => theme.toolbar_bg,
             _ => theme.accent,
         }
     }
 
-    /// Escribe el token `idx` (0..12) de un tema. Fuera de rango → no hace nada.
+    /// Escribe el token `idx` de un tema. Fuera de rango → no hace nada.
     fn set_token_of(theme: &mut Theme, idx: usize, c: ThemeColor) {
         match idx {
             0 => theme.accent = c,
@@ -179,6 +180,7 @@ impl ConfigCtrl {
             11 => theme.row_inactive_bg = c,
             12 => theme.active_panel_bg = c,
             13 => theme.inactive_panel_bg = c,
+            14 => theme.toolbar_bg = c,
             _ => {}
         }
     }
@@ -289,7 +291,7 @@ impl ConfigCtrl {
         }
     }
 
-    /// Hex "#rrggbb" del token `idx` (0..12) del tema en edición. Sin editor → "#000000".
+    /// Hex "#rrggbb" del token `idx` del tema en edición. Sin editor → "#000000".
     pub fn editing_token_hex(&self, idx: usize) -> String {
         self.editing
             .as_ref()
@@ -411,7 +413,7 @@ impl ConfigCtrl {
         self.editing.take().map(|e| e.prev_theme_id)
     }
 
-    /// Restaura los 12 tokens del tema en edición a los del builtin del que se duplicó (botón
+    /// Restaura los tokens del tema en edición a los del builtin del que se duplicó (botón
     /// "Restaurar de fábrica"), incluyendo "paneles inactivos planos". Conserva el nombre/base
     /// actuales del editor. No hace nada si el tema en edición no proviene de un builtin. El
     /// llamador re-aplica el preview tras esto.
@@ -429,6 +431,7 @@ impl ConfigCtrl {
         };
         e.theme.accent = factory.accent;
         e.theme.panel_bg = factory.panel_bg;
+        e.theme.toolbar_bg = factory.toolbar_bg;
         e.theme.active_panel_bg = factory.active_panel_bg;
         e.theme.inactive_panel_bg = factory.inactive_panel_bg;
         e.theme.row_bg = factory.row_bg;

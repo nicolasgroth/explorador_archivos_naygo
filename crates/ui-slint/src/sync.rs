@@ -333,6 +333,18 @@ pub(crate) fn build_sync(
                         pv.title = SharedString::from(c.pane_label(id).as_str());
                         changed = true;
                     }
+                    if purpose == Some(PanePurpose::Tree) {
+                        let reveal_row = c.tree_reveal_row(id);
+                        let reveal_key = SharedString::from(c.tree_reveal_key(id));
+                        if pv.tree_reveal_row != reveal_row {
+                            pv.tree_reveal_row = reveal_row;
+                            changed = true;
+                        }
+                        if pv.tree_reveal_key != reveal_key {
+                            pv.tree_reveal_key = reveal_key;
+                            changed = true;
+                        }
+                    }
                     // La estrella de favorito puede cambiar al navegar o al togglear.
                     if purpose == Some(PanePurpose::Files) {
                         let fav = c.is_pane_dir_favorite(id);
@@ -807,6 +819,8 @@ pub(crate) fn build_sync(
                             tree_link_label: SharedString::from(
                                 ctrl.borrow().tree_link_label(*id).as_str(),
                             ),
+                            tree_reveal_row: ctrl.borrow().tree_reveal_row(*id),
+                            tree_reveal_key: SharedString::from(ctrl.borrow().tree_reveal_key(*id)),
                             rows: ModelRc::from(pm.rows.clone()),
                             columns: ModelRc::from(pm.columns.clone()),
                             col_menu: ModelRc::from(pm.col_menu.clone()),

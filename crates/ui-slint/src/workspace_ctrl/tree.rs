@@ -16,6 +16,29 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Índice de la carpeta activa dentro de las filas visibles. La UI lo consume para revelar
+    /// el destino tras activar un panel Files; no expande ni hace I/O.
+    pub fn tree_reveal_row(&self, id: PaneId) -> i32 {
+        self.trees
+            .get(&id)
+            .and_then(|tree| {
+                let active = tree.active_path.as_ref()?;
+                tree.flat_paths().iter().position(|path| path == active)
+            })
+            .map(|row| row as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Clave de revelación que acompaña al índice. La UI necesita ambas: el índice posiciona el
+    /// viewport y la ruta asegura una señal nueva aun si dos carpetas comparten ese índice.
+    pub fn tree_reveal_key(&self, id: PaneId) -> String {
+        self.trees
+            .get(&id)
+            .and_then(|tree| tree.active_path.as_ref())
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    }
+
     // --- Acciones de los paneles especiales ---
 
     /// Navega el panel Files activo a `dir` (desde favoritos/recientes/árbol) y arranca su

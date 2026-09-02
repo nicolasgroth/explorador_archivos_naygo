@@ -88,6 +88,9 @@ pub struct Theme {
     pub base: ThemeBase,
     pub accent: ThemeColor,
     pub panel_bg: ThemeColor,
+    /// Fondo exclusivo de la barra de herramientas. Al faltar en temas existentes cae al fondo
+    /// del panel para mantener compatibilidad visual y de archivos de tema.
+    pub toolbar_bg: ThemeColor,
     /// Fondo del panel Files activo. Al faltar en temas existentes cae a `panel_bg`.
     pub active_panel_bg: ThemeColor,
     /// Fondo de panel Files inactivo y paneles de información. Al faltar cae a `panel_bg`.
@@ -115,11 +118,12 @@ pub struct Theme {
 impl Serialize for Theme {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Theme", 18)?;
+        let mut st = s.serialize_struct("Theme", 19)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("base", &self.base)?;
         st.serialize_field("accent", &self.accent)?;
         st.serialize_field("panel_bg", &self.panel_bg)?;
+        st.serialize_field("toolbar_bg", &self.toolbar_bg)?;
         st.serialize_field("active_panel_bg", &self.active_panel_bg)?;
         st.serialize_field("inactive_panel_bg", &self.inactive_panel_bg)?;
         st.serialize_field("row_bg", &self.row_bg)?;
@@ -145,6 +149,7 @@ struct ThemeRaw {
     base: Option<ThemeBase>,
     accent: Option<ThemeColor>,
     panel_bg: Option<ThemeColor>,
+    toolbar_bg: Option<ThemeColor>,
     active_panel_bg: Option<ThemeColor>,
     inactive_panel_bg: Option<ThemeColor>,
     row_bg: Option<ThemeColor>,
@@ -175,6 +180,7 @@ impl<'de> Deserialize<'de> for Theme {
             base,
             accent: raw.accent.unwrap_or(def.accent),
             panel_bg,
+            toolbar_bg: raw.toolbar_bg.unwrap_or(panel_bg),
             active_panel_bg: raw.active_panel_bg.unwrap_or(panel_bg),
             inactive_panel_bg: raw.inactive_panel_bg.unwrap_or(panel_bg),
             row_bg,
@@ -211,6 +217,7 @@ impl Theme {
                 base,
                 accent: c(0x2f, 0x81, 0xf7),
                 panel_bg: c(0x1e, 0x1e, 0x1e),
+                toolbar_bg: c(0x1e, 0x1e, 0x1e),
                 active_panel_bg: c(0x1e, 0x1e, 0x1e),
                 inactive_panel_bg: c(0x1e, 0x1e, 0x1e),
                 row_bg: c(0x1e, 0x1e, 0x1e),
@@ -235,6 +242,7 @@ impl Theme {
                 // que los temas claros se perciban demasiado brillantes. Un gris leve da mejor
                 // confort y sensación de contraste sin tocar el texto.
                 panel_bg: c(0xe8, 0xe8, 0xea),
+                toolbar_bg: c(0xe8, 0xe8, 0xea),
                 active_panel_bg: c(0xe8, 0xe8, 0xea),
                 inactive_panel_bg: c(0xe8, 0xe8, 0xea),
                 row_bg: c(0xee, 0xee, 0xf0),
@@ -455,6 +463,7 @@ mod tests {
             base: ThemeBase::Dark,
             accent: ThemeColor::new(1, 2, 3),
             panel_bg: ThemeColor::new(4, 5, 6),
+            toolbar_bg: ThemeColor::new(5, 6, 7),
             active_panel_bg: ThemeColor::new(6, 7, 8),
             inactive_panel_bg: ThemeColor::new(8, 9, 10),
             row_bg: ThemeColor::new(7, 8, 9),
@@ -482,6 +491,7 @@ mod tests {
         assert_eq!(t.name, "Min");
         assert_eq!(t.base, ThemeBase::Dark);
         let _ = t.accent;
+        assert_eq!(t.toolbar_bg, t.panel_bg);
     }
 
     #[test]
@@ -505,10 +515,12 @@ mod tests {
         // Round-trip explícito de los dos campos nuevos: deben sobrevivir serializar→deserializar.
         let mut t = Theme::defaults_for(ThemeBase::Dark, "X".into());
         t.row_inactive_bg = ThemeColor::new(0x10, 0x20, 0x30);
+        t.toolbar_bg = ThemeColor::new(0x20, 0x30, 0x40);
         t.flat_inactive_panels = true;
         let json = serde_json::to_string(&t).unwrap();
         let back: Theme = serde_json::from_str(&json).unwrap();
         assert_eq!(back.row_inactive_bg, ThemeColor::new(0x10, 0x20, 0x30));
+        assert_eq!(back.toolbar_bg, ThemeColor::new(0x20, 0x30, 0x40));
         assert!(back.flat_inactive_panels);
     }
 
@@ -527,13 +539,14 @@ mod tests {
         // El default de row_inactive_bg es el row_bg RESUELTO de este tema, no el genérico.
         assert_eq!(t.row_inactive_bg, t.row_bg);
         assert_eq!(t.row_inactive_bg, ThemeColor::new(0x11, 0x22, 0x33));
+        assert_eq!(t.toolbar_bg, t.panel_bg);
         assert!(!t.flat_inactive_panels);
     }
 
     #[test]
-    fn los_cinco_de_fabrica_cargan_con_campos_nuevos() {
-        // Los 5 temas embebidos (cuyos .json aún no tienen los campos nuevos) deben cargar bien y
-        // dejar row_inactive_bg = su row_bg y flat = false (sin cambio de aspecto).
+    fn los_temas_de_fabrica_exponen_fondo_de_toolbar() {
+        // Todos los temas embebidos incluyen el token explícito y mantienen defaults compatibles
+        // para los restantes campos opcionales.
         let cat = ThemeCatalog::load(
             std::path::Path::new("Z:/no/existe"),
             &ThemeCatalog::default_id(),

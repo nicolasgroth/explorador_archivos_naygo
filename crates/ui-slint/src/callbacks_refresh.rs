@@ -313,7 +313,7 @@ pub(crate) fn build_refresh_config_vm(
         // Tarjetas de tema para la galería de selección (config → Apariencia).
         cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(theme_cards))));
         // Estado del editor de temas (config → Apariencia). Cuando hay un tema en edición se
-        // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 12 tokens (hex +
+        // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 15 tokens (hex +
         // r/g/b por canal, para inicializar el color-picker, que no parsea hex).
         cfg.set_editing_active(editing_active);
         cfg.set_editing_name(editing_name.into());

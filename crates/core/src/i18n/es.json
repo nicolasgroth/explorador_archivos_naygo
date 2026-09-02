@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "Fila de panel inactivo",
   "slint.theme.tok.active_panel_bg": "Fondo del panel activo",
   "slint.theme.tok.inactive_panel_bg": "Fondo del panel inactivo",
+  "slint.theme.tok.toolbar_bg": "Fondo de la barra de herramientas",
   "slint.theme.use_inactive_row_color": "Color propio para filas inactivas",
   "slint.theme.flat_inactive": "Paneles inactivos planos",
   "slint.cfg.language": "Idioma",

@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "Zeile inaktives Panel",
   "slint.theme.tok.active_panel_bg": "Hintergrund aktives Panel",
   "slint.theme.tok.inactive_panel_bg": "Hintergrund inaktives Panel",
+  "slint.theme.tok.toolbar_bg": "Symbolleistenhintergrund",
   "slint.theme.use_inactive_row_color": "Eigene Farbe für inaktive Zeilen",
   "slint.theme.flat_inactive": "Inaktive Panels flach",
   "slint.cfg.language": "Sprache",

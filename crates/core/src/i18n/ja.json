@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "非アクティブパネルの行",
   "slint.theme.tok.active_panel_bg": "アクティブパネルの背景",
   "slint.theme.tok.inactive_panel_bg": "非アクティブパネルの背景",
+  "slint.theme.tok.toolbar_bg": "ツールバーの背景",
   "slint.theme.use_inactive_row_color": "非アクティブ行に別の色を使う",
   "slint.theme.flat_inactive": "非アクティブなパネルをフラットにする",
   "slint.cfg.language": "言語",

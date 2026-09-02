@@ -24,6 +24,7 @@ where
     let theme = ui.global::<Theme>();
     theme.set_accent(col(t.accent));
     theme.set_panel_bg(col(t.panel_bg));
+    theme.set_toolbar_bg(col(t.toolbar_bg));
     theme.set_active_panel_bg(col(t.active_panel_bg));
     theme.set_inactive_panel_bg(col(t.inactive_panel_bg));
     theme.set_row_bg(col(t.row_bg));

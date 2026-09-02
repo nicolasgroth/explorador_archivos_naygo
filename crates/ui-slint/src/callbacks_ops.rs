@@ -175,10 +175,8 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                 .set_description(&description)
                 .set_buttons(rfd::MessageButtons::YesNo)
                 .show();
-            if accepted == rfd::MessageDialogResult::Yes {
-                if ctrl.borrow_mut().unblock_provenance() {
-                    start_timer();
-                }
+            if accepted == rfd::MessageDialogResult::Yes && ctrl.borrow_mut().unblock_provenance() {
+                start_timer();
             }
         });
     }

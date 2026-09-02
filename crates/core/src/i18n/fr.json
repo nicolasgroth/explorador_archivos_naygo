@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "Ligne de panneau inactif",
   "slint.theme.tok.active_panel_bg": "Arrière-plan du panneau actif",
   "slint.theme.tok.inactive_panel_bg": "Arrière-plan du panneau inactif",
+  "slint.theme.tok.toolbar_bg": "Arrière-plan de la barre d’outils",
   "slint.theme.use_inactive_row_color": "Couleur distincte pour les lignes inactives",
   "slint.theme.flat_inactive": "Panneaux inactifs plats",
   "slint.cfg.language": "Langue",

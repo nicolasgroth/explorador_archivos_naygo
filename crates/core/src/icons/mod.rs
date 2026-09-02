@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 
-//! Embebe los PNG de los cinco sets con `include_bytes!`. `bytes_for_id` da los bytes
+//! Embebe los PNG de los sets de fábrica con `include_bytes!`. `bytes_for_id` da los bytes
 //! del ícono para un set (por id string) y una clave; si la clave no tiene asset propio,
 //! cae a `unknown` (genérico), que siempre existe. `resolve_with_overrides` aplica los
 //! overrides por objeto sobre el set base. Función pura y testeable. Vive en
@@ -100,6 +100,9 @@ set_table!(MATERIAL, "material");
 set_table!(FLAT_COLOR, "flat-color");
 set_table!(FLUENT, "fluent");
 set_table!(MONO, "mono");
+// Selección compacta CC0 de Kenney: 39 claves por set, no la colección completa.
+set_table!(KENNEY_GAME, "kenney-game");
+set_table!(KENNEY_BOARD, "kenney-board");
 
 /// Set de fábrica usado como último fallback (su `unknown` siempre existe embebido).
 const FALLBACK_SET: &str = "lucide";
@@ -113,6 +116,8 @@ fn table_for_id(set_id: &str) -> Option<&'static [(&'static str, &'static [u8])]
         "flat-color" => Some(FLAT_COLOR),
         "fluent" => Some(FLUENT),
         "mono" => Some(MONO),
+        "kenney-game" => Some(KENNEY_GAME),
+        "kenney-board" => Some(KENNEY_BOARD),
         _ => None,
     }
 }
@@ -400,6 +405,8 @@ mod tests {
             "flat-color",
             "fluent",
             "mono",
+            "kenney-game",
+            "kenney-board",
         ] {
             for key in all_keys() {
                 assert!(
@@ -422,6 +429,8 @@ mod tests {
             "flat-color",
             "fluent",
             "mono",
+            "kenney-game",
+            "kenney-board",
         ] {
             let table = table_for_id(set).expect("set embebido existe");
             for key in all_keys() {

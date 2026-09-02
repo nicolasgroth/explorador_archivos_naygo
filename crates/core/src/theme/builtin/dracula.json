@@ -3,6 +3,7 @@
   "base": "dark",
   "accent": "#bd93f9",
   "panel_bg": "#282a36",
+  "toolbar_bg": "#232530",
   "row_bg": "#21222c",
   "row_alt_bg": "#2e3040",
   "text": "#f8f8f2",

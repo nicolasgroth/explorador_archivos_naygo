@@ -254,29 +254,44 @@ export component PreviewPanel inherits Rectangle {
                 // se puede copiar por fragmento.
                 viewport-width: root.wrap-text ? self.visible-width : max(self.visible-width, text-editor.preferred-width + 16px);
                 viewport-height: max(self.visible-height, text-editor.preferred-height);
-                text-editor := TextInput {
-                    text: root.view.text;
-                    read-only: true;
-                    single-line: false;
-                    color: Theme.text;
-                    font-family: "Consolas";
-                    wrap: root.wrap-text ? word-wrap : no-wrap;
-                    selection-background-color: Theme.accent.with-alpha(0.75);
-                    selection-foreground-color: Theme.text;
+                // `TextInput` no expone `scroll-event`. Se vuelve hijo de esta TouchArea: los
+                // clicks y arrastres que usa para seleccionar se consumen en el editor, mientras
+                // que la rueda que el editor no maneja burbujea al contenedor y mueve el viewport.
+                // Así se conserva selección parcial y Ctrl+C sin cargar todo el archivo.
+                text-wheel := TouchArea {
                     x: 8px;
-                    width: root.wrap-text ? parent.width - 16px : max(parent.width - 16px, self.preferred-width);
-                    height: self.preferred-height;
-                    page-height: sv.visible-height;
-                    // `TextInput` conserva selección y caret cuando su propiedad `text` cambia.
-                    // Al navegar, eso podía dejar seleccionada una posición del archivo anterior
-                    // —fuera del viewport y aparentemente inexistente. Reasignar tras vaciarlo
-                    // reinicia ese estado interno, manteniendo la selección normal sólo dentro
-                    // del archivo actualmente mostrado.
-                    property <string> content-key: root.view.path + "\u{0}" + root.view.text;
-                    changed content-key => {
-                        self.text = "";
-                        self.text = root.view.text;
-                        sv.viewport-y = 0;
+                    width: root.wrap-text ? parent.width - 16px : max(parent.width - 16px, text-editor.preferred-width);
+                    height: text-editor.preferred-height;
+                    scroll-event(ev) => {
+                        sv.viewport-y = clamp(
+                            sv.viewport-y + ev.delta-y,
+                            -(max(0px, sv.viewport-height - sv.visible-height)),
+                            0px);
+                        accept;
+                    }
+                    text-editor := TextInput {
+                        text: root.view.text;
+                        read-only: true;
+                        single-line: false;
+                        color: Theme.text;
+                        font-family: "Consolas";
+                        wrap: root.wrap-text ? word-wrap : no-wrap;
+                        selection-background-color: Theme.accent.with-alpha(0.75);
+                        selection-foreground-color: Theme.text;
+                        width: parent.width;
+                        height: self.preferred-height;
+                        page-height: sv.visible-height;
+                        // `TextInput` conserva selección y caret cuando su propiedad `text` cambia.
+                        // Al navegar, eso podía dejar seleccionada una posición del archivo anterior
+                        // —fuera del viewport y aparentemente inexistente. Reasignar tras vaciarlo
+                        // reinicia ese estado interno, manteniendo la selección normal sólo dentro
+                        // del archivo actualmente mostrado.
+                        property <string> content-key: root.view.path + "\u{0}" + root.view.text;
+                        changed content-key => {
+                            self.text = "";
+                            self.text = root.view.text;
+                            sv.viewport-y = 0;
+                        }
                     }
                 }
             }

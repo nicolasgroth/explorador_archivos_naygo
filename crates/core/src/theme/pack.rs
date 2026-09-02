@@ -93,8 +93,17 @@ mod tests {
 
     #[test]
     fn packs_embebidos_usan_sets_validos() {
-        // Los sets de los packs embebidos deben ser ids válidos de los 5 sets de fábrica.
-        let valid = ["lucide", "tabler", "material", "flat-color", "mono"];
+        // Los sets de los packs embebidos deben ser ids válidos de fábrica.
+        let valid = [
+            "lucide",
+            "fluent",
+            "tabler",
+            "material",
+            "flat-color",
+            "mono",
+            "kenney-game",
+            "kenney-board",
+        ];
         let cat = PackCatalog::load(Path::new("Z:/no/existe"));
         for pack in cat.packs() {
             assert!(

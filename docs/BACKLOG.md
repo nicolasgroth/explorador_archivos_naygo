@@ -2,7 +2,7 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
-> Última actualización: 2026-09-01.
+> Última actualización: 2026-09-02.
 
 ## Estado de partida
 
@@ -165,6 +165,19 @@ panel activo.
 
 **Cierre funcional 2026-09-01:** el texto plano de Vista previa es solo lectura, pero permite
 seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conserva copiar todo.
+
+### Cierre funcional 2026-09-02 (árbol, preview, apariencia e íconos)
+
+- El árbol común ahora sigue al panel Files activo y revela su carpeta cuando estaba fuera del
+  viewport, sin modificar la navegación ni expandir ramas ajenas.
+- La rueda permite recorrer la Vista previa de texto seleccionable (incluye TXT, XML y otros
+  formatos de texto); se conserva el límite liviano de lectura y la señal visual de contenido
+  recortado.
+- Los sets Fluent y de color conservan su identificador al reiniciar. El editor de temas incorpora
+  un token independiente para el fondo de la barra de herramientas, compatible con temas previos.
+- Se incorporaron los sets compactos y tintables `Kenney Game` y `Kenney Board`: 39 íconos por set,
+  con licencia CC0 documentada en `assets/icons/KENNEY-SOURCES.md`; la colección fuente de `tmp/`
+  no se empaqueta.
 
 ---
 

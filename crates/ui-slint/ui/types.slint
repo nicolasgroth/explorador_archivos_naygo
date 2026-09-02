@@ -653,6 +653,12 @@ export struct PaneVm {
     link-member: bool,        // participa en una pareja Tree↔Files
     tree-linked: bool,        // Tree dedicado (false = árbol común)
     tree-link-label: string,  // "Común" o el panel Files enlazado
+    // Índice visible de la carpeta activa del árbol. Cambia al activar otro Files para revelar
+    // la selección correcta dentro del viewport del árbol común.
+    tree-reveal-row: int,
+    // Ruta de la misma selección: fuerza la revelación aunque dos carpetas ocupen el mismo índice
+    // visible tras un refresco del árbol.
+    tree-reveal-key: string,
     // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
     rows: [RowData],          // Files
     // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`; el

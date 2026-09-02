@@ -78,6 +78,9 @@ embebidas como PNG en el binario:
 - **Tabler Icons** (<https://tabler.io/icons>) — licencia MIT. Set `tabler`.
 - **Material Symbols / Material Design Icons** (<https://fonts.google.com/icons>) — licencia Apache-2.0. Set `material`.
 - **Flat Color Icons** (<https://github.com/icons8/flat-color-icons>) — licencia MIT. Set `flat-color`.
+- **Kenney Game Icons** y **Kenney Board Game Icons** (<https://kenney.nl/assets>) — licencia
+  CC0 1.0. Sets `kenney-game` y `kenney-board`; se incluyen 39 PNG seleccionados por set, no las
+  colecciones completas. La procedencia y el mapeo están en `assets/icons/KENNEY-SOURCES.md`.
 
 Todas son licencias permisivas. Los íconos importados por el usuario (sets `.naygoset`
 o packs sueltos) son responsabilidad de quien los distribuye.

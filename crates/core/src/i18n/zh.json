@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "非活动面板行",
   "slint.theme.tok.active_panel_bg": "活动面板背景",
   "slint.theme.tok.inactive_panel_bg": "非活动面板背景",
+  "slint.theme.tok.toolbar_bg": "工具栏背景",
   "slint.theme.use_inactive_row_color": "为非活动行使用单独颜色",
   "slint.theme.flat_inactive": "扁平化非活动面板",
   "slint.cfg.language": "语言",

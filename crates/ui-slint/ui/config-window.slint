@@ -367,7 +367,7 @@ export component ConfigWindow inherits Window {
     callback theme-customize(string);
     callback theme-edit(string);
     callback theme-delete(string);
-    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 11 tokens
+    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 15 tokens
     // como hex "#rrggbb" + sus componentes r/g/b (para inicializar el picker, que no parsea hex).
     in property <bool> editing-active: false;
     in property <string> editing-name: "";
@@ -376,12 +376,13 @@ export component ConfigWindow inherits Window {
     in property <[int]> editing-token-r;
     in property <[int]> editing-token-g;
     in property <[int]> editing-token-b;
-    // Nombres legibles de los 14 tokens (orden = índice del token).
+    // Nombres legibles de los 15 tokens (orden = índice del token).
     property <[string]> token-names: [
         Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
         Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
         Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border, Tr.theme-tok-row-inactive-bg,
         Tr.theme-tok-active-panel-bg, Tr.theme-tok-inactive-panel-bg,
+        Tr.theme-tok-toolbar-bg,
     ];
     // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
     // edición).
@@ -913,7 +914,7 @@ export component ConfigWindow inherits Window {
                                     }
                                 }
                                 // ---------- Editor de tema (se muestra cuando hay un tema en edición) ----------
-                                // Vista expandible debajo de la galería: nombre + base + lista de los 11 tokens
+                                // Vista expandible debajo de la galería: nombre + base + lista de los 15 tokens
                                 // (muestra de color + nombre + hex; clic abre el ColorPicker para ESE token, cuyo
                                 // `changed(hex)` dispara el preview en vivo en TODA la app). Botones guardar/
                                 // restaurar/cancelar al final.

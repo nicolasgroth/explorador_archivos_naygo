@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "비활성 패널 행",
   "slint.theme.tok.active_panel_bg": "활성 패널 배경",
   "slint.theme.tok.inactive_panel_bg": "비활성 패널 배경",
+  "slint.theme.tok.toolbar_bg": "도구 모음 배경",
   "slint.theme.use_inactive_row_color": "비활성 행에 별도 색상 사용",
   "slint.theme.flat_inactive": "비활성 패널 평면화",
   "slint.cfg.language": "언어",

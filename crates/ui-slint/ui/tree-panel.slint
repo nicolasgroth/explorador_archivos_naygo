@@ -79,6 +79,10 @@ export component TreePanel inherits Rectangle {
     in property <length> row-h: 22px;   // alto de fila (densidad configurable)
     in property <bool> linked;
     in property <string> link-label;
+    // Fila a centrar al recibir una carpeta activa desde Rust (-1 = no hay una visible).
+    in property <int> reveal-row: -1;
+    // La ruta cambia incluso si dos destinos consecutivos caen en el mismo índice de la lista.
+    in property <string> reveal-key: "";
     callback toggle(string);    // expandir/colapsar la rama (por ruta)
     callback navigate(string);  // navegar el Files activo a esa carpeta
     callback context(string, length, length); // clic derecho: menú de la carpeta real
@@ -113,6 +117,23 @@ export component TreePanel inherits Rectangle {
             if (ev.text == Key.Return) { root.tree-key("enter"); return accept; }
             return reject;
         }
+        // Estas propiedades viven en el FocusScope que contiene al ListView; el alias observa
+        // la entrada del componente sin depender de eventos de sus delegates.
+        property <int> requested-reveal-row: root.reveal-row;
+        property <string> requested-reveal-key: root.reveal-key;
+        property <length> list-visible-height: list.visible-height;
+        function reveal-active-row() {
+            if (self.requested-reveal-row >= 0 && list.visible-height > 0px) {
+                list.viewport-y = -clamp(
+                    self.requested-reveal-row * root.row-h - (list.visible-height - root.row-h) / 2,
+                    0px,
+                    max(0px, root.rows.length * root.row-h - list.visible-height));
+            }
+        }
+        changed requested-reveal-row => { self.reveal-active-row(); }
+        changed requested-reveal-key => { self.reveal-active-row(); }
+        // El primer cambio puede llegar antes del layout; se repite cuando ya hay viewport.
+        changed list-visible-height => { self.reveal-active-row(); }
     VerticalLayout {
         padding: Theme.space-sm;
         Rectangle {
@@ -147,8 +168,10 @@ export component TreePanel inherits Rectangle {
                 }
             }
         }
-        ListView {
+        list := ListView {
             vertical-stretch: 1;
+            // `ListView` no revela automáticamente una fila que cambió fuera de él; el
+            // FocusScope superior centra `reveal-row` cuando llega desde el controlador.
             for n[i] in root.rows: row-rect := Rectangle {
                 height: root.row-h;
                 background: n.active

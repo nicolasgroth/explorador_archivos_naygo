@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 
-//! Lista los sets de íconos disponibles: los 5 de fábrica (lucide/tabler/material/
-//! flat-color/mono) más los packs sueltos descubiertos en `<config_dir>/icons/<nombre>/`.
+//! Lista los sets de íconos disponibles: los sets de fábrica más los packs sueltos descubiertos
+//! en `<config_dir>/icons/<nombre>/`.
 //! Patrón análogo a `theme::ThemeCatalog`. Puro salvo el `read_dir` de descubrimiento.
 
 use std::path::Path;
@@ -11,11 +11,11 @@ use std::path::Path;
 /// Un set de íconos disponible.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IconSetInfo {
-    /// Id estable (lucide/tabler/material/flat-color/mono o el nombre de la carpeta suelta).
+    /// Id estable (uno de fábrica o el nombre de la carpeta suelta).
     pub id: String,
     /// Etiqueta a mostrar.
     pub label: String,
-    /// `true` si es uno de los 5 de fábrica.
+    /// `true` si es uno de los sets de fábrica.
     pub builtin: bool,
     /// Si los íconos se tiñen al color del tema (línea/máscara) o traen su color (flat-color).
     pub tintable: bool,
@@ -27,7 +27,7 @@ pub struct IconSetCatalog {
 }
 
 impl IconSetCatalog {
-    /// Construye el catálogo: 5 de fábrica + sueltos de `<dir>/icons/<nombre>/`.
+    /// Construye el catálogo: sets de fábrica + sueltos de `<dir>/icons/<nombre>/`.
     /// Tolerante: si `read_dir` falla, solo los de fábrica.
     pub fn load(dir: &Path) -> IconSetCatalog {
         let mut sets = vec![
@@ -67,10 +67,31 @@ impl IconSetCatalog {
                 builtin: true,
                 tintable: true,
             },
+            IconSetInfo {
+                id: "kenney-game".into(),
+                label: "Kenney Game".into(),
+                builtin: true,
+                tintable: true,
+            },
+            IconSetInfo {
+                id: "kenney-board".into(),
+                label: "Kenney Board".into(),
+                builtin: true,
+                tintable: true,
+            },
         ];
         // Mantener en sync con el vec! de sets de fábrica de arriba: si agregas un set
         // nuevo allá, agrégalo aquí o su carpeta se detectaría como pack suelto duplicado.
-        let factory_ids = ["lucide", "tabler", "material", "flat-color", "mono"];
+        let factory_ids = [
+            "lucide",
+            "fluent",
+            "tabler",
+            "material",
+            "flat-color",
+            "mono",
+            "kenney-game",
+            "kenney-board",
+        ];
         let icons_dir = dir.join("icons");
         if let Ok(entries) = std::fs::read_dir(&icons_dir) {
             for entry in entries.flatten() {
@@ -126,13 +147,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cinco_sets_de_fabrica_presentes() {
+    fn ocho_sets_de_fabrica_presentes_incluyendo_kenney() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        for id in ["lucide", "tabler", "material", "flat-color", "mono"] {
+        for id in [
+            "lucide",
+            "fluent",
+            "tabler",
+            "material",
+            "flat-color",
+            "mono",
+            "kenney-game",
+            "kenney-board",
+        ] {
             assert!(cat.contains(id), "falta el set de fábrica {id}");
         }
-        assert_eq!(cat.available().len(), 6);
+        assert_eq!(cat.available().len(), 8);
     }
 
     #[test]
@@ -150,6 +180,8 @@ mod tests {
         assert!(by("tabler"));
         assert!(by("material"));
         assert!(by("mono"));
+        assert!(by("kenney-game"));
+        assert!(by("kenney-board"));
         assert!(!by("flat-color")); // trae su propio color
     }
 
@@ -185,7 +217,7 @@ mod tests {
     fn icons_dir_ausente_solo_fabrica() {
         let dir = tempfile::tempdir().unwrap();
         let cat = IconSetCatalog::load(dir.path());
-        assert_eq!(cat.available().len(), 6);
+        assert_eq!(cat.available().len(), 8);
     }
 
     #[test]

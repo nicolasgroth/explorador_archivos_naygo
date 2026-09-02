@@ -941,7 +941,7 @@ export component AppWindow inherits Window {
         // Barra superior: path del panel activo + subir + agregar panel.
         Rectangle {
             height: root.top-bar-h;
-            background: Theme.chrome-bg;
+            background: Theme.toolbar-bg;
             HorizontalLayout {
                 padding-left: 6px;
                 padding-right: 6px;
@@ -1477,6 +1477,8 @@ export component AppWindow inherits Window {
                         row-h: root.settings-vm.row-h;
                         linked: p.tree-linked;
                         link-label: p.tree-link-label;
+                        reveal-row: p.tree-reveal-row;
+                        reveal-key: p.tree-reveal-key;
                         toggle(path) => { root.tree-toggle(p.id, path); }
                         navigate(path) => { root.tree-navigate(p.id, path); }
                         context(path, x, y) => { root.tree-context(p.id, path, x, y); }

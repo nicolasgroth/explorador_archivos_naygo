@@ -680,12 +680,13 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
 }
 
 /// Normaliza el id del set de íconos: mapea las formas capitalizadas del enum viejo
-/// (`"Flat"`, `"Fluent"`, `"Mono"`) a los ids en minúscula actuales. Cualquier otro id
-/// se conserva tal cual (packs sueltos; el catálogo/IconProvider resuelven los desconocidos).
+/// (`"Flat"`, `"Fluent"`, `"Mono"`) a los ids actuales. El id canónico `fluent` se conserva:
+/// es un set de color real, no el enum heredado. Cualquier otro id se mantiene tal cual (packs
+/// sueltos; el catálogo/IconProvider resuelven los desconocidos).
 fn normalize_icon_set_id(id: &str) -> String {
     match id {
         "Flat" | "flat" => "flat-color".to_string(),
-        "Fluent" | "fluent" => "lucide".to_string(),
+        "Fluent" => "fluent".to_string(),
         "Mono" => "mono".to_string(),
         other => other.to_string(),
     }
@@ -1406,9 +1407,9 @@ mod tests {
     }
 
     #[test]
-    fn migra_flat_a_flat_color_y_fluent_a_lucide() {
+    fn migra_flat_y_conserva_el_set_fluent_de_color() {
         let dir = tempfile::tempdir().unwrap();
-        for s in ["lucide", "flat-color"] {
+        for s in ["lucide", "flat-color", "fluent"] {
             std::fs::create_dir_all(dir.path().join("icons").join(s)).unwrap();
         }
         std::fs::write(
@@ -1425,7 +1426,15 @@ mod tests {
         )
         .unwrap();
         let s = load_settings(dir.path());
-        assert_eq!(s.icon_set, "lucide");
+        assert_eq!(s.icon_set, "fluent");
+
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version":1,"bar_position":"Top","icon_only":false,"icon_set":"Fluent"}"#,
+        )
+        .unwrap();
+        let s = load_settings(dir.path());
+        assert_eq!(s.icon_set, "fluent");
     }
 
     #[test]

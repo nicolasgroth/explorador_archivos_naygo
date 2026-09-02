@@ -876,6 +876,7 @@
   "slint.theme.tok.row_inactive_bg": "निष्क्रिय पैनल पंक्ति",
   "slint.theme.tok.active_panel_bg": "सक्रिय पैनल पृष्ठभूमि",
   "slint.theme.tok.inactive_panel_bg": "निष्क्रिय पैनल पृष्ठभूमि",
+  "slint.theme.tok.toolbar_bg": "टूलबार पृष्ठभूमि",
   "slint.theme.use_inactive_row_color": "निष्क्रिय पंक्तियों के लिए अलग रंग",
   "slint.theme.flat_inactive": "निष्क्रिय पैनल सपाट",
   "slint.cfg.language": "भाषा",
