@@ -6,6 +6,18 @@
 
 ## Estado de partida
 
+- Respaldo solicitado publicado y comprobado en GitHub: `dcca05b1`, rama
+  `fix/single-instance-y-bandeja`, 131 archivos. Incluye código, documentación y galería de demo;
+  excluye tmp/ personal, configuraciones y artefactos generados. No se modificó main.
+- Revisión posterior de 0.5.1 implementada y validada: etiquetas/acciones secundarias de bandeja,
+  espacios recientes de sesión y filtro/reintento revisado de fallidos. 1.238 pruebas aprobadas,
+  seis smoke ignorados; Clippy/formato/diff/diez idiomas correctos. Grafo: 7.498 nodos / 13.618
+  aristas. Registros `post-github-verified-tests.log`, `post-github-clippy-final.log` y
+  `post-github-graphify-final.log` en target/agent-out. Distribución regenerada y verificada:
+  instalador del 2026-09-05 a las 22:31 y portable a las 22:29 (America/Santiago); hashes en
+  [validación 0.5.1](VALIDACION-0.5.1.md). Continuación preparada para publicar en la misma rama.
+  Pendiente sólo validación instalada de Nicolás para estos ajustes.
+
 - Entregada **0.5.1** (petición 2026-09-05): rutas con ancho natural y extremo actual
   visible, acciones de bandeja arriba con ajuste de filas según ancho, vaciar separado abajo,
   MIT completa y seleccionable en Acerca de desde LICENSE. Sin nuevas dependencias.
@@ -97,6 +109,14 @@ con estas recomendaciones. No incluye publicar muestras personales de tmp/ ni bi
 - Acceso a espacios recientes sin indexación global ni abrirlos/ejecutarlos automáticamente.
 - Filtrar fallos del historial y preparar un reintento sólo de fallidos, con revisión de fuentes,
   destinos y conflictos; no repetir a ciegas una operación completa ni los pasos ya completados.
+
+Implementadas en la revisión posterior: etiquetas de bandeja reutilizan la preferencia persistida
+«Solo íconos»; recientes limitados a diez referencias de sesión (con limpiar, sin I/O al renderizar);
+reintentos sólo de archivos regulares fallidos de copiar/mover con origen conocido en el plan.
+No se reintentan borrados, ZIP, carpetas, saltados, éxitos ni operaciones sin request recuperable.
+Se conservan destinos exactos, se revalidan tamaño/mtime/rutas físicas al confirmar y el motor
+consulta conflictos. No registra undo; el diálogo lo advierte. Los fallos no compatibles siguen
+accesibles en el detalle. Referencia: [reintentos](REINTENTOS.md).
 
 Referencia de interfaz: https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/command-bar
 

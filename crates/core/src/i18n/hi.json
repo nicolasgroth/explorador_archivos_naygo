@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "हाल के कार्यस्थान (इस सत्र में)",
+  "retry.title": "विफल फ़ाइलों को फिर आज़माएँ",
+  "retry.filter": "केवल विफल",
+  "retry.review": "विफलताओं की समीक्षा…",
+  "retry.help": "केवल कॉपी/स्थानांतरण में विफल फ़ाइलें; सफल चरण और फ़ोल्डर दोहराए नहीं जाते। पथ जाँचें। टकराव पर पूछा जाएगा। इस प्रयास को पूर्ववत नहीं किया जा सकता।",
+  "retry.changed": "समीक्षा के दौरान फ़ाइलें बदल गईं। बंद करके फिर समीक्षा करें।",
+  "retry.invalid": "पुनः प्रयास तैयार नहीं हो सका। पथ और अनुमतियाँ जाँचें।",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

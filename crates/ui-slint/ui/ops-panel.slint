@@ -9,7 +9,7 @@
 //   - HISTORIAL (kind==2): fila con el `status` ya formateado ("hecho: N copiados, …").
 // Íconos dibujados con Path (NO glifos de fuente: el render por software puede no pintarlos).
 // Todo el texto pasa por Tr (i18n) y los colores por Theme.
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, CheckBox } from "std-widgets.slint";
 import { OpRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -686,12 +686,13 @@ component HistoryRow inherits Rectangle {
         HorizontalLayout {
             spacing: 6px;
             // Íconito neutro de "hecho" (no afirma éxito/fallo: ver nota junto a DoneIcon).
-            DoneIcon {
+            if !root.op.has-errors: DoneIcon {
                 width: 14px;
                 height: 14px;
                 tint: Theme.text-dim;
                 y: (parent.height - self.height) / 2;
             }
+            if root.op.has-errors: Text { text: "!"; color: Theme.error; font-weight: 700; width: 14px; }
             Text {
                 text: root.op.label;
                 color: Theme.text-dim;
@@ -720,7 +721,7 @@ component HistoryRow inherits Rectangle {
             }
         }
         // Segunda línea: nombres inline (1-2) o el enlace "Ver N archivos" (3+).
-        if root.op.files-summary != "": Text {
+        if root.op.files-summary != "" && !root.op.has-file-list: Text {
             text: root.op.files-summary;
             color: Theme.text;
             font-size: 11px;
@@ -733,7 +734,7 @@ component HistoryRow inherits Rectangle {
                 alignment: start;
                 link := Text {
                     // "Ver N archivos": compone Tr + el conteo (no se traduce el número).
-                    text: Tr.ops-view-files + " " + root.op.files-done-count + " " + Tr.ops-files-word;
+                    text: root.op.has-errors ? Tr.retry-review : Tr.ops-view-files + " " + root.op.files-done-count + " " + Tr.ops-files-word;
                     color: link-touch.has-hover ? Theme.accent : Theme.text-dim;
                     font-size: 11px;
                     font-weight: 600;
@@ -757,6 +758,7 @@ component SectionHeader inherits Text {
 }
 
 export component OpsPanel inherits Rectangle {
+    property <bool> failures-only: false;
     // Tres modelos ya separados por zona en Rust (evita filas-fantasma y espaciados sobrantes):
     // EN CURSO (kind==0), EN COLA (kind==1) e HISTORIAL (kind==2).
     in property <[OpRowVm]> running-rows;
@@ -860,9 +862,17 @@ export component OpsPanel inherits Rectangle {
 
                 // ZONA HISTORIAL.
                 if root.history-count > 0: SectionHeader { text: Tr.ops-history; }
-                for r in root.history-rows: HistoryRow {
-                    op: r;
-                    show-files(i) => { root.show-files(i); }
+                if root.history-count > 0: CheckBox { text: Tr.retry-filter; checked <=> root.failures-only; }
+                VerticalLayout {
+                spacing: 0px;
+                for r in root.history-rows: Rectangle {
+                    height: !root.failures-only || r.has-errors ? history-row.height : 0px;
+                    visible: !root.failures-only || r.has-errors;
+                    history-row := HistoryRow {
+                        width: parent.width; op: r;
+                        show-files(i) => { root.show-files(i); }
+                    }
+                }
                 }
 
                 // Espaciador para empujar el contenido hacia arriba.

@@ -16,6 +16,7 @@ slint::slint! {
     export { Tr } from "../ui/i18n.slint";
     export component LayoutProbe inherits Window {
         in property <int> probe-width: 900;
+        in property <bool> labels: false;
         out property <float> actual-width: self.width / 1px;
         width: root.probe-width * 1px; height: 460px; background: #0e1622;
         callback navigate(string);
@@ -27,6 +28,7 @@ slint::slint! {
             navigate(p) => { root.navigate(p); }
         }
         BasketPanel {
+            show-labels: root.labels;
             x: 0px; y: 38px; width: parent.width; height: parent.height - 38px;
             rows: [{ name: "informe.txt", path: "D:\\Documentos\\informe.txt", selected: true }];
             selected-count: 1;
@@ -51,6 +53,8 @@ fn render_compact_paths_and_wrapping_basket_without_native_windows() {
     let ui = LayoutProbe::new().unwrap();
     ui.global::<Tr>()
         .set_basket_title("Bandeja temporal".into());
+    ui.global::<Tr>()
+        .set_delivery_title("Preparar entrega".into());
     ui.global::<Tr>()
         .set_basket_scope("Acciones sobre marcados. Quitar conserva originales.".into());
     let action = Rc::new(std::cell::Cell::new(-1));
@@ -120,6 +124,101 @@ fn render_compact_paths_and_wrapping_basket_without_native_windows() {
             );
         }
     }
+    ui.set_labels(true);
+    for width in [900, 200] {
+        ui.set_probe_width(width);
+        window.set_size(slint::PhysicalSize::new(width as u32, 460));
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        let mut pixels = vec![slint::Rgb8Pixel::default(); width as usize * 460];
+        window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width as usize);
+        });
+        let bytes: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+        image::save_buffer(
+            output.join(format!("basket-labels-{width}.png")),
+            &bytes,
+            width as u32,
+            460,
+            image::ColorType::Rgb8,
+        )
+        .unwrap();
+        let columns = ((width - 12 + 5) / 159).clamp(1, 8);
+        for index in 0..4 {
+            let position = slint::LogicalPosition::new(
+                (21 + index % columns * 159) as f32,
+                (77 + index / columns * 33) as f32,
+            );
+            action.set(-1);
+            for event in [
+                slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+                slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+            ] {
+                window.dispatch_event(event);
+            }
+            assert_eq!(
+                action.get(),
+                index,
+                "labeled action {index} at width {width}"
+            );
+        }
+    }
+    // Desplegar las acciones secundarias en el panel estrecho y probar Guardar lista.
+    let position = slint::LogicalPosition::new(100.0, 210.0);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        window.dispatch_event(event);
+    }
+    slint::platform::update_timers_and_animations();
+    window.request_redraw();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 200 * 460];
+    window.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, 200);
+    });
+    image::save_buffer(
+        output.join("basket-labels-expanded-200.png"),
+        &pixels
+            .iter()
+            .flat_map(|p| [p.r, p.g, p.b])
+            .collect::<Vec<_>>(),
+        200,
+        460,
+        image::ColorType::Rgb8,
+    )
+    .unwrap();
+    let position = slint::LogicalPosition::new(21.0, 209.0);
+    action.set(-1);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        window.dispatch_event(event);
+    }
+    assert_eq!(
+        action.get(),
+        4,
+        "expanded secondary action remains reachable"
+    );
     ui.hide().unwrap();
 }
 

@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "最近の作業領域（このセッション）",
+  "retry.title": "失敗したファイルを再試行",
+  "retry.filter": "失敗のみ",
+  "retry.review": "失敗を確認…",
+  "retry.help": "コピー・移動に失敗したファイルのみです。成功した処理やフォルダーは繰り返しません。パスを確認してください。競合時には確認します。この再試行は元に戻せません。",
+  "retry.changed": "確認中にファイルが変更されました。閉じて再確認してください。",
+  "retry.invalid": "再試行を準備できません。パスとアクセス許可を確認してください。",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

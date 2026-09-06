@@ -158,6 +158,7 @@ pub struct WorkspaceCtrl {
     pub basket_context: bool,
     pub delivery: delivery::DeliveryState,
     pub task_spaces: task_spaces::TaskSpacesState,
+    pub retry: retry::RetryState,
     pub saved_queries: saved_queries::SavedQueriesState,
     pub comparison_points: comparison_points::ComparisonPointsState,
     pub recipes: recipes::RecipesState,
@@ -602,6 +603,7 @@ mod meta;
 mod navigation;
 mod ops;
 mod recipes;
+mod retry;
 mod saved_queries;
 mod session;
 mod sync_assistant;
@@ -660,6 +662,7 @@ impl WorkspaceCtrl {
             basket_context: false,
             delivery: Default::default(),
             task_spaces: Default::default(),
+            retry: Default::default(),
             saved_queries: Default::default(),
             comparison_points: Default::default(),
             recipes: Default::default(),

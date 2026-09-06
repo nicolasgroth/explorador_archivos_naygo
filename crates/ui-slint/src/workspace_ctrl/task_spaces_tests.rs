@@ -3,6 +3,43 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
+#[test]
+fn recent_spaces_are_bounded_deduplicated_and_session_only() {
+    let mut state = TaskSpacesState::default();
+    for n in 0..15 {
+        state.remember(PathBuf::from(format!("{n}.naygospace")));
+    }
+    assert_eq!(state.recents.len(), 10);
+    state.remember(PathBuf::from("9.naygospace"));
+    assert_eq!(state.recents[0], PathBuf::from("9.naygospace"));
+    assert_eq!(state.recents.len(), 10);
+    assert!(TaskSpacesState::default().recents.is_empty());
+}
+
+#[test]
+fn recent_space_requires_review_and_confirm_and_can_be_cleared() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = controller(dir.path());
+    c.spaces_open();
+    c.spaces_save(Some(dir.path().join("saved.naygospace")), None, false);
+    drain(&mut c);
+    assert_eq!(c.task_spaces.recents.len(), 1);
+    c.basket.add([dir.path().join("current.txt")]);
+    c.spaces_read_recent(0, None);
+    drain(&mut c);
+    assert_eq!(
+        c.basket.len(),
+        1,
+        "review does not replace current workspace"
+    );
+    assert!(c.task_spaces.has_pending());
+    c.spaces_apply_pending();
+    assert!(c.basket.is_empty());
+    c.task_spaces.recents.clear();
+    c.spaces_read_recent(0, None);
+    assert!(!c.task_spaces.busy());
+}
+
 fn drain(c: &mut WorkspaceCtrl) {
     for _ in 0..3000 {
         let done = c.pump_task_spaces();

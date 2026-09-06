@@ -13,6 +13,7 @@ pub mod journal;
 pub mod names;
 pub mod plan;
 pub mod plan_async;
+pub mod retry;
 pub mod undo;
 
 pub use actions::{

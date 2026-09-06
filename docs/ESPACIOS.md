@@ -56,6 +56,11 @@ los paneles las listan en workers y muestran sus errores normales sin bloquear l
 
 ## Integridad y límites
 
+El gestor muestra los últimos diez espacios guardados o aplicados durante esta sesión, sin
+duplicados. Pulsar uno vuelve a leer el archivo en un worker y abre la revisión; no sustituye
+el espacio actual hasta confirmar. «Limpiar» sólo quita referencias del historial, no archivos.
+El historial reciente es efímero: no se escriben rutas adicionales en disco ni se indexan carpetas.
+
 JSON versionado, máximo 4 MB, 64 paneles y 10.000 referencias. Guardar como nunca sustituye un
 archivo existente: usa otro nombre o Actualizar sobre el abierto. Actualizar vuelve a leer y validar
 el documento y compara su SHA-256 con la revisión conocida; archivos corruptos, de versión no

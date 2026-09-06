@@ -25,6 +25,13 @@ where
     ui.global::<TextUtil>()
         .on_contains(|haystack, needle| haystack.as_str().contains(needle.as_str()));
     let tr = ui.global::<Tr>();
+    tr.set_spaces_recents(c.t("spaces.recents").into());
+    tr.set_retry_title(c.t("retry.title").into());
+    tr.set_retry_filter(c.t("retry.filter").into());
+    tr.set_retry_review(c.t("retry.review").into());
+    tr.set_retry_help(c.t("retry.help").into());
+    tr.set_retry_changed(c.t("retry.changed").into());
+    tr.set_retry_invalid(c.t("retry.invalid").into());
     tr.set_points_title(c.t("points.title").into());
     tr.set_points_help(c.t("points.help").into());
     tr.set_points_root(c.t("points.root").into());

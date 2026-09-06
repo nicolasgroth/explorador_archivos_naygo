@@ -594,6 +594,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 let delivery_done = ctrl.borrow_mut().pump_delivery();
                 let spaces_was_busy = ctrl.borrow().task_spaces.busy();
                 let spaces_done = ctrl.borrow_mut().pump_task_spaces();
+                let retry_done = ctrl.borrow_mut().pump_retry();
                 let queries_done = ctrl.borrow_mut().pump_saved_queries();
                 let points_done = ctrl.borrow_mut().pump_comparison_points();
                 let recipes_done = ctrl.borrow_mut().pump_recipes();
@@ -664,6 +665,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && basket_import_done
                     && delivery_done
                     && spaces_done
+                    && retry_done
                     && queries_done
                     && points_done
                     && recipes_done

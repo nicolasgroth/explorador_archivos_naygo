@@ -454,7 +454,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         ui.on_op_show_files(move |id| {
-            let (rows, label, context) = {
+            let (rows, label, context, can_retry) = {
                 let c = ctrl.borrow();
                 let id = id as u64;
                 let rows = c.ops.op_file_list(id);
@@ -467,7 +467,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                     .find(|o| o.id == id)
                     .map(|o| o.label.clone())
                     .unwrap_or_default();
-                (rows, label, context)
+                (rows, label, context, c.ops.retry_files(id).is_some())
             };
             if let Some(ui) = ui_weak.upgrade() {
                 let vms: Vec<OpFileVm> = rows.into_iter().map(to_op_file_vm).collect();
@@ -475,7 +475,35 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                 ui.set_op_file_list_label(SharedString::from(label.as_str()));
                 ui.set_op_file_context(to_op_file_context_vm(context));
                 ui.set_op_file_list_open(true);
+                ui.set_op_file_id(id);
+                ui.set_op_file_can_retry(can_retry);
             }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync = sync_rows.clone();
+        let timer = start_timer.clone();
+        ui.on_op_retry(move |id| {
+            if id >= 0 {
+                ctrl.borrow_mut().retry_open(id as u64);
+            }
+            timer();
+            sync();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync = sync_rows.clone();
+        let timer = start_timer.clone();
+        ui.on_retry_action(move |action| {
+            if action == 1 {
+                ctrl.borrow_mut().retry_confirm();
+            } else {
+                ctrl.borrow_mut().retry_close();
+            }
+            timer();
+            sync();
         });
     }
     {

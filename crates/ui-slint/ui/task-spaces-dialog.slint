@@ -10,6 +10,7 @@ export component TaskSpacesDialog inherits Rectangle {
     in property <bool> busy;
     in property <bool> can-update;
     in property <bool> pending;
+    in property <[string]> recents;
     in-out property <string> base-root;
     callback action(int, string);
     background: #00000080;
@@ -44,6 +45,16 @@ export component TaskSpacesDialog inherits Rectangle {
                             Button { text: Tr.spaces-update; enabled: !root.busy && root.can-update; clicked => { root.action(3, ""); } }
                         }
                         Button { text: Tr.spaces-open; enabled: !root.busy; clicked => { root.action(2, root.base-root); } }
+                        if root.recents.length > 0: VerticalLayout {
+                            spacing: 4px;
+                            Text { text: Tr.spaces-recents; color: Theme.text-dim; wrap: word-wrap; }
+                            for path[i] in root.recents: Button {
+                                min-width: 0px;
+                                text: path; enabled: !root.busy;
+                                clicked => { root.action(10 + i, root.base-root); }
+                            }
+                            Button { text: Tr.cfg-default-table-clear; enabled: !root.busy; clicked => { root.action(7, ""); } }
+                        }
                         if root.pending: VerticalLayout {
                             spacing: 6px;
                             Button { text: Tr.spaces-save-open; enabled: !root.busy && root.can-update; clicked => { root.action(5, ""); } }

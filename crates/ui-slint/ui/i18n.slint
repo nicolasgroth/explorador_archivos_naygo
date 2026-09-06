@@ -4,6 +4,13 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 export global Tr {
+    in property <string> spaces-recents: "Espacios recientes (esta sesión)";
+    in property <string> retry-title: "Reintentar fallidos";
+    in property <string> retry-filter: "Solo fallidos";
+    in property <string> retry-review: "Revisar fallidos…";
+    in property <string> retry-help: "Solo archivos fallidos de copiar/mover; no se repiten éxitos ni carpetas. Revisa las rutas. Se consultarán los conflictos. Este reintento no registra deshacer.";
+    in property <string> retry-changed: "Los archivos cambiaron durante la revisión. Cierra y revisa de nuevo.";
+    in property <string> retry-invalid: "No se puede preparar el reintento. Revisa las rutas y permisos.";
     in property <string> queries-month;
     in property <string> recipes-title;
     in property <string> recipes-help;

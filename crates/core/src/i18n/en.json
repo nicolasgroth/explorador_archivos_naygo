@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "Recent spaces (this session)",
+  "retry.title": "Retry failed files",
+  "retry.filter": "Failures only",
+  "retry.review": "Review failures…",
+  "retry.help": "Only failed copy/move files; successful steps and folders are not repeated. Review the paths. Conflicts will be prompted. This retry does not record undo.",
+  "retry.changed": "Files changed during review. Close and review again.",
+  "retry.invalid": "Cannot prepare retry. Check paths and permissions.",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

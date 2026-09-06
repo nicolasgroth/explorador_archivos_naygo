@@ -1670,7 +1670,9 @@ impl OpsCtrl {
                         String::new()
                     },
                     files_summary,
-                    has_file_list,
+                    has_file_list: has_file_list
+                        || o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
+                    has_errors: o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
                     files_done_count,
                 }
             })
@@ -1715,10 +1717,62 @@ impl OpsCtrl {
         rows
     }
 
-    /// Lista completa de archivos procesados por la op terminada `op_id` (la que pidió "Ver
-    /// archivos"). Cada entrada es "nombre" o "nombre · estado" (Saltado/Fallido) para que el
-    /// popup distinga lo que se concretó de lo que no. Vacío si la op no existe o no terminó.
-    /// Se calcula al vuelo desde `summary.items` (no se cachea: el popup se abre por demanda).
+    /// Archivos fallidos conocidos del plan original de copiar/mover. No se reenumera
+    /// ningún árbol ni se repiten éxitos/saltados. Se calcula por demanda, sin I/O.
+    pub fn retry_files(
+        &self,
+        op_id: u64,
+    ) -> Option<(OpKind, Vec<naygo_core::ops::retry::RetryFile>, usize)> {
+        let op = self.active_ops.iter().find(|o| o.id == op_id)?;
+        let request = op.request.as_ref()?;
+        if !matches!(request.kind, OpKind::Copy | OpKind::Move) {
+            return None;
+        }
+        let summary = op.summary.as_ref()?;
+        let done_sources: std::collections::HashSet<_> = summary
+            .items
+            .iter()
+            .filter(|i| matches!(i.outcome, OpOutcome::Done))
+            .filter_map(|i| i.src.as_ref())
+            .collect();
+        let done_destinations: std::collections::HashSet<_> = summary
+            .items
+            .iter()
+            .filter(|i| matches!(i.outcome, OpOutcome::Done))
+            .map(|i| &i.dest)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut files = Vec::new();
+        for item in &summary.items {
+            if !matches!(item.outcome, OpOutcome::Failed(_)) {
+                continue;
+            }
+            let Some(source) = &item.src else {
+                continue;
+            };
+            if !op.size_map.contains_key(source) {
+                continue;
+            }
+            if done_sources.contains(source) || done_destinations.contains(&item.dest) {
+                continue;
+            }
+            let file = naygo_core::ops::retry::RetryFile {
+                source: source.clone(),
+                destination: item.dest.clone(),
+            };
+            if seen.insert((file.source.clone(), file.destination.clone())) {
+                files.push(file);
+                if files.len() > 10_000 {
+                    return None;
+                }
+            }
+        }
+        if files.is_empty() || files.len() > 10_000 {
+            return None;
+        }
+        Some((request.kind.clone(), files, summary.count_failed()))
+    }
+
     pub fn op_file_list(&self, op_id: u64) -> Vec<OpFileEntry> {
         use naygo_core::format::{format_size, SizeFormat};
         let Some(op) = self.active_ops.iter().find(|o| o.id == op_id) else {
@@ -2169,6 +2223,7 @@ pub fn op_kind_code(kind: &OpKind) -> i32 {
 /// Los campos de tamaño/velocidad/tiempo vienen ya formateados como String (listos para la UI).
 #[derive(Clone, Debug)]
 pub struct OpRowData {
+    pub has_errors: bool,
     pub index: i32,
     pub label: String,
     pub percent: f32,
@@ -3142,6 +3197,53 @@ mod tests {
             size_map: HashMap::new(),
             staging_guards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn retry_excludes_successes_skips_directories_and_unsupported_kinds() {
+        let mut c = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(42);
+        op.rx = None;
+        op.request = Some(naygo_core::ops::transfer(
+            false,
+            vec![],
+            PathBuf::from("D:/dst"),
+        ));
+        let rows = [
+            ("ok", OpOutcome::Done),
+            ("skip", OpOutcome::Skipped),
+            ("bad", OpOutcome::Failed("denied".into())),
+            ("dir", OpOutcome::Failed("dir".into())),
+        ];
+        op.summary = Some(OpSummary {
+            items: rows
+                .into_iter()
+                .map(|(name, outcome)| OpItem {
+                    src: Some(PathBuf::from(format!("D:/src/{name}"))),
+                    dest: PathBuf::from(format!("D:/dst/{name}")),
+                    outcome,
+                })
+                .collect(),
+            bytes_done: 0,
+            elapsed_secs: 0.0,
+        });
+        for name in ["ok", "skip", "bad"] {
+            op.size_map
+                .insert(PathBuf::from(format!("D:/src/{name}")), 1);
+        }
+        c.active_ops.push(op);
+        let (_, files, failed) = c.retry_files(42).unwrap();
+        assert_eq!(failed, 2);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, PathBuf::from("D:/src/bad"));
+        let row = &c.op_rows(naygo_core::format::DateFormat::default())[0];
+        assert!(
+            row.has_errors && row.has_file_list,
+            "failures always have accessible detail"
+        );
+        assert!(c.retry_files(99).is_none());
+        c.active_ops[0].request.as_mut().unwrap().kind = OpKind::Delete { to_trash: true };
+        assert!(c.retry_files(42).is_none());
     }
 
     #[test]

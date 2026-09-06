@@ -15,6 +15,7 @@ component BasketIconButton inherits Rectangle {
     in property <string> glyph;
     in property <image> icon;
     in property <string> tooltip;
+    in property <bool> show-label: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
     callback clicked();
@@ -30,9 +31,14 @@ component BasketIconButton inherits Rectangle {
     background: touch.has-hover ? Theme.hover-bg : Theme.panel-bg;
     opacity: root.enabled ? 1 : 0.45;
     if root.icon.width > 0: Image { source: root.icon; width: 18px; height: 18px;
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+        x: root.show-label ? 6px : (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
     if root.icon.width == 0: Text { text: root.glyph; color: root.danger ? Theme.error : Theme.text;
+        width: root.show-label ? 30px : parent.width;
         horizontal-alignment: center; vertical-alignment: center; }
+    if root.show-label: Text {
+        x: 30px; width: max(0px, parent.width - 36px); height: parent.height;
+        text: root.tooltip; color: Theme.text; overflow: elide; vertical-alignment: center;
+    }
     button-focus := FocusScope {
         enabled: root.enabled;
         key-pressed(ev) => {
@@ -52,6 +58,8 @@ component BasketIconButton inherits Rectangle {
 }
 
 export component BasketPanel inherits Rectangle {
+    in property <bool> show-labels: false;
+    property <bool> secondary-open: false;
     in property <bool> active;
     in property <[BasketRowVm]> rows;
     in property <int> focused-row: -1;
@@ -127,10 +135,15 @@ export component BasketPanel inherits Rectangle {
         Text { text: Tr.basket-title + " (" + root.selected-count + " / " + root.rows.length + ")"; color: Theme.text; font-weight: 700; }
         action-bar := Rectangle {
             // Coordenadas lógicas: una fila cuando cabe; envolver sin reordenar acciones.
-            property <int> columns: clamp(floor((self.width + 5px) / 35px), 1, 8);
-            height: ceil(root.actions.length / self.columns) * 33px - 5px;
+            property <length> cell-width: root.show-labels ? min(159px, self.width + 5px) : 35px;
+            property <int> count: root.show-labels && !root.secondary-open ? 4 : 8;
+            property <int> columns: clamp(floor((self.width + 5px) / self.cell-width), 1, 8);
+            height: ceil(self.count / self.columns) * 33px - 5px;
             for action[i] in root.actions: BasketIconButton {
-                x: mod(i, action-bar.columns) * 35px;
+                visible: i < action-bar.count;
+                width: action-bar.cell-width - 5px;
+                show-label: root.show-labels;
+                x: mod(i, action-bar.columns) * action-bar.cell-width;
                 y: floor(i / action-bar.columns) * 33px;
                 icon: action.icon; glyph: action.glyph; tooltip: action.tooltip;
                 enabled: action.enabled; danger: action.danger;
@@ -146,6 +159,10 @@ export component BasketPanel inherits Rectangle {
                 }
                 hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
             }
+        }
+        if root.show-labels: Button {
+            text: (root.secondary-open ? "▴ " : "▾ ") + Tr.dlg-more-options;
+            clicked => { root.secondary-open = !root.secondary-open; }
         }
         Text { text: Tr.basket-scope; color: Theme.text-dim; wrap: word-wrap; }
         if root.rows.length == 0: Text {

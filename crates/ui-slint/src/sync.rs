@@ -550,6 +550,22 @@ pub(crate) fn build_sync(
             ui.set_query_can_update(c.saved_queries.can_update());
             ui.set_query_report(c.saved_queries.report.clone().into());
             ui.set_spaces_busy(c.task_spaces.busy());
+            ui.set_retry_visible(c.retry.open);
+            ui.set_retry_busy(c.retry.busy());
+            ui.set_retry_ready(c.retry.ready());
+            if ui.get_retry_report().as_str() != c.retry.report {
+                ui.set_retry_report(c.retry.report.clone().into());
+            }
+            let recents: Vec<SharedString> = c
+                .task_spaces
+                .recents
+                .iter()
+                .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
+                .collect();
+            // No recrear botones en cada tick: conservar foco y navegación por teclado.
+            if ui.get_spaces_recents().iter().ne(recents.iter().cloned()) {
+                ui.set_spaces_recents(ModelRc::from(Rc::new(VecModel::from(recents))));
+            }
             ui.set_spaces_can_update(c.task_spaces.can_update());
             ui.set_spaces_pending(c.task_spaces.has_pending());
             ui.set_spaces_name(c.task_spaces.name().into());

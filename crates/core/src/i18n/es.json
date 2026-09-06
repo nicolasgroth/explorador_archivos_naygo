@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "Espacios recientes (esta sesión)",
+  "retry.title": "Reintentar fallidos",
+  "retry.filter": "Solo fallidos",
+  "retry.review": "Revisar fallidos…",
+  "retry.help": "Solo archivos fallidos de copiar/mover; no se repiten éxitos ni carpetas. Revisa las rutas. Se consultarán los conflictos. Este reintento no registra deshacer.",
+  "retry.changed": "Los archivos cambiaron durante la revisión. Cierra y revisa de nuevo.",
+  "retry.invalid": "No se puede preparar el reintento. Revisa las rutas y permisos.",
   "queries.month": "Este mes",
   "recipes.title": "Recetas de operaciones…",
   "recipes.help": "Reúne archivos, filtra y prepara una entrega. Las recetas guardan criterios, nunca archivos ni rutas de esta ejecución. Abrir o guardar no ejecuta nada.",

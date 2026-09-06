@@ -16,7 +16,7 @@
 // es el lugar.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
-import { ListView } from "std-widgets.slint";
+import { ListView, CheckBox, Button } from "std-widgets.slint";
 import { OpFileVm, OpFileContextVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -61,6 +61,10 @@ component InfoLine inherits HorizontalLayout {
 }
 
 export component OpFileListModal inherits Rectangle {
+    in property <bool> can-retry;
+    callback retry();
+    property <bool> failures-only: false;
+    changed open => { root.failures-only = false; }
     in property <bool> open;
     in property <string> op-label;      // etiqueta de la op (subtítulo), p. ej. "Mover → D:\x"
     in property <[OpFileVm]> rows;
@@ -157,11 +161,14 @@ export component OpFileListModal inherits Rectangle {
             }
 
             // Lista con scroll: ruta relativa + tamaño + estado (+ motivo si falló).
+            CheckBox { text: Tr.retry-filter; checked <=> root.failures-only; }
+            if root.can-retry: Button { text: Tr.retry-review; clicked => { root.retry(); } }
             ListView {
                 vertical-stretch: 1;
                 for f in root.rows: Rectangle {
                     // Alto adaptable: 24px normal, 38px si hay un motivo de fallo (segunda línea).
-                    height: (f.status == 2 && f.detail != "") ? 38px : 24px;
+                    visible: !root.failures-only || f.status == 2;
+                    height: root.failures-only && f.status != 2 ? 0px : ((f.status == 2 && f.detail != "") ? 38px : 24px);
                     VerticalLayout {
                         padding-left: 4px;
                         padding-right: 4px;

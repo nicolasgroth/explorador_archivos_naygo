@@ -24,6 +24,8 @@ enum Completed {
 }
 #[derive(Default)]
 pub struct TaskSpacesState {
+    // MRU acotado de esta sesión: no persiste rutas privadas ni explora el disco.
+    pub recents: Vec<PathBuf>,
     pub open: bool,
     pub report: String,
     pub dirty: bool,
@@ -41,6 +43,11 @@ impl Drop for TaskSpacesState {
     }
 }
 impl TaskSpacesState {
+    fn remember(&mut self, path: PathBuf) {
+        self.recents.retain(|p| p != &path);
+        self.recents.insert(0, path);
+        self.recents.truncate(10);
+    }
     pub fn busy(&self) -> bool {
         self.rx.is_some()
     }
@@ -56,6 +63,14 @@ impl TaskSpacesState {
 }
 
 impl WorkspaceCtrl {
+    pub fn spaces_read_recent(&mut self, index: usize, root: Option<PathBuf>) {
+        if !self.task_spaces.open || self.task_spaces.busy() {
+            return;
+        }
+        if let Some(path) = self.task_spaces.recents.get(index).cloned() {
+            self.spaces_read(path, root);
+        }
+    }
     pub(super) fn space_snapshot(&self, name: &str) -> Result<TaskSpace, SpaceError> {
         let mut space = task_space::from_workspace(name.to_owned(), self.session_persist())?;
         space.workspace.tree_links.sort_unstable();
@@ -286,6 +301,7 @@ impl WorkspaceCtrl {
                 self.refresh_space_report();
             }
             Ok(Completed::Written(space, then_open)) => {
+                self.task_spaces.remember(space.path.clone());
                 if self
                     .task_spaces
                     .pending
@@ -386,6 +402,7 @@ impl WorkspaceCtrl {
             }
         }
         // Cola/historial de operaciones y guards de entregas siguen vivos y globales.
+        self.task_spaces.remember(space.path.clone());
         self.task_spaces.active = Some(space);
         self.task_spaces.open = false;
         self.refresh_space_report();

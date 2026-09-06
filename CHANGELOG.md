@@ -9,6 +9,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [0.5.1] - 2026-09-05
 
+### Añadido — revisión posterior al respaldo en GitHub
+- Bandeja con etiquetas al desactivar «Solo íconos» y acciones secundarias desplegables.
+- Acceso a los diez espacios recientes de la sesión, con revisión previa y opción de limpiar.
+- Filtro de fallidos en historial/detalle y reintento revisado de archivos de copiar/mover.
+  Excluye éxitos, saltados, carpetas y otras operaciones; revalida antes de ejecutar, consulta
+  conflictos y advierte que no registra deshacer. Sin nuevas dependencias.
+
 ### Corregido
 - Rutas de panel con ancho natural de cada segmento, sin repartir huecos entre carpetas.
   Conservan el extremo actual cuando falta ancho y todos los ancestros en el menú de ruta.

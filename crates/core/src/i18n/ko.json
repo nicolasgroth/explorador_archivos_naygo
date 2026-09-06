@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "최근 작업 공간(현재 세션)",
+  "retry.title": "실패한 파일 다시 시도",
+  "retry.filter": "실패만",
+  "retry.review": "실패 검토…",
+  "retry.help": "복사/이동에 실패한 파일만 대상입니다. 성공한 작업과 폴더는 반복하지 않습니다. 경로를 검토하세요. 충돌 시 확인합니다. 이 재시도는 실행 취소를 기록하지 않습니다.",
+  "retry.changed": "검토 중 파일이 변경되었습니다. 닫고 다시 검토하세요.",
+  "retry.invalid": "재시도를 준비할 수 없습니다. 경로와 권한을 확인하세요.",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

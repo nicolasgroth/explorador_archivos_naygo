@@ -55,6 +55,10 @@ pub(crate) fn wire_task_spaces(ui: &AppWindow, ctx: &WireCtx) {
             3 => ctrl.borrow_mut().spaces_save(None, None, false),
             4 => ctrl.borrow_mut().spaces_apply_pending(),
             5 => ctrl.borrow_mut().spaces_save(None, None, true),
+            7 => ctrl.borrow_mut().task_spaces.recents.clear(),
+            10..=19 => ctrl
+                .borrow_mut()
+                .spaces_read_recent((action - 10) as usize, root),
             _ => ctrl.borrow_mut().spaces_close(),
         }
         if action == 0 {

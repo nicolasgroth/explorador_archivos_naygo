@@ -27,6 +27,7 @@ import { OpDialogs } from "op-dialogs.slint";
 import { MessageModal } from "message-modal.slint";
 import { OpsPanel } from "ops-panel.slint";
 import { OpFileListModal } from "op-file-list-modal.slint";
+import { RetryDialog } from "retry-dialog.slint";
 import { ContextMenu } from "context-menu.slint";
 import { ConfigWindow } from "config-window.slint";
 import { BatchRename } from "batch-rename.slint";
@@ -558,6 +559,12 @@ export component AppWindow inherits Window {
     callback search-rerun();
     in property <bool> spaces-visible;
     in property <bool> spaces-busy;
+    in property <bool> retry-visible;
+    in property <bool> retry-busy;
+    in property <bool> retry-ready;
+    in property <string> retry-report;
+    callback retry-action(int);
+    in property <[string]> spaces-recents;
     in property <bool> spaces-can-update;
     in property <bool> spaces-pending;
     in property <string> spaces-report;
@@ -802,6 +809,9 @@ export component AppWindow inherits Window {
     // a Rust la lista completa (op-show-files con el id de la op); Rust llena `op-file-list` +
     // `op-file-list-label` y abre el modal poniendo `op-file-list-open`.
     callback op-show-files(int);
+    in property <int> op-file-id;
+    in property <bool> op-file-can-retry;
+    callback op-retry(int);
     in property <[OpFileVm]> op-file-list;
     in property <string> op-file-list-label;
     // Encabezado enriquecido del popup (PUNTO 3): tipo + origen + destino + estadísticas.
@@ -1679,6 +1689,7 @@ export component AppWindow inherits Window {
                         show-files(i) => { root.op-show-files(i); }
                     }
                     if p.purpose == 7: BasketPanel {
+                        show-labels: !root.settings-vm.icon-only;
                         width: 100%; height: 100%; active: p.active; rows: p.basket-rows;
                         focused-row: root.basket-focused-row;
                         selected-count: root.basket-selected-count;
@@ -2461,6 +2472,7 @@ export component AppWindow inherits Window {
     if root.spaces-visible: TaskSpacesDialog {
         width: 100%; height: 100%; report: root.spaces-report; busy: root.spaces-busy;
         can-update: root.spaces-can-update; pending: root.spaces-pending;
+        recents: root.spaces-recents;
         base-root <=> root.spaces-root;
         action(a, r) => { root.spaces-action(a, r); }
     }
@@ -2597,11 +2609,18 @@ export component AppWindow inherits Window {
 
     // Popup con la lista completa de archivos de una op (lo abre "Ver N archivos" del historial).
     OpFileListModal {
+        can-retry: root.op-file-can-retry;
+        retry => { root.op-file-list-open = false; root.op-retry(root.op-file-id); }
         open: root.op-file-list-open;
         op-label: root.op-file-list-label;
         rows: root.op-file-list;
         context: root.op-file-context;
         close() => { root.op-file-list-open = false; }
+    }
+    if root.retry-visible: RetryDialog {
+        width: parent.width; height: parent.height;
+        busy: root.retry-busy; ready: root.retry-ready; report: root.retry-report;
+        action(a) => { root.retry-action(a); }
     }
 
 }

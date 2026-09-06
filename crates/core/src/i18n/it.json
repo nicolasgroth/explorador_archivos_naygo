@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "Spazi recenti (questa sessione)",
+  "retry.title": "Riprova i file non riusciti",
+  "retry.filter": "Solo errori",
+  "retry.review": "Esamina errori…",
+  "retry.help": "Solo file non riusciti di copia/spostamento; successi e cartelle non vengono ripetuti. Controlla i percorsi. I conflitti saranno richiesti. Questo tentativo non registra annullamento.",
+  "retry.changed": "I file sono cambiati durante la verifica. Chiudi e verifica di nuovo.",
+  "retry.invalid": "Impossibile preparare il tentativo. Controlla percorsi e permessi.",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

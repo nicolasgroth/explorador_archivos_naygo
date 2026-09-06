@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "Letzte Arbeitsbereiche (diese Sitzung)",
+  "retry.title": "Fehlgeschlagene Dateien wiederholen",
+  "retry.filter": "Nur Fehler",
+  "retry.review": "Fehler prüfen…",
+  "retry.help": "Nur fehlgeschlagene Kopier-/Verschiebe-Dateien; erfolgreiche Schritte und Ordner werden nicht wiederholt. Pfade prüfen. Konflikte werden abgefragt. Kein Rückgängigmachen für diesen Versuch.",
+  "retry.changed": "Dateien wurden während der Prüfung geändert. Schließen und erneut prüfen.",
+  "retry.invalid": "Wiederholung nicht möglich. Pfade und Berechtigungen prüfen.",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

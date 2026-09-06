@@ -259,6 +259,7 @@ impl WorkspaceCtrl {
             || self.text_transform.is_some() // transformación de texto
             || self.delivery.open
             || self.task_spaces.open
+            || self.retry.open
             || self.saved_queries.open
             || self.comparison_points.open
             || self.recipes.open
@@ -285,6 +286,7 @@ impl WorkspaceCtrl {
         if self.ops.pending_dialog.is_some()
             || self.delivery.open
             || self.task_spaces.open
+            || self.retry.open
             || self.saved_queries.open
             || self.comparison_points.open
             || self.recipes.open

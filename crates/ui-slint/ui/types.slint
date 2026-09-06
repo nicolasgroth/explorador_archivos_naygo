@@ -339,6 +339,7 @@ export struct NewFolderVm {
 
 // Fila del panel de progreso: una operación en curso/en cola/terminada (historial).
 export struct OpRowVm {
+    has-errors: bool,
     index: int,
     label: string,
     percent: float,        // 0..100

@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "Espaces récents (cette session)",
+  "retry.title": "Réessayer les fichiers en échec",
+  "retry.filter": "Échecs uniquement",
+  "retry.review": "Examiner les échecs…",
+  "retry.help": "Uniquement les fichiers en échec de copie/déplacement ; les réussites et dossiers ne sont pas répétés. Vérifiez les chemins. Les conflits seront demandés. Ce nouvel essai ne permet pas d’annuler.",
+  "retry.changed": "Les fichiers ont changé pendant la vérification. Fermez et vérifiez à nouveau.",
+  "retry.invalid": "Impossible de préparer le nouvel essai. Vérifiez chemins et autorisations.",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

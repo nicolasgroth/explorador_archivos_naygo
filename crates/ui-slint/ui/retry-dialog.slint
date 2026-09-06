@@ -1,0 +1,35 @@
+// Naygo — revisión explícita del reintento de archivos fallidos.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, TextEdit } from "std-widgets.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+export component RetryDialog inherits Rectangle {
+    in property <bool> busy;
+    in property <bool> ready;
+    in property <string> report;
+    callback action(int);
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: min(760px, parent.width - 16px); height: min(620px, parent.height - 16px);
+        key-pressed(ev) => {
+            if ev.text == Key.Escape { root.action(0); return accept; }
+            reject
+        }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-width: 1px; border-color: Theme.border;
+            VerticalLayout {
+                padding: 12px; spacing: 8px;
+                Text { text: Tr.retry-title; font-weight: 700; color: Theme.text; }
+                Text { text: Tr.retry-help; color: Theme.text-dim; wrap: word-wrap; }
+                TextEdit { text: root.report; read-only: true; min-height: 0px; vertical-stretch: 1; }
+                if root.busy: Text { text: Tr.spaces-working; color: Theme.text-dim; }
+                Button { text: Tr.missing-retry; enabled: root.ready && !root.busy; clicked => { root.action(1); } }
+                Button { text: root.busy ? Tr.ops-cancel : Tr.ops-close; clicked => { root.action(0); } }
+            }
+        }
+    }
+}

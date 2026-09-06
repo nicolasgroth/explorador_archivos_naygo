@@ -550,6 +550,7 @@ pub(crate) fn to_op_dialog_vm(d: ops_ctrl::OpDialogVmData) -> OpDialogVm {
 
 pub(crate) fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
     OpRowVm {
+        has_errors: r.has_errors,
         index: r.index,
         label: SharedString::from(r.label.as_str()),
         percent: r.percent,

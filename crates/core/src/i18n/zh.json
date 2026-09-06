@@ -1,4 +1,11 @@
 {
+  "spaces.recents": "最近的工作区（本次会话）",
+  "retry.title": "重试失败的文件",
+  "retry.filter": "仅显示失败",
+  "retry.review": "检查失败项…",
+  "retry.help": "仅重试复制或移动失败的文件，不重复成功步骤或文件夹。请检查路径。发生冲突时会询问。本次重试不记录撤销。",
+  "retry.changed": "检查期间文件已更改。请关闭后重新检查。",
+  "retry.invalid": "无法准备重试。请检查路径和权限。",
   "queries.month": "This month",
   "recipes.title": "Operation recipes…",
   "recipes.help": "Gather files, filter and prepare a delivery. Recipes save criteria, never files or this run's paths. Opening or saving never executes anything.",

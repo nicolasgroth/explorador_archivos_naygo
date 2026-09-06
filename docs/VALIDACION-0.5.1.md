@@ -35,7 +35,7 @@ La prueba headless no equivale a validar la aplicación instalada con Narrador, 
 temas personalizados. Probar instalado: ruta corta/larga al redimensionar, navegación y menú de
 ancestros, bandeja ancha/estrecha, tooltips/teclado y selección/copia/scroll de MIT en Acerca de.
 
-## Distribución
+## Distribución inicial — 2026-09-05, 20:36
 
 Regenerada con `scripts/build-release.ps1`, solo y sin otras tareas pesadas, el 2026-09-05.
 Compilación Rust: 26 min 56 s; compilación del instalador: 98,172 s. Registro completo:
@@ -68,7 +68,60 @@ a567779e400717f4bc96b574f67c85cc8d9d81958b261a6016f2b3aeb8d404bf  Naygo-0.5.1-po
   ni push. No se cerró la instancia del usuario ni se instaló automáticamente.
 - Pendiente validación instalada de Nicolás, incluida la interacción manual indicada arriba.
 
-## Recomendaciones — requieren confirmación
+## Revisión posterior al respaldo en GitHub
+
+Nicolás aprobó continuar el 2026-09-05 después de publicar los cambios. El respaldo inicial es
+`dcca05b1799ec5781ed0a00eab5a3202e0b34008`, verificado en origin/fix/single-instance-y-bandeja.
+Los binarios se regeneran con el mismo número 0.5.1 y un identificador de build nuevo.
+
+- Bandeja: desactivar «Solo íconos» muestra etiquetas y un desplegable de acciones secundarias.
+  Mantiene el modo compacto anterior por defecto; se reutiliza la preferencia persistida.
+- Espacios: diez recientes de la sesión, deduplicados, con limpiar y revisión antes de aplicar.
+  No se persiste este MRU ni se exploran las rutas al renderizar.
+- Operaciones: filtro de fallidos tanto en historial como en detalle, señal de error y acceso al
+  detalle aunque haya cero éxitos. Revisión/reintento de archivos fallidos de copiar/mover con
+  origen conocido, destinos exactos, comprobación de cambios y consulta de conflictos. No undo,
+  explícito en el diálogo. Limitaciones detalladas en [REINTENTOS.md](REINTENTOS.md).
+- Tests nuevos: selección de candidatos, cambios de origen/destino, cancelación sin ejecutar,
+  copia/movimiento confirmado conservando otros archivos y recientes sin aplicación implícita.
+  El render por software cubre también bandeja con etiquetas a 900/200 px.
+- Paridad de los diez idiomas validada; no se añadieron dependencias.
+
+Validación final de esta revisión: **1.238 pruebas aprobadas** (862 core + 22 integración core +
+47 platform + 305 UI + 2 integración visual), seis smoke interactivos ignorados. Logs:
+`target/agent-out/post-github-verified-tests.log` y `post-github-clippy-final.log` (Clippy sin
+advertencias, 1 min 27 s). Formato/diff y diez catálogos correctos. Capturas de etiquetas a
+900/200 px y desplegable a 200 px inspeccionados; clic en acción secundaria verificado. El fixture
+no carga todos los íconos ni todo el catálogo de producción. Grafo final: 7.498 nodos / 13.618
+aristas / 775 comunidades, `post-github-graphify-final.log`.
+
+Distribución de la revisión regenerada con `scripts/build-release.ps1` solo: Rust 27 min 27 s;
+Inno Setup 87 s, ambos correctos. Registro: `target/agent-out/post-github-release.log`.
+
+| Artefacto actual | Bytes | Hora del 2026-09-05 (America/Santiago) |
+| --- | ---: | --- |
+| `dist/Naygo-0.5.1-setup.exe` | 51.410.586 | 22:31:11 |
+| `dist/Naygo-0.5.1-portable.zip` | 12.558.380 | 22:29:44 |
+
+SHA-256 recalculados y coincidentes con `dist/SHA256SUMS.txt`:
+
+```text
+16ae35d59ca31da542521b759b42948e0ae69369d4cb4c86ef58fd3ea5a0a988  Naygo-0.5.1-setup.exe
+2451194893dab550bed959c6dc386b9ba4a584470c53043fe0bea7ba3a18e920  Naygo-0.5.1-portable.zip
+```
+
+7-Zip verificó las cuatro entradas. EXE del ZIP idéntico al release: 35.668.992 bytes,
+versión 0.5.1 y autoría ISGroth / Nicolás Groth; SHA-256
+`c31140fd3ea8e1f5d907ce992d1d10ebb4e0763bbe9e8bd989236ac3074fd0f3`.
+LICENSE vuelve a coincidir con la fuente canónica (hash indicado en la distribución inicial).
+PDB: 334.016.512 bytes, opcional en el instalador y excluido del ZIP. Firma de código sigue
+pendiente del certificado externo; no se instaló ni se cerró la instancia del usuario.
+
+Esta revisión se prepara para publicar en `fix/single-instance-y-bandeja`, sobre `dcca05b1`.
+Pendiente prueba instalada de Nicolás: alternar etiquetas, desplegar acciones con teclado,
+abrir/limpiar recientes, filtrar fallidos y revisar/cancelar/reintentar una copia de prueba.
+
+## Recomendaciones aprobadas
 
 1. Modo opcional «ícono + etiqueta» y menú de acciones secundarias en barras compactas.
 2. Espacios recientes accesibles sin catálogo/indexación global ni ejecución automática.
