@@ -97,7 +97,7 @@ pub enum DateFormat {
 
 /// Convierte segundos epoch UTC a (año, mes 1..12, día 1..31, hora, minuto). Algoritmo de
 /// fecha civil de Howard Hinnant (sin dependencias). Asume días de 86400s.
-fn civil_from_epoch(secs: i64) -> (i64, u32, u32, u32, u32) {
+pub(crate) fn civil_from_epoch(secs: i64) -> (i64, u32, u32, u32, u32) {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let hour = (rem / 3600) as u32;

@@ -6,6 +6,13 @@ import { RowData, PaneVm, SplitVm, PickVm, DestinationRadarRowVm, TabVm, OpDialo
 import { PathBar } from "path-bar.slint";
 import { FilePanel } from "file-panel.slint";
 import { DestinationRadar } from "destination-radar.slint";
+import { DeliveryDialog, DeliveryResult } from "delivery-dialog.slint";
+import { TaskSpacesDialog } from "task-spaces-dialog.slint";
+import { SavedQueryDialog } from "saved-query-dialog.slint";
+import { ComparisonPointsDialog } from "comparison-points-dialog.slint";
+import { RecipeDialog } from "recipe-dialog.slint";
+import { PointRowVm } from "types.slint";
+import { QueryDraftVm } from "types.slint";
 import { ColumnMenu } from "column-menu.slint";
 import { TreePanel } from "tree-panel.slint";
 import { InspectorPanel } from "inspector-panel.slint";
@@ -500,6 +507,86 @@ export component AppWindow inherits Window {
     callback add-pane-of(int);        // agrega un panel del purpose dado (menú ▾)
     callback add-linked-browser();    // crea una pareja Árbol↔Files persistente
     callback basket-remove(int);
+    callback basket-select(int, bool, bool);
+    callback basket-select-all();
+    callback basket-remove-selected();
+    callback delivery-open();
+    callback spaces-action(int, string);
+    callback query-action(int, QueryDraftVm);
+    callback recipe-action(int);
+    callback recipe-invalidate();
+    in property <bool> recipe-visible;
+    in property <bool> recipe-busy;
+    in property <bool> recipe-ready;
+    in property <bool> recipe-waiting;
+    in property <bool> recipe-can-update;
+    in property <string> recipe-report;
+    in property <string> recipe-progress;
+    in property <int> recipe-revision: -1;
+    in-out property <QueryDraftVm> recipe-query;
+    in-out property <int> recipe-source;
+    in-out property <int> recipe-layout;
+    in-out property <string> recipe-output-name;
+    in-out property <string> recipe-parent;
+    in-out property <bool> recipe-zip;
+    in-out property <bool> recipe-hashes;
+    in-out property <bool> recipe-number-duplicates;
+    callback points-action(int);
+    callback points-select(int, bool);
+    in property <bool> points-visible;
+    in property <bool> points-busy;
+    in property <bool> points-loaded;
+    in property <bool> points-confirm-delete;
+    in property <bool> points-has-selection;
+    in property <string> points-report;
+    in property <string> points-progress;
+    in property <[PointRowVm]> points-rows;
+    in property <int> points-revision: -1;
+    in-out property <string> points-root;
+    in-out property <string> points-exclusions;
+    in-out property <bool> points-recursive;
+    in-out property <bool> points-hashed;
+    callback query-prepare(string, string, string, bool, bool, bool);
+    in property <bool> query-visible;
+    in property <bool> query-busy;
+    in property <bool> query-can-update;
+    in property <string> query-report;
+    in property <int> query-revision;
+    in-out property <QueryDraftVm> query-draft;
+    callback search-select(int, bool, bool);
+    callback search-to-basket();
+    callback search-rerun();
+    in property <bool> spaces-visible;
+    in property <bool> spaces-busy;
+    in property <bool> spaces-can-update;
+    in property <bool> spaces-pending;
+    in property <string> spaces-report;
+    in property <string> spaces-name;
+    in-out property <string> spaces-root;
+    callback delivery-browse();
+    callback delivery-prepare(string, int, string, bool, bool, string, bool);
+    callback delivery-result-action(int);
+    in property <string> delivery-group-defaults;
+    in property <bool> delivery-result-visible;
+    in property <bool> delivery-result-success;
+    in property <string> delivery-result-report;
+    callback delivery-invalidate();
+    callback delivery-publish();
+    callback delivery-dismiss();
+    in property <bool> delivery-visible;
+    in property <bool> delivery-busy;
+    in property <bool> delivery-ready;
+    in property <bool> delivery-waiting;
+    in property <string> delivery-report;
+    in-out property <string> delivery-destination;
+    in property <int> basket-focused-row: -1;
+    in property <int> basket-selected-count;
+    in property <image> basket-copy-icon;
+    in property <image> basket-move-icon;
+    in property <image> basket-delete-icon;
+    in property <image> basket-open-icon;
+    in property <image> basket-delivery-icon;
+    callback basket-drag-out(int);
     callback basket-clear();
     callback basket-copy();
     callback basket-move();
@@ -655,6 +742,9 @@ export component AppWindow inherits Window {
     callback pane-drag-move(int, length, length); // (PaneId, x, y) en coords de contenido
     callback pane-drag-drop(int, length, length); // soltar: recompone el layout
     callback close-pane(int);                      // (PaneId) cerrar/quitar el panel
+    callback maximize-pane(int);
+    in property <int> maximized-pane: -1;
+    property <bool> preview-fit-image: true;
     // Vista previa de la zona de drop activa (rect en coords de contenido; w/h 0 = oculta).
     in property <length> drop-x;
     in property <length> drop-y;
@@ -668,8 +758,10 @@ export component AppWindow inherits Window {
     callback pick-resolve(int);          // elige el panel número N (clic)
     callback pick-cancel();              // cancelar (clic fuera)
     in property <[DestinationRadarRowVm]> destination-radar-rows;
+    in property <bool> destination-radar-open;
     in property <bool> destination-radar-move;
     callback destination-radar-choose(int);
+    callback destination-radar-browse();
     callback destination-radar-cancel();
     // Texto de la barra de estado (carpeta activa + recuento de ítems/selección).
     in property <string> status;
@@ -1132,7 +1224,7 @@ export component AppWindow inherits Window {
                 // confundirse con "Tabs".
                 layouts-btn := ToolBtn {
                     label: Tr.toolbar-layouts;
-                    tip: Tr.toolbar-layouts-tip;
+                    tip: Tr.toolbar-layouts-tip + (root.spaces-name == "" ? "" : "\n" + root.spaces-name);
                     icon: root.tb-layouts;
                     icon-only: root.settings-vm.icon-only;
                     btn-width: root.settings-vm.icon-only ? 30px : 84px;
@@ -1264,7 +1356,7 @@ export component AppWindow inherits Window {
                 if p.tabs.length > 0: TabBar {
                     x: 0;
                     y: 0;
-                    width: 100%;
+                    width: max(0px, parent.width - 54px);
                     height: parent.bar-h;
                     tabs: p.tabs;
                     select(id) => { root.tab-select(id); }
@@ -1306,7 +1398,7 @@ export component AppWindow inherits Window {
                             vertical-alignment: center;
                         }
                         // Hueco para que el texto no quede bajo la X de cerrar (que va encima).
-                        Rectangle { width: 22px; }
+                        Rectangle { width: 50px; }
                     }
                     title-touch := TouchArea {
                         mouse-cursor: move;
@@ -1348,6 +1440,23 @@ export component AppWindow inherits Window {
                         closex-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => { root.close-pane(p.id); }
+                        }
+                    }
+                }
+                // Acción común a títulos y pestañas; no se arrastra ni cambia el layout.
+                Rectangle {
+                    x: parent.width - 50px; y: 1px; width: 24px; height: 24px;
+                    background: solo-touch.has-hover ? Theme.hover-bg : Theme.header-bg;
+                    accessible-role: button;
+                    accessible-label: Tr.pane-maximize;
+                    Text { text: root.maximized-pane == p.id ? "▣" : "□"; color: Theme.text;
+                        horizontal-alignment: center; vertical-alignment: center; }
+                    solo-touch := TouchArea {
+                        clicked => { root.maximize-pane(p.id); }
+                        changed has-hover => {
+                            root.hovered-tip = self.has-hover ? Tr.pane-maximize : "";
+                            root.hovered-tip-x = self.absolute-position.x;
+                            root.hovered-tip-y = self.absolute-position.y + self.height;
                         }
                     }
                 }
@@ -1534,6 +1643,7 @@ export component AppWindow inherits Window {
                         focus-pane() => { root.activate(p.id); }
                     }
                     if p.purpose == 5: PreviewPanel {
+                        fit-image <=> root.preview-fit-image;
                         width: 100%;
                         height: 100%;
                         active: p.active;
@@ -1570,7 +1680,20 @@ export component AppWindow inherits Window {
                     }
                     if p.purpose == 7: BasketPanel {
                         width: 100%; height: 100%; active: p.active; rows: p.basket-rows;
+                        focused-row: root.basket-focused-row;
+                        selected-count: root.basket-selected-count;
+                        copy-icon: root.basket-copy-icon; move-icon: root.basket-move-icon;
+                        delete-icon: root.basket-delete-icon; open-icon: root.basket-open-icon;
+                        delivery-icon: root.basket-delivery-icon;
+                        key(t, c, s, a) => { root.key(t, c, s, a); }
+                        key-release(c, s, a) => { root.key-release(c, s, a); }
+                        drag-in-progress: root.drag-in-progress;
                         focus-pane() => { root.activate(p.id); }
+                        select(i, c, s) => { root.basket-select(i, c, s); }
+                        select-all => { root.basket-select-all(); }
+                        remove-selected => { root.basket-remove-selected(); }
+                        delivery => { root.delivery-open(); }
+                        drag-out(i) => { root.basket-drag-out(i); }
                         remove(i) => { root.basket-remove(i); }
                         clear() => { root.basket-clear(); }
                         copy() => { root.basket-copy(); }
@@ -1578,11 +1701,16 @@ export component AppWindow inherits Window {
                         delete-files() => { root.basket-delete(); }
                         save-list() => { root.basket-save-list(); }
                         open-list() => { root.basket-open-list(); }
+                        hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                     }
                     if p.purpose == 8: SearchPanel {
                         width: 100%;
                         height: 100%;
                         vm: root.search-vm;
+                        manage(n, r, c, i, w, s) => { root.query-prepare(n, r, c, i, w, s); }
+                        select(i, c, s) => { root.search-select(i, c, s); }
+                        to-basket() => { root.search-to-basket(); }
+                        rerun() => { root.search-rerun(); }
                         root-suggestions: root.search-root-suggestions;
                         run(name, base, content, ignore-case, wildcards, recursive) => {
                             root.search-run(name, base, content, ignore-case, wildcards, recursive);
@@ -2179,6 +2307,21 @@ export component AppWindow inherits Window {
             }
             Rectangle { height: 1px; background: Theme.border; }
             MenuItem {
+                label: Tr.spaces-title;
+                clicked => { root.layout-menu-open = false; root.spaces-action(0, ""); }
+            }
+            MenuItem {
+                label: Tr.recipes-title;
+                clicked => { root.layout-menu-open = false; root.recipe-action(0); }
+            }
+            MenuItem {
+                label: Tr.points-title;
+                clicked => { root.layout-menu-open = false; root.points-action(0); }
+            }
+            if root.spaces-name != "": Text {
+                text: root.spaces-name; color: Theme.text-dim; overflow: elide;
+            }
+            MenuItem {
                 label: Tr.layout-save-current;
                 clicked => {
                     root.layout-menu-open = false;
@@ -2309,10 +2452,59 @@ export component AppWindow inherits Window {
         clicked => { root.pick-cancel(); }
     }
 
-    if root.destination-radar-rows.length > 0: DestinationRadar {
+    if root.delivery-result-visible: DeliveryResult {
+        width: min(520px, parent.width - 16px); height: 146px;
+        x: parent.width - self.width - 8px; y: max(0px, parent.height - self.height - 28px);
+        report: root.delivery-result-report; success: root.delivery-result-success;
+        action(a) => { root.delivery-result-action(a); }
+    }
+    if root.spaces-visible: TaskSpacesDialog {
+        width: 100%; height: 100%; report: root.spaces-report; busy: root.spaces-busy;
+        can-update: root.spaces-can-update; pending: root.spaces-pending;
+        base-root <=> root.spaces-root;
+        action(a, r) => { root.spaces-action(a, r); }
+    }
+    if root.query-visible: SavedQueryDialog {
+        width: 100%; height: 100%;
+        draft <=> root.query-draft;
+        busy: root.query-busy; can-update: root.query-can-update; report: root.query-report;
+        action(a, d) => { root.query-action(a, d); }
+    }
+    if root.recipe-visible: RecipeDialog {
+        width: 100%; height: 100%; busy: root.recipe-busy; ready: root.recipe-ready;
+        waiting: root.recipe-waiting; can-update: root.recipe-can-update;
+        report: root.recipe-report; progress: root.recipe-progress;
+        query <=> root.recipe-query; source <=> root.recipe-source; layout <=> root.recipe-layout;
+        output-name <=> root.recipe-output-name; destination <=> root.recipe-parent;
+        zip <=> root.recipe-zip; hashes <=> root.recipe-hashes; number-duplicates <=> root.recipe-number-duplicates;
+        action(a) => { root.recipe-action(a); }
+        invalidate => { root.recipe-invalidate(); }
+    }
+    if root.points-visible: ComparisonPointsDialog {
+        width: 100%; height: 100%; busy: root.points-busy; loaded: root.points-loaded;
+        confirm-delete: root.points-confirm-delete; has-selection: root.points-has-selection;
+        report: root.points-report; progress: root.points-progress; rows: root.points-rows;
+        folder <=> root.points-root; exclusions <=> root.points-exclusions;
+        recursive <=> root.points-recursive; hashed <=> root.points-hashed;
+        action(a) => { root.points-action(a); }
+        select(i, s) => { root.points-select(i, s); }
+    }
+    if root.delivery-visible: DeliveryDialog {
+        width: 100%; height: 100%; destination <=> root.delivery-destination;
+        report: root.delivery-report; busy: root.delivery-busy;
+        ready: root.delivery-ready; waiting: root.delivery-waiting;
+        group-defaults: root.delivery-group-defaults;
+        browse => { root.delivery-browse(); }
+        prepare(d, m, r, z, h, g, n) => { root.delivery-prepare(d, m, r, z, h, g, n); }
+        invalidate => { root.delivery-invalidate(); }
+        publish => { root.delivery-publish(); }
+        dismiss => { root.delivery-dismiss(); }
+    }
+    if root.destination-radar-open: DestinationRadar {
         width: 100%; height: 100%; rows: root.destination-radar-rows;
         title: (root.destination-radar-move ? Tr.ops-file-kind-move : Tr.ops-file-kind-copy) + "…";
         choose(index) => { root.destination-radar-choose(index); }
+        browse => { root.destination-radar-browse(); }
         dismiss => { root.destination-radar-cancel(); }
     }
     for p in root.picks: Rectangle {

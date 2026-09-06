@@ -20,6 +20,7 @@ type CacheKey = (IconKey, (u8, u8, u8), bool);
 /// la configuración (`Settings.icon_set`, un id de set). El `config_dir` permite resolver los
 /// packs sueltos del usuario desde disco.
 pub struct IconCache {
+    control_map: HashMap<CacheKey, Image>,
     /// Clave: (set_activo, clave_ícono, color_tinte, tintable). Incluye el tinte para
     /// que al cambiar el color del tema se fuerce re-decodificación sin limpiar el cache.
     map: HashMap<CacheKey, Image>,
@@ -40,6 +41,7 @@ pub struct IconCache {
 impl IconCache {
     pub fn new(active: impl Into<String>, config_dir: PathBuf) -> IconCache {
         IconCache {
+            control_map: HashMap::new(),
             map: HashMap::new(),
             ft_map: HashMap::new(),
             active: active.into(),
@@ -59,6 +61,7 @@ impl IconCache {
     ) {
         self.overrides = ov;
         self.map.clear();
+        self.control_map.clear();
     }
 
     /// Configura el tinte del set activo. `tintable` indica si el set es máscara blanca;
@@ -68,6 +71,7 @@ impl IconCache {
         self.tintable = tintable;
         self.tint = rgb;
         self.map.clear();
+        self.control_map.clear();
     }
 
     /// Solo para tests: número de entradas actualmente en el cache.
@@ -83,6 +87,7 @@ impl IconCache {
         if new != self.active {
             // El cache es solo del set vigente (la clave ya no lleva el set): al cambiar, vaciarlo.
             self.map.clear();
+            self.control_map.clear();
             self.active = new;
         }
     }
@@ -139,6 +144,33 @@ impl IconCache {
         let img = decode(&bytes);
         self.map.insert(ck, img.clone());
         img
+    }
+
+    /// Controles nuevos: resolver solo assets embebidos, nunca leer PNGs de disco en el
+    /// refresco de UI. Respeta los sets compilados y overrides Builtin; los packs externos
+    /// conservan el fallback embebido. Caché separada para no ocultar overrides de filas.
+    pub fn get_control(&mut self, key: IconKey) -> Image {
+        let tint = if self.tintable { self.tint } else { (0, 0, 0) };
+        let ck = (key, tint, self.tintable);
+        if let Some(image) = self.control_map.get(&ck) {
+            return image.clone();
+        }
+        let set = match self.overrides.get(naygo_core::icons::file_name(key)) {
+            Some(naygo_core::icon_source::IconSource::Builtin { set_id }) => set_id,
+            _ => &self.active,
+        };
+        let mut bytes = naygo_core::icons::bytes_for_id(set, key);
+        if bytes.is_empty() {
+            bytes = naygo_core::icons::bytes_for_id("lucide", key);
+        }
+        let bytes = if self.tintable {
+            tint_png(&bytes, self.tint)
+        } else {
+            bytes
+        };
+        let image = decode(&bytes);
+        self.control_map.insert(ck, image.clone());
+        image
     }
 
     /// Ícono para un `Entry` de archivo/carpeta: si su extensión tiene ícono EXACTO por

@@ -257,6 +257,11 @@ impl WorkspaceCtrl {
             || self.column_menu.is_some() // menú/editor de columna (clic derecho en header)
             || self.sync_assistant.is_some() // asistente de sincronización
             || self.text_transform.is_some() // transformación de texto
+            || self.delivery.open
+            || self.task_spaces.open
+            || self.saved_queries.open
+            || self.comparison_points.open
+            || self.recipes.open
     }
 
     /// Tecla sobre el panel activo (reusa el keymap). Devuelve true si navegó.
@@ -277,7 +282,13 @@ impl WorkspaceCtrl {
         // pegar, retomar), el teclado lo controla el modal Slint (Enter confirma, Esc cancela);
         // aquí suspendemos las acciones globales para que un Enter NO abra el archivo
         // seleccionado por debajo del modal. Mismo criterio que con el selector de panel.
-        if self.ops.pending_dialog.is_some() {
+        if self.ops.pending_dialog.is_some()
+            || self.delivery.open
+            || self.task_spaces.open
+            || self.saved_queries.open
+            || self.comparison_points.open
+            || self.recipes.open
+        {
             return false;
         }
         // Con el editor de rename inline abierto, las teclas son del editor (Enter/Esc/flechas
@@ -364,11 +375,125 @@ impl WorkspaceCtrl {
     /// acción que el teclado sin duplicar el ruteo (ver `execute_palette_command`). Devuelve
     /// `true` si algo cambió y la UI debe refrescar (igual semántica que `on_key`).
     pub fn run_action(&mut self, action: Action) -> bool {
+        if self
+            .ws
+            .active_id()
+            .and_then(|id| self.ws.pane(id))
+            .is_some_and(|p| p.purpose == PanePurpose::Search)
+            && !matches!(
+                action,
+                Action::SwitchPane
+                    | Action::CommandPalette
+                    | Action::Help
+                    | Action::OpenConfig
+                    | Action::Find
+                    | Action::ToggleMaximizePane
+                    | Action::CancelListing
+            )
+        {
+            return self.search_handle_action(action);
+        }
         let active = self.ws.active_id();
+        if active
+            .and_then(|id| self.ws.pane(id))
+            .is_some_and(|p| p.purpose == PanePurpose::Basket)
+        {
+            match action {
+                Action::SelectAll => return self.basket_select_all(),
+                Action::ExtendUp => return self.basket_move_modified(-1, false, true),
+                Action::ExtendDown => return self.basket_move_modified(1, false, true),
+                Action::ExtendPageUp => {
+                    return self.basket_move_modified(-(PAGE_ROWS as isize), false, true)
+                }
+                Action::ExtendPageDown => {
+                    return self.basket_move_modified(PAGE_ROWS as isize, false, true)
+                }
+                Action::ExtendHome => return self.basket_select_modified(0, false, true),
+                Action::ExtendEnd => {
+                    return self.basket_select_modified(
+                        self.basket.len().saturating_sub(1),
+                        false,
+                        true,
+                    )
+                }
+                Action::FocusUpKeep => return self.basket_move_modified(-1, true, false),
+                Action::FocusDownKeep => return self.basket_move_modified(1, true, false),
+                Action::ToggleSelect | Action::ToggleFocused => {
+                    if let Some(index) = self
+                        .basket_selection
+                        .focused
+                        .as_ref()
+                        .and_then(|p| self.basket.items().iter().position(|item| item == p))
+                    {
+                        return self.basket_select_modified(index, true, false);
+                    }
+                    return false;
+                }
+                Action::Delete => return self.basket_delete(),
+                Action::DeletePermanent => return self.basket_delete_kind(true),
+                Action::CancelListing => {
+                    self.basket_selection.clear_marks();
+                    return true;
+                }
+                Action::Refresh => {
+                    self.clear_metadata();
+                    return true;
+                }
+                Action::Paste => {
+                    if let naygo_core::clipboard::ClipboardContent::Files { paths, .. } =
+                        naygo_platform::clipboard::read()
+                    {
+                        return self.basket.add(paths) > 0;
+                    }
+                    return false;
+                }
+                Action::FocusHome => return self.basket_select(0),
+                Action::FocusEnd => return self.basket_select(self.basket.len().saturating_sub(1)),
+                Action::FocusPageUp => return self.basket_move_selection(-(PAGE_ROWS as isize)),
+                Action::FocusPageDown => return self.basket_move_selection(PAGE_ROWS as isize),
+                Action::CopyToOther => return self.basket_request_transfer(false),
+                Action::MoveToOther => return self.basket_request_transfer(true),
+                Action::Activate => {
+                    if let Some(path) = self.basket_selected_path() {
+                        let result = naygo_platform::open::open_default(&path);
+                        self.report_shell_result(result);
+                    }
+                    return true;
+                }
+                // Las acciones que necesitan una tabla Files no deben usar un panel anterior.
+                Action::Rename
+                | Action::PasteHistory
+                | Action::BatchRename
+                | Action::ComputeSize
+                | Action::FilterPrevMatch
+                | Action::GoUp
+                | Action::GoBack
+                | Action::GoForward
+                | Action::GoHome
+                | Action::RunAsAdministrator
+                | Action::EditPath
+                | Action::OpenTerminal
+                | Action::NewFile
+                | Action::NewDir
+                | Action::OpenFocusedOtherPane => return false,
+                _ => {}
+            }
+        }
         match action {
+            Action::ToggleMaximizePane => {
+                return active.is_some_and(|id| self.toggle_maximize(id));
+            }
             // Con el filtro visual por tipeo activo, ↑/↓ NO se mueven de a una fila: saltan a
             // la coincidencia anterior/siguiente (pedido del usuario; Tab sigue para paneles).
             Action::MoveUp => {
+                if self
+                    .ws
+                    .active_id()
+                    .and_then(|id| self.ws.pane(id))
+                    .is_some_and(|p| p.purpose == PanePurpose::Basket)
+                {
+                    return self.basket_move_selection(-1);
+                }
                 if self.filter_active() {
                     self.jump_filter_match(-1);
                 } else {
@@ -376,6 +501,14 @@ impl WorkspaceCtrl {
                 }
             }
             Action::MoveDown => {
+                if self
+                    .ws
+                    .active_id()
+                    .and_then(|id| self.ws.pane(id))
+                    .is_some_and(|p| p.purpose == PanePurpose::Basket)
+                {
+                    return self.basket_move_selection(1);
+                }
                 if self.filter_active() {
                     self.jump_filter_match(1);
                 } else {
@@ -634,6 +767,60 @@ impl WorkspaceCtrl {
         use naygo_core::keymap::Action;
         use naygo_core::palette::{Command, CommandCategory, CommandPayload};
         let mut out: Vec<Command> = Vec::new();
+        out.push(Command {
+            label: self.config.t("recipes.title"),
+            category: CommandCategory::Action,
+            shortcut: String::new(),
+            payload: CommandPayload::Recipes,
+        });
+        for path in &self.recipes.references {
+            out.push(Command {
+                label: format!(
+                    "{}: {}",
+                    self.config.t("recipes.open"),
+                    path.file_stem().unwrap_or_default().to_string_lossy()
+                ),
+                category: CommandCategory::Action,
+                shortcut: String::new(),
+                payload: CommandPayload::LoadRecipe(path.clone()),
+            });
+        }
+        out.push(Command {
+            label: self.config.t("points.title"),
+            category: CommandCategory::Action,
+            shortcut: String::new(),
+            payload: CommandPayload::ComparisonPoints,
+        });
+        out.push(Command {
+            label: self.config.t("queries.title"),
+            category: CommandCategory::Action,
+            shortcut: String::new(),
+            payload: CommandPayload::SavedQueries,
+        });
+        for path in &self.saved_queries.references {
+            out.push(Command {
+                label: format!(
+                    "{}: {}",
+                    self.config.t("queries.load"),
+                    path.file_stem().unwrap_or_default().to_string_lossy()
+                ),
+                category: CommandCategory::Action,
+                shortcut: String::new(),
+                payload: CommandPayload::LoadQuery(path.clone()),
+            });
+        }
+        out.push(Command {
+            label: self.config.t("spaces.title"),
+            category: CommandCategory::Action,
+            shortcut: String::new(),
+            payload: CommandPayload::TaskSpaces,
+        });
+        out.push(Command {
+            label: self.config.t("delivery.title"),
+            category: CommandCategory::Action,
+            shortcut: String::new(),
+            payload: CommandPayload::PrepareDelivery,
+        });
 
         // 1) Acciones CURADAS: las más útiles, en orden de presentación. (Se omiten las de
         // micro-navegación —mover foco, extender selección— que no tienen sentido en una paleta.)
@@ -657,6 +844,7 @@ impl WorkspaceCtrl {
             Action::GoForward,
             Action::GoHome,
             Action::SwitchPane,
+            Action::ToggleMaximizePane,
             Action::CopyToOther,
             Action::MoveToOther,
             Action::SelectAll,
@@ -952,6 +1140,27 @@ impl WorkspaceCtrl {
                 true
             }
             // Abrir configuración: la UI lee el flag y muestra la ventana.
+            CommandPayload::PrepareDelivery => self.delivery_open(),
+            CommandPayload::TaskSpaces => self.spaces_open(),
+            CommandPayload::SavedQueries => self.query_open(None),
+            CommandPayload::ComparisonPoints => self.points_open(),
+            CommandPayload::Recipes => self.recipe_open(),
+            CommandPayload::LoadRecipe(path) => {
+                if self.recipe_open() {
+                    self.recipe_read(path.clone(), false);
+                    true
+                } else {
+                    false
+                }
+            }
+            CommandPayload::LoadQuery(path) => {
+                if self.query_open(None) {
+                    self.query_read(path.clone());
+                    true
+                } else {
+                    false
+                }
+            }
             CommandPayload::OpenConfig => {
                 self.open_config_requested = true;
                 true
@@ -1044,6 +1253,14 @@ impl WorkspaceCtrl {
     /// aparición. Devuelve true si la tecla se aceptó (hay que refrescar: tinte del filtro,
     /// selección, auto-scroll a la coincidencia); false si era un caracter de control.
     fn typeahead(&mut self, text: &str) -> bool {
+        if self
+            .ws
+            .active_id()
+            .and_then(|id| self.ws.pane(id))
+            .is_some_and(|p| p.purpose != PanePurpose::Files)
+        {
+            return false;
+        }
         let Some(ch) = text.chars().next().filter(|c| !c.is_control()) else {
             return false;
         };

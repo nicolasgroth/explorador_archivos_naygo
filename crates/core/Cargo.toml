@@ -19,6 +19,8 @@ gen-icons = ["dep:resvg", "dep:usvg", "dep:tiny-skia"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# SHA-256 opcional de entregas; ya forma parte del lock transitivo (MIT/Apache-2.0).
+sha2 = "0.10.9"
 tracing = { workspace = true }
 # Decodificación de imágenes: PNG/JPEG (íconos) + BMP/GIF/WebP/ICO para la vista
 # previa liviana (todas puras-Rust, MIT/Apache, sin libs nativas).

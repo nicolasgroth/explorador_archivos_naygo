@@ -45,6 +45,7 @@ impl WorkspaceCtrl {
             return;
         };
         crate::logging::breadcrumb(&format!("aplicar layout {}", name));
+        self.maximized_pane = None;
         let home = self.template_home();
         // Cancelar los listados/árboles actuales antes de reemplazar el workspace.
         for l in self.listings.values() {
@@ -75,6 +76,7 @@ impl WorkspaceCtrl {
             return false;
         };
         crate::logging::breadcrumb(&format!("aplicar layout {} (efímero, CLI)", name));
+        self.maximized_pane = None;
         let home = self.template_home();
         // Cancelar los listados/árboles actuales antes de reemplazar el workspace.
         for l in self.listings.values() {

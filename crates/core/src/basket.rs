@@ -97,9 +97,121 @@ fn path_key(path: &Path) -> String {
     }
 }
 
+/// Selección por identidad, independiente de índices que cambian al quitar referencias.
+/// El foco gobierna Preview; las marcas gobiernan operaciones. No consulta el disco.
+#[derive(Clone, Debug, Default)]
+pub struct BasketSelection {
+    pub focused: Option<PathBuf>,
+    anchor: Option<PathBuf>,
+    marked: HashSet<PathBuf>,
+}
+
+impl BasketSelection {
+    pub fn select(&mut self, items: &[PathBuf], index: usize, control: bool, shift: bool) -> bool {
+        let Some(path) = items.get(index) else {
+            return false;
+        };
+        if shift {
+            let anchor = self
+                .anchor
+                .as_ref()
+                .or(self.focused.as_ref())
+                .and_then(|p| items.iter().position(|item| item == p))
+                .unwrap_or(index);
+            if !control {
+                self.marked.clear();
+            }
+            self.marked
+                .extend(items[anchor.min(index)..=anchor.max(index)].iter().cloned());
+            if self.anchor.is_none() {
+                self.anchor = Some(items[anchor].clone());
+            }
+        } else {
+            if control {
+                if !self.marked.remove(path) {
+                    self.marked.insert(path.clone());
+                }
+            } else {
+                self.marked.clear();
+                self.marked.insert(path.clone());
+            }
+            self.anchor = Some(path.clone());
+        }
+        self.focused = Some(path.clone());
+        true
+    }
+
+    pub fn contains(&self, path: &Path) -> bool {
+        self.marked.contains(path)
+    }
+
+    pub fn count(&self) -> usize {
+        self.marked.len()
+    }
+
+    pub fn clear_marks(&mut self) {
+        self.marked.clear();
+        self.anchor = self.focused.clone();
+    }
+
+    pub fn paths(&self, items: &[PathBuf]) -> Vec<PathBuf> {
+        items
+            .iter()
+            .filter(|p| self.marked.contains(*p))
+            .cloned()
+            .collect()
+    }
+
+    pub fn select_all(&mut self, items: &[PathBuf]) {
+        self.marked = items.iter().cloned().collect();
+        if self.focused.is_none() {
+            self.focused = items.first().cloned();
+        }
+        if self.anchor.is_none() {
+            self.anchor = self.focused.clone();
+        }
+    }
+
+    pub fn reconcile(&mut self, items: &[PathBuf]) {
+        self.marked.retain(|p| items.contains(p));
+        if self.focused.as_ref().is_some_and(|p| !items.contains(p)) {
+            self.focused = None;
+        }
+        if self.anchor.as_ref().is_some_and(|p| !items.contains(p)) {
+            self.anchor = self.focused.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seleccion_rango_ancla_ctrl_y_reconciliacion_por_ruta() {
+        let items: Vec<_> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        let mut selection = BasketSelection::default();
+        assert!(!selection.select(&items, 99, false, false));
+        selection.select(&items, 1, false, false);
+        selection.select(&items, 4, false, true);
+        assert_eq!(selection.paths(&items), items[1..].to_vec());
+        selection.select(&items, 2, false, true);
+        assert_eq!(selection.paths(&items), items[1..3].to_vec());
+        selection.select(&items, 0, true, false);
+        selection.select(&items, 2, true, false);
+        assert_eq!(selection.paths(&items), items[..2].to_vec());
+        assert_eq!(selection.focused, Some(items[2].clone()));
+        selection.reconcile(&items[1..]);
+        assert_eq!(selection.paths(&items), vec![items[1].clone()]);
+        selection.select_all(&items);
+        assert_eq!(selection.paths(&items), items);
+        selection.reconcile(&[]);
+        assert!(selection.paths(&items).is_empty());
+        assert!(selection.focused.is_none());
+    }
 
     #[test]
     fn deduplica_y_conserva_orden() {

@@ -1,0 +1,58 @@
+// Naygo — guardado explícito y revisión de espacios por tarea.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, LineEdit, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component TaskSpacesDialog inherits Rectangle {
+    in property <string> report;
+    in property <bool> busy;
+    in property <bool> can-update;
+    in property <bool> pending;
+    in-out property <string> base-root;
+    callback action(int, string);
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2;
+        y: max(8px, (parent.height - self.height) / 2);
+        width: min(700px, parent.width - 16px);
+        height: min(610px, parent.height - 16px);
+        key-pressed(ev) => {
+            if ev.text == Key.Escape { root.action(6, ""); return accept; }
+            reject
+        }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-color: Theme.border; border-width: 1px;
+            VerticalLayout {
+                padding: 12px; spacing: 8px;
+                Text { text: Tr.spaces-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 8px;
+                        Text { text: Tr.spaces-help; color: Theme.text-dim; wrap: word-wrap; }
+                        Text { text: Tr.spaces-root-help; color: Theme.text-dim; wrap: word-wrap; }
+                        LineEdit { text <=> root.base-root; placeholder-text: Tr.spaces-root; enabled: !root.busy && !root.pending; }
+                        TextEdit { text: root.report; read-only: true; min-height: 130px; preferred-height: 190px; }
+                        if root.busy: Text { text: Tr.spaces-working; color: Theme.text-dim; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: Tr.spaces-save-as; enabled: !root.busy; clicked => { root.action(1, root.base-root); } }
+                            Button { text: Tr.spaces-update; enabled: !root.busy && root.can-update; clicked => { root.action(3, ""); } }
+                        }
+                        Button { text: Tr.spaces-open; enabled: !root.busy; clicked => { root.action(2, root.base-root); } }
+                        if root.pending: VerticalLayout {
+                            spacing: 6px;
+                            Button { text: Tr.spaces-save-open; enabled: !root.busy && root.can-update; clicked => { root.action(5, ""); } }
+                            Button { text: Tr.spaces-discard-open; enabled: !root.busy; clicked => { root.action(4, ""); } }
+                        }
+                    }
+                }
+                Button { text: root.busy ? Tr.ops-cancel : Tr.ops-close; clicked => { root.action(6, ""); } }
+            }
+        }
+    }
+}

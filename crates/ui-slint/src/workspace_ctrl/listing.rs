@@ -898,10 +898,18 @@ impl WorkspaceCtrl {
             .and_then(|id| self.ws.pane(id))
             .and_then(|p| p.files.as_ref())
             .or_else(|| self.ws.active_files());
-        let focused_file = files_pane
-            .and_then(|f| f.focused_view_entry())
-            .filter(|e| e.kind != EntryKind::Directory)
-            .map(|e| e.path.clone());
+        let focused_file = if self.search_context {
+            self.search_selected_entry()
+                .filter(|e| e.kind != EntryKind::Directory)
+                .map(|e| e.path.clone())
+        } else {
+            self.basket_selected_path().or_else(|| {
+                files_pane
+                    .and_then(|f| f.focused_view_entry())
+                    .filter(|e| e.kind != EntryKind::Directory)
+                    .map(|e| e.path.clone())
+            })
+        };
         self.preview.set_wanted(focused_file, now);
         // El toggle global de auto-resaltado controla al worker: se sincroniza antes de lanzarlo.
         self.preview

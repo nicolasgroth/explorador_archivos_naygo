@@ -125,6 +125,7 @@ pub enum Action {
     /// Ir a la carpeta de inicio configurada (Home). Alt+Home.
     GoHome,
     SwitchPane,
+    ToggleMaximizePane,
     CancelListing,
     Copy,
     Duplicate,
@@ -235,6 +236,7 @@ impl Action {
             GoForward,
             GoHome,
             SwitchPane,
+            ToggleMaximizePane,
             CancelListing,
             Copy,
             Duplicate,
@@ -308,6 +310,7 @@ impl Action {
             GoForward => "action.go_forward",
             GoHome => "action.go_home",
             SwitchPane => "action.switch_pane",
+            ToggleMaximizePane => "action.maximize_pane",
             CancelListing => "action.cancel_listing",
             Copy => "action.copy",
             Duplicate => "action.duplicate",
@@ -409,6 +412,7 @@ impl KeyMap {
             // inmediato estilo Commander y Ctrl+Tab resulta familiar para usuarios de apps
             // con paneles/pestañas. La acción sigue siendo configurable desde Ajustes.
             (SwitchPane, vec![Chord::plain(Tab), Chord::ctrl(Tab)]),
+            (ToggleMaximizePane, vec![Chord::ctrl_shift(Char('m'))]),
             (CancelListing, vec![Chord::plain(Escape)]),
             (Copy, vec![Chord::ctrl(Char('c'))]),
             (Duplicate, vec![Chord::ctrl(Char('d'))]),
@@ -557,10 +561,22 @@ impl KeyMap {
     /// default; eso da retro-compat ante acciones nuevas como ComputeSize.)
     fn from_stored(stored: Vec<StoredBinding>) -> KeyMap {
         let mut km = KeyMap::defaults();
+        // La acción nueva no puede apropiarse de un atajo que el usuario ya asignó
+        // en una versión anterior. Una asignación explícita a maximizar sí se respeta.
+        let maximize_stored = stored
+            .iter()
+            .any(|e| e.action == Action::ToggleMaximizePane);
+        let maximize_claimed = stored.iter().any(|e| {
+            e.action != Action::ToggleMaximizePane
+                && e.chords.contains(&Chord::ctrl_shift(KeyCode::Char('m')))
+        });
         for entry in stored {
             if let Some(pos) = km.bindings.iter().position(|(a, _)| *a == entry.action) {
                 km.bindings[pos].1 = entry.chords;
             }
+        }
+        if !maximize_stored && maximize_claimed {
+            km.slot_mut(Action::ToggleMaximizePane).clear();
         }
         km
     }
@@ -648,13 +664,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tiene_66_acciones_con_clave_i18n_unica() {
+    fn maximizar_no_roba_atajo_personalizado_de_version_anterior() {
+        let chord = Chord::ctrl_shift(KeyCode::Char('m'));
+        let km = KeyMap::from_stored(vec![StoredBinding {
+            action: Action::Find,
+            chords: vec![chord],
+        }]);
+        assert_eq!(km.action_for(&chord), Some(Action::Find));
+        assert!(km.chords_for(Action::ToggleMaximizePane).is_empty());
+    }
+
+    #[test]
+    fn all_tiene_67_acciones_con_clave_i18n_unica() {
         let all = Action::all();
-        assert_eq!(all.len(), 66);
+        assert_eq!(all.len(), 67);
         let mut keys: Vec<&str> = all.iter().map(|a| a.i18n_key()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), 66, "cada acción tiene una clave i18n única");
+        assert_eq!(
+            keys.len(),
+            all.len(),
+            "cada acción tiene una clave i18n única"
+        );
     }
 
     #[test]
@@ -663,6 +694,10 @@ mod tests {
         // Cada botón de toolbar antes sin atajo ahora tiene su chord por defecto, y `action_for`
         // (lo que consume la UI al teclear) lo resuelve a la acción correcta.
         for (chord, action) in [
+            (
+                Chord::ctrl_shift(KeyCode::Char('m')),
+                Action::ToggleMaximizePane,
+            ),
             (Chord::ctrl(KeyCode::Char('t')), Action::OpenTerminal),
             (Chord::ctrl_shift(KeyCode::Char('t')), Action::SplitPanel),
             (Chord::ctrl_shift(KeyCode::Char('r')), Action::RefreshDrives),

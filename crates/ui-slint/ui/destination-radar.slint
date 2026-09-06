@@ -2,22 +2,36 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 import { DestinationRadarRowVm } from "types.slint";
+import { Button, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
 
 export component DestinationRadar inherits Rectangle {
     in property <[DestinationRadarRowVm]> rows;
     in property <string> title;
     callback choose(int);
+    callback browse();
     callback dismiss();
+    property <int> focused-row: 0;
+    changed focused-row => {
+        if root.focused-row * 44px < -destinations.viewport-y {
+            destinations.viewport-y = -root.focused-row * 44px;
+        } else if (root.focused-row + 1) * 44px > -destinations.viewport-y + destinations.height {
+            destinations.viewport-y = min(0px, destinations.height - (root.focused-row + 1) * 44px);
+        }
+    }
     background: #00000070;
     TouchArea { clicked => { root.dismiss(); } }
     card := FocusScope {
         x: (parent.width - self.width) / 2;
         y: max(20px, (parent.height - self.height) / 3);
         width: min(620px, parent.width - 40px);
-        height: min(parent.height - 40px, 74px + root.rows.length * 48px);
+        height: min(parent.height - 40px, 116px + root.rows.length * 48px);
         key-pressed(ev) => {
             if (ev.text == Key.Escape) { root.dismiss(); return accept; }
+            if (ev.text == Key.DownArrow) { root.focused-row = min(root.rows.length - 1, root.focused-row + 1); return accept; }
+            if (ev.text == Key.UpArrow) { root.focused-row = max(0, root.focused-row - 1); return accept; }
+            if (ev.text == Key.Return && root.rows.length > 0) { root.choose(root.focused-row); return accept; }
             if (ev.text == "1") { root.choose(0); return accept; }
             if (ev.text == "2") { root.choose(1); return accept; }
             if (ev.text == "3") { root.choose(2); return accept; }
@@ -36,9 +50,11 @@ export component DestinationRadar inherits Rectangle {
             VerticalLayout {
                 padding: 12px; spacing: 4px;
                 Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 700; height: 26px; }
-                for row in root.rows: Rectangle {
-                    height: 42px; border-radius: 4px;
-                    background: touch.has-hover ? Theme.row-alt-bg : transparent;
+                destinations := ListView {
+                min-height: 0px; vertical-stretch: 1;
+                for row[i] in root.rows: Rectangle {
+                    height: 44px; border-radius: 4px;
+                    background: i == root.focused-row ? Theme.selection-bg : (touch.has-hover ? Theme.row-alt-bg : transparent);
                     HorizontalLayout {
                         spacing: 10px;
                         Text { text: row.number + ""; color: Theme.accent; font-size: 18px; width: 20px; horizontal-alignment: center; vertical-alignment: center; }
@@ -48,6 +64,12 @@ export component DestinationRadar inherits Rectangle {
                         }
                     }
                     touch := TouchArea { mouse-cursor: pointer; clicked => { root.choose(row.number - 1); } }
+                }
+                }
+                Button {
+                    text: Tr.destination-radar-browse;
+                    horizontal-stretch: 1;
+                    clicked => { root.browse(); }
                 }
             }
         }

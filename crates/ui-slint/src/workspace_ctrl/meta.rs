@@ -12,12 +12,14 @@ use super::*;
 /// Resultado del worker de metadata. La presencia del ADS se mantiene separada de sus campos:
 /// Windows puede crear un Zone.Identifier sin ZoneId/URLs legibles y aun así debe poder quitarse.
 pub(crate) struct MetaResult {
+    basic: Result<std::fs::Metadata, String>,
     fields: Vec<naygo_core::metadata::MetadataField>,
     has_zone_identifier: bool,
 }
 
 /// Lectura de metadata en curso/terminada para el archivo actualmente enfocado.
 pub struct MetaJob {
+    pub basic: Option<Result<std::fs::Metadata, String>>,
     /// Archivo cuya metadata se pidió (clave para no relanzar el mismo job en cada tick).
     pub path: std::path::PathBuf,
     /// Canal por el que el worker envía los campos leídos (una sola vez).
@@ -121,6 +123,13 @@ impl WorkspaceCtrl {
         let worker_path = path.clone();
         let worker_token = token.clone();
         std::thread::spawn(move || {
+            if worker_token.is_cancelled() {
+                return;
+            }
+            let basic = std::fs::metadata(&worker_path).map_err(|e| e.to_string());
+            if worker_token.is_cancelled() {
+                return;
+            }
             let mut fields = naygo_core::metadata::metadata_for(&worker_path);
             let mut has_zone_identifier = false;
             match naygo_platform::zone_identifier::read(&worker_path) {
@@ -155,12 +164,14 @@ impl WorkspaceCtrl {
             // send falla (canal cerrado porque el job fue reemplazado).
             if !worker_token.is_cancelled() {
                 let _ = tx.send(MetaResult {
+                    basic,
                     fields,
                     has_zone_identifier,
                 });
             }
         });
         self.meta_job = Some(MetaJob {
+            basic: None,
             path,
             rx,
             token,
@@ -190,6 +201,7 @@ impl WorkspaceCtrl {
         }
         // El worker envía una sola vez; `try_recv` no bloquea el hilo de UI.
         if let Ok(result) = job.rx.try_recv() {
+            job.basic = Some(result.basic);
             job.fields = result
                 .fields
                 .into_iter()
@@ -228,12 +240,20 @@ impl WorkspaceCtrl {
     /// previsualizando, y hacer clic dentro del propio Preview/Inspector no la vacía. Solo
     /// archivos: para carpetas no hay metadata por tipo.
     pub fn metadata_target(&self) -> Option<std::path::PathBuf> {
-        self.last_active_files
-            .and_then(|id| self.ws.pane(id))
-            .and_then(|p| p.files.as_ref())
-            .or_else(|| self.ws.active_files())
-            .and_then(|f| f.focused_view_entry())
-            .filter(|e| e.kind != naygo_core::fs_model::EntryKind::Directory)
-            .map(|e| e.path.clone())
+        if self.search_context {
+            return self
+                .search_selected_entry()
+                .filter(|e| e.kind != EntryKind::Directory)
+                .map(|e| e.path.clone());
+        }
+        self.basket_selected_path().or_else(|| {
+            self.last_active_files
+                .and_then(|id| self.ws.pane(id))
+                .and_then(|p| p.files.as_ref())
+                .or_else(|| self.ws.active_files())
+                .and_then(|f| f.focused_view_entry())
+                .filter(|e| e.kind != naygo_core::fs_model::EntryKind::Directory)
+                .map(|e| e.path.clone())
+        })
     }
 }

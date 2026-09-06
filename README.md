@@ -42,6 +42,15 @@ incluidos, temas y sets de íconos personalizables.
 
 ## Funcionalidades
 
+- **Puntos de comparación** desde Disposiciones o Ctrl+P: guardar metadatos y SHA-256 opcional,
+  comparar más tarde con cobertura explícita y enviar cambios presentes a bandeja/entregas.
+  Sin restauración de bytes ni indexador. [Guía de puntos](docs/PUNTOS-DE-COMPARACION.md).
+- **Consultas guardadas multiraíz** desde F3 o Ctrl+P: filtros de nombre/contenido, tamaño y
+  fechas relativas, ejecución explícita cancelable, resultados seleccionables y envío a bandeja.
+  Sin indexador residente. [Guía de consultas](docs/BUSQUEDAS-GUARDADAS.md).
+- **Espacios por tarea** desde Disposiciones o Ctrl+P: guardado explícito de paneles, rutas,
+  columnas, filtros y bandeja; importar/exportar `.naygospace`, raíz portable y revisión antes
+  de cambiar de tarea, sin interrumpir copias o movimientos. [Guía de espacios](docs/ESPACIOS.md).
 - Navegación por paneles dual (o múltiples), con ir atrás/adelante (incluidos los botones
   laterales del mouse) y barra de ruta editable con favoritos.
 - Árbol de carpetas con expansión incremental y revelado hasta la carpeta activa. Puede ser
@@ -54,7 +63,17 @@ incluidos, temas y sets de íconos personalizables.
   derecha→izquierda o bidireccional, con plan seleccionable y borrado de sobrantes
   desactivado por defecto.
 - Bandeja temporal para reunir archivos de carpetas distintas y luego copiarlos, moverlos o
-  enviarlos a la papelera como un solo lote.
+  enviarlos a la papelera como un solo lote. Ctrl/Shift y Ctrl+A marcan el conjunto; las acciones
+  usan únicamente los marcados. Quitar referencias o vaciar no borra los archivos originales.
+- **Preparar entrega** desde la bandeja o Ctrl+P: revisar los destinos, agrupar por origen,
+  usar rutas relativas a una raíz explícita o archivos al mismo nivel, y publicar una carpeta
+  nueva o un ZIP. Incluye manifiesto/lista sin rutas privadas y verificación SHA-256 opcional.
+  Cancela desde Operaciones; deshacer retira únicamente el destino nuevo, no los originales.
+  [Guía de entregas y límites](docs/ENTREGAS.md).
+- **Recetas de operaciones** desde Disposiciones o Ctrl+P: reunir una selección o consulta,
+  filtrar y preparar una carpeta/ZIP fechado. `.naygorecipe` guarda criterios reutilizables,
+  con raíces/destino indicados por ejecución; nunca ejecuta al abrir ni modifica originales.
+  [Guía de recetas](docs/RECETAS.md).
 - Accesos físicos en el árbol a Escritorio, Documentos, Descargas, Imágenes, OneDrive y
   Dropbox; siguen funcionando aunque Windows o el proveedor los haya reubicado a otra unidad.
 - Transformación segura de texto entre CRLF, LF y CR clásico; UTF-8/UTF-16, BOM, salto final

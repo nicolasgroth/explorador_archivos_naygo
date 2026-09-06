@@ -21,13 +21,76 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         area_of,
         ..
     } = ctx;
-    // Bandeja temporal: acciones sobre sus rutas. El selector nativo de carpeta corre solo al
-    // confirmar copiar/mover; el trabajo posterior queda en el motor asíncrono de operaciones.
+    // Bandeja temporal: selección, destinos y operaciones. Copiar/Mover abre primero el radar
+    // de paneles Files visibles; «Otra carpeta…» queda como escape explícito en ese mismo radar.
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         ui.on_basket_remove(move |index| {
             ctrl.borrow_mut().basket_remove(index.max(0) as usize);
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_basket_select(move |index, control, shift| {
+            if ctrl
+                .borrow_mut()
+                .basket_select_modified(index.max(0) as usize, control, shift)
+            {
+                start_timer();
+            }
+            sync_layout();
+        });
+    }
+    {
+        // Igual que el arrastre desde Files, `DoDragDrop` se difiere al próximo turno: su loop
+        // modal re-entra Slint y no puede convivir con un RefCell prestado por este callback.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_basket_drag_out(move |index| {
+            let (paths, staging) = {
+                let mut c = ctrl.borrow_mut();
+                let Some(path) = c.basket.items().get(index.max(0) as usize).cloned() else {
+                    return;
+                };
+                if !c.basket_selection.contains(&path) {
+                    c.basket_select(index.max(0) as usize);
+                }
+                (c.basket_action_paths(), c.basket_staging.clone())
+            };
+            if paths.is_empty() {
+                return;
+            }
+            let ui_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_drag_in_progress(true);
+                }
+                let _staging = staging; // Conservar fuentes virtuales durante todo el bucle OLE.
+                let _ = naygo_platform::dnd::start_drag(&paths);
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_drag_in_progress(false);
+                    ui.set_drag_just_ended(true);
+                }
+            });
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_basket_select_all(move || {
+            ctrl.borrow_mut().basket_select_all();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        ui.on_basket_remove_selected(move || {
+            ctrl.borrow_mut().basket_remove_selected();
             sync_layout();
         });
     }
@@ -44,12 +107,10 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         let handler = move || {
-            if let Some(dest) = rfd::FileDialog::new().pick_folder() {
-                if ctrl.borrow_mut().basket_transfer_to(dest, move_files) {
-                    start_timer();
-                }
-                sync_layout();
+            if ctrl.borrow_mut().basket_request_transfer(move_files) {
+                start_timer();
             }
+            sync_layout();
         };
         if move_files {
             ui.on_basket_move(handler);
@@ -282,6 +343,14 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
+        ui.on_maximize_pane(move |id| {
+            ctrl.borrow_mut().toggle_maximize(PaneId(id as u64));
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
         ui.on_close_pane(move |id| {
             ctrl.borrow_mut().close_pane(PaneId(id as u64));
             sync_layout();
@@ -313,6 +382,21 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         ui.on_destination_radar_choose(move |index| {
             ctrl.borrow_mut()
                 .destination_radar_resolve(index.max(0) as usize);
+            start_timer();
+            sync_layout();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_destination_radar_browse(move || {
+            // El diálogo se abre sin mantener un préstamo al controlador. Si el usuario cancela,
+            // el radar queda abierto y puede escoger un panel visible sin repetir el gesto.
+            let Some(path) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            ctrl.borrow_mut().destination_radar_resolve_path(path);
             start_timer();
             sync_layout();
         });

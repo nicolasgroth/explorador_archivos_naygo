@@ -1,0 +1,100 @@
+// Naygo — revisión y publicación de entregas sin modificar originales.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, ComboBox, LineEdit, TextEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component DeliveryDialog inherits Rectangle {
+    in-out property <string> destination;
+    in property <string> report;
+    in property <bool> busy;
+    in property <bool> ready;
+    in property <bool> waiting;
+    in property <string> group-defaults;
+    property <string> group-names: root.group-defaults;
+    property <bool> rename-duplicates;
+    property <string> relative-root;
+    property <int> mode;
+    property <bool> zip;
+    property <bool> hashes;
+    callback browse();
+    callback prepare(string, int, string, bool, bool, string, bool);
+    callback invalidate();
+    callback publish();
+    callback dismiss();
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2;
+        y: max(8px, (parent.height - self.height) / 2);
+        width: min(740px, parent.width - 16px);
+        height: min(680px, parent.height - 16px);
+        key-pressed(ev) => {
+            if ev.text == Key.Escape { root.dismiss(); return accept; }
+            reject
+        }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-color: Theme.border; border-width: 1px;
+            VerticalLayout {
+                padding: 12px; spacing: 8px;
+                Text { text: Tr.delivery-title; color: Theme.text; font-weight: 700; font-size: 18px; }
+                ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 7px;
+                        Text { text: Tr.delivery-help; color: Theme.text-dim; wrap: word-wrap; }
+                        Text { text: Tr.delivery-destination; color: Theme.text; }
+                        HorizontalLayout {
+                            LineEdit { text <=> root.destination; horizontal-stretch: 1; enabled: !root.busy; edited => { root.invalidate(); } }
+                            Button { text: "…"; accessible-label: Tr.destination-radar-browse; enabled: !root.busy; clicked => { root.browse(); } }
+                        }
+                        HorizontalLayout {
+                            ComboBox { model: [Tr.delivery-grouped, Tr.delivery-flat, Tr.delivery-relative]; current-index <=> root.mode; enabled: !root.busy; horizontal-stretch: 1; selected(_) => { root.invalidate(); } }
+                            CheckBox { text: "ZIP"; checked <=> root.zip; enabled: !root.busy; toggled => { root.invalidate(); } }
+                        }
+                        if root.mode == 2: LineEdit { text <=> root.relative-root; placeholder-text: Tr.delivery-root; enabled: !root.busy; edited => { root.invalidate(); } }
+                        if root.mode == 0: Text { text: Tr.delivery-group-names; color: Theme.text-dim; wrap: word-wrap; }
+                        if root.mode == 0: TextEdit { text <=> root.group-names; min-height: 70px; preferred-height: 90px;
+                            enabled: !root.busy; edited => { root.invalidate(); } }
+                        if root.mode == 1: CheckBox { text: Tr.delivery-rename; checked <=> root.rename-duplicates;
+                            enabled: !root.busy; toggled => { root.invalidate(); } }
+                        CheckBox { text: Tr.delivery-hash; checked <=> root.hashes; enabled: !root.busy; toggled => { root.invalidate(); } }
+                        TextEdit { text: root.report; read-only: true; min-height: 160px; preferred-height: 260px; }
+                        if root.waiting: Text { text: Tr.delivery-waiting; color: Theme.text-dim; wrap: word-wrap; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: root.busy ? Tr.ops-cancel : Tr.delivery-prepare;
+                        clicked => { if root.busy { root.invalidate(); } else { root.prepare(root.destination, root.mode, root.relative-root, root.zip, root.hashes, root.group-names, root.rename-duplicates); } } }
+                    Button { text: Tr.delivery-publish; enabled: root.ready && !root.busy && !root.waiting; clicked => { root.publish(); } }
+                    Button { text: Tr.ops-close; clicked => { root.dismiss(); } }
+                }
+            }
+        }
+    }
+}
+
+// Resultado no modal: no roba foco al terminar una operación en segundo plano.
+export component DeliveryResult inherits Rectangle {
+    in property <string> report;
+    in property <bool> success;
+    callback action(int);
+    background: Theme.panel-bg;
+    border-width: 1px; border-color: Theme.border;
+    TouchArea {}
+    VerticalLayout {
+        padding: 8px; spacing: 6px;
+        Text { text: root.report; color: Theme.text; overflow: elide; wrap: word-wrap; max-height: 40px; }
+        HorizontalLayout {
+            Button { text: Tr.delivery-open-result; enabled: root.success; clicked => { root.action(0); } }
+            Button { text: Tr.delivery-copy-result; enabled: root.success; clicked => { root.action(1); } }
+        }
+        HorizontalLayout {
+            Button { text: Tr.delivery-back; clicked => { root.action(2); } }
+            Button { text: Tr.ops-close; clicked => { root.action(3); } }
+        }
+    }
+}

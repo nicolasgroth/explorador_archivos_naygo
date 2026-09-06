@@ -22,6 +22,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 mod archive;
 mod batch_delete;
+mod delivery;
 mod resume;
 
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
@@ -789,7 +790,7 @@ impl OpsCtrl {
     /// ¿Hay alguna op realmente trabajando? Cuenta tanto las que copian (canal del motor vivo)
     /// como las que están "Calculando…" (canal de planificación vivo): ambas ocupan el turno en
     /// modo cola, así una segunda op espera a que la primera termine de escanear Y de copiar.
-    fn any_running(&self) -> bool {
+    pub(crate) fn any_running(&self) -> bool {
         self.active_ops.iter().any(|o| {
             o.started && (o.rx.is_some() || o.plan_rx.is_some() || o.awaiting_folders.is_some())
         })

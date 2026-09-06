@@ -2,14 +2,29 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
-> Última actualización: 2026-09-02.
+> Última actualización: 2026-09-05.
 
 ## Estado de partida
 
-- Versión en curso: **0.4.0+** (0.4.0 publicada 2026-08-16; hay trabajo sin publicar en el
-  working tree: buscador F3 ampliado, carpetas conocidas de Windows en el árbol, y más).
-- Suite: **1.100 tests verdes** (más 6 smoke tests de Windows ignorados por requerir interacción).
-  Clippy: cero warnings en todo el workspace y todos los targets.
+- Entregada **0.5.1** (petición 2026-09-05): rutas con ancho natural y extremo actual
+  visible, acciones de bandeja arriba con ajuste de filas según ancho, vaciar separado abajo,
+  MIT completa y seleccionable en Acerca de desde LICENSE. Sin nuevas dependencias.
+  Validación: 1.230 pruebas aprobadas, 6 smoke interactivos ignorados; Clippy sin advertencias,
+  formato/diff y paridad de diez catálogos correctos. Logs 051-validated-tests.log y
+  051-final-clippy.log en target/agent-out. Render software inspeccionado a 900/360/200/110 px,
+  con comprobación de ancho real, ruta compacta y clics de las ocho acciones al envolver.
+  Grafo actualizado: 7.442 nodos / 13.526 aristas (051-graphify.log).
+  Instalador regenerado a las 20:36 y portable a las 20:34, hora America/Santiago;
+  checksums, integridad ZIP, versión del EXE y LICENSE empaquetada verificados.
+  Registro: target/agent-out/051-release.log. Detalle y hashes: [validación 0.5.1](VALIDACION-0.5.1.md).
+  Pendiente prueba instalada de Nicolás.
+- Distribución anterior: **0.5.0**; instalador y portable regenerados el 2026-09-05. Hay cambios
+  previos sin commit en el working tree; inventariar y validar antes de nuevas entregas.
+- Suite de recetas verificada 2026-09-05: **1.228 tests verdes** (más 6 smoke tests de Windows
+  ignorados por requerir interacción). Registro final: `target/agent-out/recipes-final-tests.log`.
+  Clippy aprobado con `--all-targets --locked -- -D warnings` (`recipes-final-clippy.log`).
+  Séptima entrega regenerada y verificada: instalador del 2026-09-05 a las 18:32,
+  portable de las 18:30, hora America/Santiago. Detalle y hashes en el plan.
 - i18n: 10 idiomas con paridad verificada por `scripts/check_i18n_lang.py` (en CI).
 - **Fix ya aplicado en el working tree (incluir en el próximo commit):** las 7 claves
   `slint.preview.{loading,cancel,cancel_tip,copy_tip,wrap_on_tip,wrap_off_tip,reset_view_tip}`
@@ -73,6 +88,18 @@
 
 ## A. Mejoras técnicas pendientes (importante aplicarlas)
 
+### Mejoras de usabilidad posteriores a 0.5.1 — aprobadas el 2026-09-05
+
+Nicolás pidió respaldar primero todos los cambios del proyecto en GitHub y después continuar
+con estas recomendaciones. No incluye publicar muestras personales de tmp/ ni binarios en Git.
+
+- Opción «ícono + etiqueta» y menú de acciones secundarias en barras con íconos poco familiares.
+- Acceso a espacios recientes sin indexación global ni abrirlos/ejecutarlos automáticamente.
+- Filtrar fallos del historial y preparar un reintento sólo de fallidos, con revisión de fuentes,
+  destinos y conflictos; no repetir a ciegas una operación completa ni los pasos ya completados.
+
+Referencia de interfaz: https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/command-bar
+
 ### T-4. Firma de código del instalador
 **Preparación completada; activación externa pendiente.** `scripts/build-release.ps1` ya acepta
 `SignToolPath` + `CertificateThumbprint` (o sus variables de entorno), firma el `setup.exe` con
@@ -84,6 +111,138 @@ usar una sin esa autorización. Mientras tanto, el bypass de SmartScreen está d
 ---
 
 ## B. Funcionalidades aprobadas para implementar
+
+### Plan 2026-09-04 — usabilidad y flujos de trabajo (pendiente)
+
+Plan detallado: [Usabilidad y flujos de trabajo](plans/2026-09-04-usabilidad-y-flujos-de-trabajo.md).
+Solicitado por Nicolás; séptima entrega implementada y empaquetada (recetas declarativas).
+El alcance completo de las siete etapas NO está cerrado.
+
+Implementado en el working tree del 2026-09-04:
+
+- Tinte tenue en la columna ordenada solo del panel activo, con prioridad de selección/alertas.
+- Ruta acotada con ancestros accesibles y botones laterales reservados; comparación en segunda
+  fila cuando falta ancho.
+- Bandeja con Inicio/Fin/Página, scroll siguiendo foco y metadata básica asíncrona por ruta.
+- Radar desplazable con flechas/Enter y fuentes capturadas al abrir; mover no vacía la bandeja
+  antes de conocer el resultado.
+- Maximizar/restaurar un panel con botón/paleta/Ctrl+Shift+M sin alterar el layout persistido.
+
+Segunda entrega implementada: selección múltiple por identidad en bandeja (Ctrl/Shift/Ctrl+A,
+Ctrl+flechas y arrastre del grupo), marcas persistentes entre paneles y alcance explícito de
+acciones. Borrar confirma los originales; quitar/vaciar solo retira referencias. Los controles
+están agrupados y tienen foco de teclado. Ctrl+V agrega referencias, no pega en otro panel.
+
+Asistente de entregas implementado: carpeta nueva o ZIP desde marcados/Ctrl+P; grupos por fuente,
+plano o raíz relativa explícita, revisión y revalidación, SHA-256 opcional, manifiesto/lista sin
+rutas privadas, temporales propios, cancelación y deshacer únicamente del destino. Se reutilizan
+los motores existentes; ZIP usa inventario congelado. [Guía y límites](ENTREGAS.md).
+
+Tercera entrega implementada (2026-09-05): nombres de grupo editables, revisión conjunta de
+homónimos y propuesta numerada explícita en modo plano, conservando todas las fuentes. Tarjeta
+de resultado no modal con abrir carpeta de salida, copiar ubicación y recuperar las fuentes
+marcadas en bandeja sin vaciar otras referencias. El historial conserva los errores de una
+entrega fallida, en vez de perder el motivo y aparentar «hecho: 0». La detección de solapamientos
+entre muchas fuentes pasa de comparar todas las parejas a búsquedas ordenadas O(n log n).
+
+Configuración: búsqueda por etiquetas de ajustes, no solo por nombre de categoría; navegación
+lateral con foco visible, Enter/Espacio y estado sin coincidencias. No consulta disco.
+Quedan controles/configuración restantes (incluida restauración por sección), validación
+visual/DPI/accesibilidad y mediciones. Etapa 4 implementada con validación instalada pendiente;
+etapas 5–7 implementadas con validación instalada pendiente. El alcance completo NO está cerrado.
+
+Cuarta entrega (2026-09-05): espacios por tarea `.naygospace` desde Disposiciones y Ctrl+P,
+guardado/actualización explícitos, revisión antes de cambiar y raíz portable opcional. Conserva
+layout, panel activo, columnas/filtros, tipeo y bandeja sin serializar listados ni preview.
+La cola de operaciones conserva sus destinos capturados al cambiar. Archivos corruptos,
+incompatibles o editados externamente no se sobrescriben; staging efímero se rechaza al guardar.
+Conversión de layouts existentes aplicándolos y usando Guardar como. [Guía y límites](ESPACIOS.md).
+El indicador de cambios se recalcula en el gestor, no en cada frame; abrir tarea usa el selector
+nativo, sin catálogo residente ni exploración al arranque. ES/EN; nuevas claves usan inglés
+provisional en los otros ocho idiomas (paridad no significa traducción editorial terminada).
+
+Validación de cuarta entrega: 815 core + 22 integración + 40 platform + 285 UI = 1.162 pruebas,
+6 ignoradas. Grafo AST: 7.046 nodos / 12.702 aristas; registro `spaces-graphify.log`.
+Formato/diff y paridad de los diez idiomas verificados. Prueba de firma de filas desacoplada del
+portapapeles global para que un bloqueo externo del SO no produzca fallos ajenos a su contrato.
+
+Distribución de cuarta entrega terminada con `scripts/build-release.ps1`, ejecutado solo,
+salida 0 (`target/agent-out/spaces-release.log`): release 25 min 40 s, Inno 85,5 s.
+Instalador `dist/Naygo-0.5.0-setup.exe` de las 12:40:27 (49.512.070 bytes), portable de
+las 12:39:01 (12.470.322 bytes). Hashes verificados contra `dist/SHA256SUMS.txt`; `7z t`
+aprobado y ejecutable del ZIP idéntico al release (34.059.776 bytes, versión/autoría verificadas).
+PDB de diagnóstico: 320.688.128 bytes en `target/release`, opcional en instalador y fuera del ZIP.
+Sin dependencias nuevas; portable +145.762 bytes frente a la tercera entrega. Sin firma externa
+y sin cerrar la instancia instalada de Nicolás: validación visual/DPI/Narrador pendiente.
+Origen: working tree sin commit sobre `6ea74b9f39da`, rama `fix/single-instance-y-bandeja`.
+
+Validación de la segunda entrega: `cargo test --workspace --locked` (1.142 aprobados, 6 ignorados),
+`cargo fmt --all -- --check` y paridad de los 10 idiomas aprobadas.
+`cargo clippy --workspace --all-targets --locked -- -D warnings` aprobado; grafo actualizado por AST
+(6.924 nodos, 12.393 aristas). Logs: `delivery-validated-tests.log` y `delivery-final-clippy.log`
+dentro de `target/agent-out`. Distribución de esta segunda entrega regenerada con
+`scripts/build-release.ps1` (salida 0): instalador del 2026-09-05 a las 00:13
+(48.621.974 bytes), portable de las 00:11 (12.233.915 bytes), hora America/Santiago. Ambos SHA-256
+verificados contra `dist/SHA256SUMS.txt`; `naygo.exe` del ZIP coincide con `target/release`.
+Versión y autoría del exe verificadas. Origen: working tree sin commit sobre `6ea74b9f39da`,
+rama `fix/single-instance-y-bandeja`. Hashes completos en el plan enlazado arriba.
+Registro: `target/agent-out/delivery-release.log`. Validación visual pendiente: no se cerró
+la instancia instalada del usuario para forzar el smoke. Firma externa T-4 sigue pendiente.
+
+Tercera entrega: suite completa con 1.147 aprobados (808 core + 22 integración + 37 platform +
+280 UI), 6 ignorados; formato, diff y paridad i18n verificados. Grafo AST actualizado:
+6.943 nodos / 12.467 aristas. Logs `target/agent-out/refinements-tests.log` y
+`refinements-graphify.log`. Clippy final con `--all-targets --locked -- -D warnings` aprobado,
+registro `refinements-final-clippy.log`. Distribución regenerada con `scripts/build-release.ps1`
+(salida 0): instalador del 2026-09-05 a las 07:32 (48.987.054 bytes), portable de las 07:30
+(12.324.560 bytes), hora America/Santiago. Ambos hashes contrastados con `SHA256SUMS.txt`,
+ZIP legible y ejecutable idéntico al release (33.639.936 bytes); versión/autoría verificadas.
+Log: `target/agent-out/refinements-release.log` (compilación: 23 min 48 s).
+Hashes completos en el plan. Sigue sin firma externa y sin validación visual/DPI instalada;
+no se cerró la sesión del usuario. Cambios aún sin commit sobre `6ea74b9f39da`.
+
+- [ ] Etapa 0: base 0.5.0 reproducible e inventario de validación.
+- [ ] Etapa 1: ruta adaptable, foco/teclado, propiedades completas de bandeja, accesibilidad,
+  controles/diálogos adaptables y configuración fácil de encontrar.
+- [ ] Etapa 2: maximización temporal implementada y probada en controlador; validar
+  interactivamente restauración visual, pestañas y DPI con el nuevo instalador.
+- [ ] Etapa 3: carpeta/ZIP, manifiesto, SHA-256 y refinamientos de grupos/homónimos/posentrega
+  implementados. Falta validación manual de fallos/cancelación de archivos grandes. Los demás
+  errores de I/O/ruta todavía se informan al encontrarlos, sin resolución masiva ni omisiones.
+- [ ] Etapa 4: guardado/actualización/importación de espacios implementados y probados;
+  falta validar instalado (diálogo/teclado/DPI/Narrador y red caída real). Referencias a búsquedas
+  implementadas con etapa 5; recetas añadidas en etapa 7. Sin catálogo ni autoguardado de espacios.
+- [ ] Etapa 5: consultas .naygosearch multiraíz implementadas, con tamaños/fechas relativas,
+  ejecución explícita, cobertura parcial, selección/preview/propiedades/bandeja y referencias
+  Ctrl+P/espacios. Validación automática aprobada: 1.181 tests, 6 ignorados, Clippy limpio.
+  Logs queries-validated-tests.log y queries-validated-clippy.log en target/agent-out.
+  Instalador/portable regenerados y verificados (2026-09-05, 14:44/14:42); build salida 0,
+  ZIP íntegro, ejecutable idéntico al release y SHA-256 contrastados. Falta validación instalada/DPI/red real.
+  Guía: docs/BUSQUEDAS-GUARDADAS.md. No hay índice residente ni ejecución al cargar o arrancar.
+- [ ] Etapa 6: puntos .naygopoint implementados; captura/lectura/comparación/exportación/papelera
+  en workers, SHA-256 opcional, exclusiones y cobertura desconocida explícitas, límites 50.000
+  entradas / 32 MiB, 5.000 filas de cambios y envío sólo de archivos presentes a bandeja.
+  Validación automática aprobada: 1.207 tests, 6 ignorados; Clippy limpio. Instalador y portable
+  regenerados/verificados: 2026-09-05 a las 17:24/17:22 (build salida 0, ZIP íntegro, exe idéntico
+  al release, versión 0.5.0 y SHA-256 contrastados). Log: target/agent-out/points-release.log.
+  Pendientes aceptación instalada/DPI/Narrador,
+  permisos/red reales y traducción editorial de los ocho catálogos con respaldo EN.
+  Guía: docs/PUNTOS-DE-COMPARACION.md. No es respaldo ni incluye catálogo/indexador residente.
+- [ ] Etapa 7: recetas .naygorecipe implementadas en working tree; editor de selección/consulta,
+  filtros y fecha «este mes», parámetros de raíces/destino separados, revisión congelada,
+  entrega carpeta/ZIP con nombres fechados, guardado protegido por revisión y referencias en
+  espacios/Ctrl+P. Sin scripts, borrado de originales ni servicios residentes. Guía: docs/RECETAS.md.
+  Validación final: 1.228 pruebas aprobadas (859 core + 22 integración + 47 platform + 300 UI),
+  6 smoke tests interactivos ignorados; Clippy sin advertencias, formato/diff y paridad de diez
+  catálogos aprobados. Logs recipes-final-tests.log y recipes-final-clippy.log en target/agent-out.
+  Distribución regenerada/verificada: 2026-09-05 a las 18:32/18:30 (build salida 0, ZIP íntegro,
+  exe idéntico al release, versión 0.5.0 y SHA-256 contrastados). Log recipes-release.log.
+  Grafo AST actualizado: 7.426 nodos / 13.508 aristas (recipes-graphify.log).
+  Pendiente aceptación instalada: teclado/DPI/Narrador, red/permisos y cancelación real.
+  Ocho catálogos usan respaldo EN para las claves nuevas; traducción editorial pendiente.
+
+Cada entrega que modifique la app requiere pruebas e instalador/portable regenerados mediante
+`scripts/build-release.ps1`, ejecutado solo, y validación de Nicolás antes de la siguiente feature.
 
 ### F-5. Historial de navegación con memoria de contexto («Atrás de verdad»)
 Al volver Atrás/Adelante, restaurar no solo la ruta sino también el archivo enfocado, selección,
@@ -204,6 +363,26 @@ seleccionar fragmentos y copiarlos con `Ctrl+C`; el botón de la cabecera conser
   persistentes. Se añadieron Vivid y Pastel: dos sets CC0 de 39 íconos multicolor, con paleta
   semántica por tipo de archivo o acción y sin tintado por tema.
 
+### Cierre funcional 2026-09-02 (productividad y bandeja temporal)
+
+- Se verificaron y conservaron los tres flujos de productividad ya presentes: paleta de comandos
+  con `Ctrl+P`, ayuda contextual de atajos con `F1` y disposiciones de workspace guardables desde
+  el menú Layouts. No se duplicaron con una segunda implementación.
+- Copiar/Mover desde Bandeja abre el radar de destinos y ofrece primero los paneles Files visibles;
+  mantiene «Elegir otra carpeta…» como alternativa explícita. Arrastrar una fila de la bandeja a
+  un panel abierto usa el mismo OLE drag seguro que el resto de la aplicación.
+- La fila elegida se destaca y alimenta Vista previa, Propiedades y metadata asíncrona. Las acciones
+  de la bandeja son ahora compactas, basadas en íconos y tienen tooltip, incluido quitar una fila.
+
+### Cierre funcional 2026-09-02 (0.5.0: continuidad de preview y bandeja)
+
+- El selector de escala de imágenes mantiene el último modo elegido —ajustar o 1:1— al navegar
+  entre archivos, sin afectar el comportamiento de scroll del tamaño natural.
+- Con la Bandeja temporal activa, las flechas ↑/↓ recorren sus ítems y conservan su contexto como
+  fuente de Preview, Propiedades y metadata; no recuperan la selección del último panel Files.
+- La versión de distribución pasa a **0.5.0**. Todo cambio de la aplicación debe cerrar con un
+  nuevo `setup.exe` y ZIP portable para validación manual.
+
 ---
 
 ---
@@ -242,5 +421,14 @@ paneles. Se rechaza una carpeta sobre sí misma o dentro de su propio árbol.
   distribución resultante.
 - La máquina del usuario estuvo bajo presión de RAM (~700 MB libres): correr builds pesados
   (release con LTO) SOLOS, sin otros trabajos en paralelo.
+- **Material web 2026-09-05:** generadas y revisadas 20 capturas reales de Naygo 0.5.0
+  en seis temas, con datos ficticios y TXT de explicaciones/alt. Entrega local:
+  `C:\Users\ngrot\Pictures\Screenshots\Naygo-web-20-capturas.zip`.
+  Corpus y copia portable separados en `D:\Naygo-Demo`; sesión instalada restaurada
+  en segundo plano. No se modificó la aplicación ni se requirió rebuild de distribución.
+  Ampliación: material ubicado por el usuario en `assets/screenshots`; agregadas
+  variantes multipanel 21–22 (oscura y clara), anonimizadas mediante edición generativa
+  de su referencia. Guía y notas distinguen estas ilustraciones de las 20 capturas
+  reales. Revisadas visualmente; referencia privada excluida de la entrega.
 - `scripts/run-logged.sh` envuelve comandos pesados (deja salida + curva de RAM en
   `target/agent-out/` y bitácora en `logs/agent-bitacora.md`); útil ante caídas del entorno.

@@ -6,13 +6,25 @@
 // fuente (los emojis salen invisibles/monocromos con el renderizador por software de Slint).
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
-import { LineEdit, ListView, CheckBox } from "std-widgets.slint";
+import { LineEdit, ListView, CheckBox, Button } from "std-widgets.slint";
 import { SearchVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
 export component SearchPanel inherits Rectangle {
     in property <SearchVm> vm;
+    callback manage(string, string, string, bool, bool, bool);
+    callback select(int, bool, bool);
+    callback to-basket();
+    callback rerun();
+    property <int> focused-row: root.vm.focused-row;
+    changed focused-row => {
+        if root.focused-row < 0 { list.viewport-y = 0px; return; }
+        if root.focused-row * 30px < -list.viewport-y { list.viewport-y = -root.focused-row * 30px; }
+        else if (root.focused-row + 1) * 30px > -list.viewport-y + list.height {
+            list.viewport-y = min(0px, list.height - (root.focused-row + 1) * 30px);
+        }
+    }
     // Lanza la búsqueda con el texto actual del campo.
     callback run(string, string, string, bool, bool, bool);
     // Autocompletado async de «Buscar desde», reutilizando la misma lógica segura de path-bar.
@@ -99,6 +111,11 @@ export component SearchPanel inherits Rectangle {
             }
 
             // --- Raíz editable. Se inicializa desde el último panel Files activo. ---
+            Button {
+                text: Tr.queries-title;
+                clicked => { root.manage(root.draft, root.draft-root, root.draft-content,
+                    root.draft-ignore-case, root.draft-wildcards, root.draft-recursive); }
+            }
             HorizontalLayout {
                 spacing: 8px;
                 height: 32px;
@@ -111,6 +128,7 @@ export component SearchPanel inherits Rectangle {
                 LineEdit {
                     horizontal-stretch: 1;
                     text <=> root.draft-root;
+                    enabled: !root.vm.advanced;
                     edited(t) => {
                         root.root-suggestion-index = -1;
                         root.root-changed(t);
@@ -183,6 +201,7 @@ export component SearchPanel inherits Rectangle {
                     horizontal-stretch: 1;
                     placeholder-text: Tr.search-placeholder;
                     text <=> root.draft;
+                    enabled: !root.vm.advanced;
                     // Enter lanza la búsqueda.
                     accepted(t) => {
                         root.run(t, root.draft-root, root.draft-content,
@@ -196,28 +215,15 @@ export component SearchPanel inherits Rectangle {
                         return reject;
                     }
                 }
-                Rectangle {
+                Button {
                     width: 96px;
-                    border-radius: 5px;
-                    // Detener es una acción de cancelación: rojo sostenido, con mayor contraste
-                    // que Buscar para que se encuentre al primer vistazo.
-                    background: root.vm.running
-                        ? (btn-touch.has-hover ? Theme.error.brighter(12%) : Theme.error)
-                        : (btn-touch.has-hover ? Theme.accent : Theme.selection-bg);
-                    Text {
-                        text: root.vm.running ? Tr.search-stop : Tr.search-go;
-                        color: Theme.text;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                    btn-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            if (root.vm.running) { root.cancel(); }
-                            else {
-                                root.run(root.draft, root.draft-root, root.draft-content,
-                                    root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
-                            }
+                    text: root.vm.running ? Tr.search-stop : Tr.search-go;
+                    clicked => {
+                        if (root.vm.running) { root.cancel(); }
+                        else if root.vm.advanced { root.rerun(); }
+                        else {
+                            root.run(root.draft, root.draft-root, root.draft-content,
+                                root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
                         }
                     }
                 }
@@ -237,6 +243,7 @@ export component SearchPanel inherits Rectangle {
                     horizontal-stretch: 1;
                     placeholder-text: Tr.search-content-placeholder;
                     text <=> root.draft-content;
+                    enabled: !root.vm.advanced;
                     accepted(t) => {
                         root.run(root.draft, root.draft-root, root.draft-content,
                             root.draft-ignore-case, root.draft-wildcards, root.draft-recursive);
@@ -254,14 +261,14 @@ export component SearchPanel inherits Rectangle {
             HorizontalLayout {
                 spacing: 16px;
                 height: 28px;
-                CheckBox { text: Tr.search-ignore-case; checked <=> root.draft-ignore-case; }
-                CheckBox { text: Tr.search-wildcards; checked <=> root.draft-wildcards; }
-                CheckBox { text: Tr.search-recursive; checked <=> root.draft-recursive; }
+                CheckBox { text: Tr.search-ignore-case; checked <=> root.draft-ignore-case; enabled: !root.vm.advanced; }
+                CheckBox { text: Tr.search-wildcards; checked <=> root.draft-wildcards; enabled: !root.vm.advanced; }
+                CheckBox { text: Tr.search-recursive; checked <=> root.draft-recursive; enabled: !root.vm.advanced; }
             }
 
             // --- Estado: "Buscando…", "N resultados", "parcial / tope" ---
             HorizontalLayout {
-                height: 14px;
+                height: root.vm.advanced ? 58px : 14px;
                 spacing: 5px;
                 if root.vm.running: HorizontalLayout {
                     width: 26px;
@@ -272,6 +279,7 @@ export component SearchPanel inherits Rectangle {
                 }
                 Text {
                     text: root.vm.status;
+                    wrap: word-wrap;
                     color: root.vm.running ? Theme.accent : Theme.text-dim;
                     font-size: 11px;
                     vertical-alignment: center;
@@ -279,7 +287,9 @@ export component SearchPanel inherits Rectangle {
             }
 
             // --- Resultados (lista scrollable) ---
+            Button { text: Tr.queries-basket + " (" + root.vm.marked-count + ")"; enabled: root.vm.marked-count > 0; clicked => { root.to-basket(); } }
             Rectangle {
+                min-height: 0px;
                 vertical-stretch: 1;
                 background: Theme.row-bg;
                 border-radius: 6px;
@@ -294,10 +304,14 @@ export component SearchPanel inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                ListView {
+                results-focus := FocusScope {
+                    key-pressed(ev) => { root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt); accept }
+                list := ListView {
                     for hit[i] in root.vm.hits: Rectangle {
                         height: 30px;
-                        background: row-touch.has-hover ? Theme.selection-bg : transparent;
+                        background: hit.selected ? Theme.selection-bg : (row-touch.has-hover ? Theme.hover-bg : transparent);
+                        border-width: root.vm.focused-row == i ? 1px : 0px;
+                        border-color: Theme.accent;
                         HorizontalLayout {
                             padding-left: 8px;
                             padding-right: 8px;
@@ -352,10 +366,17 @@ export component SearchPanel inherits Rectangle {
                             }
                         }
                         row-touch := TouchArea {
+                            width: max(0px, parent.width - 88px);
                             mouse-cursor: pointer;
-                            clicked => { root.open(i); }
+                            pointer-event(ev) => {
+                                if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left {
+                                    results-focus.focus(); root.select(i, ev.modifiers.control, ev.modifiers.shift);
+                                }
+                            }
+                            double-clicked => { root.open(i); }
                         }
                     }
+                }
                 }
             }
         }

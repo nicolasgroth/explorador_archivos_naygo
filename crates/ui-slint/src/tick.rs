@@ -591,6 +591,15 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 ctrl.borrow_mut().pump_meta();
                 let zone_unblock_done = ctrl.borrow_mut().pump_zone_unblock();
                 let basket_import_done = ctrl.borrow_mut().pump_basket_import();
+                let delivery_done = ctrl.borrow_mut().pump_delivery();
+                let spaces_was_busy = ctrl.borrow().task_spaces.busy();
+                let spaces_done = ctrl.borrow_mut().pump_task_spaces();
+                let queries_done = ctrl.borrow_mut().pump_saved_queries();
+                let points_done = ctrl.borrow_mut().pump_comparison_points();
+                let recipes_done = ctrl.borrow_mut().pump_recipes();
+                if spaces_was_busy && spaces_done {
+                    sync_layout();
+                }
                 // Drenar la búsqueda recursiva en vuelo (Ctrl+F / lupa).
                 let search_done = ctrl.borrow_mut().pump_search();
                 // Drenar el listado profundo en vuelo (vista profunda / toggle).
@@ -653,6 +662,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && meta_done
                     && zone_unblock_done
                     && basket_import_done
+                    && delivery_done
+                    && spaces_done
+                    && queries_done
+                    && points_done
+                    && recipes_done
                     && search_done
                     && !deep_changed
                     && !fresh_pending

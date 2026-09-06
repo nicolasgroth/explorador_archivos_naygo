@@ -121,9 +121,7 @@ export component PreviewPanel inherits Rectangle {
     property <bool> wrap-text: true;
     // Las imágenes parten ajustadas, como hasta ahora. El segundo modo mantiene exactamente sus
     // píxeles rasterizados y deja que ScrollView aparezca solo si no caben en el panel.
-    property <bool> fit-image: true;
-    property <string> image-content-key: root.view.path + "\u{0}" + root.view.image.width + "x" + root.view.image.height;
-    changed image-content-key => { root.fit-image = true; }
+    in-out property <bool> fit-image: true;
     background: Theme.inactive-panel-bg;
     border-width: 1px;
     border-color: root.active ? Theme.active-pane-border : Theme.divider;

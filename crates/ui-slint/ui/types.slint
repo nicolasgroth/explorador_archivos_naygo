@@ -288,6 +288,7 @@ export struct MissingFolderVm {
 // contenedora relativa a la raíz de búsqueda (dónde está), tamaño/fecha ya formateados, si es
 // carpeta, y el ícono cacheado. La acción "abrir" se hace por índice, no por ruta.
 export struct SearchHitVm {
+    selected: bool,
     name: string,
     rel-dir: string,     // carpeta contenedora relativa a la raíz ("" = en la raíz)
     detail: string,      // tamaño + fecha ya formateados (columna secundaria)
@@ -298,6 +299,9 @@ export struct SearchHitVm {
 // Estado del panel de búsqueda F3. Sus criterios se conservan mientras el panel está abierto,
 // de modo que el usuario puede ajustar y relanzar sin perder la raíz ni las opciones.
 export struct SearchVm {
+    advanced: bool,
+    focused-row: int,
+    marked-count: int,
     active: bool,
     query: string,
     root-label: string,
@@ -308,6 +312,20 @@ export struct SearchVm {
     running: bool,       // worker aún en vuelo (muestra el spinner/Detener)
     hits: [SearchHitVm],
     status: string,
+}
+
+export struct PointRowVm { path: string, status: string, actionable: bool, selected: bool }
+export struct QueryDraftVm {
+    name: string,
+    roots: string,
+    name-query: string,
+    content-query: string,
+    min-bytes: string,
+    max-bytes: string,
+    modified: int,
+    ignore-case: bool,
+    use-wildcards: bool,
+    recursive: bool,
 }
 
 // Estado del modal "nueva(s) carpeta(s)".
@@ -470,6 +488,8 @@ export struct BasketRowVm {
     // La referencia fue leída desde .naygolist, pero ya no existe según el worker de importación.
     // Sigue siendo operable/visible: la marca evita perderla de forma silenciosa.
     missing: bool,
+    // La selección de la bandeja alimenta Preview y Propiedades, igual que una fila Files.
+    selected: bool,
     icon: image,
 }
 

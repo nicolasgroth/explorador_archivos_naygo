@@ -1,0 +1,73 @@
+// Naygo — edición explícita de consultas guardadas, sin ejecutar al cargar.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, LineEdit, TextEdit, ScrollView, CheckBox, ComboBox } from "std-widgets.slint";
+import { QueryDraftVm } from "types.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component SavedQueryDialog inherits Rectangle {
+    in-out property <QueryDraftVm> draft;
+    in property <string> report;
+    in property <bool> busy;
+    in property <bool> can-update;
+    callback action(int, QueryDraftVm);
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2;
+        y: max(8px, (parent.height - self.height) / 2);
+        width: min(760px, parent.width - 16px);
+        height: min(740px, parent.height - 16px);
+        key-pressed(ev) => {
+            if ev.text == Key.Escape { root.action(5, root.draft); return accept; }
+            reject
+        }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-color: Theme.border; border-width: 1px;
+            VerticalLayout {
+                padding: 12px; spacing: 8px;
+                Text { text: Tr.queries-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 8px;
+                        Text { text: Tr.queries-help; color: Theme.text-dim; wrap: word-wrap; }
+                        LineEdit { text <=> root.draft.name; placeholder-text: Tr.queries-name; enabled: !root.busy; }
+                        Text { text: Tr.queries-roots-help; color: Theme.text-dim; wrap: word-wrap; }
+                        TextEdit { text <=> root.draft.roots; read-only: root.busy; min-height: 75px; preferred-height: 95px; }
+                        LineEdit { text <=> root.draft.name-query; placeholder-text: Tr.search-placeholder; enabled: !root.busy; }
+                        LineEdit { text <=> root.draft.content-query; placeholder-text: Tr.search-content-placeholder; enabled: !root.busy; }
+                        HorizontalLayout {
+                            CheckBox { text: Tr.search-ignore-case; checked <=> root.draft.ignore-case; enabled: !root.busy; }
+                            CheckBox { text: Tr.search-wildcards; checked <=> root.draft.use-wildcards; enabled: !root.busy; }
+                            CheckBox { text: Tr.search-recursive; checked <=> root.draft.recursive; enabled: !root.busy; }
+                        }
+                        HorizontalLayout {
+                            LineEdit { text <=> root.draft.min-bytes; placeholder-text: Tr.queries-min; enabled: !root.busy; }
+                            LineEdit { text <=> root.draft.max-bytes; placeholder-text: Tr.queries-max; enabled: !root.busy; }
+                        }
+                        Text { text: Tr.queries-date; color: Theme.text-dim; }
+                        ComboBox {
+                            model: [Tr.queries-any, Tr.queries-today, Tr.queries-week, Tr.queries-days7, Tr.queries-days30, Tr.queries-month];
+                            current-index <=> root.draft.modified; enabled: !root.busy;
+                        }
+                        TextEdit { text: root.report; read-only: true; min-height: 55px; preferred-height: 65px; }
+                        if root.busy: Text { text: Tr.spaces-working; color: Theme.text-dim; }
+                        HorizontalLayout {
+                            Button { text: Tr.queries-load; enabled: !root.busy; clicked => { root.action(1, root.draft); } }
+                            Button { text: Tr.spaces-save-as; enabled: !root.busy; clicked => { root.action(2, root.draft); } }
+                            Button { text: Tr.spaces-update; enabled: !root.busy && root.can-update; clicked => { root.action(3, root.draft); } }
+                        }
+                        Button { text: Tr.queries-forget; enabled: !root.busy && root.can-update; clicked => { root.action(7, root.draft); } }
+                    }
+                }
+                HorizontalLayout {
+                    Button { text: root.busy ? Tr.ops-cancel : Tr.ops-close; clicked => { root.action(5, root.draft); } }
+                    Button { text: Tr.search-go; enabled: !root.busy; clicked => { root.action(4, root.draft); } }
+                }
+            }
+        }
+    }
+}

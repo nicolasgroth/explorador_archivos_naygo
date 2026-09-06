@@ -3421,7 +3421,7 @@ checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "naygo-core"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "image",
  "lofty",
@@ -3431,6 +3431,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "sha2",
  "syntect",
  "tempfile",
  "tiny-skia 0.12.0",
@@ -3442,8 +3443,9 @@ dependencies = [
 
 [[package]]
 name = "naygo-platform"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
+ "chrono",
  "global-hotkey",
  "naygo-core",
  "notify",
@@ -3457,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "naygo-ui-slint"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "flate2",
  "i-slint-backend-winit",

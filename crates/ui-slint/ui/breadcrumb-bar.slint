@@ -1,0 +1,76 @@
+// Naygo — ruta acotada con acceso a todos los ancestros, sin I/O ni medidas de disco.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, ListView } from "std-widgets.slint";
+import { PathSeg } from "types.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component BreadcrumbBar inherits Rectangle {
+    in property <[PathSeg]> segments;
+    in property <length> available-height;
+    callback navigate(string);
+    callback context(string, length, length);
+    callback edit();
+    callback hover-tip(string, length, length);
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    clip: true;
+        Button {
+            x: 0px; y: 0px; width: 28px; height: root.height;
+            text: "…";
+            clicked => { ancestors.show(); }
+        }
+        // Anchos naturales: el espacio sobrante queda al final, no entre los nombres.
+        // Si no cabe la ruta, conservar visible su extremo actual; … ofrece todos los ancestros.
+        viewport := Rectangle {
+            x: 30px; width: max(0px, root.width - 30px); height: root.height; clip: true;
+            trail := HorizontalLayout {
+                x: min(0px, viewport.width - self.width);
+                width: self.preferred-width; height: root.height;
+                spacing: 0px; alignment: start;
+        for seg in root.segments: Rectangle {
+            height: root.height;
+            width: min(label.preferred-width + 8px, viewport.width);
+            horizontal-stretch: 0;
+            clip: true;
+            background: touch.has-hover ? Theme.hover-bg : transparent;
+            label := Text {
+                x: 4px; width: max(0px, parent.width - 8px);
+                text: "› " + seg.label;
+                color: Theme.text; vertical-alignment: center; overflow: elide;
+            }
+            touch := TouchArea {
+                clicked => { root.navigate(seg.path); }
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right {
+                        root.context(seg.path, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
+                changed has-hover => { root.hover-tip(self.has-hover ? seg.path : "", self.absolute-position.x, self.absolute-position.y + self.height); }
+            }
+        }
+            }
+        }
+    ancestors := PopupWindow {
+        x: 0; y: root.height;
+        width: max(180px, root.width);
+        height: min(max(64px, root.available-height - 60px), min(320px, (root.segments.length + 1) * 32px));
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel-bg; border-width: 1px; border-color: Theme.border;
+            VerticalLayout {
+            spacing: 0px;
+            Button { text: Tr.edit-path; height: 32px; clicked => { ancestors.close(); root.edit(); } }
+            ListView {
+                min-height: 0px;
+                for seg in root.segments: Button {
+                    height: 32px; text: seg.path;
+                    clicked => { ancestors.close(); root.navigate(seg.path); }
+                }
+            }
+            }
+        }
+    }
+}

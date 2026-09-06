@@ -3,7 +3,7 @@
 // callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
-import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
+import { ListView, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
 import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm, NewsSection, IconChoiceVm } from "types.slint";
 import { Tr, TextUtil } from "i18n.slint";
 import { Theme } from "theme.slint";
@@ -307,6 +307,7 @@ export component ConfigWindow inherits Window {
     in property <[ThemeCardVm]> theme-cards;
     in property <string> config-dir;
     in property <string> app-version;
+    in property <string> license-text;
     // Categoría seleccionada (0..9). in-out para que Rust pueda saltar a la pestaña Íconos desde
     // el handler de personalize-icon-set.
     in-out property <int> cat: 3; // arranca en Apariencia (lo más visible)
@@ -331,9 +332,28 @@ export component ConfigWindow inherits Window {
         { label: Tr.cfg-cat-import, cat: 5 },
         { label: Tr.cfg-cat-about, cat: 8 },
     ];
-    // Texto del buscador de opciones (filtra las pestañas del sidebar por nombre). Vacío = todas
+    // Texto del buscador de opciones (encuentra categorías y etiquetas de ajustes). Vacío = todas
     // visibles. Estado puramente local: no se persiste ni se cablea a Rust.
     property <string> search-text: "";
+    // Índice liviano de etiquetas existentes, traducido en caliente. No consulta disco ni
+    // modifica ajustes: encuentra la sección donde vive la opción, no solo su categoría.
+    property <[string]> category-terms: [
+        Tr.cfg-show-parent + " " + Tr.cfg-icon-only + " " + Tr.cfg-bar-position + " " + Tr.cfg-window-title + " " + Tr.cfg-size-no-subdirs + " " + Tr.cfg-autostart + " " + Tr.cfg-autostart-minimized + " " + Tr.cfg-default-table + " " + Tr.cfg-language,
+        Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-animations,
+        Tr.cfg-paste-confirm + " " + Tr.cfg-paste-name + " " + Tr.cfg-paste-ext + " " + Tr.cfg-paste-image-name + " " + Tr.cfg-paste-image-fmt + " " + Tr.cfg-paste-jpg-quality,
+        Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
+        Tr.cfg-reset-all + " " + Tr.cfg-sc-action + " " + Tr.cfg-sc-combo + " " + Tr.cfg-change + " " + Tr.cfg-reset,
+        Tr.cfg-export-hint + " " + Tr.cfg-ie-lang + " " + Tr.cfg-export-lang + " " + Tr.cfg-import-lang + " " + Tr.cfg-ie-themes + " " + Tr.cfg-export-theme + " " + Tr.cfg-import-theme + " " + Tr.cfg-ie-icons + " " + Tr.icons-export + " " + Tr.icons-import + " " + Tr.cfg-ie-config + " " + Tr.cfg-export-config + " " + Tr.cfg-import-config,
+        Tr.cfg-ops-display + " " + Tr.cfg-low-power + " " + Tr.cfg-new-items-at-end + " " + Tr.cfg-tray-enabled + " " + Tr.cfg-close-to-tray + " " + Tr.cfg-global-hotkey + " " + Tr.cfg-recent-limit + " " + Tr.cfg-frequent-dirs-limit + " " + Tr.cfg-footer-section + " " + Tr.cfg-footer-enabled + " " + Tr.cfg-footer-template + " " + Tr.cfg-footer-tokens + " " + Tr.cfg-footer-preview + " " + Tr.cfg-home-dir,
+        Tr.cfg-auto-highlight + " " + Tr.cfg-preview-hint + " " + Tr.cfg-preview-ext + " " + Tr.cfg-preview-on + " " + Tr.cfg-preview-as + " " + Tr.cfg-preview-add-title,
+        Tr.about-version + " " + Tr.about-author + " " + Tr.about-company + " " + Tr.about-license + " " + Tr.about-stack + " " + Tr.about-notices + " " + Tr.about-repo + " " + Tr.about-news-title,
+        Tr.icons-section-base + " " + Tr.icons-section-objects + " " + Tr.icons-section-custom + " " + Tr.icons-change + " " + Tr.icons-import + " " + Tr.icons-export + " " + Tr.icons-reset + " " + Tr.icons-user-png,
+    ];
+    function category-matches(index: int) -> bool {
+        return root.search-text == "" || TextUtil.contains(
+            (root.nav-items[index].label + " " + root.category-terms[root.nav-items[index].cat]).to-lowercase(),
+            root.search-text.to-lowercase());
+    }
     // Easter egg de "Acerca de": 5 clics seguidos en el logo disparan ~8s de "lluvia de Naygo"
     // con un mensaje que se escribe letra a letra. `egg-progress` (0..1) lo anima un Timer; el
     // contador de clics se reinicia si pasan más de 2s entre clics (ventana de encadenado).
@@ -521,8 +541,7 @@ export component ConfigWindow inherits Window {
                     VerticalLayout {
                         padding: 6px;
                         spacing: 2px;
-                        // Buscador de opciones: filtra las pestañas por nombre (substring,
-                        // case-insensitive). Vacío = todas visibles. El estado vive en `search-text`.
+                        // Encuentra categorías por su nombre y por las etiquetas de sus ajustes.
                         LineEdit {
                             height: 28px;
                             placeholder-text: Tr.cfg-search;
@@ -538,15 +557,36 @@ export component ConfigWindow inherits Window {
                             // Slint 1.16 no tiene `contains`/substring en sus expresiones, así que el
                             // match de subcadena (case-insensitive) lo resuelve Rust vía TextUtil.contains.
                             // Lowercaseamos aquí (Slint sí tiene to-lowercase) y Rust hace un contains plano.
-                            property <bool> matches: root.search-text == "" || TextUtil.contains(it.label.to-lowercase(), root.search-text.to-lowercase());
+                            property <bool> matches: root.category-matches(i);
                             // Las filas ocultas no deben reservar alto: en un VerticalLayout `visible:false`
                             // igual deja su hueco, así que colapsamos también el alto (0px) cuando no coincide.
                             height: self.matches ? 30px : 0px;
                             visible: self.matches;
                             background: root.cat == it.cat ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
                             border-radius: 4px;
+                            border-width: cat-focus.has-focus ? 1px : 0px;
+                            border-color: Theme.accent;
                             Text { text: it.label; color: Theme.text; vertical-alignment: center; x: 10px; }
-                            cat-touch := TouchArea { clicked => { root.cat = it.cat; root.capturing = ""; root.reset-armed = false; } }
+                            cat-focus := FocusScope {
+                                enabled: parent.matches;
+                                accessible-role: button;
+                                accessible-label: it.label;
+                                key-pressed(ev) => {
+                                    if ev.text == Key.Return || ev.text == " " {
+                                        root.cat = it.cat; root.capturing = ""; root.reset-armed = false;
+                                        return accept;
+                                    }
+                                    reject
+                                }
+                            }
+                            cat-touch := TouchArea { clicked => { cat-focus.focus(); root.cat = it.cat; root.capturing = ""; root.reset-armed = false; } }
+                        }
+                        if !root.category-matches(0) && !root.category-matches(1)
+                            && !root.category-matches(2) && !root.category-matches(3)
+                            && !root.category-matches(4) && !root.category-matches(5)
+                            && !root.category-matches(6) && !root.category-matches(7)
+                            && !root.category-matches(8) && !root.category-matches(9): Text {
+                            text: Tr.no-matches; color: Theme.text-dim; wrap: word-wrap;
                         }
                         // Espaciador estirable: da a esta columna max-height infinito. Sin él, la
                         // suma de los ítems fijos le ponía un tope finito a la FILA, y la fila —aun
@@ -1812,6 +1852,11 @@ export component ConfigWindow inherits Window {
                                 }
                                 Text { text: Tr.about-company; color: Theme.text-dim; horizontal-alignment: center; }
                                 Text { text: Tr.about-license; color: Theme.text-dim; horizontal-alignment: center; }
+                                TextEdit {
+                                    text: root.license-text; read-only: true;
+                                    preferred-height: 240px; min-height: 140px;
+                                    accessible-label: Tr.about-license;
+                                }
                                 Text { text: Tr.about-stack; color: Theme.text-dim; horizontal-alignment: center; }
                                 Text {
                                     text: Tr.about-notices;

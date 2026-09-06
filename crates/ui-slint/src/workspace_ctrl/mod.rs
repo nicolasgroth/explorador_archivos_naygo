@@ -76,7 +76,18 @@ pub struct PanePick {
 #[derive(Clone, Debug)]
 pub struct DestinationRadar {
     pub move_files: bool,
+    /// Fuentes congeladas al abrir; un cambio de foco posterior no cambia la operación.
+    pub sources: Vec<PathBuf>,
     pub candidates: Vec<naygo_core::destination_radar::DestinationCandidate>,
+    /// La operación que se confirma al elegir un destino. El radar se comparte entre la
+    /// selección de un panel Files y la bandeja temporal, sin confundir sus rutas de origen.
+    pub origin: DestinationRadarOrigin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DestinationRadarOrigin {
+    FilesSelection,
+    Basket,
 }
 
 /// Estado estable de una sesión de renombrado inline.
@@ -97,6 +108,8 @@ pub struct RenameRequest {
 
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
+    /// Presentación temporal; nunca se serializa ni sustituye el layout guardado.
+    pub maximized_pane: Option<PaneId>,
     /// Configuración de la app (settings + i18n + temas + atajos), cargada del core y
     /// persistida en el directorio portable. El keymap vive aquí (`config.keymap`).
     pub config: crate::config_ctrl::ConfigCtrl,
@@ -139,6 +152,17 @@ pub struct WorkspaceCtrl {
     /// Referencias importadas que ya no existen. Se calcula en el worker de importación y se
     /// conserva para que la bandeja las muestre, en vez de descartarlas silenciosamente.
     pub basket_missing: std::collections::HashSet<PathBuf>,
+    /// Ítem de bandeja que alimenta Preview/Propiedades. Solo vive mientras el usuario navega
+    /// entre Bandeja, Preview e Inspector; al volver a Files se prioriza su selección normal.
+    pub basket_selection: naygo_core::basket::BasketSelection,
+    pub basket_context: bool,
+    pub delivery: delivery::DeliveryState,
+    pub task_spaces: task_spaces::TaskSpacesState,
+    pub saved_queries: saved_queries::SavedQueriesState,
+    pub comparison_points: comparison_points::ComparisonPointsState,
+    pub recipes: recipes::RecipesState,
+    pub search_context: bool,
+    pub delivery_results: delivery::DeliveryResults,
     /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
     /// su worker y se cancela al cerrar o cambiar opciones.
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
@@ -485,6 +509,7 @@ pub struct SearchHit {
 /// Una fila del panel de resultados, ya formateada y con el ícono resuelto (lo arma el
 /// controlador para que main.rs solo la copie al `SearchHitVm` de Slint).
 pub struct SearchRow {
+    pub selected: bool,
     pub name: String,
     pub rel_dir: String,
     /// Tamaño + fecha ya formateados ("12 KB · 2026-06-17").
@@ -513,6 +538,7 @@ pub struct DeepJob {
 /// búsqueda nueva cancela y reemplaza la anterior. Mientras `open`, la UI muestra el panel de
 /// resultados. Modelado igual que `SizeJob`: worker + canal + token + estado acumulado.
 pub struct SearchJob {
+    pub details: saved_queries::SearchDetails,
     /// Carpeta raíz bajo la que se busca (por defecto la del panel activo al disparar).
     pub root: PathBuf,
     /// Texto de nombre/patrón buscado (lo que el usuario tipeó; se muestra en el encabezado).
@@ -565,7 +591,9 @@ fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, h: 
 // mismo tipo repartidos en módulos del mismo crate.
 mod basket;
 mod columns;
+mod comparison_points;
 mod context;
+mod delivery;
 mod favorites;
 mod input;
 mod layout_panes;
@@ -573,8 +601,11 @@ mod listing;
 mod meta;
 mod navigation;
 mod ops;
+mod recipes;
+mod saved_queries;
 mod session;
 mod sync_assistant;
+mod task_spaces;
 mod templates;
 mod text_transform;
 mod tree;
@@ -609,6 +640,7 @@ impl WorkspaceCtrl {
         }
         let mut c = WorkspaceCtrl {
             ws,
+            maximized_pane: None,
             config,
             listings: HashMap::new(),
             trees: HashMap::new(),
@@ -624,6 +656,15 @@ impl WorkspaceCtrl {
             basket_staging: Vec::new(),
             basket_import_rx: None,
             basket_missing: std::collections::HashSet::new(),
+            basket_selection: Default::default(),
+            basket_context: false,
+            delivery: Default::default(),
+            task_spaces: Default::default(),
+            saved_queries: Default::default(),
+            comparison_points: Default::default(),
+            recipes: Default::default(),
+            search_context: false,
+            delivery_results: Default::default(),
             sync_assistant: None,
             text_transform: None,
             pending_pick: None,

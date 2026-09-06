@@ -7,10 +7,86 @@ import { BasketRowVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 
+struct BasketAction { icon: image, glyph: string, tooltip: string, enabled: bool, danger: bool }
+
+// Acción compacta de la bandeja: los controles no desperdician una fila por sus
+// etiquetas. El nombre accesible y el tooltip son independientes.
+component BasketIconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <image> icon;
+    in property <string> tooltip;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    callback hover-tip(string, length, length);
+    width: 30px;
+    height: 28px;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+    accessible-enabled: root.enabled;
+    forward-focus: button-focus;
+    border-width: 1px;
+    border-color: button-focus.has-focus ? Theme.accent : Theme.border;
+    background: touch.has-hover ? Theme.hover-bg : Theme.panel-bg;
+    opacity: root.enabled ? 1 : 0.45;
+    if root.icon.width > 0: Image { source: root.icon; width: 18px; height: 18px;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; image-fit: contain; }
+    if root.icon.width == 0: Text { text: root.glyph; color: root.danger ? Theme.error : Theme.text;
+        horizontal-alignment: center; vertical-alignment: center; }
+    button-focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(ev) => {
+            if ev.text == Key.Return || ev.text == " " { root.clicked(); return accept; }
+            reject
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { button-focus.focus(); root.clicked(); } }
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tooltip : "",
+                self.absolute-position.x + self.width / 2,
+                self.absolute-position.y);
+        }
+    }
+}
+
 export component BasketPanel inherits Rectangle {
     in property <bool> active;
     in property <[BasketRowVm]> rows;
+    in property <int> focused-row: -1;
+    in property <int> selected-count;
+    in property <bool> drag-in-progress;
+    in property <image> copy-icon;
+    in property <image> move-icon;
+    in property <image> delete-icon;
+    in property <image> open-icon;
+    in property <image> delivery-icon;
+    property <[BasketAction]> actions: [
+        { icon: root.copy-icon, tooltip: Tr.basket-copy, enabled: root.selected-count > 0 },
+        { icon: root.move-icon, tooltip: Tr.basket-move, enabled: root.selected-count > 0 },
+        { icon: root.delete-icon, tooltip: Tr.basket-delete, enabled: root.selected-count > 0, danger: true },
+        { icon: root.delivery-icon, tooltip: Tr.delivery-title, enabled: root.selected-count > 0 },
+        { glyph: "↓", tooltip: Tr.basket-save-list, enabled: root.rows.length > 0 },
+        { icon: root.open-icon, tooltip: Tr.basket-open-list, enabled: true },
+        { glyph: "☑", tooltip: Tr.basket-select-all, enabled: root.rows.length > 0 },
+        { glyph: "−", tooltip: Tr.basket-remove, enabled: root.selected-count > 0 },
+    ];
+    changed focused-row => {
+        if root.focused-row < 0 { return; }
+        if root.focused-row * 38px < -list.viewport-y {
+            list.viewport-y = -root.focused-row * 38px;
+        } else if (root.focused-row + 1) * 38px > -list.viewport-y + list.height {
+            list.viewport-y = min(0px, list.height - (root.focused-row + 1) * 38px);
+        }
+    }
     callback focus-pane();
+    callback select(int, bool, bool);
+    callback select-all();
+    callback remove-selected();
+    callback key(string, bool, bool, bool);
+    callback key-release(bool, bool, bool);
+    callback drag-out(int);
     callback remove(int);
     callback clear();
     callback copy();
@@ -18,14 +94,60 @@ export component BasketPanel inherits Rectangle {
     callback delete-files();
     callback save-list();
     callback open-list();
+    callback delivery();
+    callback hover-tip(string, length, length);
     background: Theme.inactive-panel-bg;
     border-width: 1px;
     border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
+    scope := FocusScope {
+    key-released(ev) => { root.key-release(ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt); reject }
+    key-pressed(ev) => {
+        if root.rows.length > 0 && !ev.modifiers.control && !ev.modifiers.alt
+            && (ev.text == Key.DownArrow || ev.text == Key.UpArrow || ev.text == Key.Home
+            || ev.text == Key.End || ev.text == Key.PageUp || ev.text == Key.PageDown) {
+            root.focus-pane();
+            if ev.text == Key.Home { root.select(0, false, ev.modifiers.shift); }
+            else if ev.text == Key.End { root.select(root.rows.length - 1, false, ev.modifiers.shift); }
+            else {
+                root.select(clamp(root.focused-row < 0
+                    ? (ev.text == Key.UpArrow || ev.text == Key.PageUp ? root.rows.length - 1 : 0)
+                    : root.focused-row + (ev.text == Key.DownArrow ? 1 : (ev.text == Key.UpArrow ? -1
+                        : (ev.text == Key.PageDown ? max(1, floor(list.height / 38px)) : -max(1, floor(list.height / 38px))))), 0, root.rows.length - 1), false, ev.modifiers.shift);
+            }
+            return accept;
+        }
+        root.focus-pane();
+        root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+        accept
+    }
     VerticalLayout {
         padding: 6px;
         spacing: 5px;
-        Text { text: Tr.basket-title + " (" + root.rows.length + ")"; color: Theme.text; font-weight: 700; }
+        Text { text: Tr.basket-title + " (" + root.selected-count + " / " + root.rows.length + ")"; color: Theme.text; font-weight: 700; }
+        action-bar := Rectangle {
+            // Coordenadas lógicas: una fila cuando cabe; envolver sin reordenar acciones.
+            property <int> columns: clamp(floor((self.width + 5px) / 35px), 1, 8);
+            height: ceil(root.actions.length / self.columns) * 33px - 5px;
+            for action[i] in root.actions: BasketIconButton {
+                x: mod(i, action-bar.columns) * 35px;
+                y: floor(i / action-bar.columns) * 33px;
+                icon: action.icon; glyph: action.glyph; tooltip: action.tooltip;
+                enabled: action.enabled; danger: action.danger;
+                clicked => {
+                    if i == 0 { root.copy(); }
+                    else if i == 1 { root.move-files(); }
+                    else if i == 2 { root.delete-files(); }
+                    else if i == 3 { root.delivery(); }
+                    else if i == 4 { root.save-list(); }
+                    else if i == 5 { root.open-list(); }
+                    else if i == 6 { root.select-all(); }
+                    else { root.remove-selected(); }
+                }
+                hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+            }
+        }
+        Text { text: Tr.basket-scope; color: Theme.text-dim; wrap: word-wrap; }
         if root.rows.length == 0: Text {
             text: Tr.basket-empty;
             color: Theme.text-dim;
@@ -34,11 +156,18 @@ export component BasketPanel inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: center;
         }
-        if root.rows.length > 0: ListView {
+        list := ListView {
+            visible: root.rows.length > 0;
+            min-height: 0px;
             vertical-stretch: 1;
             for row[i] in root.rows: Rectangle {
                 height: 38px;
-                background: touch.has-hover ? Theme.hover-bg : (mod(i, 2) == 0 ? Theme.row-bg : Theme.row-alt-bg);
+                border-width: root.focused-row == i ? 1px : 0px;
+                border-color: Theme.accent;
+                background: row.selected
+                    ? (root.active ? Theme.selection-bg : Theme.selection-inactive-bg)
+                    : (touch.has-hover ? Theme.hover-bg
+                        : (mod(i, 2) == 0 ? Theme.row-bg : Theme.row-alt-bg));
                 HorizontalLayout {
                     padding-left: 6px; padding-right: 4px; spacing: 7px;
                     Image { source: row.icon; width: 18px; height: 18px; image-fit: contain; }
@@ -52,25 +181,57 @@ export component BasketPanel inherits Rectangle {
                             overflow: elide;
                         }
                     }
-                    Rectangle {
-                        width: 24px; height: 24px; border-radius: Theme.radius-sm;
-                        background: remove-touch.has-hover ? Theme.hover-bg : transparent;
-                        Text { text: "×"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
-                        remove-touch := TouchArea { clicked => { root.remove(i); } }
+                    BasketIconButton {
+                        width: 24px; height: 24px; glyph: "×"; tooltip: Tr.basket-remove;
+                        clicked => { root.remove(i); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
                 }
-                touch := TouchArea { clicked => { root.focus-pane(); } }
+                // Igual que Files: un clic selecciona; superar 12 px inicia un OLE drag del
+                // elemento elegido. El área deja libre el botón × para no interceptarlo.
+                touch := TouchArea {
+                    enabled: !root.drag-in-progress;
+                    width: parent.width - 28px;
+                    property <bool> pressed-here: false;
+                    property <bool> dragging: false;
+                    property <length> press-x;
+                    property <length> press-y;
+                    moved => {
+                        if (self.pressed-here && !self.dragging
+                            && (abs(self.mouse-x - self.press-x) > 12px
+                                || abs(self.mouse-y - self.press-y) > 12px)) {
+                            self.dragging = true;
+                            self.pressed-here = false;
+                            root.focus-pane();
+                            scope.focus();
+                            root.drag-out(i);
+                        }
+                    }
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                            self.pressed-here = true;
+                            self.dragging = false;
+                            self.press-x = self.mouse-x;
+                            self.press-y = self.mouse-y;
+                            root.focus-pane();
+                            scope.focus();
+                        }
+                        if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left
+                            && self.pressed-here) {
+                            self.pressed-here = false;
+                            root.focus-pane();
+                            root.select(i, ev.modifiers.control, ev.modifiers.shift);
+                        }
+                    }
+                }
             }
         }
         HorizontalLayout {
             spacing: 5px;
-            Button { text: Tr.basket-copy; enabled: root.rows.length > 0; clicked => { root.copy(); } }
-            Button { text: Tr.basket-move; enabled: root.rows.length > 0; clicked => { root.move-files(); } }
-            Button { text: Tr.basket-delete; enabled: root.rows.length > 0; clicked => { root.delete-files(); } }
-            Button { text: "💾"; enabled: root.rows.length > 0; clicked => { root.save-list(); } }
-            Button { text: "📂"; clicked => { root.open-list(); } }
             Rectangle { horizontal-stretch: 1; }
-            Button { text: Tr.basket-clear; enabled: root.rows.length > 0; clicked => { root.clear(); } }
+            BasketIconButton { glyph: "×"; tooltip: Tr.basket-clear; danger: true; enabled: root.rows.length > 0;
+                clicked => { root.clear(); } hover-tip(t, x, y) => { root.hover-tip(t, x, y); } }
         }
+    }
     }
 }

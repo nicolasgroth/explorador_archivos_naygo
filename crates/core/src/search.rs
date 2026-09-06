@@ -36,7 +36,7 @@ pub const MAX_HITS: usize = 5000;
 pub const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Criterios de una búsqueda. La UI los arma, pero este tipo no conoce Slint ni Windows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchOptions {
     /// Nombre o patrón del elemento. Vacío significa "cualquier nombre" cuando hay
     /// una búsqueda de contenido; una búsqueda completamente vacía no produce hits.
@@ -74,6 +74,12 @@ impl SearchOptions {
 /// (No deriva `Eq` porque `Entry` contiene tiempos del sistema; `PartialEq` basta para tests.)
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchMsg {
+    /// Cobertura de la ejecución multiraíz: omisiones de I/O/contenido y límite de recorrido.
+    Coverage {
+        unreadable: usize,
+        content_skipped: usize,
+        directory_cap: bool,
+    },
     /// Una coincidencia recién descubierta (archivo o carpeta).
     Hit(Entry),
     /// Avance: cuántas carpetas se han recorrido hasta ahora (throttled).

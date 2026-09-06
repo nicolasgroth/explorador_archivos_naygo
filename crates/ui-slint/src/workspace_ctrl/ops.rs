@@ -43,6 +43,13 @@ impl WorkspaceCtrl {
     /// nació el gesto, no el activo (si no, arrastrar desde un panel inactivo no movía nada y
     /// obligaba a un clic extra para activarlo primero). Vacío si `id` no es un panel Files.
     pub fn selected_paths_of(&self, id: PaneId) -> Vec<PathBuf> {
+        if self
+            .ws
+            .pane(id)
+            .is_some_and(|p| p.purpose == PanePurpose::Basket)
+        {
+            return self.basket_action_paths();
+        }
         let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
             return Vec::new();
         };

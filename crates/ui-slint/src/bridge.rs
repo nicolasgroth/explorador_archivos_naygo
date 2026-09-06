@@ -269,7 +269,7 @@ pub fn column_toggles(
 
 /// Formatea la fecha de modificación legible según el ajuste, ajustando al huso local
 /// (`tz_offset_secs`). Cadena vacía si no hay fecha.
-fn fmt_time(
+pub(crate) fn fmt_time(
     t: Option<std::time::SystemTime>,
     fmt: naygo_core::format::DateFormat,
     tz_offset_secs: i64,
@@ -312,6 +312,14 @@ pub fn inspector_info(
     let Some(e) = f.and_then(|f| f.focused_view_entry()) else {
         return InspectorInfo::default();
     };
+    inspector_entry(e, date_format, tz_offset_secs)
+}
+
+pub fn inspector_entry(
+    e: &naygo_core::fs_model::Entry,
+    date_format: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+) -> InspectorInfo {
     use naygo_core::fs_model::EntryKind;
     let kind = match e.kind {
         EntryKind::Directory => "Carpeta",

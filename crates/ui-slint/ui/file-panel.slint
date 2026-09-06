@@ -9,6 +9,7 @@ import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
+import { BreadcrumbBar } from "breadcrumb-bar.slint";
 
 // Íconos dibujados con Path (no glifos de fuente): bajo render por software los emoji/★/✓
 // salían invisibles. `fill`/`stroke` los pinta el llamador según estado.
@@ -609,7 +610,7 @@ export component FilePanel inherits FocusScope {
         VerticalLayout {
             // --- Barra de ruta: breadcrumbs (modo normal) o editor con autocompletado. ---
             Rectangle {
-                height: 28px;
+                height: !root.editing && root.width < 480px && (root.comparison-active || root.comparison-link-available) ? 54px : 28px;
                 // Cuando el panel está activo, la path-bar lleva un fondo de acento tenue para
                 // resaltar dónde está el foco. Al arrastrar encima (drag-over) se remarca más fuerte
                 // para reforzar que ese es el destino del drop.
@@ -625,6 +626,7 @@ export component FilePanel inherits FocusScope {
                 }
                 // Modo BREADCRUMB: segmentos clicables; clic en el hueco entra a edición.
                 if !root.editing: HorizontalLayout {
+                    height: 28px;
                     padding-left: 4px;
                     spacing: 0px;
                     // Navegación local: cada panel conserva su propio historial. Los botones se
@@ -638,7 +640,7 @@ export component FilePanel inherits FocusScope {
                         history-menu(x) => { root.open-back-history(root.pane-id, x); }
                         hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
-                    PanelNavButton {
+                    if root.width > 440px: PanelNavButton {
                         glyph: "⌄";
                         tip: Tr.nav-back-history-tip;
                         enabled: root.can-go-back;
@@ -653,7 +655,7 @@ export component FilePanel inherits FocusScope {
                         history-menu(x) => { root.open-forward-history(root.pane-id, x); }
                         hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
-                    PanelNavButton {
+                    if root.width > 440px: PanelNavButton {
                         glyph: "⌄";
                         tip: Tr.nav-forward-history-tip;
                         enabled: root.can-go-forward;
@@ -666,42 +668,13 @@ export component FilePanel inherits FocusScope {
                         clicked => { root.nav-up(root.pane-id); }
                         hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
-                    for seg[i] in root.segments: Rectangle {
-                        width: seg-label.preferred-width + 10px;
-                        background: seg-touch.has-hover ? Theme.hover-bg : transparent;
-                        border-radius: Theme.radius-sm;
-                        seg-label := Text {
-                            text: (i == 0 ? "" : "› ") + seg.label;
-                            color: Theme.text;
-                            vertical-alignment: center;
-                            x: 4px;
-                        }
-                        seg-touch := TouchArea {
-                            pointer-event(ev) => {
-                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
-                                    root.activate(root.pane-id);
-                                    root.segment-clicked(root.pane-id, seg.path);
-                                }
-                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
-                                    root.activate(root.pane-id);
-                                    root.segment-context(root.pane-id, seg.path,
-                                        self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
-                                }
-                            }
-                        }
-                    }
-                    // Zona vacía a la derecha: clic = editar la ruta.
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        edit-touch := TouchArea {
-                            pointer-event(ev) => {
-                                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
-                                    root.activate(root.pane-id);
-                                    root.path-edit-start(root.pane-id);
-                                }
-                            }
-                        }
+                    BreadcrumbBar {
+                        segments: root.segments;
+                        available-height: root.height;
+                        navigate(path) => { root.activate(root.pane-id); root.segment-clicked(root.pane-id, path); }
+                        context(path, x, y) => { root.activate(root.pane-id); root.segment-context(root.pane-id, path, x, y); }
+                        edit() => { root.activate(root.pane-id); root.path-edit-start(root.pane-id); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
                     // ★ favorito (toggle): lleno si la carpeta ya está anclada.
                     Rectangle {
@@ -790,11 +763,19 @@ export component FilePanel inherits FocusScope {
                             }
                         }
                     }
+                    Rectangle {
+                        width: root.width >= 480px && (root.comparison-active || root.comparison-link-available)
+                            ? (root.comparison-active ? 130px : 24px) : 0px;
+                    }
+                }
+                    // En paneles estrechos la comparación usa otra fila, sin quitar acciones.
                     // Acciones F-8, visibles solo para una comparación viva. Los glifos cortos
                     // no compiten con los breadcrumbs en paneles angostos: ≠ selecciona los
                     // distintos, ⊘ los que existen solo aquí, C/M los transfiere al otro lado.
-                    if root.comparison-active || root.comparison-link-available: Rectangle {
+                    if !root.editing && (root.comparison-active || root.comparison-link-available): Rectangle {
                         width: root.comparison-active ? 130px : 24px; height: 22px;
+                        x: parent.width - self.width;
+                        y: root.width < 480px ? 30px : 3px;
                         HorizontalLayout {
                             spacing: 1px;
                             if root.comparison-active: Rectangle {
@@ -838,7 +819,6 @@ export component FilePanel inherits FocusScope {
                             }
                         }
                     }
-                }
                 // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela, perder foco
                 // (clic afuera) vuelve a los breadcrumbs.
                 // Envuelto en HorizontalLayout (mismo patrón que los breadcrumbs de arriba) para
@@ -1063,8 +1043,13 @@ export component FilePanel inherits FocusScope {
                         // Celdas dinámicas: una por columna visible, con su ancho. La columna Name
                         // (kind 0) se pinta como ícono + nombre; las demás como texto de `cells[ci]`.
                         // El ícono cacheado (6A) cuesta como un glifo: no se re-rasteriza por frame.
-                        for col[ci] in root.columns: HorizontalLayout {
+                        for col[ci] in root.columns: Rectangle {
                             width: col.width;
+                            // El orden es una pista secundaria, nunca tapa selección o alertas.
+                            background: root.active && col.sort-dir != 0 && !row.selected
+                                && !row.filter-match && row.compare-state == 0 && !row.highlight
+                                && i != root.hover-row ? Theme.accent.with-alpha(0.08) : transparent;
+                            HorizontalLayout {
                             // Las columnas numéricas/fechas necesitan aire propio; no tocar el
                             // ancho persistido, solo separar el contenido para que "Tamaño" y
                             // "Modificado" no se lean como una sola columna en paneles estrechos.
@@ -1222,6 +1207,7 @@ export component FilePanel inherits FocusScope {
                                 horizontal-alignment: col.align-right ? right : left;
                                 horizontal-stretch: 1;
                                 overflow: elide;
+                            }
                             }
                         }
                     }

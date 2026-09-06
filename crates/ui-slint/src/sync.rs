@@ -89,12 +89,29 @@ pub(crate) fn build_sync(
         let ctrl = ctrl.clone();
         let models = models.clone();
         let last_row_sig = last_row_sig.clone();
+        let search_model = Rc::new(VecModel::<SearchHitVm>::default());
+        let points_model = Rc::new(VecModel::<PointRowVm>::default());
         move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
             // `borrow_mut` porque `rows_of` necesita mutar el IconCache (decodifica on-demand).
             let mut c = ctrl.borrow_mut();
+            ui.set_maximized_pane(c.maximized_pane.map_or(-1, |id| id.0 as i32));
+            ui.set_basket_selected_count(c.basket_selection.count() as i32);
+            use naygo_core::icon_kind::{ActionIcon, FileCategory, IconKey};
+            ui.set_basket_copy_icon(c.icons.get_control(IconKey::Action(ActionIcon::Copy)));
+            ui.set_basket_move_icon(c.icons.get_control(IconKey::Action(ActionIcon::Forward)));
+            ui.set_basket_delete_icon(c.icons.get_control(IconKey::Action(ActionIcon::Delete)));
+            ui.set_basket_open_icon(c.icons.get_control(IconKey::Folder));
+            ui.set_basket_delivery_icon(c.icons.get_control(IconKey::File(FileCategory::Archive)));
+            ui.set_basket_focused_row(
+                c.basket_selection
+                    .focused
+                    .as_ref()
+                    .and_then(|path| c.basket.items().iter().position(|p| p == path))
+                    .map_or(-1, |i| i as i32),
+            );
             // Título de la ventana según el modo configurado (solo app / app+ruta / solo ruta).
             // Se recalcula en cada sync pero solo se escribe si cambió (navegación, cambio de
             // panel activo o de la opción en Configuración).
@@ -103,6 +120,7 @@ pub(crate) fn build_sync(
                 ui.set_window_title(title.into());
             }
             let active = c.active_id();
+            ui.set_destination_radar_open(c.destination_radar.is_some());
             ui.set_destination_radar_move(
                 c.destination_radar
                     .as_ref()
@@ -457,6 +475,103 @@ pub(crate) fn build_sync(
             ui.set_status(SharedString::from(c.status_line().as_str()));
             ui.set_sync_vm(c.sync_vm());
             ui.set_text_transform_vm(c.text_transform_vm());
+            ui.set_delivery_visible(c.delivery.open);
+            if c.task_spaces.open && !ui.get_spaces_visible() {
+                ui.set_spaces_root("".into());
+            }
+            ui.set_spaces_visible(c.task_spaces.open);
+            if c.saved_queries.open
+                && (!ui.get_query_visible() || ui.get_query_revision() != c.saved_queries.revision)
+            {
+                ui.set_query_draft(crate::callbacks_queries::draft_vm(&c.saved_queries.draft));
+                ui.set_query_revision(c.saved_queries.revision);
+            }
+            ui.set_query_visible(c.saved_queries.open);
+            let recipes = &c.recipes;
+            if ui.get_recipe_revision() != recipes.revision {
+                ui.set_recipe_query(crate::callbacks_queries::draft_vm(
+                    &recipes.draft.query(recipes.parameters.roots.clone()),
+                ));
+                ui.set_recipe_source(
+                    if recipes.draft.source == naygo_core::recipe::Source::Selection {
+                        0
+                    } else {
+                        1
+                    },
+                );
+                ui.set_recipe_layout(match recipes.draft.layout {
+                    naygo_core::recipe::Layout::Flat => 0,
+                    naygo_core::recipe::Layout::Grouped => 1,
+                    naygo_core::recipe::Layout::Relative => 2,
+                });
+                ui.set_recipe_output_name(recipes.draft.output_name.clone().into());
+                ui.set_recipe_parent(recipes.parameters.parent.display().to_string().into());
+                ui.set_recipe_zip(recipes.draft.output == naygo_core::delivery::Output::Zip);
+                ui.set_recipe_hashes(recipes.draft.hashes);
+                ui.set_recipe_number_duplicates(recipes.draft.number_duplicates);
+                ui.set_recipe_revision(recipes.revision);
+            }
+            ui.set_recipe_visible(recipes.open);
+            ui.set_recipe_busy(recipes.busy());
+            ui.set_recipe_ready(recipes.ready());
+            ui.set_recipe_can_update(recipes.can_update());
+            ui.set_recipe_report(recipes.report.clone().into());
+            ui.set_recipe_progress(recipes.progress().to_string().into());
+            ui.set_recipe_waiting(
+                c.ops.ops_mode == crate::ops_ctrl::OpsMode::Queue && c.ops.any_running(),
+            );
+            let points = &c.comparison_points;
+            if ui.get_points_revision() != points.revision {
+                ui.set_points_root(points.root.clone().into());
+                ui.set_points_exclusions(points.exclusions.clone().into());
+                ui.set_points_recursive(points.recursive);
+                ui.set_points_hashed(points.hashed);
+                while points_model.row_count() > points.rows.len() {
+                    points_model.remove(points_model.row_count() - 1);
+                }
+                for (index, row) in points.rows.iter().enumerate() {
+                    if index >= points_model.row_count() {
+                        points_model.push(row.clone());
+                    } else if points_model.row_data(index).as_ref() != Some(row) {
+                        points_model.set_row_data(index, row.clone());
+                    }
+                }
+                ui.set_points_rows(ModelRc::from(points_model.clone()));
+                ui.set_points_revision(points.revision);
+            }
+            ui.set_points_visible(points.open);
+            ui.set_points_busy(points.busy());
+            ui.set_points_loaded(points.loaded());
+            ui.set_points_confirm_delete(points.confirm_delete);
+            ui.set_points_has_selection(points.selected());
+            ui.set_points_report(points.report.clone().into());
+            ui.set_points_progress(points.progress().to_string().into());
+            ui.set_query_busy(c.saved_queries.busy());
+            ui.set_query_can_update(c.saved_queries.can_update());
+            ui.set_query_report(c.saved_queries.report.clone().into());
+            ui.set_spaces_busy(c.task_spaces.busy());
+            ui.set_spaces_can_update(c.task_spaces.can_update());
+            ui.set_spaces_pending(c.task_spaces.has_pending());
+            ui.set_spaces_name(c.task_spaces.name().into());
+            if ui.get_spaces_report().as_str() != c.task_spaces.report {
+                ui.set_spaces_report(c.task_spaces.report.clone().into());
+            }
+            ui.set_delivery_busy(c.delivery.rx.is_some());
+            ui.set_delivery_ready(c.delivery.plan.is_some());
+            ui.set_delivery_group_defaults(c.delivery.group_names.clone().into());
+            ui.set_delivery_result_visible(c.delivery_results.latest.is_some());
+            ui.set_delivery_result_success(c.delivery_result_location(false).is_some());
+            if let Some(receipt) = &c.delivery_results.latest {
+                if ui.get_delivery_result_report().as_str() != receipt.message {
+                    ui.set_delivery_result_report(receipt.message.clone().into());
+                }
+            }
+            ui.set_delivery_waiting(
+                c.ops.ops_mode == crate::ops_ctrl::OpsMode::Queue && c.ops.any_running(),
+            );
+            if ui.get_delivery_report().as_str() != c.delivery.report {
+                ui.set_delivery_report(c.delivery.report.clone().into());
+            }
             // Botones Atrás/Adelante del toolbar: habilitados según el historial del panel activo.
             // Va aquí (refresco central) para que se actualicen tras cualquier navegación —teclado,
             // mouse, doble-clic, breadcrumbs— no solo al pulsar los botones.
@@ -586,6 +701,7 @@ pub(crate) fn build_sync(
                     .search_rows()
                     .into_iter()
                     .map(|r| SearchHitVm {
+                        selected: r.selected,
                         name: r.name.into(),
                         rel_dir: r.rel_dir.into(),
                         detail: r.detail.into(),
@@ -593,7 +709,23 @@ pub(crate) fn build_sync(
                         icon: r.icon,
                     })
                     .collect();
+                while search_model.row_count() > hits.len() {
+                    search_model.remove(search_model.row_count() - 1);
+                }
+                for (index, hit) in hits.into_iter().enumerate() {
+                    if index >= search_model.row_count() {
+                        search_model.push(hit);
+                    } else if search_model.row_data(index).as_ref() != Some(&hit) {
+                        search_model.set_row_data(index, hit);
+                    }
+                }
                 ui.set_search_vm(SearchVm {
+                    advanced: c
+                        .search_job
+                        .as_ref()
+                        .is_some_and(|j| j.details.advanced.is_some()),
+                    focused_row: c.search_focused_index(),
+                    marked_count: c.search_marked_count() as i32,
                     active: open,
                     query: query.into(),
                     root_label: root_label.into(),
@@ -602,7 +734,7 @@ pub(crate) fn build_sync(
                     use_wildcards: options.use_wildcards,
                     recursive: options.recursive,
                     running,
-                    hits: ModelRc::new(VecModel::from(hits)),
+                    hits: ModelRc::from(search_model.clone()),
                     status: status.into(),
                 });
             }
@@ -761,7 +893,14 @@ pub(crate) fn build_sync(
                 .collect();
             let new_ids: Vec<PaneId> = visible.iter().map(|(id, _)| *id).collect();
             // Todos los ids del layout (visibles + ocultos) para conservar sus modelos.
-            let all_ids: Vec<PaneId> = pane_rects.iter().map(|(id, _)| *id).collect();
+            let all_ids: Vec<PaneId> = ctrl
+                .borrow()
+                .ws
+                .layout
+                .pane_rects(area)
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
 
             let mut m = models.borrow_mut();
             // La estructura cambió si cambió la lista visible, el área, o algún grupo

@@ -463,6 +463,7 @@ impl WorkspaceCtrl {
         let (rx, _handle) =
             naygo_core::search::spawn_search(root.clone(), options.clone(), token.clone());
         self.search_job = Some(SearchJob {
+            details: Default::default(),
             root,
             query: options.name_query.clone(),
             options,
@@ -497,6 +498,7 @@ impl WorkspaceCtrl {
         let token = naygo_core::CancellationToken::new();
         let (_tx, rx) = std::sync::mpsc::channel();
         self.search_job = Some(SearchJob {
+            details: Default::default(),
             root,
             query: String::new(),
             options: naygo_core::search::SearchOptions::default(),
@@ -535,6 +537,7 @@ impl WorkspaceCtrl {
 
     /// Cierra el panel de resultados y cancela el worker en vuelo (si lo hay).
     pub fn close_search(&mut self) {
+        self.search_context = false;
         self.cancel_search_autocomplete();
         if let Some(job) = self.search_job.take() {
             job.token.cancel();
@@ -563,15 +566,46 @@ impl WorkspaceCtrl {
         }
         use naygo_core::search::SearchMsg;
         let root = job.root.clone();
-        while let Ok(msg) = job.rx.try_recv() {
+        for _ in 0..256 {
+            let msg = match job.rx.try_recv() {
+                Ok(msg) => msg,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if !job.done {
+                        job.partial = true;
+                        job.details.coverage.0 += 1;
+                        job.done = true;
+                    }
+                    break;
+                }
+            };
             match msg {
+                SearchMsg::Coverage {
+                    unreadable,
+                    content_skipped,
+                    directory_cap,
+                } => {
+                    job.details.coverage = (unreadable, content_skipped, directory_cap);
+                }
                 SearchMsg::Hit(entry) => {
-                    let rel_dir = entry
-                        .path
-                        .parent()
-                        .and_then(|p| p.strip_prefix(&root).ok())
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                    let rel_dir = if job.details.advanced.is_some() {
+                        entry
+                            .path
+                            .parent()
+                            .map_or(String::new(), |p| p.display().to_string())
+                    } else {
+                        entry
+                            .path
+                            .parent()
+                            .and_then(|p| p.strip_prefix(&root).ok())
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| {
+                                entry
+                                    .path
+                                    .parent()
+                                    .map_or(String::new(), |p| p.display().to_string())
+                            })
+                    };
                     job.hits.push(SearchHit { entry, rel_dir });
                 }
                 SearchMsg::Progress { dirs_scanned } => job.dirs_scanned = dirs_scanned,
@@ -664,6 +698,7 @@ impl WorkspaceCtrl {
                     }
                 }
                 SearchRow {
+                    selected: job.details.selection.contains(&h.entry.path),
                     name: h.entry.name.clone(),
                     rel_dir: h.rel_dir.clone(),
                     detail: parts.join(" · "),
@@ -682,7 +717,10 @@ impl WorkspaceCtrl {
             return (String::new(), false);
         };
         // Panel recién abierto (query vacía, sin búsqueda aún): sin estado.
-        if job.query.is_empty() {
+        if job.query.is_empty()
+            && job.details.advanced.is_none()
+            && job.options.content_query.is_empty()
+        {
             return (String::new(), false);
         }
         let n = job.hits.len();
@@ -699,6 +737,46 @@ impl WorkspaceCtrl {
         }
         if job.hit_cap {
             s.push_str(&format!(" (tope {})", naygo_core::search::MAX_HITS));
+        }
+        if let Some(query) = &job.details.advanced {
+            let (unreadable, skipped, cap) = job.details.coverage;
+            s = format!(
+                "{} · {}: {} · {}: {} · {}: {} · {}: {}{}{}",
+                query.name,
+                self.config.t("queries.hits"),
+                n,
+                self.config.t("queries.roots"),
+                query.normalized_roots().len(),
+                self.config.t("queries.unreadable"),
+                unreadable,
+                self.config.t("queries.skipped"),
+                skipped,
+                if job.partial || job.cancelled {
+                    format!(" · {}", self.config.t("queries.partial"))
+                } else {
+                    String::new()
+                },
+                if cap || job.hit_cap {
+                    format!(" · {}", self.config.t("queries.capped"))
+                } else {
+                    String::new()
+                }
+            );
+            if let Some(at) = job.details.executed_at {
+                s.push_str(&format!(
+                    "\n{}: {}",
+                    self.config.t("queries.executed"),
+                    naygo_core::format::format_time(
+                        Some(at + naygo_platform::time::local_utc_offset_secs()),
+                        self.config.settings.date_format
+                    )
+                ));
+            }
+            if running {
+                s.push_str(&format!(" · {}", self.config.t("queries.running")));
+            } else if job.cancelled {
+                s.push_str(&format!(" · {}", self.config.t("spaces.cancelled")));
+            }
         }
         (s, running)
     }

@@ -1,0 +1,79 @@
+// Naygo — captura explícita, comparación y selección de cambios presentes.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, CheckBox, LineEdit, TextEdit, ListView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+import { PointRowVm } from "types.slint";
+
+export component ComparisonPointsDialog inherits Rectangle {
+    in property <bool> busy;
+    in property <bool> loaded;
+    in property <bool> confirm-delete;
+    in property <bool> has-selection;
+    in property <string> report;
+    in property <string> progress;
+    in property <[PointRowVm]> rows;
+    in-out property <string> folder;
+    in-out property <string> exclusions;
+    in-out property <bool> recursive;
+    in-out property <bool> hashed;
+    callback action(int);
+    callback select(int, bool);
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2; y: max(8px, (parent.height - self.height) / 2);
+        width: min(820px, parent.width - 16px); height: min(760px, parent.height - 16px);
+        key-pressed(ev) => { if ev.text == Key.Escape { root.action(8); return accept; } reject }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-color: Theme.border; border-width: 1px;
+            VerticalLayout {
+                padding: 12px; spacing: 6px;
+                Text { text: Tr.points-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.points-help; color: Theme.text-dim; wrap: word-wrap; }
+                        Text { text: Tr.points-root; color: Theme.text; }
+                        LineEdit { text <=> root.folder; enabled: !root.busy && !root.loaded; }
+                        HorizontalLayout {
+                            CheckBox { text: Tr.points-recursive; checked <=> root.recursive; enabled: !root.busy && !root.loaded; }
+                            CheckBox { text: Tr.points-hashed; checked <=> root.hashed; enabled: !root.busy && !root.loaded; }
+                        }
+                        Text { text: Tr.points-exclusions; color: Theme.text-dim; wrap: word-wrap; }
+                        TextEdit { text <=> root.exclusions; read-only: root.busy || root.loaded; preferred-height: 65px; }
+                        HorizontalLayout {
+                            Button { text: Tr.points-new; enabled: !root.busy && !root.confirm-delete; clicked => { root.action(7); } }
+                            Button { text: Tr.points-capture; enabled: !root.busy && !root.loaded; clicked => { root.action(1); } }
+                            Button { text: Tr.points-open; enabled: !root.busy && !root.confirm-delete; clicked => { root.action(2); } }
+                        }
+                        HorizontalLayout {
+                            Button { text: Tr.points-compare; enabled: !root.busy && root.loaded && !root.confirm-delete; clicked => { root.action(3); } }
+                            Button { text: Tr.points-export; enabled: !root.busy && root.loaded && !root.confirm-delete; clicked => { root.action(4); } }
+                            Button { text: Tr.points-delete; enabled: !root.busy && root.loaded; clicked => { root.action(5); } }
+                        }
+                        if root.confirm-delete: Text { text: Tr.points-delete-confirm; color: Theme.text; wrap: word-wrap; }
+                        TextEdit { text: root.report; read-only: true; preferred-height: 85px; }
+                        if root.busy: Text { text: Tr.spaces-working + " · " + root.progress; color: Theme.text-dim; }
+                        ListView {
+                            preferred-height: 220px;
+                            for row[index] in root.rows: HorizontalLayout {
+                                height: 32px; spacing: 6px;
+                                CheckBox { checked: row.selected; enabled: row.actionable && !root.busy && !root.confirm-delete;
+                                    accessible-label: row.path; toggled => { root.select(index, self.checked); } }
+                                Text { text: row.status; color: Theme.text-dim; width: 120px; overflow: elide; }
+                                Text { text: row.path; color: Theme.text; overflow: elide; horizontal-stretch: 1; }
+                            }
+                        }
+                        Text { text: Tr.points-basket-help; color: Theme.text-dim; wrap: word-wrap; }
+                        Button { text: Tr.points-basket; enabled: !root.busy && root.has-selection && !root.confirm-delete; clicked => { root.action(6); } }
+                    }
+                }
+                Button { text: root.busy || root.confirm-delete ? Tr.ops-cancel : Tr.ops-close; clicked => { root.action(8); } }
+            }
+        }
+    }
+}

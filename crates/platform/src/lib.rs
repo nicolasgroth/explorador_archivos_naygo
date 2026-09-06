@@ -9,6 +9,7 @@
 
 pub mod autostart;
 pub mod clipboard;
+pub mod comparison_point_store;
 pub mod context_menu;
 pub mod device_watch;
 pub mod dir_watch;
@@ -22,7 +23,10 @@ pub mod global_hotkey;
 pub mod known_folders;
 pub mod locale;
 pub mod open;
+pub mod recipe_store;
+pub mod saved_search_store;
 pub mod single_instance;
+pub mod task_space_store;
 pub mod time;
 pub mod trash;
 pub mod window;

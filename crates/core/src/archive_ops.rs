@@ -100,6 +100,30 @@ pub fn compress_zip(
         let base = src.parent().unwrap_or(Path::new(""));
         collect_entries(src, base, &mut entries);
     }
+    compress_zip_entries(&entries, dest_zip, on_progress, token)
+}
+
+/// Comprime un inventario ya revisado, sin volver a recorrer directorios ni añadir entradas
+/// descubiertas después. Útil para entregas congeladas; mantiene el mismo motor y resultados.
+pub fn compress_zip_entries(
+    entries: &[(PathBuf, String)],
+    dest_zip: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+    token: &CancellationToken,
+) -> Result<Vec<ArchiveOpItem>, ArchiveError> {
+    for (_, internal) in entries {
+        token.wait_if_paused();
+        if token.is_cancelled() {
+            return Err(ArchiveError::Cancelled);
+        }
+        if internal.is_empty()
+            || !Path::new(internal)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(ArchiveError::Zip("invalid relative entry name".into()));
+        }
+    }
     let total: u64 = entries
         .iter()
         .map(|(p, _)| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
@@ -111,7 +135,7 @@ pub fn compress_zip(
 
     let mut done: u64 = 0;
     let mut items: Vec<ArchiveOpItem> = Vec::new();
-    for (disk, internal) in &entries {
+    for (disk, internal) in entries {
         if token.is_cancelled() {
             drop(zipw);
             let _ = std::fs::remove_file(dest_zip);
@@ -145,6 +169,7 @@ pub fn compress_zip(
                 let mut buf = [0u8; 64 * 1024];
                 let mut failed = false;
                 loop {
+                    token.wait_if_paused();
                     if token.is_cancelled() {
                         drop(zipw);
                         let _ = std::fs::remove_file(dest_zip);

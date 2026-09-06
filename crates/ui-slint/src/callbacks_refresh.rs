@@ -326,6 +326,8 @@ pub(crate) fn build_refresh_config_vm(
         cfg.set_editing_token_b(ModelRc::from(Rc::new(VecModel::from(editing_bs))));
         cfg.set_config_dir(config_dir_str.into());
         cfg.set_app_version(naygo_full_version().into());
+        // Única fuente legal, embebida en compilación: sin I/O en el hilo de UI.
+        cfg.set_license_text(include_str!("../../../LICENSE").into());
         // Sección "Novedades": parsear el CHANGELOG embebido y volcar las notas de la
         // versión actual. Se setea una sola vez (no cambia en runtime).
         {

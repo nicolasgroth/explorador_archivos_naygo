@@ -7,7 +7,46 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.5.1] - 2026-09-05
+
+### Corregido
+- Rutas de panel con ancho natural de cada segmento, sin repartir huecos entre carpetas.
+  Conservan el extremo actual cuando falta ancho y todos los ancestros en el menú de ruta.
+- Acciones de la bandeja arriba, en una sola fila cuando caben y ajuste a varias filas sólo
+  al estrechar el panel. Vaciar permanece separado abajo; se conservan tooltips y teclado.
+- Texto MIT completo, seleccionable y desplazable en Acerca de, embebido desde LICENSE.
+  Copyright actualizado con el correo del autor, sin cambiar los términos de la licencia.
+
+## [0.5.0] - 2026-09-05
+
 ### Añadido
+- Recetas declarativas (.naygorecipe) desde Disposiciones/Ctrl+P: selección o consulta,
+  filtros, nombres fechados y carpeta/ZIP nuevo mediante revisión y ejecución explícitas.
+  Parámetros de raíces/destino separados del documento portable, referencias en espacios,
+  guardado protegido por revisión y resultado en Operaciones. Sin scripts ni tareas residentes.
+- Filtro «Este mes» en consultas y recetas, resuelto con el calendario local al preparar.
+- Puntos de comparación locales (.naygopoint) desde Disposiciones/Ctrl+P: captura cancelable,
+  alcance y exclusiones explícitos, SHA-256 opcional, comparación conservadora con cobertura
+  parcial, selección de archivos presentes para bandeja, exportación y retirada del punto a papelera.
+  No son respaldos ni copian/eliminan los archivos enumerados.
+- Búsquedas guardadas multiraíz (.naygosearch): criterios por nombre/contenido, tamaño y fecha
+  relativa, carga sin ejecución, streaming cancelable y cobertura parcial explícita. Selección
+  por teclado con Preview/Propiedades y envío a bandeja; accesos Ctrl+P y referencias en espacios.
+- Espacios por tarea desde Disposiciones o Ctrl+P: guardar/actualizar y abrir archivos
+  `.naygospace` con rutas, columnas, filtros, disposición, panel activo y referencias de bandeja.
+  Revisión antes de cambiar, raíz portable opcional y protección frente a documentos corruptos
+  o modificados externamente. La cola de operaciones continúa con sus destinos originales.
+- Entregas: nombres de grupo editables, revisión conjunta de homónimos y propuesta explícita de
+  sufijos únicos en modo plano. Resultado no modal con abrir carpeta de salida, copiar ubicación
+  y recuperar las fuentes marcadas en la bandeja; los fallos conservan su error en el historial.
+- Configuración: el buscador encuentra secciones por las etiquetas de sus ajustes, además del
+  nombre de categoría. Navegación lateral con foco visible y activación Enter/Espacio.
+- Preparar entregas desde la selección o la bandeja (también desde Ctrl+P): revisión previa,
+  grupos por origen, estructura plana o raíz relativa explícita, carpeta nueva o ZIP, manifiesto
+  JSON y lista legible sin rutas privadas. SHA-256 opcional, cancelación y deshacer del destino.
+- Selección múltiple en la bandeja con Ctrl/Shift, Ctrl+A, flechas y arrastre del grupo marcado.
+  Las acciones usan solo los marcados; quitar referencias no borra originales.
+- Maximización temporal de paneles (Ctrl+Shift+M) sin cambiar la disposición guardada.
 - Indicador por sesión de archivos nuevos, modificados y desaparecidos desde la visita anterior.
 - Radar de destinos para copiar/mover: permite elegir con 1–9 entre paneles, favoritos, recientes
   y destinos de operaciones sin navegar antes a la carpeta.
@@ -25,6 +64,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   OneDrive y Dropbox, incluso cuando fueron reubicadas a otra unidad.
 
 ### Corregido
+- Cambiar de panel conserva las marcas de la bandeja sin robar el contexto del preview.
+  Sus atajos ya no operan por accidente sobre un panel Files anterior; borrar confirma
+  los originales concretos y no vacía las referencias si se cancela o falla.
+- Rutas largas mantienen disponibles sus acciones laterales; la columna ordenada recibe un
+  tinte discreto exclusivamente en el panel activo, sin tapar selección ni alertas.
 - Los archivos arrastrados directamente desde 7-Zip, WinRAR y otras fuentes OLE virtuales
   ahora se extraen en segundo plano y entran al flujo normal de copia. Naygo valida sus rutas,
   no bloquea la interfaz y limpia el staging temporal al terminar o cancelar.

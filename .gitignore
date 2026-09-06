@@ -34,3 +34,6 @@ installer/*.bmp
 # Salida del knowledge graph (graphify) y assets de trabajo locales — no versionar.
 /graphify-out/
 /assets/icons/otros/
+
+# Muestras personales y fuentes de iconos para trabajo local; no publicar.
+/tmp/

@@ -4,6 +4,7 @@
 
 use super::*;
 use slint::Model;
+use std::time::Duration;
 
 /// Drena los listados hasta que todos terminan (con timeout), simulando los ticks del
 /// Timer. Devuelve true si terminaron.
@@ -15,6 +16,316 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     false
+}
+
+#[test]
+fn maximizar_es_presentacion_y_restaurar_conserva_layout_y_modelos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Preview, area());
+    let preview = c.active_id().unwrap();
+    let original = c.pane_rects(area());
+    let layout = serde_json::to_string(&c.ws.layout).unwrap();
+    let count = c.ws.panes().len();
+    assert!(c.toggle_maximize(preview));
+    assert_eq!(c.pane_rects(area()), vec![(preview, area())]);
+    assert!(c.split_handles(area()).is_empty());
+    assert_eq!(c.ws.panes().len(), count);
+    assert_eq!(serde_json::to_string(&c.ws.layout).unwrap(), layout);
+    assert!(c.toggle_maximize(preview));
+    assert_eq!(c.pane_rects(area()), original);
+    assert!(c.toggle_maximize(preview));
+    c.set_active(first);
+    assert_eq!(c.maximized_pane, None);
+    assert_eq!(c.pane_rects(area()), original);
+}
+
+#[test]
+fn maximizar_invalido_no_muta_y_cerrar_restaura() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(!c.toggle_maximize(PaneId(u64::MAX)));
+    c.add_pane_of(PanePurpose::Preview, area());
+    let preview = c.active_id().unwrap();
+    assert!(c.run_action(Action::ToggleMaximizePane));
+    assert_eq!(c.maximized_pane, Some(preview));
+    c.close_pane(preview);
+    assert_eq!(c.maximized_pane, None);
+    assert!(!c.pane_rects(area()).is_empty());
+}
+
+#[test]
+fn bandeja_flechas_sin_foco_empiezan_en_extremos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    let a = tmp.path().join("a.txt");
+    let b = tmp.path().join("b.txt");
+    c.basket.add([a.clone(), b.clone()]);
+    assert!(c.basket_move_selection(1));
+    assert_eq!(c.basket_selected_path(), Some(a.clone()));
+    c.basket_selection.focused = None;
+    assert!(c.basket_move_selection(-1));
+    assert_eq!(c.basket_selected_path(), Some(b.clone()));
+    assert!(c.basket_move_selection(1));
+    assert_eq!(c.basket_selected_path(), Some(b));
+    c.basket_clear();
+    assert!(!c.basket_move_selection(1));
+}
+
+#[test]
+fn bandeja_multiseleccion_conserva_marcas_sin_robar_contexto_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    let files = c.active_id().unwrap();
+    c.add_pane_of(PanePurpose::Basket, area());
+    let basket = c.active_id().unwrap();
+    let paths: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .map(|p| tmp.path().join(p))
+        .collect();
+    c.basket.add(paths.clone());
+    assert!(!c.basket_request_transfer(false));
+    c.basket_select(0);
+    c.run_action(Action::ExtendDown);
+    assert_eq!(c.selected_paths(), paths[..2]);
+    c.run_action(Action::FocusDownKeep);
+    assert_eq!(c.basket_selected_path(), Some(paths[2].clone()));
+    assert_eq!(c.basket_action_paths(), paths[..2]);
+    c.set_active(files);
+    assert!(c.basket_selected_path().is_none());
+    assert_eq!(c.basket_action_paths(), paths[..2]);
+    c.set_active(basket);
+    assert_eq!(c.metadata_target(), Some(paths[2].clone()));
+    c.basket_delete();
+    assert!(
+        matches!(&c.ops.pending_dialog, Some(crate::ops_ctrl::OpDialog::ConfirmDelete { sources, permanent: false }) if sources == &paths[..2])
+    );
+    assert_eq!(c.basket.len(), 3);
+    assert!(c.basket_remove_selected());
+    assert_eq!(c.basket.items(), &paths[2..]);
+}
+
+#[test]
+fn entrega_revisada_se_invalida_y_publica_con_deshacer_solo_del_destino() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let input = work.path().join("input.txt");
+    std::fs::write(&input, b"delivery content").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    c.basket.add([input.clone()]);
+    c.basket_select(0);
+    assert!(c.delivery_open());
+    c.basket_clear();
+    let destination = work.path().join("delivery");
+    c.delivery_prepare(
+        destination.clone(),
+        1,
+        PathBuf::new(),
+        false,
+        true,
+        Default::default(),
+    );
+    for _ in 0..3000 {
+        if c.pump_delivery() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(c.delivery.plan.is_some(), "{}", c.delivery.error);
+    assert!(!destination.exists());
+    c.delivery_invalidate();
+    assert!(!c.delivery_execute());
+    c.delivery_prepare(
+        destination.clone(),
+        1,
+        PathBuf::new(),
+        false,
+        true,
+        Default::default(),
+    );
+    for _ in 0..3000 {
+        if c.pump_delivery() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(c.delivery_execute());
+    for _ in 0..3000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(destination.join("input.txt").is_file());
+    assert!(input.is_file());
+    let published = std::fs::canonicalize(&destination).unwrap();
+    assert!(
+        matches!(c.ops.undo_history.last().unwrap().actions.as_slice(),
+        [naygo_core::ops::undo::UndoAction::TrashCreated { path }] if path == &published)
+    );
+    assert!(!c.delivery.open);
+    c.pump_delivery();
+    assert_eq!(c.delivery_result_location(false), Some(published));
+    assert!(c.delivery_return_to_selection());
+    assert_eq!(c.basket_action_paths(), vec![input]);
+    assert!(c.basket_context);
+}
+
+#[test]
+fn radar_bandeja_congela_fuentes_antes_de_cambiar_el_conjunto() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    c.last_area = area();
+    let first = tmp.path().join("primero.txt");
+    c.basket.add([first.clone()]);
+    c.basket_select_all();
+    c.basket_request_transfer(false);
+    c.basket.add([tmp.path().join("posterior.txt")]);
+    assert_eq!(c.destination_radar.as_ref().unwrap().sources, vec![first]);
+}
+
+#[test]
+fn entrega_fallida_conserva_error_y_no_habilita_abrir_destino() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let input = work.path().join("source.txt");
+    std::fs::write(&input, b"original").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    c.basket.add([input.clone()]);
+    c.basket_select(0);
+    assert!(c.delivery_open());
+    let destination = work.path().join("out");
+    c.delivery_prepare(
+        destination.clone(),
+        1,
+        PathBuf::new(),
+        false,
+        false,
+        Default::default(),
+    );
+    for _ in 0..3000 {
+        if c.pump_delivery() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(c.delivery.plan.is_some());
+    std::fs::write(&input, b"changed after review").unwrap();
+    assert!(c.delivery_execute());
+    for _ in 0..3000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    c.pump_delivery();
+    assert!(!destination.exists());
+    assert!(c.ops.undo_history.is_empty());
+    assert!(c.delivery_result_location(false).is_none());
+    let summary = c.ops.active_ops.last().unwrap().summary.as_ref().unwrap();
+    assert!(
+        matches!(&summary.items[0].outcome, naygo_core::ops::OpOutcome::Failed(error) if error.contains("source changed"))
+    );
+    assert!(c
+        .delivery_results
+        .latest
+        .as_ref()
+        .unwrap()
+        .message
+        .contains("source changed"));
+    c.basket_clear();
+    assert!(c.delivery_return_to_selection());
+    assert_eq!(c.basket_action_paths(), vec![input]);
+}
+
+#[test]
+fn entrega_conflictos_bloquean_publicar_hasta_revisar_la_resolucion() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    for name in ["one", "two"] {
+        let folder = work.path().join(name);
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("same.txt");
+        std::fs::write(&file, name).unwrap();
+        c.basket.add([file]);
+    }
+    c.basket_select_all();
+    assert!(c.delivery_open());
+    assert_eq!(c.delivery.group_names.lines().count(), 2);
+    let dest = work.path().join("out.zip");
+    c.delivery_prepare(
+        dest.clone(),
+        1,
+        PathBuf::new(),
+        true,
+        false,
+        Default::default(),
+    );
+    for _ in 0..3000 {
+        if c.pump_delivery() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(c.delivery.plan.is_none());
+    assert!(c.delivery.report.contains("same.txt"));
+    assert!(!c.delivery_execute());
+    c.delivery_prepare(
+        dest.clone(),
+        1,
+        PathBuf::new(),
+        true,
+        false,
+        naygo_core::delivery::ReviewOptions {
+            rename_flat_duplicates: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..3000 {
+        if c.pump_delivery() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(c.delivery.plan.is_some(), "{}", c.delivery.report);
+    assert!(c.delivery.report.contains("same (2).txt"));
+    assert!(!dest.exists(), "revisar no publica");
+    c.delivery_invalidate();
+    assert!(!c.delivery_execute(), "editar obliga a revisar de nuevo");
+}
+
+#[test]
+fn bandeja_metadata_basica_llega_del_worker_y_descarta_resultado_anterior() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("prueba.txt");
+    let dir = tmp.path().join("carpeta");
+    std::fs::write(&file, "12345").unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    c.basket.add([file.clone(), dir.clone()]);
+    for (index, path) in [file, dir].into_iter().enumerate() {
+        c.basket_select(index);
+        // El dato anterior nunca se presenta como metadata de la nueva ruta.
+        assert!(c.inspector_info().modified.is_empty());
+        c.request_metadata(path);
+        for _ in 0..3000 {
+            if c.pump_meta() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(c.pump_meta());
+        let info = c.inspector_info();
+        assert_eq!(info.is_dir, index == 1);
+        assert!(!info.modified.is_empty());
+        if index == 0 {
+            assert_eq!(info.size, naygo_core::format::human_size(5));
+        }
+    }
 }
 
 /// Drena el probe async de "carpeta no encontrada" hasta que aplica sus resultados (con
@@ -420,7 +731,9 @@ fn rows_signature_detecta_cambios_y_es_estable() {
 
     // Marcar una ruta como CORTADA cambia la firma (la fila se atenúa).
     let s_pre_cut = c.rows_signature(id, secs, now).unwrap();
-    c.ops.set_cut(&[work.path().join("a.txt")]);
+    // Esta prueba comprueba la firma, no el portapapeles global (puede estar ocupado
+    // por otra aplicación o prueba). La marca equivale a un corte ya aceptado por el SO.
+    c.ops.cut_set.insert(work.path().join("a.txt"));
     let s_cut = c.rows_signature(id, secs, now).unwrap();
     assert_ne!(s_pre_cut, s_cut, "cortar una ruta cambia la firma");
 
@@ -2631,6 +2944,48 @@ fn inspector_lee_el_files_activo() {
     }
     let info = c.inspector_info();
     assert!(info.present, "hay un ítem enfocado");
+}
+
+/// La selección de Bandeja es una fuente de primer nivel para Preview/Propiedades, pero no
+/// exige I/O en el callback del clic: los workers existentes reciben la ruta en el tick.
+#[test]
+fn bandeja_seleccionada_alimenta_inspector_y_metadata() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("reunido.txt");
+    std::fs::write(&path, b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    assert_eq!(c.basket.add([path.clone()]), 1);
+    assert!(c.basket_select(0));
+
+    let info = c.inspector_info();
+    assert!(info.present);
+    assert_eq!(info.name, "reunido.txt");
+    assert_eq!(c.metadata_target(), Some(path));
+    assert!(c.basket_rows().first().is_some_and(|row| row.selected));
+}
+
+/// Copiar/Mover desde Bandeja ofrece los paneles Files abiertos por el mismo radar usado por
+/// F-keys, y marca explícitamente que la operación debe tomar rutas de la bandeja.
+#[test]
+fn bandeja_abre_radar_con_paneles_visibles_como_destino() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("reunido.txt");
+    std::fs::write(&path, b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new(tmp.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.last_area = area();
+    assert_eq!(c.basket.add([path]), 1);
+
+    c.basket_select_all();
+    assert!(c.basket_request_transfer(false));
+    let radar = c.destination_radar.as_ref().expect("radar abierto");
+    assert_eq!(radar.origin, DestinationRadarOrigin::Basket);
+    assert!(!radar.move_files);
+    assert!(
+        !radar.candidates.is_empty(),
+        "el panel Files abierto se ofrece primero"
+    );
 }
 
 /// Navegar desde un favorito mueve el panel Files activo y lo registra en recientes.

@@ -34,6 +34,13 @@ pub enum CommandPayload {
     Theme(ThemeId),
     /// Abrir la ventana de configuración.
     OpenConfig,
+    PrepareDelivery,
+    TaskSpaces,
+    SavedQueries,
+    ComparisonPoints,
+    Recipes,
+    LoadRecipe(PathBuf),
+    LoadQuery(PathBuf),
 }
 
 /// Un comando de la paleta.

@@ -7,7 +7,23 @@ use super::*;
 impl WorkspaceCtrl {
     /// Rects de los paneles (id, rect) dado el área de contenido.
     pub fn pane_rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        if let Some(id) = self.maximized_pane.filter(|id| self.ws.pane(*id).is_some()) {
+            return vec![(id, area)];
+        }
         self.ws.layout.pane_rects(area)
+    }
+
+    pub fn toggle_maximize(&mut self, id: PaneId) -> bool {
+        if self.ws.pane(id).is_none() {
+            return false;
+        }
+        self.maximized_pane = if self.maximized_pane == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
+        self.set_active(id);
+        true
     }
 
     /// Recuerda el área de contenido actual (la UI la setea en cada layout) para resolver
@@ -81,6 +97,9 @@ impl WorkspaceCtrl {
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
     pub fn split_handles(&self, area: Rect) -> Vec<SplitHandle> {
+        if self.maximized_pane.is_some() {
+            return Vec::new();
+        }
         self.ws.layout.split_handles(area)
     }
 
@@ -211,6 +230,9 @@ impl WorkspaceCtrl {
     }
 
     pub fn set_active(&mut self, id: PaneId) {
+        if self.maximized_pane.is_some_and(|solo| solo != id) {
+            self.maximized_pane = None;
+        }
         // El filtro de tipeo pertenece al panel con foco. Si se estaba ocultando filas, restaurar
         // el panel que se deja antes de cambiar y aplicar el mismo buffer al nuevo panel.
         if self.filter_hide_nonmatches && self.ws.active_id() != Some(id) {
@@ -220,6 +242,25 @@ impl WorkspaceCtrl {
         }
         self.ws.set_active(id);
         self.sync_visual_filter();
+        if !matches!(
+            self.ws.pane(id).map(|p| p.purpose),
+            Some(PanePurpose::Search | PanePurpose::Preview | PanePurpose::Inspector)
+        ) {
+            self.search_context = false;
+        } else if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Search) {
+            self.search_context = true;
+        }
+        // La selección de bandeja debe sobrevivir al consultar Preview/Propiedades, pero no
+        // competir con la selección normal cuando el usuario vuelve a un panel Files u otro
+        // panel de navegación.
+        if !matches!(
+            self.ws.pane(id).map(|pane| pane.purpose),
+            Some(PanePurpose::Basket | PanePurpose::Preview | PanePurpose::Inspector)
+        ) {
+            self.basket_context = false;
+        } else if self.ws.pane(id).map(|pane| pane.purpose) == Some(PanePurpose::Basket) {
+            self.basket_context = true;
+        }
         // Recordar el último panel Files activo, para que la navegación desde paneles
         // auxiliares (Árbol/Favoritos) vaya al panel que el usuario venía usando.
         if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Files) {
@@ -498,6 +539,7 @@ impl WorkspaceCtrl {
     /// No-op si el cierre dejaría la ventana sin paneles. Tras cerrar, re-sincroniza el árbol con
     /// la carpeta del nuevo panel activo.
     pub fn close_pane(&mut self, id: PaneId) {
+        self.maximized_pane = None;
         let targets = self.close_targets(id);
         if targets.is_empty() || self.ws.panes().len() <= targets.len() {
             return;
@@ -838,7 +880,7 @@ impl WorkspaceCtrl {
                 source: S::Recent,
             })
             .collect();
-        let candidates: Vec<C> = rank([open, last, favorites, frequent, recent], 9)
+        let candidates: Vec<C> = rank([open, last, favorites, frequent, recent], 99)
             .into_iter()
             .filter(|c| Some(&c.path) != origin_dir.as_ref())
             .collect();
@@ -847,7 +889,9 @@ impl WorkspaceCtrl {
         }
         self.destination_radar = Some(DestinationRadar {
             move_files,
+            sources: self.selected_paths(),
             candidates,
+            origin: DestinationRadarOrigin::FilesSelection,
         });
         false
     }
@@ -856,18 +900,37 @@ impl WorkspaceCtrl {
         let Some(radar) = self.destination_radar.take() else {
             return;
         };
-        let Some(candidate) = radar.candidates.get(index) else {
+        let Some(path) = radar
+            .candidates
+            .get(index)
+            .map(|candidate| candidate.path.clone())
+        else {
             return;
         };
-        self.transfer_to_dir(
-            self.selected_paths(),
-            candidate.path.clone(),
-            radar.move_files,
-        );
+        self.destination_radar_transfer(radar, path);
+    }
+
+    /// Resuelve el radar con una carpeta elegida manualmente desde «Otra carpeta…».
+    pub fn destination_radar_resolve_path(&mut self, path: PathBuf) {
+        let Some(radar) = self.destination_radar.take() else {
+            return;
+        };
+        self.destination_radar_transfer(radar, path);
     }
 
     pub fn destination_radar_cancel(&mut self) {
         self.destination_radar = None;
+    }
+
+    fn destination_radar_transfer(&mut self, radar: DestinationRadar, path: PathBuf) {
+        match radar.origin {
+            DestinationRadarOrigin::FilesSelection => {
+                self.transfer_to_dir(radar.sources, path, radar.move_files);
+            }
+            DestinationRadarOrigin::Basket => {
+                self.basket_transfer_paths(radar.sources, path, radar.move_files);
+            }
+        }
     }
 
     /// Apila el panel `origin` como pestaña sobre el grupo/hoja de `dest` (los agrupa). El

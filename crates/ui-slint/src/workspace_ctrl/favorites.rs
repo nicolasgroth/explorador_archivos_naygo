@@ -10,6 +10,21 @@ impl WorkspaceCtrl {
     /// Info del inspector para el panel `id` (lee el Files ACTIVO, no el `id`: el
     /// inspector refleja el panel de archivos activo, sea cual sea su posición).
     pub fn inspector_info(&self) -> InspectorInfo {
+        if self.search_context {
+            return self
+                .search_selected_entry()
+                .map(|e| {
+                    crate::bridge::inspector_entry(
+                        e,
+                        self.config.settings.date_format,
+                        naygo_platform::time::local_utc_offset_secs(),
+                    )
+                })
+                .unwrap_or_default();
+        }
+        if let Some(info) = self.basket_inspector_info() {
+            return info;
+        }
         inspector_info(
             self.ws.active_files(),
             self.config.settings.date_format,

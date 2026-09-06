@@ -1,0 +1,96 @@
+// Naygo — editor de secuencia declarativa con revisión obligatoria.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Button, CheckBox, ComboBox, LineEdit, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+import { QueryDraftVm } from "types.slint";
+export component RecipeDialog inherits Rectangle {
+    in-out property <QueryDraftVm> query;
+    in-out property <int> source;
+    in-out property <int> layout;
+    in-out property <string> output-name;
+    in-out property <string> destination;
+    in-out property <bool> zip;
+    in-out property <bool> hashes;
+    in-out property <bool> number-duplicates;
+    in property <bool> busy;
+    in property <bool> ready;
+    in property <bool> waiting;
+    in property <bool> can-update;
+    in property <string> progress;
+    in property <string> report;
+    callback action(int);
+    callback invalidate();
+    background: #00000080;
+    TouchArea {}
+    card := FocusScope {
+        x: (parent.width - self.width) / 2; y: max(8px, (parent.height - self.height) / 2);
+        width: min(840px, parent.width - 16px); height: min(840px, parent.height - 16px);
+        key-pressed(ev) => { if ev.text == Key.Escape { root.action(8); return accept; } reject }
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; card.focus(); } }
+        Rectangle {
+            background: Theme.panel-bg; border-color: Theme.border; border-width: 1px;
+            VerticalLayout {
+                padding: 12px; spacing: 7px;
+                Text { text: Tr.recipes-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: Tr.recipes-help; color: Theme.text-dim; wrap: word-wrap; }
+                        LineEdit { text <=> root.query.name; placeholder-text: Tr.recipes-name; enabled: !root.busy; edited => { root.invalidate(); } }
+                        HorizontalLayout {
+                            Button { text: Tr.recipes-open; enabled: !root.busy; clicked => { root.action(1); } }
+                            Button { text: Tr.spaces-save-as; enabled: !root.busy; clicked => { root.action(3); } }
+                            Button { text: Tr.spaces-update; enabled: !root.busy && root.can-update; clicked => { root.action(4); } }
+                            Button { text: Tr.queries-forget; enabled: !root.busy && root.can-update; clicked => { root.action(9); } }
+                        }
+                        Text { text: Tr.recipes-gather; color: Theme.text; }
+                        ComboBox { model: [Tr.recipes-selection, Tr.recipes-query]; current-index <=> root.source; enabled: !root.busy; selected(_) => { root.invalidate(); } }
+                        Button { text: Tr.recipes-import-query; enabled: !root.busy; clicked => { root.action(5); } }
+                        Text { text: Tr.recipes-roots; color: Theme.text-dim; wrap: word-wrap; }
+                        TextEdit { text <=> root.query.roots; preferred-height: 60px; enabled: !root.busy; edited => { root.invalidate(); } }
+                        Text { text: Tr.recipes-filter; color: Theme.text; }
+                        HorizontalLayout {
+                            LineEdit { text <=> root.query.name-query; placeholder-text: Tr.recipes-pattern; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.content-query; placeholder-text: Tr.recipes-content; enabled: !root.busy; edited => { root.invalidate(); } }
+                        }
+                        HorizontalLayout {
+                            CheckBox { text: Tr.recipes-case; checked <=> root.query.ignore-case; enabled: !root.busy; toggled => { root.invalidate(); } }
+                            CheckBox { text: Tr.recipes-wildcards; checked <=> root.query.use-wildcards; enabled: !root.busy; toggled => { root.invalidate(); } }
+                            CheckBox { text: Tr.points-recursive; checked <=> root.query.recursive; enabled: !root.busy; toggled => { root.invalidate(); } }
+                        }
+                        HorizontalLayout {
+                            LineEdit { text <=> root.query.min-bytes; placeholder-text: Tr.queries-min; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.max-bytes; placeholder-text: Tr.queries-max; enabled: !root.busy; edited => { root.invalidate(); } }
+                            ComboBox { model: [Tr.queries-any, Tr.queries-today, Tr.queries-week, Tr.queries-days7, Tr.queries-days30, Tr.queries-month];
+                                current-index <=> root.query.modified; enabled: !root.busy; selected(_) => { root.invalidate(); } }
+                        }
+                        Text { text: Tr.recipes-output; color: Theme.text; }
+                        Text { text: Tr.recipes-destination-help; color: Theme.text-dim; wrap: word-wrap; }
+                        HorizontalLayout {
+                            LineEdit { text <=> root.destination; placeholder-text: Tr.recipes-destination; enabled: !root.busy; edited => { root.invalidate(); } }
+                            Button { text: "…"; accessible-label: Tr.recipes-destination; enabled: !root.busy; clicked => { root.action(10); } }
+                        }
+                        LineEdit { text <=> root.output-name; enabled: !root.busy; edited => { root.invalidate(); } }
+                        HorizontalLayout {
+                            ComboBox { model: [Tr.delivery-flat, Tr.delivery-grouped, Tr.delivery-relative]; current-index <=> root.layout; enabled: !root.busy; selected(_) => { root.invalidate(); } }
+                            CheckBox { text: "ZIP"; checked <=> root.zip; enabled: !root.busy; toggled => { root.invalidate(); } }
+                        }
+                        CheckBox { text: Tr.delivery-rename; checked <=> root.number-duplicates; enabled: !root.busy && root.layout == 0; toggled => { root.invalidate(); } }
+                        CheckBox { text: Tr.delivery-hash; checked <=> root.hashes; enabled: !root.busy; toggled => { root.invalidate(); } }
+                        TextEdit { text: root.report; read-only: true; preferred-height: 220px; }
+                        if root.busy: Text { text: Tr.spaces-working + " · " + root.progress; color: Theme.text-dim; }
+                        if root.waiting: Text { text: Tr.delivery-waiting; color: Theme.text-dim; wrap: word-wrap; }
+                    }
+                }
+                HorizontalLayout {
+                    Button { text: Tr.recipes-prepare; enabled: !root.busy; clicked => { root.action(6); } }
+                    Button { text: Tr.recipes-run; enabled: root.ready && !root.busy && !root.waiting; clicked => { root.action(7); } }
+                    Button { text: root.busy ? Tr.ops-cancel : Tr.ops-close; clicked => { root.action(8); } }
+                }
+            }
+        }
+    }
+}

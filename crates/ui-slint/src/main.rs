@@ -24,6 +24,7 @@
 mod bridge;
 mod callbacks_config;
 mod callbacks_ctx;
+mod callbacks_delivery;
 mod callbacks_history;
 mod callbacks_layouts;
 mod callbacks_listing;
@@ -32,8 +33,12 @@ mod callbacks_ops;
 mod callbacks_palette;
 mod callbacks_panes;
 mod callbacks_pathbar;
+mod callbacks_points;
+mod callbacks_queries;
+mod callbacks_recipes;
 mod callbacks_refresh;
 mod callbacks_rename;
+mod callbacks_task_spaces;
 mod config_ctrl;
 mod devices;
 mod i18n_keys;
@@ -754,6 +759,11 @@ fn main() -> Result<(), slint::PlatformError> {
     callbacks_ctx::wire_ctx_menu(&ui, &wctx);
     // Multi-panel: swap/clone/stack, pestañas, drag de paneles, splitters, resize.
     callbacks_panes::wire_panes(&ui, &wctx);
+    callbacks_delivery::wire_delivery(&ui, &wctx);
+    callbacks_task_spaces::wire_task_spaces(&ui, &wctx);
+    callbacks_queries::wire_queries(&ui, &wctx);
+    callbacks_recipes::wire_recipes(&ui, &wctx);
+    callbacks_points::wire_points(&ui, &wctx);
 
     // Al cerrar la ventana (Fase 5E, arregla la deuda de F4): persistir la sesión y luego SALIR
     // DE VERDAD (quit_event_loop), salvo que el usuario haya pedido "cerrar a bandeja" y el tray

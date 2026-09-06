@@ -1,0 +1,216 @@
+NAYGO — GALERÍA DE FUNCIONALIDADES PARA LA WEB
+Nicolás Groth / ISGroth · 2026 · MIT
+Serie 01–20: capturas reales de Naygo 0.5.0, build 202609051646.
+Serie 21–22: variantes multipanel editadas, descritas al final.
+Fecha: 5 de septiembre de 2026.
+
+20 imágenes PNG de 1584 × 892 píxeles. Idioma: español.
+Temas: Dark Blue, Paper, Dracula, Solarized Dark, Commander y Neon Retro.
+
+USO DEL MATERIAL
+Cada entrada relaciona el nombre del PNG con una explicación que puedes usar
+como pie de imagen y un texto alternativo para accesibilidad (atributo alt).
+Las capturas 01–20 conservan la interfaz real: no se reconstruyeron ni retocaron.
+El recorte se hizo al capturar, para excluir el escritorio y la barra de tareas.
+Usa los PNG a su resolución original o permite ampliarlos: los diálogos tienen
+texto pequeño que no se debe reducir excesivamente en la página.
+
+Todos los documentos del Proyecto Aurora y sus rutas son ficticios. Se creó
+una copia portable con configuración propia para evitar favoritos e historial
+de la sesión personal. El único recurso gráfico copiado del proyecto es el
+logo público de Naygo. Las tomas de inspección con información del equipo no
+forman parte de esta entrega. Se revisó visualmente cada PNG entregable.
+
+La serie es una selección de funciones, no un inventario exhaustivo ni una
+medición de rendimiento. Cuando una imagen muestra una vista previa de una
+operación, la explicación no la presenta como una operación ya ejecutada.
+
+01-paneles-duales-vista-previa-texto-dark-blue.png
+Título: Navega y consulta sin perder el contexto
+Explicación: Dos paneles muestran los documentos y su respaldo, mientras Vista
+previa permite leer la guía seleccionada. Es útil para revisar archivos antes
+de copiarlos, sin abrir cada documento en otra aplicación.
+Alt: Naygo con dos carpetas y la vista previa de una guía de entrega, en Dark Blue.
+
+02-paleta-comandos-atajos-dark-blue.png
+Título: Las herramientas al alcance del teclado
+Explicación: Ctrl+P abre la paleta con comandos y sus atajos disponibles. Permite
+encontrar acciones como comparar, preparar entregas o renombrar por lotes desde
+el espacio de trabajo actual.
+Alt: Paleta de comandos de Naygo sobre dos paneles de archivos, en Dark Blue.
+
+03-comparacion-archivos-distintos-exclusivos-dark-blue.png
+Título: Identifica diferencias entre carpetas
+Explicación: La comparación resalta Plan semanal.txt como distinto y los
+documentos que sólo existen en un lado. Ayuda a decidir qué actualizar en el
+respaldo; esta comparación rápida usa nombre, tamaño y fecha, no hashes.
+Alt: Comparación de dos carpetas con archivos distintos y exclusivos resaltados.
+
+04-maximizar-panel-temporalmente-paper.png
+Título: Más espacio cuando lo necesitas
+Explicación: Ctrl+Shift+M amplía temporalmente el panel activo para trabajar con
+una lista más ancha. El mismo atajo permite volver a la disposición anterior,
+sin tener que reconstruir los otros paneles.
+Alt: Panel de documentos maximizado dentro de Naygo con el tema claro Paper.
+
+05-vista-previa-svg-ajustada-dracula.png
+Título: Revisa recursos gráficos desde el explorador
+Explicación: El SVG seleccionado se muestra ajustado al panel de Vista previa.
+Sirve para identificar ilustraciones y verificar su composición antes de
+abrirlas con su aplicación predeterminada. La ilustración fue creada para esta demo.
+Alt: Vista previa de una ilustración SVG de montañas junto a sus variantes, en Dracula.
+
+06-renombrado-lotes-numeracion-vista-previa-dracula.png
+Título: Renombra un lote con resultados previsibles
+Explicación: La plantilla Aurora_entrega_{n:3} propone nombres numerados con tres
+dígitos, conservando las extensiones. La tabla Antes/Después permite revisar el
+resultado de los nueve archivos antes de aplicar el cambio. Esta toma es una
+previsualización: no se ejecutó el renombrado.
+Alt: Renombrado por lotes con nombres originales y propuesta numerada, en Dracula.
+
+07-exportar-listado-csv-menu-contextual-dracula.png
+Título: Convierte una selección en un inventario
+Explicación: El menú contextual ofrece exportar el listado al portapapeles o a
+CSV, con variantes de separador. Es útil para llevar un inventario a una planilla
+sin transcribir los nombres. La captura muestra las opciones, no un CSV ya exportado.
+Alt: Menú contextual con opciones de exportación de listados a CSV y al portapapeles.
+
+08-crear-carpetas-multiples-anidadas-dracula.png
+Título: Prepara una estructura en un solo diálogo
+Explicación: Una carpeta por línea y la barra invertida permiten definir varias
+carpetas y sus niveles. Aquí se preparan Documentos y Recursos graficos dentro
+de Entrega final; es útil para iniciar proyectos con una estructura consistente.
+La imagen muestra el lote validado antes de pulsar Crear.
+Alt: Diálogo de creación de dos carpetas anidadas para una entrega, en Dracula.
+
+09-bandeja-lista-portable-multiples-origenes-solarized.png
+Título: Reúne archivos sin mover sus originales
+Explicación: Una lista .naygolist reúne seis referencias de Documentos, Diseno,
+Datos y Codigo. La bandeja permite marcarlas y operar sobre el conjunto, aunque
+sus originales estén en carpetas distintas; Vista previa conserva ese contexto.
+Alt: Bandeja con seis archivos de cuatro carpetas y vista previa de texto, en Solarized Dark.
+
+10-preparar-entrega-zip-verificacion-sha256-solarized.png
+Título: Revisa una entrega antes de generarla
+Explicación: El asistente muestra los seis archivos, sus nombres de salida y el
+destino ZIP. La opción SHA-256 está activada para verificar contenido. Es útil
+para preparar una entrega acompañada de lista y manifiesto conservando los
+originales. La captura corresponde a la revisión previa a la creación local.
+Alt: Asistente de entrega ZIP con revisión de contenido y SHA-256 activado.
+
+11-entrega-completada-historial-operaciones-solarized.png
+Título: Continúa trabajando después de la entrega
+Explicación: El ZIP ficticio ya fue creado. El panel de operaciones registra
+el resultado y la tarjeta ofrece abrir la salida, copiar su ubicación o volver
+a las fuentes en bandeja. Permite revisar el resultado sin interrumpir la navegación.
+Alt: Entrega ZIP completada con historial de operación y accesos a salida y fuentes.
+
+12-vista-previa-zip-manifiesto-sin-extraer-solarized.png
+Título: Consulta un ZIP sin extraerlo
+Explicación: Vista previa muestra el árbol del ZIP creado, los tamaños y los
+archivos naygo-list.txt y naygo-manifest.json incluidos en la entrega. Es útil
+para comprobar qué contiene un paquete antes de descomprimirlo.
+Alt: Árbol de contenido de un ZIP con lista, manifiesto y tamaños de archivo.
+
+13-consulta-varias-carpetas-criterios-commander.png
+Título: Busca en varias carpetas con una misma consulta
+Explicación: La consulta prepara la búsqueda de «revision» en Documentos y
+Respaldo. El editor también ofrece contenido, tamaño, fecha y recursión, y
+permite guardar los criterios como .naygosearch para reutilizarlos. En esta
+toma los criterios están preparados; la búsqueda se ejecuta explícitamente.
+Alt: Editor de consulta con dos carpetas raíz y criterio de nombre, en Commander.
+
+14-resultados-busqueda-multiraiz-vista-previa-commander.png
+Título: Distingue coincidencias por su ubicación
+Explicación: La búsqueda terminó con cuatro resultados de dos raíces y sin
+errores de lectura. Las rutas distinguen archivos homónimos y la selección
+alimenta Vista previa; también se puede añadir a la bandeja para operar después.
+Alt: Cuatro resultados de búsqueda en dos carpetas, con una coincidencia previsualizada.
+
+15-puntos-comparacion-cambios-sha256-commander.png
+Título: Comprueba qué cambió desde un estado guardado
+Explicación: Se capturó un punto .naygopoint y luego se modificaron los datos
+ficticios. Naygo informa un archivo agregado, uno modificado, uno ausente y
+catorce con el mismo contenido SHA-256. Sirve para revisar cambios entre
+momentos distintos. Un punto guarda referencias y metadatos: no es un respaldo
+de los archivos y no permite restaurar su contenido.
+Alt: Punto de comparación con un agregado, un modificado y un ausente tras verificar SHA-256.
+
+16-espacios-tarea-guardados-raiz-portable-commander.png
+Título: Guarda el espacio de trabajo de una tarea
+Explicación: El espacio «Aurora - revision documental» quedó guardado como
+.naygospace con una raíz portable. Permite recuperar la disposición, rutas,
+columnas y filtros del trabajo sin transportar los archivos mismos. El
+guardado es explícito; los resultados de búsquedas no se almacenan como listados.
+Alt: Espacio de revisión documental guardado con raíz portable, en Commander.
+
+17-radar-destinos-teclado-neon-retro.png
+Título: Elige un destino con una tecla
+Explicación: El radar presenta destinos numerados para mover la selección,
+incluido el panel Respaldo. Permite elegir una ubicación sin navegar antes
+hasta ella; también ofrece otra carpeta. Esta toma no ejecuta el movimiento.
+Alt: Radar de movimiento con dos destinos ficticios numerados, en Neon Retro.
+
+18-ayuda-contextual-atajos-neon-retro.png
+Título: Aprende los atajos mientras trabajas
+Explicación: F1 reúne instrucciones de paneles, navegación, columnas y
+operaciones junto con los atajos activos. Es útil para descubrir formas de
+trabajar con el teclado sin salir del explorador.
+Alt: Ayuda de Naygo con navegación, operaciones y lista de atajos activos.
+
+19-galeria-temas-colores-personalizacion-neon-retro.png
+Título: Elige la apariencia que te acomode
+Explicación: La galería muestra nueve temas, con Neon Retro seleccionado, y
+opciones de sets de iconos. Permite adaptar la apariencia del espacio de trabajo
+y acceder a la personalización de cada tema desde una misma sección.
+Alt: Configuración de apariencia con nueve temas y sets de iconos de Naygo.
+
+20-editor-temas-colores-por-componente-neon-retro.png
+Título: Personaliza colores por componente
+Explicación: El editor separa superficies, paneles, filas y tablas, e incluye
+un color propio para la barra de herramientas. Es útil para ajustar un tema
+a tus preferencias. La captura muestra una copia en edición; no se guardaron
+cambios sobre el tema incorporado.
+Alt: Editor de un tema con colores de paneles, barra de herramientas y bordes.
+
+SELECCIÓN SUGERIDA PARA LA PÁGINA
+Vista general: 01. Recursos gráficos: 05. Trabajo por lotes: 06.
+Entrega: 10 y 11. Búsqueda: 14. Cambios en carpetas: 15.
+Personalización: 19. Las demás imágenes pueden acompañar fichas más detalladas.
+
+Los archivos de demostración quedaron separados del paquete de publicación,
+en D:\Naygo-Demo, para permitir nuevas tomas. El ZIP de esta galería contiene
+únicamente los 20 PNG y la versión original de este TXT.
+
+VARIANTES MULTIPANEL EDITADAS PARA LA WEB (21–22)
+
+Resolución: 21 = 1722 × 913 píxeles; 22 = 1721 × 914 píxeles.
+
+Estas dos imágenes se editaron con la herramienta integrada image_gen a partir
+de la referencia proporcionada por el usuario. Se sustituyeron nombres de
+archivos, carpetas, favoritos, rutas y valores por datos ficticios de Aurora.
+La referencia con datos reales no se incorporó a esta entrega.
+Son ilustraciones de interfaz basadas en una captura: la edición generativa
+también modificó detalles gráficos y tipográficos. No deben presentarse como
+capturas exactas del build ni usarse para documentar cifras o controles precisos.
+La variante clara es una interpretación visual tipo Paper.
+
+21-multipanel-arbol-favoritos-documentos-anonimizado-oscuro.png
+Título: Varias carpetas a la vista en un mismo espacio
+Explicación: La composición muestra cinco paneles de archivos junto al árbol
+de carpetas, favoritos y paneles auxiliares. Permite ilustrar cómo mantener
+recursos, documentos y entregas a la vista para trabajar entre ubicaciones
+sin cambiar continuamente de ventana. Apariencia oscura; datos ficticios.
+Alt: Vista multipanel editada de Naygo en colores oscuros con carpetas Aurora.
+
+22-multipanel-arbol-favoritos-documentos-anonimizado-claro.png
+Título: Un espacio multipanel con apariencia clara
+Explicación: La misma composición con fondos claros permite mostrar otra
+apariencia del espacio de trabajo. El árbol aporta contexto y los favoritos
+ofrecen acceso a destinos frecuentes. Los archivos gráficos aparecen como
+listado; esta imagen no muestra una galería de miniaturas.
+Alt: Vista multipanel editada de Naygo en colores claros con datos ficticios.
+
+Se revisaron visualmente ambas imágenes: nombres, rutas, árbol, favoritos,
+propiedades y barra de estado. Prompts y procedencia en
+NOTAS-EDICION-MULTIPANEL.txt. Para documentación exacta, usar la serie 01–20.
