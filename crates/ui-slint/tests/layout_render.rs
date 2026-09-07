@@ -6,13 +6,15 @@ use slint::{
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
         Platform, WindowAdapter,
     },
-    ComponentHandle,
+    ComponentHandle, Model,
 };
 use std::rc::Rc;
 
 slint::slint! {
     import { BreadcrumbBar } from "../ui/breadcrumb-bar.slint";
     import { BasketPanel } from "../ui/basket-panel.slint";
+    import { BasketRowVm } from "../ui/types.slint";
+    export { BasketRowVm }
     export { Tr } from "../ui/i18n.slint";
     export component LayoutProbe inherits Window {
         in property <int> probe-width: 900;
@@ -21,6 +23,10 @@ slint::slint! {
         width: root.probe-width * 1px; height: 460px; background: #0e1622;
         callback navigate(string);
         callback action(int);
+        callback select(int);
+        callback focus-basket();
+        callback drag(int);
+        in property <[BasketRowVm]> basket-rows: [{ name: "informe.txt", path: "D:\\Documentos\\informe.txt", selected: true }];
         BreadcrumbBar {
             x: 0px; y: 0px; width: parent.width; height: 28px; available-height: parent.height;
             segments: [{ label: "D:\\", path: "D:\\" }, { label: "Empresas", path: "D:\\Empresas" },
@@ -30,7 +36,10 @@ slint::slint! {
         BasketPanel {
             show-labels: root.labels;
             x: 0px; y: 38px; width: parent.width; height: parent.height - 38px;
-            rows: [{ name: "informe.txt", path: "D:\\Documentos\\informe.txt", selected: true }];
+            rows: root.basket-rows;
+            focus-pane => { root.focus-basket(); }
+            select(index, control, shift) => { root.select(index); }
+            drag-out(index) => { root.drag(index); }
             selected-count: 1;
             copy => { root.action(0); } move-files => { root.action(1); }
             delete-files => { root.action(2); } delivery => { root.action(3); }
@@ -124,6 +133,67 @@ fn render_compact_paths_and_wrapping_basket_without_native_windows() {
             );
         }
     }
+    ui.set_labels(true);
+    // Un sync de activación actualiza la fila sin destruir su TouchArea entre down/up.
+    ui.set_probe_width(900);
+    window.set_size(slint::PhysicalSize::new(900, 460));
+    ui.set_labels(false);
+    let basket = Rc::new(slint::VecModel::from(vec![BasketRowVm {
+        name: "informe.txt".into(),
+        path: "D:/Documentos/informe.txt".into(),
+        selected: false,
+        ..Default::default()
+    }]));
+    ui.set_basket_rows(slint::ModelRc::from(basket.clone()));
+    let live_model = basket.clone();
+    ui.on_focus_basket(move || {
+        let mut row = live_model.row_data(0).unwrap();
+        row.selected = true;
+        live_model.set_row_data(0, row);
+    });
+    let selected = Rc::new(std::cell::Cell::new(-1));
+    let observed = selected.clone();
+    ui.on_select(move |index| observed.set(index));
+    let dragged = Rc::new(std::cell::Cell::new(-1));
+    let observed = dragged.clone();
+    ui.on_drag(move |index| observed.set(index));
+    window.request_redraw();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 900 * 460];
+    window.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, 900);
+    });
+    let position = slint::LogicalPosition::new(100.0, 133.0);
+    window.dispatch_event(slint::platform::WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    window.dispatch_event(slint::platform::WindowEvent::PointerReleased {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    assert_eq!(
+        selected.get(),
+        0,
+        "basket mouse selection survives activation sync"
+    );
+    selected.set(-1);
+    window.dispatch_event(slint::platform::WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    window.dispatch_event(slint::platform::WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(120.0, 133.0),
+    });
+    window.dispatch_event(slint::platform::WindowEvent::PointerReleased {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    assert_eq!(dragged.get(), 0);
+    assert_eq!(
+        selected.get(),
+        -1,
+        "drag must not become a selection click on release"
+    );
     ui.set_labels(true);
     for width in [900, 200] {
         ui.set_probe_width(width);

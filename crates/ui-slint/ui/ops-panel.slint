@@ -277,7 +277,7 @@ component OpKindChip inherits Rectangle {
 // Botón de control sin caja (sin borde). `variant`: 0=primario (chip con fondo tenue), 1=secundario
 // (solo texto, fondo únicamente en hover), 2=solo-ícono (para Cancelar; `label` se ignora, sirve de
 // tooltip fuera). Emite `pressed` al hacer clic. Mantiene todas las properties previas.
-component OpButton inherits Rectangle {
+export component OpButton inherits Rectangle {
     in property <string> label;
     in property <bool> danger: false;
     in property <int> variant: 0;
@@ -306,10 +306,11 @@ component OpButton inherits Rectangle {
         padding-right: root.variant == 2 ? 6px : 12px;
         spacing: 6px;
         alignment: center;
-        if root.show-pause: PauseIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text; }
-        if root.show-play: PlayIcon { width: root.icon-size; height: root.icon-size; tint: Theme.accent; }
-        if root.show-skip: SkipIcon { width: root.icon-size; height: root.icon-size; tint: Theme.text-dim; }
-        if root.show-cancel: CancelIcon { width: root.icon-size; height: root.icon-size; tint: Theme.error; }
+        // El layout estira la caja; el dibujo se centra dentro de ella en ambos ejes.
+        if root.show-pause: PauseIcon { width: root.icon-size; height: root.height; tint: Theme.text; }
+        if root.show-play: PlayIcon { width: root.icon-size; height: root.height; tint: Theme.accent; }
+        if root.show-skip: SkipIcon { width: root.icon-size; height: root.height; tint: Theme.text-dim; }
+        if root.show-cancel: CancelIcon { width: root.icon-size; height: root.height; tint: Theme.error; }
         if root.variant != 2 && root.label != "": Text {
             text: root.label;
             color: root.variant == 1 ? Theme.text-dim : Theme.text;

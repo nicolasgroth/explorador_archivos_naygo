@@ -4,6 +4,9 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 export global Theme {
+    in property <string> interface-font;
+    in property <string> listings-font;
+    in property <string> preview-font: "Consolas";
     // Tokens del tema (ver core::theme::Theme). Defaults = dark-blue.
     in property <color> accent: #4f8ae0;
     in property <color> panel-bg: #0e1622;

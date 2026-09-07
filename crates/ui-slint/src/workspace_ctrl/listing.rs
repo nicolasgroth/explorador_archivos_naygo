@@ -961,6 +961,11 @@ impl WorkspaceCtrl {
         let Some(active) = self.active_files_id() else {
             return false;
         };
+        self.refresh_pane(active)
+    }
+
+    /// Refrescar sin cambiar foco ni historial; rearmar también un watcher fallido.
+    pub fn refresh_pane(&mut self, active: PaneId) -> bool {
         let Some(dir) = self
             .ws
             .pane(active)
@@ -971,8 +976,25 @@ impl WorkspaceCtrl {
         };
         // F5 re-lista en el mismo sitio: cancela el deep para no mezclar filas.
         self.cancel_deep_if_navigating(active);
+        self.watchers.unwatch(active.0);
         self.start_listing(active, dir);
         true
+    }
+
+    /// Incluye pestañas abiertas y ramas expandidas, nunca recorre todo el disco.
+    pub fn refresh_all(&mut self) {
+        let ids: Vec<_> = self
+            .ws
+            .panes()
+            .iter()
+            .filter(|p| p.files.is_some())
+            .map(|p| p.id)
+            .collect();
+        for id in ids {
+            self.refresh_pane(id);
+        }
+        self.refresh_trees_visibility();
+        self.refresh_missing_cache();
     }
 
     /// Cancela el listado en curso del panel activo (Esc). Lo deja con lo que alcanzó a listar.

@@ -9,6 +9,7 @@ import { Tr, TextUtil } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { ThemeCombo } from "theme-combo.slint";
 import { ColorPicker } from "color-picker.slint";
+import { FontChoice } from "font-choice.slint";
 
 // Ícono "✕" dibujado con un Path (dos aspas), no con un glifo de fuente: bajo render por
 // software el carácter ✕/× a veces no existe en la fuente base y salía invisible (botón "vacío").
@@ -290,6 +291,7 @@ component CfgBtn inherits Rectangle {
 export component ConfigWindow inherits Window {
     title: Tr.cfg-title;
     default-font-size: 13px;
+    default-font-family: Theme.interface-font;
     icon: @image-url("../../../assets/icons/logo_naygo.png");
     preferred-width: 760px;
     preferred-height: 600px;
@@ -341,7 +343,7 @@ export component ConfigWindow inherits Window {
         Tr.cfg-show-parent + " " + Tr.cfg-icon-only + " " + Tr.cfg-bar-position + " " + Tr.cfg-window-title + " " + Tr.cfg-size-no-subdirs + " " + Tr.cfg-autostart + " " + Tr.cfg-autostart-minimized + " " + Tr.cfg-default-table + " " + Tr.cfg-language,
         Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-animations,
         Tr.cfg-paste-confirm + " " + Tr.cfg-paste-name + " " + Tr.cfg-paste-ext + " " + Tr.cfg-paste-image-name + " " + Tr.cfg-paste-image-fmt + " " + Tr.cfg-paste-jpg-quality,
-        Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
+        Tr.fonts-title + " " + Tr.fonts-interface + " " + Tr.fonts-listings + " " + Tr.fonts-preview + " " + Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
         Tr.cfg-reset-all + " " + Tr.cfg-sc-action + " " + Tr.cfg-sc-combo + " " + Tr.cfg-change + " " + Tr.cfg-reset,
         Tr.cfg-export-hint + " " + Tr.cfg-ie-lang + " " + Tr.cfg-export-lang + " " + Tr.cfg-import-lang + " " + Tr.cfg-ie-themes + " " + Tr.cfg-export-theme + " " + Tr.cfg-import-theme + " " + Tr.cfg-ie-icons + " " + Tr.icons-export + " " + Tr.icons-import + " " + Tr.cfg-ie-config + " " + Tr.cfg-export-config + " " + Tr.cfg-import-config,
         Tr.cfg-ops-display + " " + Tr.cfg-low-power + " " + Tr.cfg-new-items-at-end + " " + Tr.cfg-tray-enabled + " " + Tr.cfg-close-to-tray + " " + Tr.cfg-global-hotkey + " " + Tr.cfg-recent-limit + " " + Tr.cfg-frequent-dirs-limit + " " + Tr.cfg-footer-section + " " + Tr.cfg-footer-enabled + " " + Tr.cfg-footer-template + " " + Tr.cfg-footer-tokens + " " + Tr.cfg-footer-preview + " " + Tr.cfg-home-dir,
@@ -369,6 +371,7 @@ export component ConfigWindow inherits Window {
     callback set-show-op-summary(bool);
     callback set-show-parent(bool);
     callback set-icon-only(bool);
+    callback set-font(int, string);
     callback set-bar-position(int);
     callback set-size-no-subdirs(bool);
     callback set-autostart(bool);
@@ -807,6 +810,15 @@ export component ConfigWindow inherits Window {
                             // === Apariencia (cat 3) ===
                             if root.cat == 3: VerticalLayout {
                                 spacing: 6px;
+                                Text { text: Tr.fonts-title; color: Theme.text; font-weight: 700; }
+                                Text { text: Tr.fonts-help; color: Theme.text-dim; wrap: word-wrap; }
+                                FontChoice { label: Tr.fonts-interface; family: root.vm.interface-font; default-label: Tr.fonts-system;
+                                    apply(family) => { root.set-font(0, family); } }
+                                FontChoice { label: Tr.fonts-listings; family: root.vm.listings-font; default-label: Tr.fonts-inherit;
+                                    apply(family) => { root.set-font(1, family); } }
+                                FontChoice { label: Tr.fonts-preview; family: root.vm.preview-font; default-label: "Consolas";
+                                    sample-family: Theme.preview-font;
+                                    apply(family) => { root.set-font(2, family); } }
                                 // Galería de temas RESPONSIVE: las tarjetas fluyen en N columnas según
                                 // el ancho disponible (no más una grilla fija de 3 que se encimaba). Cada
                                 // tarjeta se posiciona por índice (fila/columna calculadas). Un clic aplica

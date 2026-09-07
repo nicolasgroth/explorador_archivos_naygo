@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Tipografia",
+  "fonts.help": "Una sola famiglia rende coerente l’interfaccia. Elenchi e anteprima possono differire. Scegli un suggerimento o inserisci un font installato e conferma. I font mancanti sono sostituiti da un font di sistema.",
+  "fonts.interface": "Interfaccia: titoli, colonne e controlli",
+  "fonts.listings": "Elenchi: nomi, date e dimensioni",
+  "fonts.preview": "Anteprima di testo e codice",
+  "fonts.system": "Predefinito di sistema",
+  "fonts.inherit": "Eredita dall’interfaccia",
+  "refresh.panel": "Aggiorna questo pannello (F5 nel pannello attivo)",
+  "refresh.all": "Aggiorna tutti i pannelli, i rami aperti e le unità",
   "spaces.recents": "Spazi recenti (questa sessione)",
   "retry.title": "Riprova i file non riusciti",
   "retry.filter": "Solo errori",

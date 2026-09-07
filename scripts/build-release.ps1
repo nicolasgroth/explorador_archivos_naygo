@@ -77,6 +77,7 @@ Write-Host "Naygo version $version"
 
 # --- 2. Compilar release (solo el binario del producto, no todo el workspace) ---
 Write-Host "Compilando release..."
+$env:NAYGO_BUILD_NONCE = [guid]::NewGuid().ToString()
 & cargo build --release -p naygo-ui-slint
 if ($LASTEXITCODE -ne 0) { throw "cargo build --release fallo." }
 $exe = Join-Path $repo "target\release\naygo.exe"

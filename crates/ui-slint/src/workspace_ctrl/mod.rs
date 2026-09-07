@@ -126,6 +126,7 @@ pub struct WorkspaceCtrl {
     /// Destino a "revelar" en cada árbol: al navegar el Files activo, el árbol expande
     /// progresivamente los ancestros hasta esta carpeta (reveal). Se limpia al llegar.
     pub reveal_targets: HashMap<PaneId, PathBuf>,
+    pub tree_refresh_pending: HashMap<PaneId, Vec<PathBuf>>,
     /// Favoritos (global), ahora un ÁRBOL de grupos anidados. Se carga de
     /// `<config>/favorites.json` al arrancar y se persiste tras cada cambio (anclar/quitar,
     /// nuevo grupo, renombrar, eliminar, mover).
@@ -649,6 +650,7 @@ impl WorkspaceCtrl {
             tree_cursor: HashMap::new(),
             tree_listings: HashMap::new(),
             reveal_targets: HashMap::new(),
+            tree_refresh_pending: HashMap::new(),
             favorites: load_favorites(&config_dir),
             fav_expanded: std::collections::HashSet::new(),
             recents: RecentDirs::new(),

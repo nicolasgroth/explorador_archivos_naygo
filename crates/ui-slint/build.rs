@@ -3,7 +3,15 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 fn main() {
-    slint_build::compile("ui/app-window.slint").expect("compilar app-window.slint");
+    // El compilador de la UI declarativa supera el stack principal de 1 MiB de MSVC.
+    // Esta reserva sólo existe durante el build; no aumenta el stack/RAM de Naygo.
+    std::thread::Builder::new()
+        .name("slint-compiler".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| slint_build::compile("ui/app-window.slint").expect("compilar app-window.slint"))
+        .expect("iniciar compilador Slint")
+        .join()
+        .expect("compilador Slint");
 
     // ID de build con fecha-hora local (YYYYMMDDHHMM), estampado en el binario como variable de
     // entorno de compilación. La versión mostrada queda `X.Y.Z+build.YYYYMMDDHHMM` (metadato de
@@ -11,14 +19,22 @@ fn main() {
     // ambigüedad qué build se está probando. Si no se puede leer la hora, se usa "unknown".
     let build_id = build_timestamp();
     println!("cargo:rustc-env=NAYGO_BUILD_ID={build_id}");
-    // NO emitir `rerun-if-changed` para el timestamp: si se restringe el re-run a un archivo, cargo
-    // reusa el BUILD_ID viejo mientras ese archivo no cambie. Para que el timestamp se regenere cada
-    // vez que el crate se recompila (que es cuando el binario cambia y hay build nuevo), se fuerza el
-    // re-run del build script apuntando a una ruta que cambia siempre (el propio OUT_DIR no sirve).
-    // La vía fiable: marcar rerun-if-env-changed sobre una var que variamos, o simplemente re-correr
-    // siempre. `cargo:rerun-if-changed=` con ruta inexistente hace que cargo re-ejecute el script en
-    // cada build. Usamos esa: apuntar a un archivo que nunca existe fuerza el re-run.
-    println!("cargo:rerun-if-changed=NONEXISTENT_FORCE_RERUN_{build_id}");
+    // Cambios reales invalidan el ID. El empaquetador además cambia un nonce para que
+    // cada distribución tenga su propio ID incluso sin cambios de código. No usar una
+    // ruta inexistente: obligaba a recompilar toda la UI incluso al repetir una prueba.
+    for path in [
+        "src",
+        "ui",
+        "../core/src",
+        "../platform/src",
+        "../../Cargo.toml",
+        "../../Cargo.lock",
+        "../../CHANGELOG.md",
+        "../../LICENSE",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    println!("cargo:rerun-if-env-changed=NAYGO_BUILD_NONCE");
 
     // En Windows: embeber el ícono de la app + metadatos del .exe (producto, versión, autor),
     // así el explorador y la barra de tareas muestran el ícono propio de Naygo en vez del

@@ -432,6 +432,91 @@ fn refrescar_f5_no_duplica_las_filas() {
     }
 }
 
+#[test]
+fn refresh_one_then_all_preserves_active_panel_and_paths() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(a.path());
+    let (origin, dest) = split_a(&mut c, b.path());
+    std::fs::write(a.path().join("a.txt"), b"a").unwrap();
+    std::fs::write(b.path().join("b.txt"), b"b").unwrap();
+    assert!(c.refresh_pane(dest));
+    assert!(drain(&mut c));
+    assert_eq!(c.ws.active_id(), Some(origin));
+    assert!(c
+        .ws
+        .pane(origin)
+        .unwrap()
+        .files
+        .as_ref()
+        .unwrap()
+        .entries
+        .is_empty());
+    assert_eq!(
+        c.ws.pane(dest)
+            .unwrap()
+            .files
+            .as_ref()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    c.refresh_all();
+    assert!(drain(&mut c));
+    assert_eq!(c.ws.active_id(), Some(origin));
+    for (id, path) in [(origin, a.path()), (dest, b.path())] {
+        let files = c.ws.pane(id).unwrap().files.as_ref().unwrap();
+        assert_eq!(files.current_dir, path);
+        assert_eq!(files.entries.len(), 1);
+    }
+}
+
+#[test]
+fn refresh_all_restores_expanded_tree_branches_and_finishes_for_deleted_nodes() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let gone = a.join("gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    let tree_id = c.ws.add_pane(PanePurpose::Tree, PathBuf::new());
+    let mut tree = DirTree::default();
+    tree.roots.push(naygo_core::tree::TreeNode::folder(
+        root.path().to_path_buf(),
+    ));
+    c.trees.insert(tree_id, tree);
+    fn drain_tree(c: &mut WorkspaceCtrl) {
+        for _ in 0..4000 {
+            if c.pump_tree() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("tree refresh did not finish");
+    }
+    for path in [root.path(), a.as_path(), gone.as_path()] {
+        c.tree_expand(tree_id, path.to_path_buf());
+        drain_tree(&mut c);
+    }
+    let added = a.join("new");
+    std::fs::create_dir(&added).unwrap();
+    std::fs::remove_dir(&gone).unwrap();
+    c.refresh_all();
+    drain_tree(&mut c);
+    assert!(drain(&mut c));
+    let tree = c.trees.get(&tree_id).unwrap();
+    assert!(tree.node_at(&a).unwrap().expanded);
+    assert!(tree.node_at(&added).is_some());
+    assert!(tree.node_at(&gone).is_none());
+    assert!(c.tree_refresh_pending.is_empty());
+
+    c.refresh_all();
+    c.tree_collapse(tree_id, root.path().to_path_buf());
+    drain_tree(&mut c);
+    assert!(!c.trees[&tree_id].node_at(root.path()).unwrap().expanded);
+    assert!(c.tree_refresh_pending.is_empty());
+}
+
 /// REGRESIÓN: refrescar una carpeta que QUEDÓ VACÍA (todos sus ítems se borraron desde fuera)
 /// debe dejar el panel vacío, no con las filas viejas. Cubre el `clear()` de la rama `done`
 /// cuando el listado nuevo no emitió ningún lote.

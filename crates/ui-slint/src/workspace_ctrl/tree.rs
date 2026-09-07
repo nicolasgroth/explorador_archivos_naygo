@@ -266,6 +266,10 @@ impl WorkspaceCtrl {
 
     /// Colapsa la rama `path` del panel `id`: cancela su worker si está en vuelo.
     pub fn tree_collapse(&mut self, id: PaneId, path: PathBuf) {
+        // Un colapso explícito cancela también la restauración de sus descendientes.
+        if let Some(pending) = self.tree_refresh_pending.get_mut(&id) {
+            pending.retain(|p| !p.starts_with(&path));
+        }
         if let Some(l) = self.tree_listings.remove(&(id, path.clone())) {
             l.cancel();
         }
@@ -313,7 +317,7 @@ impl WorkspaceCtrl {
         let ids: Vec<PaneId> = self.trees.keys().copied().collect();
         for id in ids {
             // Ramas expandidas y ya cargadas (las que muestran hijos): hay que re-listarlas.
-            let to_reload: Vec<PathBuf> = match self.trees.get(&id) {
+            let mut to_reload: Vec<PathBuf> = match self.trees.get(&id) {
                 Some(t) => t
                     .flat_paths()
                     .into_iter()
@@ -325,18 +329,58 @@ impl WorkspaceCtrl {
                     .collect(),
                 None => continue,
             };
-            for path in to_reload {
-                // Cancelar un worker en vuelo de esa rama (si lo hubiera) para no mezclar lotes.
-                if let Some(l) = self.tree_listings.remove(&(id, path.clone())) {
-                    l.cancel();
+            to_reload.extend(self.tree_refresh_pending.remove(&id).unwrap_or_default());
+            to_reload.sort();
+            to_reload.dedup();
+            to_reload.sort_by_key(|p| p.components().count());
+            let jobs: Vec<_> = self
+                .tree_listings
+                .keys()
+                .filter(|(pane, _)| *pane == id)
+                .cloned()
+                .collect();
+            for key in jobs {
+                if let Some(job) = self.tree_listings.remove(&key) {
+                    job.cancel();
                 }
-                if let Some(t) = self.trees.get_mut(&id) {
-                    // Vacía los hijos y marca Loading+expandido: el nuevo lote (ya filtrado en
-                    // `pump_tree`) los repuebla.
-                    t.begin_loading(&path);
+            }
+            self.tree_refresh_pending.insert(id, to_reload);
+        }
+        self.pump_tree_refresh();
+    }
+
+    /// Restaurar de padre a hijo conforme llegan nodos. Recargar todos de golpe borraba
+    /// los descendientes al vaciar al padre y sus resultados terminaban sin nodo receptor.
+    fn pump_tree_refresh(&mut self) {
+        let ids: Vec<_> = self.tree_refresh_pending.keys().copied().collect();
+        for id in ids {
+            let paths = self.tree_refresh_pending.remove(&id).unwrap_or_default();
+            if !self.trees.contains_key(&id) {
+                continue;
+            }
+            let mut waiting = Vec::new();
+            for path in paths {
+                if self
+                    .trees
+                    .get(&id)
+                    .and_then(|tree| tree.node_at(&path))
+                    .is_none()
+                {
+                    waiting.push(path);
+                    continue;
                 }
-                self.tree_listings
-                    .insert((id, path.clone()), Listing::start_dirs_only(path));
+                let key = (id, path.clone());
+                if let std::collections::hash_map::Entry::Vacant(job) =
+                    self.tree_listings.entry(key)
+                {
+                    self.trees.get_mut(&id).unwrap().begin_loading(&path);
+                    job.insert(Listing::start_dirs_only(path));
+                }
+            }
+            // Si ya no hay workers capaces de traer esos nodos, desaparecieron, están
+            // ocultos o son inaccesibles. No mantener el timer activo indefinidamente.
+            if !waiting.is_empty() && self.tree_listings.keys().any(|(pane, _)| *pane == id) {
+                self.tree_refresh_pending.insert(id, waiting);
             }
         }
     }
@@ -466,6 +510,7 @@ impl WorkspaceCtrl {
                 self.tree_listings.remove(&key);
             }
         }
+        self.pump_tree_refresh();
         // Tras drenar, avanzar el reveal: una rama recién cargada habilita expandir la siguiente
         // hacia la carpeta objetivo.
         if !self.reveal_targets.is_empty() {
@@ -473,6 +518,8 @@ impl WorkspaceCtrl {
         }
         // No dejar dormir el timer mientras haya workers en vuelo O un reveal pendiente (sus
         // ramas se cargan en ticks sucesivos).
-        self.tree_listings.is_empty() && self.reveal_targets.is_empty()
+        self.tree_listings.is_empty()
+            && self.reveal_targets.is_empty()
+            && self.tree_refresh_pending.is_empty()
     }
 }

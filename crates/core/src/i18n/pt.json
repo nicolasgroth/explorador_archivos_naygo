@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Tipografia",
+  "fonts.help": "Use uma família para uma interface coerente. Listas e prévia podem ser diferentes. Escolha uma sugestão ou digite uma fonte instalada e aceite. Fontes indisponíveis usam uma alternativa do sistema.",
+  "fonts.interface": "Interface: títulos, colunas e controles",
+  "fonts.listings": "Listas: nomes, datas e tamanhos",
+  "fonts.preview": "Prévia de texto e código",
+  "fonts.system": "Padrão do sistema",
+  "fonts.inherit": "Herdar da interface",
+  "refresh.panel": "Atualizar este painel (F5 no painel ativo)",
+  "refresh.all": "Atualizar todos os painéis, ramos abertos e unidades",
   "spaces.recents": "Espaços recentes (nesta sessão)",
   "retry.title": "Tentar novamente arquivos com falha",
   "retry.filter": "Somente falhas",

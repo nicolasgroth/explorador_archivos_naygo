@@ -220,6 +220,7 @@ export component TreePanel inherits Rectangle {
                             + (n.loading ? "  ..." : (n.error ? "  (!)" : ""));
                         color: n.is-drive ? Theme.text : (n.error ? Theme.error : Theme.text);
                         vertical-alignment: center;
+                        font-family: Theme.listings-font;
                         horizontal-stretch: 1;
                         overflow: elide;
                     }

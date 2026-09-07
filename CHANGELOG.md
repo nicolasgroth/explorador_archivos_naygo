@@ -9,6 +9,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [0.5.1] - 2026-09-05
 
+### Revisión de usabilidad — 2026-09-07
+- Tipografía configurable en Apariencia: interfaz con fuente del sistema por defecto,
+  listados que heredan de ella y vista previa monoespaciada. Sugerencias y nombre de fuente
+  instalada, muestra en vivo y persistencia; sin distribuir fuentes ni agregar dependencias.
+- Refresco por panel y botón global para paneles abiertos, ramas desplegadas y unidades.
+  F5 conserva su alcance local. El refresco también rearma la vigilancia de la carpeta.
+  El árbol restaura sus ramas de padre a hijo y respeta colapsos manuales durante la carga.
+- Corregida la carrera del watcher: se despierta la UI después de resolver metadata y
+  publicar el lote final. Generaciones descartan eventos de una navegación anterior.
+  Alta y liberación del watcher nativo fuera del hilo UI.
+- Selección y arrastre de bandeja conservan sus filas durante las actualizaciones de foco.
+- Íconos de pausa, reanudación, salto, cancelación y unidades centrados verticalmente.
+
 ### Añadido — revisión posterior al respaldo en GitHub
 - Bandeja con etiquetas al desactivar «Solo íconos» y acciones secundarias desplegables.
 - Acceso a los diez espacios recientes de la sesión, con revisión previa y opción de limpiar.

@@ -196,120 +196,7 @@ component ToolSep inherits Rectangle {
 // Clic navega el panel activo a la raíz. Tooltip con la ruta. Si la unidad es extraíble
 // (USB), a la derecha aparece un triángulo ▾ (estilo combobox) que abre un menú con
 // "Expulsar"; el clic derecho sobre el botón abre ese mismo menú.
-component DriveBtn inherits Rectangle {
-    in property <string> label;
-    in property <string> tip;
-    in property <image> icon;
-    in property <bool> removable: false;
-    in property <string> eject-tip;
-    callback clicked();
-    // El ▾ (o el clic derecho) pide abrir el menú de expulsión; pasa la x de anclaje (centro
-    // del ▾, en coords de ventana) para que la AppWindow posicione el menú flotante.
-    callback eject-menu(length);
-    width: drive-row.preferred-width + 10px;
-    background: dtouch.has-hover ? Theme.hover-bg : Theme.surface-raised;
-    border-radius: Theme.radius-md;
-    border-width: 1px;
-    border-color: dtouch.has-hover ? Theme.active-pane-border : Theme.divider;
-    drive-row := HorizontalLayout {
-        alignment: center;
-        spacing: 3px;
-        padding-left: 5px;
-        padding-right: 5px;
-        // Unidad FIJA/red: ícono de disco del set. Unidad EXTRAÍBLE (USB): ícono propio dibujado
-        // con Path (un pendrive), para distinguir a simple vista cuáles se pueden expulsar.
-        if !root.removable: Image {
-            source: root.icon;
-            width: 15px;
-            height: 15px;
-            vertical-alignment: center;
-            image-rendering: smooth;
-        }
-        if root.removable: Rectangle {
-            width: 15px;
-            height: 15px;
-            // Pendrive: cuerpo + conector. Dibujado con Path (el render por software no pinta
-            // glifos de fuente para íconos).
-            Path {
-                width: 15px;
-                height: 15px;
-                stroke: Theme.accent;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 15;
-                viewbox-height: 15;
-                // Cuerpo del pendrive (rectángulo vertical redondeado, parte de abajo).
-                MoveTo { x: 5; y: 5.5; }
-                LineTo { x: 10; y: 5.5; }
-                LineTo { x: 10; y: 13.5; }
-                LineTo { x: 5; y: 13.5; }
-                Close { }
-                // Conector metálico (arriba).
-                MoveTo { x: 6.5; y: 5.5; }
-                LineTo { x: 6.5; y: 2; }
-                LineTo { x: 8.5; y: 2; }
-                LineTo { x: 8.5; y: 5.5; }
-            }
-        }
-        Text {
-            text: root.label;
-            color: Theme.text;
-            font-size: Theme.font-md;
-            vertical-alignment: center;
-        }
-        // Triángulo ▾ (estilo combobox): solo en unidades extraíbles. Abre un menú
-        // ("Expulsar") en vez de expulsar directo. Su TouchArea atrapa el clic antes
-        // que el de navegación del botón. Emite la x de anclaje para el menú flotante.
-        if root.removable: chevron := Rectangle {
-            width: 14px;
-            height: 16px;
-            border-radius: 3px;
-            background: etouch.has-hover ? Theme.accent : transparent;
-            Path {
-                width: 8px;
-                height: 8px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                stroke: etouch.has-hover ? white : Theme.text-dim;
-                stroke-width: 1.3px;
-                fill: transparent;
-                viewbox-width: 8;
-                viewbox-height: 8;
-                // Chevron hacia abajo.
-                MoveTo { x: 1.5; y: 3; }
-                LineTo { x: 4; y: 5.5; }
-                LineTo { x: 6.5; y: 3; }
-            }
-            etouch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.eject-menu(chevron.absolute-position.x + chevron.width / 2);
-                }
-                changed has-hover => {
-                    root.hover-tip(self.has-hover ? root.eject-tip : "",
-                        root.absolute-position.x + root.width / 2,
-                        root.absolute-position.y + root.height);
-                }
-            }
-        }
-    }
-    callback hover-tip(string, length, length);
-    dtouch := TouchArea {
-        // Clic-izquierdo navega; clic-derecho abre el menú de expulsión si es extraíble.
-        pointer-event(ev) => {
-            if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right
-                    && root.removable) {
-                root.eject-menu(root.absolute-position.x + root.width / 2);
-            }
-        }
-        clicked => { root.clicked(); }
-        changed has-hover => {
-            root.hover-tip(self.has-hover ? root.tip : "",
-                root.absolute-position.x + root.width / 2,
-                root.absolute-position.y + root.height);
-        }
-    }
-}
+import { DriveBtn } from "drive-button.slint";
 
 // Un ítem del menú desplegable ▾.
 component MenuItem inherits Rectangle {
@@ -456,6 +343,7 @@ component HistoryCaret inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    default-font-family: Theme.interface-font;
     // Título con la versión-build (lo setea Rust con `naygo_full_version()`), así el build en prueba
     // se identifica de un vistazo en la barra de título. Default "Naygo" por si Rust no lo setea.
     in property <string> window-title: "Naygo";
@@ -973,6 +861,8 @@ export component AppWindow inherits Window {
     // Re-escanear las unidades manualmente (las de red no disparan WM_DEVICECHANGE, así que un
     // botón explícito las refresca). Rust reconstruye la tira de discos.
     callback refresh-drives();
+    callback refresh-panel(int);
+    callback refresh-all();
 
     // --- Ventana de configuración (Fase 4) ---
     // La ventana de config es ahora una ventana nativa propia (ConfigWindow); su wiring vive en
@@ -1294,9 +1184,9 @@ export component AppWindow inherits Window {
                 ToolBtn {
                     icon: root.tb-refresh;
                     icon-only: true;
-                    tip: Tr.toolbar-refresh-drives;
+                    tip: Tr.refresh-all;
                     btn-width: 30px;
-                    clicked => { root.refresh-drives(); }
+                    clicked => { root.refresh-all(); }
                     hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                 }
                 // Tira de unidades de disco (paridad con egui): clic navega el panel activo.
@@ -1585,6 +1475,7 @@ export component AppWindow inherits Window {
                         nav-back(id) => { root.nav-back(id); }
                         nav-forward(id) => { root.nav-forward(id); }
                         nav-up(id) => { root.activate(id); root.go-up(); }
+                        refresh-panel(id) => { root.refresh-panel(id); }
                         open-back-history(id, x) => { root.activate(id); root.open-back-history(x); }
                         open-forward-history(id, x) => { root.activate(id); root.open-forward-history(x); }
                     }

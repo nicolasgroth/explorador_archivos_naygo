@@ -56,6 +56,14 @@ pub(crate) fn wire_config(
         }};
     }
     // ops_mode no usa el macro: además de persistir, hay que aplicar el modo al motor de ops
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        cfg_win.on_set_font(move |role, family| {
+            ctrl.borrow_mut().config.set_font(role, family.as_str());
+            refresh();
+        });
+    }
     // (cola/paralelo) en caliente vía sync_ops_mode.
     {
         let ctrl = ctrl.clone();

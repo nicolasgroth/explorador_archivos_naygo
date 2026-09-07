@@ -264,6 +264,7 @@ component MissingOpButton inherits Rectangle {
 }
 
 export component FilePanel inherits FocusScope {
+    callback refresh-panel(int);
     in property <int> pane-id;
     in property <bool> active;
     // Se está ARRASTRANDO un archivo sobre ESTE panel ahora mismo: borde marcado + path-bar
@@ -674,6 +675,12 @@ export component FilePanel inherits FocusScope {
                         navigate(path) => { root.activate(root.pane-id); root.segment-clicked(root.pane-id, path); }
                         context(path, x, y) => { root.activate(root.pane-id); root.segment-context(root.pane-id, path, x, y); }
                         edit() => { root.activate(root.pane-id); root.path-edit-start(root.pane-id); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
+                        glyph: "⟳";
+                        tip: Tr.refresh-panel;
+                        clicked => { root.refresh-panel(root.pane-id); }
                         hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
                     // ★ favorito (toggle): lleno si la carpeta ya está anclada.
@@ -1178,6 +1185,7 @@ export component FilePanel inherits FocusScope {
                                 padding: 0;
                                 Text {
                                     text: row.match-pre;
+                                    font-family: Theme.listings-font;
                                     color: row.is-dir ? Theme.folder-text : Theme.text;
                                     vertical-alignment: center;
                                     horizontal-stretch: 0;
@@ -1185,6 +1193,7 @@ export component FilePanel inherits FocusScope {
                                 }
                                 Text {
                                     text: row.match-mid;
+                                    font-family: Theme.listings-font;
                                     color: Theme.accent;
                                     font-weight: 700;
                                     vertical-alignment: center;
@@ -1192,6 +1201,7 @@ export component FilePanel inherits FocusScope {
                                 }
                                 Text {
                                     text: row.match-post;
+                                    font-family: Theme.listings-font;
                                     color: row.is-dir ? Theme.folder-text : Theme.text;
                                     vertical-alignment: center;
                                     horizontal-stretch: 0;
@@ -1200,6 +1210,7 @@ export component FilePanel inherits FocusScope {
                             }
                             if !(col.kind == 0 && root.rename-pos == i) && !(col.kind == 0 && row.filter-match): Text {
                                 text: row.cells[ci];
+                                font-family: Theme.listings-font;
                                 color: col.kind == 0
                                     ? (row.is-dir ? Theme.folder-text : Theme.text)
                                     : Theme.text-dim;

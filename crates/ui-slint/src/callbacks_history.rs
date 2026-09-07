@@ -489,4 +489,16 @@ pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dy
         let refresh_drives = refresh_drives.clone();
         ui.on_refresh_drives(move || refresh_drives());
     }
+    {
+        let ctrl = ctrl.clone();
+        let refresh_drives = refresh_drives.clone();
+        let start_timer = ctx.start_timer.clone();
+        let sync_layout = ctx.sync_layout.clone();
+        ui.on_refresh_all(move || {
+            ctrl.borrow_mut().refresh_all();
+            refresh_drives();
+            start_timer();
+            sync_layout();
+        });
+    }
 }

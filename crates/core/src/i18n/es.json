@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Tipografía",
+  "fonts.help": "Usa una sola familia para una interfaz coherente. Puedes separar listados y vista previa. Elige una sugerencia o escribe una fuente instalada y pulsa Aceptar. Si no está disponible, se usará una alternativa del sistema.",
+  "fonts.interface": "Interfaz: títulos, columnas y controles",
+  "fonts.listings": "Listados: nombres, fechas y tamaños",
+  "fonts.preview": "Vista previa de texto y código",
+  "fonts.system": "Predeterminada del sistema",
+  "fonts.inherit": "Heredar de la interfaz",
+  "refresh.panel": "Refrescar este panel (F5 en el panel activo)",
+  "refresh.all": "Refrescar todos los paneles, ramas abiertas y unidades",
   "spaces.recents": "Espacios recientes (esta sesión)",
   "retry.title": "Reintentar fallidos",
   "retry.filter": "Solo fallidos",

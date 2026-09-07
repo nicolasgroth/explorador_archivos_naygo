@@ -275,6 +275,15 @@ pub(crate) fn build_refresh_config_vm(
         // Fase 3: volcar todo a la UI. El SettingsVm se emite con los campos de íconos ya
         // rellenos antes de llamar a set_vm / set_settings_vm.
         let mut settings_vm = settings_vm;
+        let fonts = ctrl.borrow().config.settings.fonts.clone();
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.global::<Theme>()
+                .set_interface_font(fonts.interface.as_str().into());
+            ui.global::<Theme>()
+                .set_listings_font(fonts.listings_family().into());
+            ui.global::<Theme>()
+                .set_preview_font(fonts.preview_family().into());
+        }
         settings_vm.icon_rows = icon_rows_vm;
         settings_vm.icon_set_labels = icon_set_labels_vm;
         settings_vm.icon_set_tintable = icon_tintable;
@@ -289,6 +298,12 @@ pub(crate) fn build_refresh_config_vm(
             return;
         };
         cfg.set_vm(settings_vm);
+        cfg.global::<Theme>()
+            .set_interface_font(fonts.interface.as_str().into());
+        cfg.global::<Theme>()
+            .set_listings_font(fonts.listings_family().into());
+        cfg.global::<Theme>()
+            .set_preview_font(fonts.preview_family().into());
         // Poblar el campo de límite de recientes (no está en SettingsVm).
         cfg.set_recent_limit(recent_limit);
         cfg.set_frequent_dirs_limit(frequent_dirs_limit);

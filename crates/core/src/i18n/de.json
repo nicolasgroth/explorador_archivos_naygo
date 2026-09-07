@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Typografie",
+  "fonts.help": "Eine Schriftfamilie sorgt für eine einheitliche Oberfläche. Listen und Vorschau können abweichen. Wählen Sie einen Vorschlag oder geben Sie eine installierte Schrift ein und bestätigen Sie. Fehlende Schriften werden durch eine Systemschrift ersetzt.",
+  "fonts.interface": "Oberfläche: Titel, Spalten und Steuerelemente",
+  "fonts.listings": "Listen: Namen, Datum und Größen",
+  "fonts.preview": "Text- und Codevorschau",
+  "fonts.system": "Systemstandard",
+  "fonts.inherit": "Von der Oberfläche übernehmen",
+  "refresh.panel": "Dieses Panel aktualisieren (F5 im aktiven Panel)",
+  "refresh.all": "Alle Panels, geöffneten Zweige und Laufwerke aktualisieren",
   "spaces.recents": "Letzte Arbeitsbereiche (diese Sitzung)",
   "retry.title": "Fehlgeschlagene Dateien wiederholen",
   "retry.filter": "Nur Fehler",

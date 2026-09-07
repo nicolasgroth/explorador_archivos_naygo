@@ -25,6 +25,15 @@ where
     ui.global::<TextUtil>()
         .on_contains(|haystack, needle| haystack.as_str().contains(needle.as_str()));
     let tr = ui.global::<Tr>();
+    tr.set_fonts_title(c.t("fonts.title").into());
+    tr.set_fonts_help(c.t("fonts.help").into());
+    tr.set_fonts_interface(c.t("fonts.interface").into());
+    tr.set_fonts_listings(c.t("fonts.listings").into());
+    tr.set_fonts_preview(c.t("fonts.preview").into());
+    tr.set_fonts_system(c.t("fonts.system").into());
+    tr.set_fonts_inherit(c.t("fonts.inherit").into());
+    tr.set_refresh_panel(c.t("refresh.panel").into());
+    tr.set_refresh_all(c.t("refresh.all").into());
     tr.set_spaces_recents(c.t("spaces.recents").into());
     tr.set_retry_title(c.t("retry.title").into());
     tr.set_retry_filter(c.t("retry.filter").into());

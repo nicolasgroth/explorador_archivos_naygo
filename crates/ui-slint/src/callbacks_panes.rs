@@ -21,6 +21,17 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         area_of,
         ..
     } = ctx;
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
+        ui.on_refresh_panel(move |id| {
+            if ctrl.borrow_mut().refresh_pane(PaneId(id as u64)) {
+                start_timer();
+                sync_layout();
+            }
+        });
+    }
     // Bandeja temporal: selección, destinos y operaciones. Copiar/Mover abre primero el radar
     // de paneles Files visibles; «Otra carpeta…» queda como escape explícito en ese mismo radar.
     {

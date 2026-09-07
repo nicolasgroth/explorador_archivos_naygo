@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Typographie",
+  "fonts.help": "Une seule famille assure une interface cohérente. Les listes et l’aperçu peuvent différer. Choisissez une suggestion ou saisissez une police installée puis validez. Une police absente est remplacée par une police système.",
+  "fonts.interface": "Interface : titres, colonnes et commandes",
+  "fonts.listings": "Listes : noms, dates et tailles",
+  "fonts.preview": "Aperçu de texte et de code",
+  "fonts.system": "Police du système",
+  "fonts.inherit": "Hériter de l’interface",
+  "refresh.panel": "Actualiser ce panneau (F5 dans le panneau actif)",
+  "refresh.all": "Actualiser tous les panneaux, branches ouvertes et lecteurs",
   "spaces.recents": "Espaces récents (cette session)",
   "retry.title": "Réessayer les fichiers en échec",
   "retry.filter": "Échecs uniquement",

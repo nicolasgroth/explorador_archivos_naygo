@@ -12,6 +12,9 @@ use crate::workspace::template::TemplateStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod fonts;
+mod settings_writer;
+
 /// Versión del formato de los archivos de config; permite migrar/descartar. Público para que
 /// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
 /// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
@@ -167,6 +170,8 @@ pub struct Settings {
     pub bar_position: BarPosition,
     /// Botones de la barra solo con ícono (sin texto).
     pub icon_only: bool,
+    #[serde(default)]
+    pub fonts: fonts::FontPreferences,
     /// Set de íconos activo. `#[serde(default)]`: un settings.json v1 previo (sin
     /// este campo) conserva el resto y solo este cae al default (honra CONFIG_VERSION).
     #[serde(default = "default_icon_set")]
@@ -563,6 +568,7 @@ impl Default for Settings {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Top,
             icon_only: true,
+            fonts: Default::default(),
             icon_set: "lucide".into(),
             icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Glyphs,
@@ -763,7 +769,14 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
 
 /// Guarda settings.
 pub fn save_settings(dir: &Path, s: &Settings) {
-    write_json(&dir.join("settings.json"), s);
+    settings_writer::PendingSettings::prepare(dir, s).write();
+}
+
+/// Reserva el orden sin I/O y guarda en worker. Un guardado posterior (incluido el de
+/// cierre) invalida snapshots antiguos para que cambios rápidos no pierdan preferencias.
+pub fn save_settings_async(dir: &Path, s: &Settings) -> std::thread::JoinHandle<()> {
+    let pending = settings_writer::PendingSettings::prepare(dir, s);
+    std::thread::spawn(move || pending.write())
 }
 
 /// Carga el store de plantillas; si falta/corrupto → vacío.
@@ -878,6 +891,7 @@ mod tests {
             version: CONFIG_VERSION,
             bar_position: BarPosition::Side,
             icon_only: false,
+            fonts: Default::default(),
             icon_set: "mono".to_string(),
             icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Pack,

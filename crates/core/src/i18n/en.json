@@ -1,4 +1,13 @@
 {
+  "fonts.title": "Typography",
+  "fonts.help": "Use one family for a consistent interface. Listings and preview can differ. Choose a suggestion or type an installed font and press Accept. Unavailable fonts fall back to a system alternative.",
+  "fonts.interface": "Interface: headings, columns and controls",
+  "fonts.listings": "Listings: names, dates and sizes",
+  "fonts.preview": "Text and code preview",
+  "fonts.system": "System default",
+  "fonts.inherit": "Inherit from interface",
+  "refresh.panel": "Refresh this panel (F5 in the active panel)",
+  "refresh.all": "Refresh all panels, expanded branches and drives",
   "spaces.recents": "Recent spaces (this session)",
   "retry.title": "Retry failed files",
   "retry.filter": "Failures only",

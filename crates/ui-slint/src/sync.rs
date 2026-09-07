@@ -294,7 +294,18 @@ pub(crate) fn build_sync(
                     }
                     Some(PanePurpose::Basket) => {
                         let rows = c.basket_rows();
-                        m.models_for(id).basket.set_vec(rows);
+                        let model = &m.models_for(id).basket;
+                        // set_vec recreaba los TouchArea incluso al activar el panel:
+                        // el mouse-up ya no encontraba el mouse-down de esa misma fila.
+                        if model.row_count() != rows.len() {
+                            model.set_vec(rows);
+                        } else {
+                            for (index, row) in rows.into_iter().enumerate() {
+                                if model.row_data(index).as_ref() != Some(&row) {
+                                    model.set_row_data(index, row);
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }

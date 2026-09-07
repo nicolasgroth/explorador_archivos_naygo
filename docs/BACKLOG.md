@@ -2,20 +2,33 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
-> Última actualización: 2026-09-05.
+> Última actualización: 2026-09-07.
 
 ## Estado de partida
 
+- Revisión 2026-09-07 implementada y validada: fuentes por función en Apariencia;
+  refresco local/global; reparación del wake prematuro y descarte de lotes de watchers
+  antiguos; selección de bandeja estable; íconos de operaciones/unidades centrados.
+  Refresco global conserva ramas abiertas del árbol, también si desaparecen carpetas.
+  1.246 pruebas aprobadas + smoke nativo del watcher; Clippy sin advertencias, formato/diff
+  y diez idiomas correctos. Grafo: 7.550 nodos / 13.697 aristas.
+  Se mantiene 0.5.1, build `202609071600`. Instalador y portable regenerados el 2026-09-07
+  a las 16:28 / 16:27 (America/Santiago), con hashes y contenido verificados. Sin nuevas
+  fuentes/dependencias. Esta entrega integra el trabajo anterior y esta revisión en `main`
+  por fast-forward, sin reescribir historial. Pendiente validación instalada de Nicolás.
+  Ver [validación de esta revisión](VALIDACION-2026-09-07.md).
+
 - Respaldo solicitado publicado y comprobado en GitHub: `dcca05b1`, rama
   `fix/single-instance-y-bandeja`, 131 archivos. Incluye código, documentación y galería de demo;
-  excluye tmp/ personal, configuraciones y artefactos generados. No se modificó main.
+  excluye tmp/ personal, configuraciones y artefactos generados. En ese primer respaldo
+  todavía no se modificó main.
 - Revisión posterior de 0.5.1 implementada y validada: etiquetas/acciones secundarias de bandeja,
   espacios recientes de sesión y filtro/reintento revisado de fallidos. 1.238 pruebas aprobadas,
   seis smoke ignorados; Clippy/formato/diff/diez idiomas correctos. Grafo: 7.498 nodos / 13.618
   aristas. Registros `post-github-verified-tests.log`, `post-github-clippy-final.log` y
   `post-github-graphify-final.log` en target/agent-out. Distribución regenerada y verificada:
   instalador del 2026-09-05 a las 22:31 y portable a las 22:29 (America/Santiago); hashes en
-  [validación 0.5.1](VALIDACION-0.5.1.md). Continuación preparada para publicar en la misma rama.
+  [validación 0.5.1](VALIDACION-0.5.1.md). Publicada como `d3d492a5` en la misma rama.
   Pendiente sólo validación instalada de Nicolás para estos ajustes.
 
 - Entregada **0.5.1** (petición 2026-09-05): rutas con ancho natural y extremo actual

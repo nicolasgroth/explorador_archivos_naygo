@@ -1,0 +1,39 @@
+// Naygo — familia tipográfica: predeterminada, sugerencias o nombre instalado.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { LineEdit, Button } from "std-widgets.slint";
+import { ThemeCombo } from "theme-combo.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component FontChoice inherits VerticalLayout {
+    in property <string> label;
+    in property <string> family;
+    in property <string> default-label;
+    in property <string> sample-family: root.family;
+    callback apply(string);
+    vertical-stretch: 0;
+    height: title.preferred-height + 32px + sample.preferred-height + 8px;
+    spacing: 4px;
+    title := Text { text: root.label; color: Theme.text; height: self.preferred-height; }
+    HorizontalLayout {
+        height: 32px;
+        spacing: 6px;
+        ThemeCombo {
+            model: [root.default-label, "Segoe UI", "Segoe UI Variable", "Arial", "Tahoma", "Verdana", "Consolas", "Cascadia Mono"];
+            current-value: root.family == "" ? root.default-label : root.family;
+            selected(value) => { root.apply(self.current-index == 0 ? "" : value); }
+        }
+        field := LineEdit {
+            text: root.family;
+            placeholder-text: root.default-label;
+            accepted(text) => { root.apply(text); }
+        }
+        Button { text: Tr.dlg-accept; clicked => { root.apply(field.text); } }
+    }
+    sample := Text {
+        height: self.preferred-height;
+        text: "Naygo — 0123456789 · 2026-09-06 · 1.25 MB";
+        font-family: root.sample-family; color: Theme.text-dim; overflow: elide;
+    }
+}

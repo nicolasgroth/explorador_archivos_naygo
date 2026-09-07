@@ -520,6 +520,12 @@ impl ConfigCtrl {
         self.save();
     }
 
+    pub fn set_font(&mut self, role: i32, family: &str) {
+        self.settings.fonts.set(role, family);
+        // El ajuste se aplica en memoria; el guardado no bloquea el hilo de UI.
+        let _ = config::save_settings_async(&self.config_dir, &self.settings);
+    }
+
     /// Posición de la barra: 0 = arriba, 1 = al costado.
     pub fn set_bar_position(&mut self, pos: i32) {
         self.settings.bar_position = if pos == 1 {

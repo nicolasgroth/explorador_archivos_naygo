@@ -190,7 +190,7 @@ export component BasketPanel inherits Rectangle {
                     Image { source: row.icon; width: 18px; height: 18px; image-fit: contain; }
                     VerticalLayout {
                         alignment: center; spacing: 0px; horizontal-stretch: 1;
-                        Text { text: row.name; color: Theme.text; overflow: elide; }
+                        Text { text: row.name; font-family: Theme.listings-font; color: Theme.text; overflow: elide; }
                         Text {
                             text: (row.missing ? "[!] " : "") + row.path;
                             color: row.missing ? Theme.error : Theme.text-dim;
@@ -209,6 +209,7 @@ export component BasketPanel inherits Rectangle {
                 touch := TouchArea {
                     enabled: !root.drag-in-progress;
                     width: parent.width - 28px;
+                    height: parent.height;
                     property <bool> pressed-here: false;
                     property <bool> dragging: false;
                     property <length> press-x;

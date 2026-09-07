@@ -9,10 +9,14 @@
 
 use naygo_core::fs_model::Entry;
 use naygo_core::listing::DirEvent;
-use naygo_platform::dir_watch::{self, Waker, WatchHandle};
+use naygo_platform::dir_watch::{self, Waker};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 /// Un lote de eventos del watcher con la metadata YA resuelta en el hilo relay: la UI aplica
@@ -20,11 +24,45 @@ use std::time::Instant;
 /// así que un lote grande (Dropbox sincronizando) convertía el tick en una ráfaga de syscalls
 /// bloqueantes.
 pub struct WatchBatch {
+    generation: u64,
     pub events: Vec<DirEvent>,
     /// Entry pre-construido por ruta de evento que lo necesita (Created/Modified/Renamed→to);
     /// `None` = la ruta ya no existe al momento de resolver. Las rutas de Removed/Renamed→from
     /// no se resuelven (no hace falta).
     pub resolved: HashMap<PathBuf, Option<Entry>>,
+}
+
+/// Cerrar o navegar solo señala cancelación: no espera I/O ni el destructor nativo.
+struct RelayHandle {
+    canceled: Arc<AtomicBool>,
+    wake: Sender<Vec<DirEvent>>,
+}
+
+impl Drop for RelayHandle {
+    fn drop(&mut self) {
+        self.canceled.store(true, Ordering::Release);
+        let _ = self.wake.send(Vec::new());
+    }
+}
+
+fn forward_batch(
+    tx: &Sender<(u64, WatchBatch)>,
+    pane: u64,
+    generation: u64,
+    events: Vec<DirEvent>,
+    waker: &Waker,
+) -> bool {
+    let batch = WatchBatch {
+        generation,
+        resolved: resolve_entries(&events),
+        events,
+    };
+    if tx.send((pane, batch)).is_err() {
+        return false;
+    }
+    // Esta es la cola FINAL: cuando la UI despierta ya puede consumir la metadata.
+    waker();
+    true
 }
 
 /// Resuelve los `Entry` de las rutas de `events` que los necesitan (Created / Modified /
@@ -53,13 +91,15 @@ fn resolve_entries(events: &[DirEvent]) -> HashMap<PathBuf, Option<Entry>> {
 /// etiquetados por PaneId. Cada panel guarda su `WatchHandle` (Drop = deja de vigilar). Las
 /// rutas recién aparecidas se recuerdan con su instante para pintarlas resaltadas un tiempo.
 pub struct Watchers {
-    handles: HashMap<u64, WatchHandle>, // clave: PaneId.0
+    handles: HashMap<u64, RelayHandle>, // clave: PaneId.0
     tx: Sender<(u64, WatchBatch)>,
     rx: Receiver<(u64, WatchBatch)>,
     /// Rutas resaltadas (recién aparecidas) con el instante de aparición, por panel.
     fresh: HashMap<u64, Vec<(PathBuf, Instant)>>,
     /// La carpeta que vigila cada panel (para no re-vigilar la misma y detectar cambios).
     watched_dir: HashMap<u64, PathBuf>,
+    generations: HashMap<u64, u64>,
+    next_generation: u64,
 }
 
 impl Watchers {
@@ -71,6 +111,8 @@ impl Watchers {
             rx,
             fresh: HashMap::new(),
             watched_dir: HashMap::new(),
+            generations: HashMap::new(),
+            next_generation: 0,
         }
     }
 
@@ -81,17 +123,28 @@ impl Watchers {
         // un hilo liviano reenvía cada lote agregándole el PaneId. El MISMO hilo resuelve la
         // metadata de cada ruta (`resolve_entries`), así el tick de UI no hace syscalls.
         let (pane_tx, pane_rx) = channel::<Vec<DirEvent>>();
-        let h = dir_watch::watch(&dir, pane_tx, waker);
-        self.handles.insert(pane, h);
-        self.watched_dir.insert(pane, dir);
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.generations.insert(pane, generation);
+        // Despertar DESPUÉS de resolver metadata y publicar en el canal que lee la UI.
+        // El wake del productor original se adelantaba al relay y podía perderse en reposo.
+        let canceled = Arc::new(AtomicBool::new(false));
+        self.handles.insert(
+            pane,
+            RelayHandle {
+                canceled: canceled.clone(),
+                wake: pane_tx.clone(),
+            },
+        );
+        self.watched_dir.insert(pane, dir.clone());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            // Tanto registrar la carpeta como liberar el watcher pueden bloquear en red.
+            let _watch = dir_watch::watch(&dir, pane_tx, Arc::new(|| {}));
             while let Ok(events) = pane_rx.recv() {
-                let batch = WatchBatch {
-                    resolved: resolve_entries(&events),
-                    events,
-                };
-                if tx.send((pane, batch)).is_err() {
+                if canceled.load(Ordering::Acquire)
+                    || !forward_batch(&tx, pane, generation, events, &waker)
+                {
                     break;
                 }
             }
@@ -103,6 +156,7 @@ impl Watchers {
         self.handles.remove(&pane);
         self.fresh.remove(&pane);
         self.watched_dir.remove(&pane);
+        self.generations.remove(&pane);
     }
 
     /// La carpeta que está vigilando el panel `pane` ahora mismo (para detectar cambios de
@@ -121,7 +175,10 @@ impl Watchers {
     pub fn drain(&mut self) -> Vec<(u64, WatchBatch)> {
         let mut out = Vec::new();
         while let Ok(item) = self.rx.try_recv() {
-            out.push(item);
+            // Un relay antiguo puede terminar después de navegar o cerrar el panel.
+            if self.generations.get(&item.0) == Some(&item.1.generation) {
+                out.push(item);
+            }
         }
         out
     }
@@ -176,6 +233,77 @@ impl Default for Watchers {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn wake_observes_final_batch_with_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("new.txt");
+        std::fs::write(&file, b"ready").unwrap();
+        let (tx, rx) = channel();
+        let rx = std::sync::Mutex::new(rx);
+        let waker: Waker = Arc::new(move || {
+            let (pane, batch): (u64, WatchBatch) = rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .expect("wake must follow enqueue");
+            assert_eq!(pane, 7);
+            assert_eq!(batch.generation, 3);
+            assert_eq!(
+                batch
+                    .resolved
+                    .values()
+                    .next()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .size,
+                Some(5)
+            );
+        });
+        assert!(forward_batch(
+            &tx,
+            7,
+            3,
+            vec![DirEvent::Created(file)],
+            &waker
+        ));
+    }
+
+    #[test]
+    fn old_generation_and_closed_pane_are_discarded() {
+        let mut watchers = Watchers::new();
+        watchers.generations.insert(7, 2);
+        for (pane, generation) in [(7, 1), (7, 2), (8, 2)] {
+            watchers
+                .tx
+                .send((
+                    pane,
+                    WatchBatch {
+                        generation,
+                        events: vec![],
+                        resolved: HashMap::new(),
+                    },
+                ))
+                .unwrap();
+        }
+        let batches = watchers.drain();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1.generation, 2);
+        watchers.unwatch(7);
+        watchers
+            .tx
+            .send((
+                7,
+                WatchBatch {
+                    generation: 2,
+                    events: vec![],
+                    resolved: HashMap::new(),
+                },
+            ))
+            .unwrap();
+        assert!(watchers.drain().is_empty());
+    }
 
     #[test]
     fn fresh_caduca_por_tiempo() {

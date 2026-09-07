@@ -100,6 +100,11 @@ incluidos, temas y sets de íconos personalizables.
   ventana recuerda tamaño, posición y maximizado entre sesiones.
 - Configuración completa: apariencia, atajos, previsualización, plantilla de tabla, opciones
   avanzadas y sección "Acerca de".
+- Tipografía por función en Apariencia: fuente del sistema para la interfaz, listados que
+  heredan de ella y fuente monoespaciada para el preview. Cada grupo admite otra familia
+  instalada; no se descargan ni distribuyen fuentes adicionales.
+- Refresco local desde cada panel (F5 en el activo) y global desde la barra superior:
+  paneles abiertos, ramas desplegadas y unidades, sin recorrer todo el disco.
 
 ## De simple a multipanel
 

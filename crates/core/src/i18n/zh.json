@@ -1,4 +1,13 @@
 {
+  "fonts.title": "字体",
+  "fonts.help": "建议使用同一字体保持界面一致。列表和预览可单独设置。选择建议字体或输入已安装的字体名称并确认。不可用时使用系统替代字体。",
+  "fonts.interface": "界面：标题、列和控件",
+  "fonts.listings": "列表：名称、日期和大小",
+  "fonts.preview": "文本和代码预览",
+  "fonts.system": "系统默认",
+  "fonts.inherit": "继承界面设置",
+  "refresh.panel": "刷新此面板（活动面板中按 F5）",
+  "refresh.all": "刷新所有面板、已展开分支和驱动器",
   "spaces.recents": "最近的工作区（本次会话）",
   "retry.title": "重试失败的文件",
   "retry.filter": "仅显示失败",

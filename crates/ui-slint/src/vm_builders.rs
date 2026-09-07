@@ -236,6 +236,9 @@ pub(crate) fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         .map(|s| SharedString::from(s.id.as_str()))
         .collect();
     SettingsVm {
+        interface_font: s.fonts.interface.as_str().into(),
+        listings_font: s.fonts.listings.as_str().into(),
+        preview_font: s.fonts.preview.as_str().into(),
         bar_position: if s.bar_position == BarPosition::Side {
             1
         } else {
