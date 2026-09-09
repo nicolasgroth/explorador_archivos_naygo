@@ -1,0 +1,21 @@
+# Naygo — source snapshot for the isolated preview/navigation review branch.
+# Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+# SPDX-License-Identifier: MIT
+name: Preview implementation review
+on:
+  push:
+    branches: [feat/responsive-previews-and-paths]
+permissions:
+  contents: read
+jobs:
+  source-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export exact reviewed source
+        run: git archive --format=zip --output=naygo-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: naygo-review-source
+          path: naygo-source.zip
+          retention-days: 7
