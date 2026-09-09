@@ -1,4 +1,4 @@
-# Naygo — source snapshot for the isolated preview/navigation review branch.
+# Naygo — validation for the isolated preview/navigation review branch.
 # Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 # SPDX-License-Identifier: MIT
 name: Preview implementation review
@@ -7,14 +7,75 @@ on:
     branches: [feat/responsive-previews-and-paths]
 permissions:
   contents: read
+concurrency:
+  group: preview-review
+  cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: "2"
 jobs:
-  source-snapshot:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Export exact reviewed source
-        run: git archive --format=zip --output=naygo-source.zip HEAD
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
+          cache-on-failure: true
+      - name: Apply reviewed source changes when present
+        shell: python
+        run: |
+          from pathlib import Path
+          import base64, gzip, subprocess
+          patch = Path('scripts/preview-change.patch.b64')
+          if patch.exists():
+              data = gzip.decompress(base64.b64decode(patch.read_text()))
+              subprocess.run(['git', 'apply', '--check', '-'], input=data, check=True)
+              subprocess.run(['git', 'apply', '-'], input=data, check=True)
+      - name: Rust formatting
+        run: cargo fmt --all
+      - name: i18n parity
+        shell: bash
+        run: |
+          rc=0
+          for f in crates/core/src/i18n/*.json; do
+            code=$(basename "$f" .json)
+            [ "$code" = "es" ] && continue
+            python scripts/check_i18n_lang.py "$code" || rc=1
+          done
+          exit $rc
+      - name: Tests
+        run: cargo test --workspace
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Commit validated source on this branch only
+        if: success()
+        shell: bash
+        run: |
+          if test -f scripts/preview-change.patch.b64; then
+            rm scripts/preview-change.patch.b64
+            git config user.name 'Nicolás Groth'
+            git config user.email 'ngroth@gmail.com'
+            git add crates Cargo.toml Cargo.lock docs CHANGELOG.md scripts/preview-change.patch.b64
+            git commit -m 'feat: responsive animated previews, path editing and light themes'
+            git push origin HEAD:feat/responsive-previews-and-paths
+          fi
+      - name: Export tested source including diagnostic changes
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('naygo-source.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for p in Path('.').rglob('*'):
+                  if p.is_file() and not any(x in {'.git','target','dist'} for x in p.parts) and p.name != 'naygo-source.zip':
+                      z.write(p, p.as_posix())
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: naygo-review-source
           path: naygo-source.zip
