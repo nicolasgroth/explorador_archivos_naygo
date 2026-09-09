@@ -1,5 +1,4 @@
-# Naygo — validation for the isolated preview/navigation review branch.
-# Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+# Naygo — isolated Windows validation. Copyright (c) 2026 Nicolás Groth. ISGroth.
 # SPDX-License-Identifier: MIT
 name: Preview implementation review
 on:
@@ -26,17 +25,36 @@ jobs:
         with:
           save-if: true
           cache-on-failure: true
-      - name: Apply reviewed source changes when present
+      - name: Apply reviewed changes with source hashes
+        id: apply
         shell: python
         run: |
-          from pathlib import Path
-          import base64, gzip, subprocess
-          patch = Path('scripts/preview-change.patch.b64')
-          if patch.exists():
-              data = gzip.decompress(base64.b64decode(patch.read_text()))
-              subprocess.run(['git', 'apply', '--check', '-'], input=data, check=True)
-              subprocess.run(['git', 'apply', '-'], input=data, check=True)
+          from pathlib import Path, PurePosixPath
+          import base64, hashlib, json, lzma, subprocess
+          parts = sorted(Path('scripts').glob('preview-change.[0-9].b64'))
+          if parts:
+              assert len(parts) == 4, 'Incomplete source transfer'
+              changes = json.loads(lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in parts))))
+              writes = []
+              for name, change in changes.items():
+                  path = PurePosixPath(name)
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert name.startswith(('crates/', 'docs/')) or name in ('Cargo.toml', 'CHANGELOG.md')
+                  source = subprocess.run(['git', 'show', 'HEAD:' + name], capture_output=True)
+                  old = source.stdout if source.returncode == 0 else b''
+                  assert hashlib.sha256(old).hexdigest() == change['base'], 'Base mismatch: ' + name
+                  data = b''.join(old[x[0]:x[0]+x[1]] if isinstance(x, list) else base64.b64decode(x['base64']) if isinstance(x, dict) else x.encode('utf-8') for x in change['ops'])
+                  assert hashlib.sha256(data).hexdigest() == change['result'], 'Result mismatch: ' + name
+                  writes.append((Path(name), data))
+              for path, data in writes:
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(data)
+              print('Applied', len(writes), 'verified source files')
+          fix = Path('scripts/preview-fixes.py')
+          if fix.exists():
+              subprocess.run(['python', str(fix)], check=True)
       - name: Rust formatting
+        id: format
         run: cargo fmt --all
       - name: i18n parity
         shell: bash
@@ -49,34 +67,67 @@ jobs:
           done
           exit $rc
       - name: Tests
-        run: cargo test --workspace
+        id: tests
+        shell: python
+        run: |
+          import subprocess, sys
+          from pathlib import Path
+          Path('validation').mkdir(exist_ok=True)
+          with open('validation/tests.log', 'wb') as log:
+              p = subprocess.Popen(['cargo', 'test', '--workspace', '--no-fail-fast'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              for line in p.stdout:
+                  log.write(line); log.flush(); sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
+              sys.exit(p.wait())
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        id: clippy
+        if: always() && steps.format.outcome == 'success'
+        shell: python
+        run: |
+          import subprocess, sys
+          from pathlib import Path
+          Path('validation').mkdir(exist_ok=True)
+          with open('validation/clippy.log', 'wb') as log:
+              p = subprocess.Popen(['cargo', 'clippy', '--workspace', '--all-targets', '--', '-D', 'warnings'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              for line in p.stdout:
+                  log.write(line); log.flush(); sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
+              sys.exit(p.wait())
       - name: Commit validated source on this branch only
         if: success()
         shell: bash
         run: |
-          if test -f scripts/preview-change.patch.b64; then
-            rm scripts/preview-change.patch.b64
+          if test -f scripts/preview-change.0.b64; then
+            rm scripts/preview-change.*.b64
+            rm -f scripts/preview-fixes.py
             git config user.name 'Nicolás Groth'
             git config user.email 'ngroth@gmail.com'
-            git add crates Cargo.toml Cargo.lock docs CHANGELOG.md scripts/preview-change.patch.b64
-            git commit -m 'feat: responsive animated previews, path editing and light themes'
+            git add crates Cargo.toml Cargo.lock docs CHANGELOG.md scripts
+            git commit -m 'feat: responsive animated previews, editable paths and light themes'
             git push origin HEAD:feat/responsive-previews-and-paths
           fi
-      - name: Export tested source including diagnostic changes
+      - name: Export source and validation evidence
         if: always()
         shell: python
         run: |
           from pathlib import Path
-          import zipfile
-          with zipfile.ZipFile('naygo-source.zip','w',zipfile.ZIP_DEFLATED) as z:
-              for p in Path('.').rglob('*'):
-                  if p.is_file() and not any(x in {'.git','target','dist'} for x in p.parts) and p.name != 'naygo-source.zip':
-                      z.write(p, p.as_posix())
+          import os, subprocess, zipfile
+          Path('validation').mkdir(exist_ok=True)
+          Path('validation/commit.txt').write_bytes(subprocess.check_output(['git', 'rev-parse', 'HEAD']))
+          with zipfile.ZipFile('naygo-source.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for root, dirs, files in os.walk('.'):
+                  dirs[:] = [d for d in dirs if d not in {'.git', 'target', 'dist'}]
+                  for name in files:
+                      p = Path(root) / name
+                      if p.name != 'naygo-source.zip':
+                          z.write(p, p.as_posix())
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: naygo-review-source
           path: naygo-source.zip
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: naygo-validation-logs
+          path: validation/
           retention-days: 7
