@@ -23,6 +23,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
+          key: animated-preview-20260909-v2
           save-if: true
           cache-on-failure: true
       - name: Apply reviewed changes with source hashes
@@ -50,9 +51,9 @@ jobs:
                   path.parent.mkdir(parents=True, exist_ok=True)
                   path.write_bytes(data)
               print('Applied', len(writes), 'verified source files')
-          fix = Path('scripts/preview-fixes.py')
-          if fix.exists():
-              subprocess.run(['python', str(fix)], check=True)
+          for fix in [Path('scripts/preview-fixes.py'), *sorted(Path('scripts').glob('preview-fixes-*.py'))]:
+              if fix.exists():
+                  subprocess.run(['python', str(fix)], check=True)
       - name: Rust formatting
         id: format
         run: cargo fmt --all
@@ -73,11 +74,20 @@ jobs:
           import subprocess, sys
           from pathlib import Path
           Path('validation').mkdir(exist_ok=True)
+          failed = False
           with open('validation/tests.log', 'wb') as log:
-              p = subprocess.Popen(['cargo', 'test', '--workspace', '--no-fail-fast'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-              for line in p.stdout:
-                  log.write(line); log.flush(); sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
-              sys.exit(p.wait())
+              for package in ['naygo-ui-slint', 'naygo-core', 'naygo-platform']:
+                  p = subprocess.Popen(['cargo', 'test', '-p', package, '--no-fail-fast'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                  for line in p.stdout:
+                      log.write(line); log.flush(); sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
+                  failed = p.wait() != 0 or failed
+          sys.exit(1 if failed else 0)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: naygo-test-results
+          path: validation/tests.log
+          retention-days: 7
       - name: Clippy
         id: clippy
         if: always() && steps.format.outcome == 'success'
@@ -97,7 +107,7 @@ jobs:
         run: |
           if test -f scripts/preview-change.0.b64; then
             rm scripts/preview-change.*.b64
-            rm -f scripts/preview-fixes.py
+            rm -f scripts/preview-fixes*.py
             git config user.name 'Nicolás Groth'
             git config user.email 'ngroth@gmail.com'
             git add crates Cargo.toml Cargo.lock docs CHANGELOG.md scripts
