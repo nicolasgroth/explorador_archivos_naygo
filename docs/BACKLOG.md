@@ -34,6 +34,13 @@
 >   el comportamiento de esa advertencia y regenerar dist; no se afirma protección universal.
 >   La suite local completa pasó con 1.533 pruebas, nueve ignoradas y Clippy sin avisos bajo el
 >   supervisor de memoria; aún faltan la validación remota y el build de distribución.
+>   Runner [41213425597](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41213425597):
+>   los dos tests originalmente fallidos pasan, pero el test nuevo de alias 8.3 falla al restaurar
+>   con el nombre largo. La restauración pasa el nombre abreviado como nombre explícito; corregir
+>   preservando identidad y sin pisar destinos, y volver a validar el gate.
+>   Ajuste posterior: se consulta el nombre largo antes del borrado y se conserva en el recibo;
+>   si Windows no permite consultarlo, se detiene la operación. Las 18 pruebas locales de
+>   Papelera y Clippy de plataforma pasan; el alias 8.3 distinto necesita validación del runner.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.

@@ -175,6 +175,7 @@ pub fn move_to_trash_with_progress(
 
             let recycled_items = Arc::new(Mutex::new(Vec::new()));
             let source_aliases = Arc::new(Mutex::new(HashMap::new()));
+            let mut restore_paths = HashMap::new();
             let sink: IFileOperationProgressSink = ProgressSink {
                 progress,
                 cancelled,
@@ -187,6 +188,13 @@ pub fn move_to_trash_with_progress(
                 .map_err(|e| TrashError::Failed(e.to_string()))?;
 
             for path in &paths {
+                // Expandir el nombre antes de reciclarlo: el alias 8.3 desaparece al moverlo a
+                // Papelera y usarlo como nombre de destino restauraría otro nombre. No resolver
+                // el destino de junctions ni enlaces. Si no se puede consultar, no borrar.
+                let restore_path = long_path_name(path).map_err(|error| {
+                    TrashError::Failed(format!("no se pudo obtener el nombre original: {error}"))
+                })?;
+                restore_paths.insert(path.clone(), restore_path);
                 let wide: Vec<u16> = path
                     .as_os_str()
                     .encode_wide()
@@ -280,7 +288,7 @@ pub fn move_to_trash_with_progress(
                 Err(error) => Some(error.to_string()),
                 Ok(false) => None,
             });
-            let (receipts, failures) = classify_delete_results(
+            let (mut receipts, failures) = classify_delete_results(
                 &paths,
                 &callback_results,
                 &still_present,
@@ -291,20 +299,23 @@ pub fn move_to_trash_with_progress(
             // El nombre de parsing proviene de `psiNewlyCreated` en PostDeleteItem y puede
             // resolver el ítem aunque la enumeración de FOLDERID_RecycleBinFolder esté vacía o
             // desactualizada. Solo se registran recibos cuya identidad fue confirmada.
-            if let Ok(mut cache) = recycle_item_names().lock() {
-                for receipt in &receipts {
-                    if let Some(item_name) = callback_results
-                        .iter()
-                        .find(|item| {
-                            item.original
-                                .as_ref()
-                                .is_some_and(|path| windows_paths_equal(path, &receipt.original))
-                        })
-                        .and_then(|item| item.parsing_name.as_ref())
-                    {
-                        cache.insert(receipt.original.clone(), item_name.clone());
-                    }
+            for receipt in &mut receipts {
+                let item_name = callback_results
+                    .iter()
+                    .find(|item| {
+                        item.original
+                            .as_ref()
+                            .is_some_and(|path| windows_paths_equal(path, &receipt.original))
+                    })
+                    .and_then(|item| item.parsing_name.as_ref());
+                let restore_path = restore_paths
+                    .get(&receipt.original)
+                    .cloned()
+                    .unwrap_or_else(|| receipt.original.clone());
+                if let (Some(item_name), Ok(mut cache)) = (item_name, recycle_item_names().lock()) {
+                    cache.insert(restore_path.clone(), item_name.clone());
                 }
+                receipt.original = restore_path;
             }
             if failures.is_empty() {
                 Ok(receipts)
@@ -318,6 +329,31 @@ pub fn move_to_trash_with_progress(
         }
         result
     }
+}
+
+#[cfg(windows)]
+fn long_path_name(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // GetLongPathName expande componentes 8.3; no hace canonicalize del destino de un enlace.
+    let required = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), None) };
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut buffer = vec![0u16; required as usize];
+    let written = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) };
+    if written == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if written as usize >= buffer.len() {
+        return Err(std::io::Error::other("la ruta cambió durante la consulta"));
+    }
+    Ok(PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..written as usize],
+    )))
 }
 
 /// Convierte rutas existentes a su forma absoluta para las API Shell, que no comparten la

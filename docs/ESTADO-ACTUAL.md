@@ -33,6 +33,15 @@ Faltan validación del runner, comportamiento de advertencia del Shell y build a
 afirma que esta configuración impida el borrado permanente en todos los proveedores.
 Validación local posterior: 1.533 pruebas aprobadas, nueve ignoradas y Clippy sin avisos; el
 supervisor registró un pico de 8,77 GiB. La validación remota y el empaquetado siguen pendientes.
+La corrida remota [41213425597](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41213425597)
+confirmó que pasan los dos casos originales de Papelera, pero falla el test nuevo de restauración
+con alias 8.3: el origen se recicla y se identifica, pero no aparece con su nombre largo original.
+La restauración usa el componente abreviado como nombre explícito de destino; falta corregirlo y
+volver a ejecutar el gate. El job Linux vuelve a fallar y el benchmark Windows pasa.
+El ajuste posterior consulta el nombre largo antes de reciclar y lo conserva en el recibo; si no
+puede obtenerlo, aborta. Las 18 pruebas locales y Clippy de plataforma pasan, aunque el volumen
+local no ofreció un alias 8.3 distinto. Falta repetir el runner y generar la distribución: se
+interrumpió el build anterior antes de empaquetar al detectarse el fallo adicional.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 

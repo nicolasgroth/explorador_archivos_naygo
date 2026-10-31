@@ -414,6 +414,8 @@ deshacer de los que sí se reciclaron e identifica por separado los que fallaron
 Naygo solo registra como recuperable un elemento cuya identidad en la Papelera pudo confirmar.
 Si el origen desapareció pero esa identidad no se pudo confirmar, el historial lo indica: revisa
 la Papelera antes de actuar. Windows puede pedir confirmación si solo ofrece borrado permanente.
+Antes de reciclar, Naygo consulta el nombre largo para poder restaurarlo; si Windows no permite
+obtenerlo, la operación se detiene y muestra el error.
 Al deshacer, la ruta original debe estar libre; cualquier entrada existente, incluso un junction
 colgante, se considera ocupada para evitar reemplazarla.
 El historial de `Ctrl+Shift+V` vive solo durante la sesión y guarda rutas de archivos;
