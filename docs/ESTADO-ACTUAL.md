@@ -4,6 +4,18 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
+## CI remota — primera evidencia nativa, 2026-10-31
+
+La corrida [41204625942](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41204625942)
+se lanzó sobre `68d3fc38` después del respaldo remoto. En Ubuntu 26.04 el job `linux-native` falló
+en las pruebas del core: 970 aprobadas y 27 fallidas. Los fallos incluyen supuestos de rutas Windows
+y pruebas que comprueban persistencia de rutas no UTF-8; todavía no se ha atribuido cada uno a un
+defecto de producto o de test. El gate Windows y el benchmark aún ejecutaban al registrar esta nota.
+En el test de búsquedas guardadas se comprobó una causa de prueba: busca el fragmento JSON compacto
+`"encoding":"unix-bytes-v1"`, mientras el serializador usa formato pretty con espacios; el test
+falla antes de verificar el round-trip y no demuestra por sí mismo pérdida de datos.
+Logs del job Linux: `target/agent-out/ci-linux-41204625942.log` (local, no versionado).
+
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
 El árbol local agrega una opción para mostrar el color de materiales base por objeto o triángulo,

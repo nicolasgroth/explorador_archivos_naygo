@@ -4,6 +4,15 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] L-03/W-12: la corrida remota [41204625942](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41204625942)
+>   sobre `68d3fc38` ejecutó pruebas nativas en Ubuntu 26.04: core terminó con 970 aprobadas y
+>   27 fallidas. Hay casos con supuestos de rutas Windows y pruebas de serialización de rutas no
+>   UTF-8. Falta determinar para cada fallo si es defecto de producto o de la prueba; el job no
+>   alcanzó el resto de sus pasos. Windows sigue priorizado y el gate Windows de esa corrida sigue
+>   en ejecución al registrar esta nota.
+>   Causa comprobada en `saved_search::tests::non_utf8_roots_round_trip_without_changing_utf8_wire_shape`:
+>   la aserción busca JSON compacto, pero `to_bytes` usa `serde_json::to_vec_pretty`; la aserción
+>   falla por espacios antes de comprobar el round-trip. No atribuir pérdida de datos a ese fallo.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.
