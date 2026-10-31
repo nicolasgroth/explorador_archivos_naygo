@@ -20,6 +20,12 @@ UI para permitir registrar nuevamente el receptor; las 20 pruebas focalizadas y 
 Una prueba Win32 con ventana oculta comprobó también que el worker instala el target y lo revoca
 al cerrar el guard. No simula un arrastre ni reemplaza la prueba real con Slint y 7-Zip.
 
+Medición exploratoria local en debug, una ejecución con archivos sintéticos de un byte:
+1.000 archivos, captura 363,90 ms y staging 866,70 ms; 10.000 archivos, captura 3.682,05 ms y
+staging 7.633,05 ms. La prueba total tardó 288,02 s e incluye creación y limpieza de ambos árboles,
+sin medición separada de esas fases. No incluye extracción de 7-Zip, UI ni unidades de red; no es
+un benchmark comparativo. La limpieza de staging productivo ocurre en un worker.
+
 Pendientes obligatorios: probar detención y cierre con proveedores lentos, arrastre desde Explorer, arrastre
 interno, archivos virtuales, selecciones mixtas, colisiones y árboles grandes. Revisar el registro
 asíncrono y sus reintentos; validar los límites en máquinas modestas; medir UI y memoria. No

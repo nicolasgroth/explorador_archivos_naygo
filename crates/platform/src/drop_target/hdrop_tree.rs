@@ -269,6 +269,29 @@ impl CapturedDrop {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "medición exploratoria de filesystem; ejecutar explícitamente"]
+    fn measure_capture_and_staging_for_many_files() {
+        for count in [1_000usize, 10_000] {
+            let source = source_fixture();
+            let folder = source.path().join("folder");
+            fs::create_dir(&folder).unwrap();
+            for index in 0..count {
+                fs::write(folder.join(format!("{index:05}.txt")), b"x").unwrap();
+            }
+            let destination = tempfile::tempdir().unwrap();
+            let token = CancellationToken::new();
+            let started = std::time::Instant::now();
+            let mut captured = capture(&[folder], &token).unwrap();
+            let capture_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            captured.release_directories();
+            let started = std::time::Instant::now();
+            captured.materialize(destination.path(), &token).unwrap();
+            let staging_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            eprintln!("files={count} capture_ms={capture_ms:.2} staging_ms={staging_ms:.2}");
+        }
+    }
+
     fn source_fixture() -> tempfile::TempDir {
         tempfile::Builder::new()
             .prefix("7zE-naygo-test-")
