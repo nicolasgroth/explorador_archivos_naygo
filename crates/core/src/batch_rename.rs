@@ -17,6 +17,7 @@
 
 use crate::clipboard::naming::civil_from_epoch;
 use crate::ops::is_valid_name;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 /// Transformación de mayúsculas aplicada al final del pipeline.
@@ -79,6 +80,9 @@ pub enum RowStatus {
     Unchanged,
     /// Nombre inválido (caracteres prohibidos, vacío) o regex mala — con motivo.
     Invalid(String),
+    /// El nombre contiene unidades que la interfaz textual actual no puede representar.
+    /// Se conserva una forma escapada para mostrarlo y se bloquea el renombrado.
+    Unrepresentable,
     /// Chocaría con otro resultado del lote, con un archivo existente que no se
     /// libera, o forma un ciclo (swap) — no soportado en v1.
     Collision,
@@ -113,7 +117,11 @@ pub fn preview(
                         path: it.path.clone(),
                         old_name: file_name_of(it),
                         new_name: String::new(),
-                        status: RowStatus::Invalid(format!("regex: {e}")),
+                        status: if is_filename_representable(it) {
+                            RowStatus::Invalid(format!("regex: {e}"))
+                        } else {
+                            RowStatus::Unrepresentable
+                        },
                     })
                     .collect();
             }
@@ -127,6 +135,14 @@ pub fn preview(
         .enumerate()
         .map(|(i, it)| {
             let old_name = file_name_of(it);
+            if !is_filename_representable(it) {
+                return PreviewRow {
+                    path: it.path.clone(),
+                    old_name,
+                    new_name: String::new(),
+                    status: RowStatus::Unrepresentable,
+                };
+            }
             let counter = spec.counter_start + (i as i64) * spec.counter_step;
             let new_name = compute_name(
                 &old_name,
@@ -163,7 +179,9 @@ pub fn can_apply(rows: &[PreviewRow]) -> bool {
         match r.status {
             RowStatus::Ok => any_change = true,
             RowStatus::Unchanged => {}
-            RowStatus::Invalid(_) | RowStatus::Collision => return false,
+            RowStatus::Invalid(_) | RowStatus::Unrepresentable | RowStatus::Collision => {
+                return false;
+            }
         }
     }
     any_change
@@ -182,10 +200,73 @@ pub fn execution_order(rows: &[PreviewRow]) -> Vec<usize> {
 // ── internos ────────────────────────────────────────────────────────────────
 
 fn file_name_of(it: &BatchItem) -> String {
-    it.path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    let Some(name) = it.path.file_name() else {
+        return String::new();
+    };
+    #[cfg(unix)]
+    if let Some(name) = name.to_str() {
+        return name.to_owned();
+    }
+    display_file_name(name)
+}
+
+fn is_filename_representable(it: &BatchItem) -> bool {
+    let Some(name) = it.path.file_name() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        name.to_str().is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+fn display_file_name(name: &OsStr) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut display = String::new();
+        let mut remaining = name.as_bytes();
+        while !remaining.is_empty() {
+            match std::str::from_utf8(remaining) {
+                Ok(valid) => {
+                    append_escaped_text(&mut display, valid);
+                    break;
+                }
+                Err(error) => {
+                    let valid_len = error.valid_up_to();
+                    if valid_len > 0 {
+                        // `valid_up_to` identifies a valid UTF-8 prefix.
+                        let valid = std::str::from_utf8(&remaining[..valid_len])
+                            .expect("valid_up_to must be a UTF-8 boundary");
+                        append_escaped_text(&mut display, valid);
+                    }
+                    let invalid_len = error.error_len().unwrap_or(remaining.len() - valid_len);
+                    for byte in &remaining[valid_len..valid_len + invalid_len] {
+                        use std::fmt::Write as _;
+                        let _ = write!(display, "\\x{byte:02X}");
+                    }
+                    remaining = &remaining[valid_len + invalid_len..];
+                }
+            }
+        }
+        display
+    }
+    #[cfg(not(unix))]
+    {
+        name.to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(unix)]
+fn append_escaped_text(output: &mut String, text: &str) {
+    for character in text.chars() {
+        output.extend(character.escape_default());
+    }
 }
 
 /// Pipeline de un nombre: plantilla → buscar/reemplazar → mayúsculas → re-adjuntar
@@ -606,5 +687,40 @@ mod tests {
             0,
         );
         assert!(can_apply(&rows));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_filename_is_escaped_and_cannot_be_renamed() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let item = BatchItem {
+            path: PathBuf::from(OsString::from_vec(b"/tmp/foto-\xff.jpg".to_vec())),
+            modified_epoch_secs: None,
+        };
+        let rows = preview(&[item], &BatchSpec::default(), &[], 0);
+
+        assert_eq!(rows[0].old_name, r"foto-\xFF.jpg");
+        assert!(rows[0].new_name.is_empty());
+        assert_eq!(rows[0].status, RowStatus::Unrepresentable);
+        assert!(!can_apply(&rows));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn valid_posix_backslash_is_preserved_by_default_template() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let item = BatchItem {
+            path: PathBuf::from(OsString::from_vec(b"/tmp/foto\\b.jpg".to_vec())),
+            modified_epoch_secs: None,
+        };
+        let rows = preview(&[item], &BatchSpec::default(), &[], 0);
+
+        assert_eq!(rows[0].old_name, r"foto\b.jpg");
+        assert_eq!(rows[0].new_name, r"foto\b.jpg");
+        assert_eq!(rows[0].status, RowStatus::Unchanged);
     }
 }

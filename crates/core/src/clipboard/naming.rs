@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: MIT
 
 //! Expande plantillas de nombre como "pegado {fecha}" sin depender de `chrono`.
-//! `{fecha}` → "YYYY-MM-DD HH-MM" en UTC, derivada de los segundos epoch (determinista
+//! `{fecha}` → "YYYY-MM-DD HH.MM.SS" en UTC, derivada de los segundos epoch (determinista
 //! y testeable). Otros `{...}` desconocidos se dejan literales.
 
-/// Expande `{fecha}` en `template` por "YYYY-MM-DD HH-MM" (UTC) derivado de
+/// Expande `{fecha}` en `template` por "YYYY-MM-DD HH.MM.SS" (UTC) derivado de
 /// `now_secs` (segundos epoch). Tokens `{...}` desconocidos se dejan literales.
 pub fn expand_name_template(template: &str, now_secs: u64) -> String {
-    let (y, mo, d, h, mi, _s) = civil_from_epoch(now_secs);
-    let fecha = format!("{y:04}-{mo:02}-{d:02} {h:02}-{mi:02}");
+    let (y, mo, d, h, mi, s) = civil_from_epoch(now_secs);
+    let fecha = format!("{y:04}-{mo:02}-{d:02} {h:02}.{mi:02}.{s:02}");
     template.replace("{fecha}", &fecha)
 }
 
@@ -47,7 +47,7 @@ mod tests {
         // 1970-01-01 00:00 UTC
         assert_eq!(
             expand_name_template("pegado {fecha}", 0),
-            "pegado 1970-01-01 00-00"
+            "pegado 1970-01-01 00.00.00"
         );
     }
 
@@ -56,7 +56,7 @@ mod tests {
         // 2021-01-01 00:00:00 UTC = 1609459200
         assert_eq!(
             expand_name_template("x {fecha}", 1_609_459_200),
-            "x 2021-01-01 00-00"
+            "x 2021-01-01 00.00.00"
         );
     }
 
@@ -65,13 +65,23 @@ mod tests {
         // 2021-01-01 13:45:00 UTC = 1609459200 + 13*3600 + 45*60 = 1609508700
         assert_eq!(
             expand_name_template("{fecha}", 1_609_508_700),
-            "2021-01-01 13-45"
+            "2021-01-01 13.45.00"
         );
     }
 
     #[test]
     fn sin_token_queda_igual() {
         assert_eq!(expand_name_template("captura", 123), "captura");
+    }
+
+    #[test]
+    fn seconds_distinguish_pastes_and_roll_into_next_minute() {
+        assert_eq!(expand_name_template("{fecha}", 59), "1970-01-01 00.00.59");
+        assert_eq!(expand_name_template("{fecha}", 60), "1970-01-01 00.01.00");
+        assert_ne!(
+            expand_name_template("{fecha}", 60),
+            expand_name_template("{fecha}", 61)
+        );
     }
 
     #[test]

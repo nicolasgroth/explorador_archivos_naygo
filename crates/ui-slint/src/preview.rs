@@ -2,42 +2,54 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 //
-// Espeja el preview de la capa egui: al enfocar un archivo se espera un debounce (150 ms)
+// Al enfocar un archivo se espera un debounce (150 ms)
 // y recién entonces un worker lee/decodifica en su hilo. El worker produce un `Payload`
 // con bytes crudos (texto ya truncado, o RGBA ya escalada): NUNCA construye tipos de Slint
 // (eso ocurre en el hilo de UI, que arma el `slint::Image`). Cada worker es cancelable: si
-// el foco cambia, el token se cancela y el resultado tardío se descarta por path.
+// el foco cambia, el token se cancela y el receptor exclusivo de esa solicitud se descarta.
+// A → B → A nunca comparte canal. Las plazas se liberan al terminar el hilo, no al cancelar.
+
+#[path = "preview_animation.rs"]
+mod animation;
+#[path = "preview_animation_reader.rs"]
+mod animation_reader;
+#[path = "preview_isolated.rs"]
+mod isolated;
+#[cfg(test)]
+#[path = "preview_lifecycle_tests.rs"]
+mod lifecycle_tests;
+#[path = "preview_workers.rs"]
+mod workers;
+pub use isolated::dispatch as isolated_dispatch;
 
 use naygo_core::cancel::CancellationToken;
 use naygo_core::highlight::HlLine;
 use naygo_core::preview::{self, CodeLang, PreviewKind, PreviewRule};
+use naygo_core::preview_policy::{Quality, Reservation, RetainedBudget};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 /// Debounce: mover rápido por una carpeta NO dispara una lectura por archivo.
 pub const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(150);
 
-/// Tras este tiempo sin contenido para el archivo enfocado, la UI ofrece cancelar. No es un
-/// timeout: una red lenta o un archivo grande puede seguir; la decisión final siempre es del
-/// usuario y el worker recibe el token cooperativo.
-pub const PREVIEW_CANCEL_AFTER: Duration = Duration::from_secs(5);
-
 /// Última vista entregada, cacheada para pintar en cada tick sin reconstruir el worker
 /// (evita parpadeo entre el momento en que llega el resultado y el siguiente foco). Guarda
-/// datos crudos; el `slint::Image` se arma en el hilo de UI desde `Image.rgba`.
-#[derive(Clone, Debug)]
+/// texto acotado y un handle de imagen construido UNA vez en UI; los VM lo comparten.
+#[derive(Debug)]
 pub enum ViewCache {
     Text {
         text: String,
         truncated: bool,
+        bytes_read: Option<usize>,
         /// Líneas ya resaltadas si la regla forzó un lenguaje de código; `None` = texto plano.
         highlighted: Option<Vec<HlLine>>,
+        _reservation: Reservation,
     },
     Image {
-        rgba: Vec<u8>,
-        width: u32,
-        height: u32,
+        image: slint::Image,
+        _reservation: Reservation,
     },
     Message(String),
 }
@@ -50,6 +62,7 @@ pub enum Payload {
     Text {
         text: String,
         truncated: bool,
+        bytes_read: Option<usize>,
         highlighted: Option<Vec<HlLine>>,
     },
     /// Imagen decodificada: RGBA8 + dimensiones (ya reescalada al tope).
@@ -65,8 +78,9 @@ pub enum Payload {
 /// Mensajes de error del preview, ya traducidos (los resuelve el hilo de UI, como ArchiveLabels).
 /// El worker los usa directamente; así `Payload::Message` sigue siendo `String` y no hay
 /// lógica de i18n en el hilo del worker.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PreviewMessages {
+    pub reader_stopped: String,
     pub not_previewable: String,
     pub archive_bad: String,
     pub read: String,
@@ -88,6 +102,7 @@ pub struct PreviewMessages {
 impl Default for PreviewMessages {
     fn default() -> Self {
         PreviewMessages {
+            reader_stopped: "El lector se detuvo por un error o límite de recursos. Puedes reintentar o abrir el archivo externamente.".into(),
             not_previewable: "No previsualizable".into(),
             archive_bad: "Archivo comprimido inválido o dañado".into(),
             read: "No se pudo leer".into(),
@@ -106,8 +121,13 @@ impl Default for PreviewMessages {
 
 type MeshLoadMessage = (
     PathBuf,
-    Result<Arc<naygo_core::mesh_preview::MeshScene>, naygo_core::mesh_preview::MeshError>,
+    Result<Arc<RetainedScene>, naygo_core::mesh_preview::MeshError>,
 );
+/// El permiso vive tanto como el último renderer que todavía usa la geometría.
+struct RetainedScene {
+    scene: naygo_core::mesh_preview::MeshScene,
+    _reservation: Reservation,
+}
 type MeshRenderMessage = (
     PathBuf,
     Result<naygo_core::mesh_preview::MeshPreview, naygo_core::mesh_preview::MeshError>,
@@ -116,13 +136,13 @@ type MeshRenderMessage = (
 /// Estado del preview: qué se quiere, desde cuándo (debounce), qué está cargado, el worker
 /// en vuelo y su token. Es propiedad del controlador.
 pub struct PreviewState {
+    quality: Quality,
+    /// Compartido por imágenes/escenas de todos los paneles de preview. No representa RSS.
+    retained: RetainedBudget,
     /// Path enfocado a previsualizar (None = nada).
     pub wanted: Option<PathBuf>,
     /// Ancla del debounce desde el último cambio de `wanted`.
     since: Option<Instant>,
-    /// Inicio del worker que todavía no entregó contenido para el archivo enfocado. Es distinto
-    /// de `since`: el debounce no cuenta para los cinco segundos del botón Cancelar.
-    loading_since: Option<Instant>,
     /// Path cuyo `Payload` ya está cargado y entregado a la UI.
     pub loaded: Option<PathBuf>,
     /// Worker en vuelo (envía una vez y termina).
@@ -131,6 +151,8 @@ pub struct PreviewState {
     token: Option<CancellationToken>,
     /// Reglas de clasificación (qué extensiones son texto/imagen).
     rules: Vec<PreviewRule>,
+    /// Límite de lectura textual elegido por el usuario, acotado a las opciones configurables.
+    text_max_bytes: usize,
     /// Toggle global de auto-resaltado de código (`Settings.auto_highlight_code`). Si está en
     /// `false`, el worker pinta el código como texto plano aunque la regla fuerce un lenguaje.
     auto_highlight: bool,
@@ -142,7 +164,7 @@ pub struct PreviewState {
     last: Option<ViewCache>,
     /// Escena 3D cargada en memoria para que arrastrar el modelo no vuelva a leer STL/3MF desde
     /// disco. `Arc` permite pasarla al worker de rasterización sin copiar sus triángulos.
-    mesh_scene: Option<(PathBuf, Arc<naygo_core::mesh_preview::MeshScene>)>,
+    mesh_scene: Option<(PathBuf, Arc<RetainedScene>)>,
     /// Worker que carga la geometría real al iniciar la primera interacción 3D.
     mesh_load_rx: Option<Receiver<MeshLoadMessage>>,
     /// Worker de rasterización de la escena ya cacheada.
@@ -151,18 +173,28 @@ pub struct PreviewState {
     mesh_token: Option<CancellationToken>,
     /// Cámara acumulada por arrastre/rueda. El último gesto reemplaza el render pendiente.
     mesh_camera: naygo_core::mesh_preview::MeshCamera,
+    mesh_appearance: naygo_core::mesh_preview::MeshAppearance,
+    workers: workers::Workers,
+    /// Sólo una cámara pendiente; los gestos sustituyen el último pedido, no crean hilos.
+    mesh_dirty: bool,
+    /// Cancelar/error son terminales hasta Reintentar o elegir otro archivo.
+    terminal: bool,
+    visible: bool,
+    animation: Option<animation::Playback>,
 }
 
 impl Default for PreviewState {
     fn default() -> Self {
         PreviewState {
+            quality: Quality::default(),
+            retained: RetainedBudget::new(64 * 1024 * 1024),
             wanted: None,
             since: None,
-            loading_since: None,
             loaded: None,
             rx: None,
             token: None,
             rules: preview::default_preview_rules(),
+            text_max_bytes: preview::DEFAULT_TEXT_MAX_BYTES as usize,
             auto_highlight: true,
             archive_labels: naygo_core::archive_tree::ArchiveLabels {
                 files: "archivo(s)".into(),
@@ -178,6 +210,12 @@ impl Default for PreviewState {
             mesh_render_rx: None,
             mesh_token: None,
             mesh_camera: naygo_core::mesh_preview::MeshCamera::default(),
+            mesh_appearance: naygo_core::mesh_preview::MeshAppearance::default(),
+            workers: workers::Workers::default(),
+            mesh_dirty: false,
+            terminal: false,
+            visible: true,
+            animation: None,
         }
     }
 }
@@ -185,6 +223,73 @@ impl Default for PreviewState {
 impl PreviewState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Cambiar calidad invalida sólo la generación del preview. Conservar el budget evita
+    /// liberar ficticiamente reservas de escenas que aún usan workers cancelados.
+    pub fn set_economical(&mut self, economical: bool, now: Instant) {
+        if self.quality.economical == economical {
+            return;
+        }
+        self.quality.economical = economical;
+        let wanted = self.wanted.clone();
+        self.set_wanted(None, now);
+        self.set_wanted(wanted, now);
+    }
+
+    /// Construye UN buffer Slint por resultado. Los VM/paneles clonan el handle compartido,
+    /// no RGBA por tick. Reserva 2× RGBA para admitir el buffer y su copia de presentación.
+    fn cache_image(&self, rgba: &[u8], width: u32, height: u32) -> Option<ViewCache> {
+        let bytes = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        if width == 0
+            || height == 0
+            || width > preview::IMAGE_MAX_SIDE
+            || height > preview::IMAGE_MAX_SIDE
+            || bytes != rgba.len()
+        {
+            return None;
+        }
+        let reservation = self.retained.reserve(bytes.checked_mul(2)?)?;
+        let buffer = slint::SharedPixelBuffer::clone_from_slice(rgba, width, height);
+        Some(ViewCache::Image {
+            image: slint::Image::from_rgba8(buffer),
+            _reservation: reservation,
+        })
+    }
+
+    fn cache_text(
+        &self,
+        text: &str,
+        truncated: bool,
+        bytes_read: Option<usize>,
+        highlighted: &Option<Vec<HlLine>>,
+    ) -> Option<ViewCache> {
+        let mut bytes = text.len();
+        if let Some(lines) = highlighted {
+            bytes = bytes.checked_add(lines.len().checked_mul(std::mem::size_of::<HlLine>())?)?;
+            for line in lines {
+                bytes = bytes.checked_add(
+                    line.spans
+                        .len()
+                        .checked_mul(std::mem::size_of::<naygo_core::highlight::HlSpan>())?,
+                )?;
+                for span in &line.spans {
+                    bytes = bytes.checked_add(span.text.len())?;
+                }
+            }
+        }
+        // Reserva conservadora para copia cruda y modelos de texto. El costo del parser
+        // y de gramáticas compartidas no forma parte de este presupuesto de retención.
+        let reservation = self.retained.reserve(bytes.checked_mul(4)?)?;
+        Some(ViewCache::Text {
+            text: text.into(),
+            truncated,
+            bytes_read,
+            highlighted: highlighted.clone(),
+            _reservation: reservation,
+        })
     }
 
     /// Fija el archivo enfocado (None = ninguno). Si cambió, reinicia el debounce y cancela
@@ -195,7 +300,6 @@ impl PreviewState {
         }
         self.wanted = file.clone();
         self.since = Some(now);
-        self.loading_since = None;
         if let Some(t) = self.token.take() {
             t.cancel();
         }
@@ -203,10 +307,14 @@ impl PreviewState {
             t.cancel();
         }
         self.rx = None;
+        self.animation = None;
         self.mesh_load_rx = None;
         self.mesh_render_rx = None;
         self.mesh_scene = None;
         self.mesh_camera = naygo_core::mesh_preview::MeshCamera::default();
+        self.mesh_appearance = naygo_core::mesh_preview::MeshAppearance::default();
+        self.mesh_dirty = false;
+        self.terminal = false;
         // No conservar el contenido del archivo anterior bajo la ruta recién enfocada: además de
         // ser engañoso, impedía saber que el preview actual llevaba demasiado tiempo cargando.
         self.loaded = None;
@@ -226,7 +334,38 @@ impl PreviewState {
     /// previsualizaban nunca. Solo asigna si cambiaron (evita trabajo en cada tick).
     pub fn set_rules(&mut self, rules: Vec<PreviewRule>) {
         if self.rules != rules {
+            let changed_kind = self.wanted.as_ref().is_some_and(|path| {
+                preview::classify_rules(path, &self.rules) != preview::classify_rules(path, &rules)
+            });
             self.rules = rules;
+            if changed_kind {
+                // Disabling/changing the active reader is explicit user input. Retire its
+                // generation immediately; unrelated rule edits do not restart playback.
+                let wanted = self.wanted.clone();
+                let now = Instant::now();
+                self.set_wanted(None, now);
+                self.set_wanted(wanted, now);
+            }
+        }
+    }
+
+    /// Cambia el límite de lectura textual y reinicia solo el preview de texto seleccionado.
+    /// El worker aislado sigue sujeto al límite de proceso y a la admisión global de memoria.
+    pub fn set_text_max_bytes(&mut self, bytes: u32) {
+        let bytes = preview::normalize_text_max_bytes(bytes) as usize;
+        if self.text_max_bytes == bytes {
+            return;
+        }
+        self.text_max_bytes = bytes;
+        let is_text = self
+            .wanted
+            .as_ref()
+            .is_some_and(|path| preview::classify_rules(path, &self.rules) == PreviewKind::Text);
+        if is_text {
+            let wanted = self.wanted.clone();
+            let now = Instant::now();
+            self.set_wanted(None, now);
+            self.set_wanted(wanted, now);
         }
     }
 
@@ -250,6 +389,9 @@ impl PreviewState {
     /// ¿Hay que arrancar el worker AHORA? (hay objetivo distinto del cargado, no hay worker
     /// en vuelo, y venció el debounce). `now` es el instante actual.
     pub fn should_start(&self, now: Instant) -> bool {
+        if !self.visible || self.terminal || self.animation.is_some() {
+            return false;
+        }
         let needs = match (&self.wanted, &self.loaded) {
             (Some(w), loaded) => Some(w) != loaded.as_ref() && self.rx.is_none(),
             (None, _) => false,
@@ -264,30 +406,66 @@ impl PreviewState {
 
     /// Lanza el worker para el `wanted` actual (asume `should_start` == true).
     pub fn start(&mut self) {
+        if !self.visible
+            || self.terminal
+            || self.rx.is_some()
+            || self.animation.is_some()
+            || !self.workers.has_capacity()
+        {
+            return;
+        }
         let Some(path) = self.wanted.clone() else {
             return;
         };
+        if !is_archive(&path) && preview::classify_rules(&path, &self.rules) == PreviewKind::Image {
+            match animation::Playback::start(
+                &self.workers,
+                path,
+                self.preview_msgs.clone(),
+                self.quality,
+            ) {
+                Ok(playback) => self.animation = playback,
+                Err(_) => {
+                    self.fail();
+                }
+            }
+            return;
+        }
         let rules = self.rules.clone();
         let auto_highlight = self.auto_highlight;
+        let quality = self.quality;
+        let text_max_bytes = self.text_max_bytes;
         let archive_labels = self.archive_labels.clone();
         let preview_msgs = self.preview_msgs.clone();
         let token = CancellationToken::new();
         let worker_token = token.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let payload = build_payload(
+        let started = Instant::now();
+        let result = self.workers.spawn(move || {
+            let payload = isolated::build(
                 &path,
                 &rules,
                 auto_highlight,
+                isolated::BuildOptions {
+                    quality,
+                    text_max_bytes,
+                },
                 &archive_labels,
                 &preview_msgs,
                 &worker_token,
             );
-            let _ = tx.send((path, payload));
+            crate::metrics::record("preview.build", started.elapsed());
+            (path, payload)
         });
-        self.token = Some(token);
-        self.rx = Some(rx);
-        self.loading_since = Some(Instant::now());
+        match result {
+            Ok(Some(rx)) => {
+                self.token = Some(token);
+                self.rx = Some(rx);
+            }
+            Ok(None) => {} // capacidad retenida por workers anteriores: conservar sólo wanted.
+            Err(_) => {
+                self.fail();
+            }
+        }
     }
 
     /// Drena el worker (sin bloquear). Si llegó un resultado para el path aún enfocado, lo
@@ -306,27 +484,26 @@ impl PreviewState {
             Ok((path, payload)) => {
                 self.rx = None;
                 self.token = None;
-                self.loading_since = None;
                 if Some(&path) == self.wanted.as_ref() {
+                    self.terminal = matches!(&payload, Payload::Message(_));
                     self.loaded = Some(path);
                     self.last = Some(match &payload {
                         Payload::Text {
                             text,
                             truncated,
+                            bytes_read,
                             highlighted,
-                        } => ViewCache::Text {
-                            text: text.clone(),
-                            truncated: *truncated,
-                            highlighted: highlighted.clone(),
+                        } => match self.cache_text(text, *truncated, *bytes_read, highlighted) {
+                            Some(cache) => cache,
+                            None => return Some(self.fail_resources()),
                         },
                         Payload::Image {
                             rgba,
                             width,
                             height,
-                        } => ViewCache::Image {
-                            rgba: rgba.clone(),
-                            width: *width,
-                            height: *height,
+                        } => match self.cache_image(rgba, *width, *height) {
+                            Some(cache) => cache,
+                            None => return Some(self.fail_resources()),
                         },
                         Payload::Message(m) => ViewCache::Message(m.clone()),
                     });
@@ -339,8 +516,7 @@ impl PreviewState {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.rx = None;
                 self.token = None;
-                self.loading_since = None;
-                None
+                Some(self.fail())
             }
         }
     }
@@ -348,6 +524,9 @@ impl PreviewState {
     /// Indica si el archivo actual es una malla que acepta interacción. La miniatura inicial de
     /// un 3MF sigue siendo válida; la geometría real se carga recién al primer gesto.
     pub fn mesh_interactive(&self) -> bool {
+        if self.terminal || !self.visible {
+            return false;
+        }
         self.loaded
             .as_ref()
             .or(self.wanted.as_ref())
@@ -362,9 +541,9 @@ impl PreviewState {
         if !self.mesh_interactive() {
             return false;
         }
-        self.mesh_camera.yaw_degrees += delta_x * 0.45;
-        self.mesh_camera.pitch_degrees =
-            (self.mesh_camera.pitch_degrees - delta_y * 0.35).clamp(-85.0, 85.0);
+        // La cámara compone la órbita en sus ejes de pantalla. La orientación completa permite
+        // que los siguientes gestos sigan sintiéndose directos aunque el modelo esté inclinado.
+        self.mesh_camera.orbit(delta_x * 0.45, delta_y * 0.35);
         self.request_mesh_render()
     }
 
@@ -389,25 +568,65 @@ impl PreviewState {
         self.request_mesh_render()
     }
 
-    /// Indica que el preview enfocado está esperando contenido (sin mostrar el del archivo
-    /// anterior). La UI lo usa para una señal de carga discreta y el botón Cancelar tardío.
-    pub fn loading(&self) -> bool {
-        self.loading_since.is_some() && self.last.is_none()
+    pub fn mesh_appearance_indices(&self) -> (i32, i32) {
+        use naygo_core::mesh_preview::{MeshColor, MeshSurface};
+        let color = match self.mesh_appearance.color {
+            MeshColor::Blue => 0,
+            MeshColor::White => 1,
+            MeshColor::Warm => 2,
+            MeshColor::Source => 3,
+        };
+        let surface = match self.mesh_appearance.surface {
+            MeshSurface::Solid => 0,
+            MeshSurface::Edges => 1,
+            MeshSurface::Wireframe => 2,
+        };
+        (color, surface)
     }
 
-    /// El botón se ofrece después de cinco segundos, no antes, y solo si aún no hay contenido.
-    pub fn can_cancel(&self, now: Instant) -> bool {
-        self.loading()
-            && self
-                .loading_since
-                .is_some_and(|started| now.duration_since(started) >= PREVIEW_CANCEL_AFTER)
+    pub fn cycle_mesh_color(&mut self) -> bool {
+        use naygo_core::mesh_preview::MeshColor;
+        if !self.mesh_interactive() {
+            return false;
+        }
+        self.mesh_appearance.color = match self.mesh_appearance.color {
+            MeshColor::Blue => MeshColor::White,
+            MeshColor::White => MeshColor::Warm,
+            MeshColor::Warm => MeshColor::Source,
+            MeshColor::Source => MeshColor::Blue,
+        };
+        self.request_mesh_render()
+    }
+
+    pub fn cycle_mesh_surface(&mut self) -> bool {
+        use naygo_core::mesh_preview::MeshSurface;
+        if !self.mesh_interactive() {
+            return false;
+        }
+        self.mesh_appearance.surface = match self.mesh_appearance.surface {
+            MeshSurface::Solid => MeshSurface::Edges,
+            MeshSurface::Edges => MeshSurface::Wireframe,
+            MeshSurface::Wireframe => MeshSurface::Solid,
+        };
+        self.request_mesh_render()
+    }
+
+    /// Indica que el preview enfocado está esperando contenido (sin mostrar el del archivo
+    /// anterior). La UI lo usa para una señal de carga discreta; Cancelar también cubre 3D.
+    pub fn loading(&self) -> bool {
+        self.busy() && self.last.is_none()
+    }
+
+    /// Incluye debounce, espera de plaza y geometría/render detrás de una miniatura.
+    pub fn can_cancel(&self, _now: Instant) -> bool {
+        self.busy() || self.animation.as_ref().is_some_and(|a| !a.ended)
     }
 
     /// Cancela todos los workers del archivo enfocado y deja un resultado terminal para evitar
     /// que `drive_preview` lance el mismo preview otra vez en el siguiente tick.
     pub fn cancel(&mut self) -> bool {
-        let active =
-            self.rx.is_some() || self.mesh_load_rx.is_some() || self.mesh_render_rx.is_some();
+        let active = self.can_cancel(Instant::now());
+        self.animation = None;
         if let Some(token) = self.token.take() {
             token.cancel();
         }
@@ -417,8 +636,10 @@ impl PreviewState {
         self.rx = None;
         self.mesh_load_rx = None;
         self.mesh_render_rx = None;
-        self.loading_since = None;
+        self.mesh_dirty = false;
+        self.mesh_scene = None;
         if active {
+            self.terminal = true;
             if let Some(path) = self.wanted.clone() {
                 self.loaded = Some(path);
             }
@@ -428,70 +649,121 @@ impl PreviewState {
     }
 
     fn request_mesh_render(&mut self) -> bool {
+        self.mesh_dirty = true;
+        self.drive_mesh();
+        true
+    }
+
+    fn drive_mesh(&mut self) {
+        if !self.visible
+            || self.terminal
+            || !self.mesh_dirty
+            || self.mesh_load_rx.is_some()
+            || self.mesh_render_rx.is_some()
+        {
+            return;
+        }
         let Some(path) = self.loaded.clone().or_else(|| self.wanted.clone()) else {
-            return false;
+            return;
         };
         if let Some((scene_path, scene)) = self.mesh_scene.as_ref().cloned() {
             if scene_path == path {
                 self.start_mesh_render(path, scene);
-                return true;
+                return;
             }
         }
         if self.mesh_load_rx.is_none() {
             let token = CancellationToken::new();
             let worker_token = token.clone();
             let load_path = path.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let scene =
-                    naygo_core::mesh_preview::load_scene(&load_path, &worker_token).map(Arc::new);
-                let _ = tx.send((load_path, scene));
+            let budget = self.retained.clone();
+            let started = Instant::now();
+            let result = self.workers.spawn(move || {
+                let scene = isolated::load_scene(&load_path, &worker_token).and_then(|scene| {
+                    use naygo_core::mesh_preview::MeshError;
+                    let bytes = scene.retained_bytes().ok_or(MeshError::TooLarge)?;
+                    // Leave room for a displayed frame; reject before retaining the scene.
+                    if bytes > naygo_core::mesh_preview::SCENE_MAX_BYTES {
+                        return Err(MeshError::TooLarge);
+                    }
+                    let reservation = budget.reserve(bytes).ok_or(MeshError::TooLarge)?;
+                    Ok(Arc::new(RetainedScene {
+                        scene,
+                        _reservation: reservation,
+                    }))
+                });
+                crate::metrics::record("preview.mesh_load", started.elapsed());
+                (load_path, scene)
             });
-            self.mesh_token = Some(token);
-            self.mesh_load_rx = Some(rx);
+            match result {
+                Ok(Some(rx)) => {
+                    self.mesh_token = Some(token);
+                    self.mesh_load_rx = Some(rx);
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    self.fail();
+                }
+            }
         }
-        true
     }
 
-    fn start_mesh_render(
-        &mut self,
-        path: PathBuf,
-        scene: Arc<naygo_core::mesh_preview::MeshScene>,
-    ) {
+    fn start_mesh_render(&mut self, path: PathBuf, scene: Arc<RetainedScene>) {
         if let Some(token) = self.mesh_token.take() {
             token.cancel();
         }
         let token = CancellationToken::new();
         let worker_token = token.clone();
         let camera = self.mesh_camera;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let preview =
-                naygo_core::mesh_preview::render_scene(&scene, 800, 600, camera, &worker_token);
-            let _ = tx.send((path, preview));
+        let appearance = self.mesh_appearance;
+        let (width, height) = self.quality.mesh_size();
+        let started = Instant::now();
+        let result = self.workers.spawn(move || {
+            let preview = naygo_core::mesh_preview::render_scene_with_appearance(
+                &scene.scene,
+                width,
+                height,
+                camera,
+                appearance,
+                &worker_token,
+            );
+            crate::metrics::record("preview.mesh_render", started.elapsed());
+            (path, preview)
         });
-        self.mesh_token = Some(token);
-        self.mesh_render_rx = Some(rx);
+        match result {
+            Ok(Some(rx)) => {
+                self.mesh_dirty = false;
+                self.mesh_token = Some(token);
+                self.mesh_render_rx = Some(rx);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                self.fail();
+            }
+        }
     }
 
     fn poll_mesh(&mut self) -> Option<Payload> {
+        self.drive_mesh();
         if let Some(rx) = self.mesh_load_rx.as_ref() {
             match rx.try_recv() {
                 Ok((path, Ok(scene))) => {
                     self.mesh_load_rx = None;
                     if Some(&path) == self.loaded.as_ref().or(self.wanted.as_ref()) {
                         self.mesh_scene = Some((path.clone(), scene.clone()));
+                        self.mesh_dirty = true;
                         self.start_mesh_render(path, scene);
                     }
                 }
                 Ok((_path, Err(error))) => {
                     self.mesh_load_rx = None;
                     self.mesh_token = None;
-                    return Some(mesh_error_payload(error, &self.preview_msgs));
+                    return Some(self.fail_mesh(error));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.mesh_load_rx = None;
                     self.mesh_token = None;
+                    return Some(self.fail());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -503,6 +775,11 @@ impl PreviewState {
             {
                 self.mesh_render_rx = None;
                 self.mesh_token = None;
+                if self.mesh_dirty {
+                    self.drive_mesh();
+                    // Presentar este frame válido de la MISMA escena mientras se prepara la
+                    // última cámara. Descartarlo en cada gesto congelaría un arrastre continuo.
+                }
                 let payload = Payload::Image {
                     rgba: preview.rgba,
                     width: preview.width,
@@ -513,10 +790,9 @@ impl PreviewState {
                         rgba,
                         width,
                         height,
-                    } => ViewCache::Image {
-                        rgba: rgba.clone(),
-                        width: *width,
-                        height: *height,
+                    } => match self.cache_image(rgba, *width, *height) {
+                        Some(cache) => cache,
+                        None => return Some(self.fail_resources()),
                     },
                     _ => unreachable!(),
                 });
@@ -525,13 +801,12 @@ impl PreviewState {
             Ok((_path, Err(error))) => {
                 self.mesh_render_rx = None;
                 self.mesh_token = None;
-                self.loading_since = None;
-                Some(mesh_error_payload(error, &self.preview_msgs))
+                Some(self.fail_mesh(error))
             }
             Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.mesh_render_rx = None;
                 self.mesh_token = None;
-                None
+                Some(self.fail())
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
         }
@@ -540,13 +815,155 @@ impl PreviewState {
     /// ¿Hay trabajo pendiente (worker en vuelo o debounce sin vencer)? Para que el timer
     /// siga vivo hasta entregar el preview.
     pub fn busy(&self) -> bool {
+        if !self.visible || self.terminal {
+            return false;
+        }
         self.rx.is_some()
+            || self.mesh_dirty
             || self.mesh_load_rx.is_some()
             || self.mesh_render_rx.is_some()
             || match (&self.wanted, &self.loaded) {
                 (Some(w), loaded) => Some(w) != loaded.as_ref(),
                 _ => false,
             }
+    }
+
+    fn fail_mesh(&mut self, error: naygo_core::mesh_preview::MeshError) -> Payload {
+        let payload = mesh_error_payload(error, &self.preview_msgs);
+        self.cancel();
+        self.terminal = true;
+        if let Payload::Message(message) = &payload {
+            self.last = Some(ViewCache::Message(message.clone()));
+        }
+        payload
+    }
+
+    fn fail(&mut self) -> Payload {
+        self.cancel();
+        self.terminal = true;
+        self.loaded = self.wanted.clone();
+        let message = self.preview_msgs.decode.clone();
+        self.last = Some(ViewCache::Message(message.clone()));
+        Payload::Message(message)
+    }
+
+    fn fail_resources(&mut self) -> Payload {
+        self.cancel();
+        self.terminal = true;
+        self.loaded = self.wanted.clone();
+        let message = self.preview_msgs.reader_stopped.clone();
+        self.last = Some(ViewCache::Message(message.clone()));
+        Payload::Message(message)
+    }
+
+    pub fn can_retry(&self) -> bool {
+        self.visible && self.terminal && self.wanted.is_some()
+    }
+
+    pub fn retry(&mut self, now: Instant) -> bool {
+        if !self.can_retry() {
+            return false;
+        }
+        self.terminal = false;
+        self.animation = None;
+        self.loaded = None;
+        self.last = None;
+        self.since = Some(now);
+        true
+    }
+
+    /// Animation frames use a separate lightweight timer; they never pump directory rows.
+    pub fn animation_tick_needed(&self) -> bool {
+        self.visible && self.animation.as_ref().is_some_and(|a| a.tick_needed())
+    }
+    pub fn animation_state(&self) -> i32 {
+        match &self.animation {
+            Some(a) if a.animated && !self.terminal => {
+                if a.ended {
+                    3
+                } else if a.paused() {
+                    2
+                } else {
+                    1
+                }
+            }
+            _ => 0,
+        }
+    }
+    pub fn toggle_animation(&mut self, now: Instant) -> bool {
+        match self.animation_state() {
+            1 | 2 => {
+                self.animation.as_mut().unwrap().toggle(now);
+                true
+            }
+            3 => {
+                self.animation = None;
+                self.loaded = None;
+                self.last = None;
+                self.since = Some(now);
+                true
+            }
+            _ => false,
+        }
+    }
+    pub fn poll_animation(&mut self, now: Instant) -> bool {
+        let Some(result) = self.animation.as_mut().and_then(|a| a.poll(now)) else {
+            return false;
+        };
+        self.loaded = self.wanted.clone();
+        match result {
+            Ok(Some(Payload::Image {
+                rgba,
+                width,
+                height,
+            })) => match self.cache_image(&rgba, width, height) {
+                Some(cache) => self.last = Some(cache),
+                None => {
+                    self.fail_resources();
+                }
+            },
+            Ok(Some(Payload::Message(message))) => {
+                self.terminal = true;
+                self.last = Some(ViewCache::Message(message));
+            }
+            Ok(None) => {}
+            _ => {
+                self.terminal = true;
+                self.last = Some(ViewCache::Message(self.preview_msgs.reader_stopped.clone()));
+            }
+        }
+        true
+    }
+
+    /// Ocultar libera contenido/escena y cancela trabajo. Conserva identidad y el estado
+    /// terminal: volver a mostrar no reintenta un error/cancelación por su cuenta.
+    pub fn set_visible(&mut self, visible: bool, now: Instant) {
+        if self.visible == visible {
+            return;
+        }
+        if !visible {
+            let terminal = self.terminal;
+            self.cancel();
+            self.terminal = terminal;
+            self.loaded = None;
+            if !terminal {
+                self.last = None;
+            }
+            self.mesh_scene = None;
+        }
+        self.visible = visible;
+        self.since = Some(now);
+    }
+}
+
+impl Drop for PreviewState {
+    fn drop(&mut self) {
+        if let Some(token) = &self.token {
+            token.cancel();
+        }
+        if let Some(token) = &self.mesh_token {
+            token.cancel();
+        }
     }
 }
 
@@ -555,6 +972,9 @@ fn mesh_error_payload(
     msgs: &PreviewMessages,
 ) -> Payload {
     match error {
+        naygo_core::mesh_preview::MeshError::ReaderStopped => {
+            Payload::Message(msgs.reader_stopped.clone())
+        }
         naygo_core::mesh_preview::MeshError::Cancelled => Payload::Message(msgs.cancelled.clone()),
         naygo_core::mesh_preview::MeshError::TooLarge
         | naygo_core::mesh_preview::MeshError::TooManyTriangles => {
@@ -565,6 +985,7 @@ fn mesh_error_payload(
 }
 
 /// Construye el payload leyendo/decodificando en el hilo del worker.
+#[cfg(test)]
 fn build_payload(
     path: &Path,
     rules: &[PreviewRule],
@@ -575,6 +996,9 @@ fn build_payload(
 ) -> Payload {
     // Los comprimidos (zip/tar/tar.gz) muestran su índice como árbol ASCII, antes de la
     // clasificación normal.
+    if token.is_cancelled() {
+        return Payload::Message(msgs.cancelled.clone());
+    }
     if is_archive(path) {
         return read_archive_listing(path, archive_labels, msgs);
     }
@@ -595,8 +1019,18 @@ fn build_payload(
 }
 
 /// Rasteriza STL/3MF en CPU. El core impone límites de bytes/triángulos y consulta el token.
+#[cfg(test)]
 fn read_mesh(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
-    match naygo_core::mesh_preview::render_file(path, 800, 600, token) {
+    read_mesh_with_quality(path, token, msgs, Quality::default())
+}
+fn read_mesh_with_quality(
+    path: &Path,
+    token: &CancellationToken,
+    msgs: &PreviewMessages,
+    quality: Quality,
+) -> Payload {
+    let (width, height) = quality.mesh_size();
+    match naygo_core::mesh_preview::render_file(path, width, height, token) {
         Ok(preview) => Payload::Image {
             rgba: preview.rgba,
             width: preview.width,
@@ -641,12 +1075,204 @@ fn is_archive(path: &Path) -> bool {
 
 /// Cuántas entradas listar como máximo (evita textos enormes en archivos con miles).
 const ARCHIVE_MAX_ENTRIES: usize = 500;
+/// Límite de bytes leídos al cargar el índice ZIP y consultar headers locales.
+const ARCHIVE_ZIP_MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
+/// El parser seekable de `zip` materializa el directorio central completo antes de exponer filas.
+const ARCHIVE_ZIP_MAX_INDEX_ENTRIES: u64 = 10_000;
+const ARCHIVE_ZIP_MAX_DIRECTORY_BYTES: u64 = 6 * 1024 * 1024;
+const ZIP_EOCD_SEARCH_BYTES: u64 = 22 + u16::MAX as u64;
+const ZIP64_EOCD_SEARCH_BYTES: u64 = 1024 * 1024;
+/// TAR y TAR.GZ no pueden saltar una entrada comprimida sin recorrer su contenido.
+const ARCHIVE_MAX_COMPRESSED_BYTES: u64 = 16 * 1024 * 1024;
+const ARCHIVE_MAX_UNCOMPRESSED_BYTES: u64 = 32 * 1024 * 1024;
+/// Evita árboles patológicos por nombres y rutas internas de profundidad extrema.
+const ARCHIVE_MAX_PATH_BYTES: usize = 1024;
+const ARCHIVE_MAX_PATH_COMPONENTS: usize = 64;
+
+/// Presupuesto compartido de lectura. Nunca entrega más de `limit` bytes y marca si el lector
+/// pidió continuar después del límite; se usa tanto sobre ZIP seekable como sobre TAR/GZIP.
+struct ArchiveReadBudget<R> {
+    inner: R,
+    remaining: u64,
+    limit_hit: Arc<AtomicBool>,
+}
+
+impl<R> ArchiveReadBudget<R> {
+    fn new(inner: R, limit: u64, limit_hit: Arc<AtomicBool>) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+            limit_hit,
+        }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for ArchiveReadBudget<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            self.limit_hit.store(true, Ordering::Relaxed);
+            return Ok(0);
+        }
+        let allowed = usize::try_from(self.remaining.min(buf.len() as u64)).unwrap_or(buf.len());
+        let read = self.inner.read(&mut buf[..allowed])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for ArchiveReadBudget<R> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ZipIndexBounds {
+    entries: u64,
+    directory_bytes: u64,
+}
+
+/// Inspecciona sólo los footers acotados de ZIP32/ZIP64 antes de entregar el archivo a `zip`.
+/// La crate construye un Vec con TODO el índice central; validar sus dimensiones evita reservar
+/// memoria según contadores hostiles antes de que el presupuesto de lectura pueda actuar.
+fn zip_index_bounds<R: std::io::Read + std::io::Seek>(
+    reader: &mut R,
+) -> std::io::Result<Option<ZipIndexBounds>> {
+    use std::io::SeekFrom;
+
+    let file_len = reader.seek(SeekFrom::End(0))?;
+    let tail_len = file_len.min(ZIP_EOCD_SEARCH_BYTES);
+    if tail_len < 22 {
+        return Ok(None);
+    }
+    reader.seek(SeekFrom::Start(file_len - tail_len))?;
+    let mut tail = vec![0; tail_len as usize];
+    reader.read_exact(&mut tail)?;
+    let Some(eocd) = tail
+        .windows(4)
+        .enumerate()
+        .rev()
+        .find_map(|(offset, bytes)| {
+            let fixed_end = offset.checked_add(22)?;
+            if bytes != b"PK\x05\x06" || fixed_end > tail.len() {
+                return None;
+            }
+            let comment_bytes = u16::from_le_bytes([tail[offset + 20], tail[offset + 21]]) as usize;
+            (fixed_end.checked_add(comment_bytes)? <= tail.len()).then_some(offset)
+        })
+    else {
+        return Ok(None);
+    };
+    let entries16 = u16::from_le_bytes([tail[eocd + 10], tail[eocd + 11]]);
+    let directory_bytes32 = u32::from_le_bytes(
+        tail[eocd + 12..eocd + 16]
+            .try_into()
+            .expect("EOCD fixed-size field"),
+    );
+    let needs_zip64 = entries16 == u16::MAX || directory_bytes32 == u32::MAX;
+    if !needs_zip64 {
+        return Ok(Some(ZipIndexBounds {
+            entries: u64::from(entries16),
+            directory_bytes: u64::from(directory_bytes32),
+        }));
+    }
+
+    let eocd_absolute = file_len - tail_len + eocd as u64;
+    let Some(locator_absolute) = eocd_absolute.checked_sub(20) else {
+        return Ok(Some(ZipIndexBounds {
+            entries: u64::MAX,
+            directory_bytes: u64::MAX,
+        }));
+    };
+    reader.seek(SeekFrom::Start(locator_absolute))?;
+    let mut locator = [0; 20];
+    reader.read_exact(&mut locator)?;
+    if &locator[..4] != b"PK\x06\x07" {
+        return Ok(Some(ZipIndexBounds {
+            entries: u64::MAX,
+            directory_bytes: u64::MAX,
+        }));
+    }
+
+    // ZIP64 permite un sector extensible; se limita la búsqueda para que el propio preflight
+    // también tenga un presupuesto y las variantes anormalmente grandes fallen con aviso.
+    let search_start = locator_absolute.saturating_sub(ZIP64_EOCD_SEARCH_BYTES);
+    reader.seek(SeekFrom::Start(search_start))?;
+    let mut zip64_region = vec![0; (locator_absolute - search_start) as usize];
+    reader.read_exact(&mut zip64_region)?;
+    for offset in zip64_region
+        .windows(4)
+        .enumerate()
+        .rev()
+        .filter_map(|(offset, bytes)| (bytes == b"PK\x06\x06").then_some(offset))
+    {
+        if offset + 56 > zip64_region.len() {
+            continue;
+        }
+        let record_bytes = u64::from_le_bytes(
+            zip64_region[offset + 4..offset + 12]
+                .try_into()
+                .expect("ZIP64 EOCD record size"),
+        );
+        let Some(record_end) = (offset as u64)
+            .checked_add(12)
+            .and_then(|start| start.checked_add(record_bytes))
+        else {
+            continue;
+        };
+        if record_end != zip64_region.len() as u64 {
+            continue;
+        }
+        let entries = u64::from_le_bytes(
+            zip64_region[offset + 32..offset + 40]
+                .try_into()
+                .expect("ZIP64 entry count"),
+        );
+        let directory_bytes = u64::from_le_bytes(
+            zip64_region[offset + 40..offset + 48]
+                .try_into()
+                .expect("ZIP64 directory size"),
+        );
+        return Ok(Some(ZipIndexBounds {
+            entries,
+            directory_bytes,
+        }));
+    }
+    Ok(Some(ZipIndexBounds {
+        entries: u64::MAX,
+        directory_bytes: u64::MAX,
+    }))
+}
+
+fn archive_path_is_bounded(path: &str) -> bool {
+    path.len() <= ARCHIVE_MAX_PATH_BYTES
+        && path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .take(ARCHIVE_MAX_PATH_COMPONENTS + 1)
+            .count()
+            <= ARCHIVE_MAX_PATH_COMPONENTS
+}
+
+/// Suma tamaños hostiles sin permitir wraparound; ante overflow, el caller omite esa fila y
+/// señala el árbol como parcial para no presentar un total falso.
+fn add_archive_size(summary: &mut naygo_core::archive_tree::ArchiveSummary, size: u64) -> bool {
+    let Some(total) = summary.total_uncompressed.checked_add(size) else {
+        summary.truncated = true;
+        return false;
+    };
+    summary.total_uncompressed = total;
+    true
+}
 
 /// Lee el índice de un comprimido (zip/tar/tar.gz) y devuelve el texto del preview (encabezado
 /// + árbol ASCII) vía `naygo_core::archive_tree`. Tolerante: ilegible/corrupto → `Payload::Message`.
 ///
-/// No extrae contenido (solo el índice central). `labels` son los textos ya traducidos por el
-/// hilo de UI (core no conoce el catálogo i18n).
+/// Nunca escribe contenido. ZIP lee un índice acotado; TAR/GZIP avanzan por un flujo con límites
+/// de bytes comprimidos/expandidos. `labels` ya llega traducido desde UI.
 fn read_archive_listing(
     path: &Path,
     labels: &naygo_core::archive_tree::ArchiveLabels,
@@ -663,13 +1289,22 @@ fn read_archive_listing(
         .to_string();
     let mut entries = Vec::new();
     let mut summary = ArchiveSummary::default();
+    let mut limit_hit = false;
     let read_ok = match fmt {
-        ArchiveFormat::Zip => read_zip_entries(path, &mut entries, &mut summary),
-        ArchiveFormat::Tar => read_tar_entries(path, &mut entries, &mut summary, false),
-        ArchiveFormat::TarGz => read_tar_entries(path, &mut entries, &mut summary, true),
+        ArchiveFormat::Zip => read_zip_entries(path, &mut entries, &mut summary, &mut limit_hit),
+        ArchiveFormat::Tar => {
+            read_tar_entries(path, &mut entries, &mut summary, false, &mut limit_hit)
+        }
+        ArchiveFormat::TarGz => {
+            read_tar_entries(path, &mut entries, &mut summary, true, &mut limit_hit)
+        }
     };
     if !read_ok {
-        return Payload::Message(msgs.archive_bad.clone());
+        return Payload::Message(if limit_hit {
+            msgs.reader_stopped.clone()
+        } else {
+            msgs.archive_bad.clone()
+        });
     }
     let text = render_archive_tree(
         &entries,
@@ -681,6 +1316,7 @@ fn read_archive_listing(
     Payload::Text {
         text,
         truncated: summary.truncated,
+        bytes_read: None,
         highlighted: None,
     }
 }
@@ -690,12 +1326,33 @@ fn read_zip_entries(
     path: &Path,
     entries: &mut Vec<naygo_core::archive_tree::ArchiveEntry>,
     summary: &mut naygo_core::archive_tree::ArchiveSummary,
+    limit_hit: &mut bool,
 ) -> bool {
     use naygo_core::archive_tree::ArchiveEntry;
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
-    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+    let read_budget_hit = Arc::new(AtomicBool::new(false));
+    let mut reader =
+        ArchiveReadBudget::new(file, ARCHIVE_ZIP_MAX_READ_BYTES, read_budget_hit.clone());
+    let index_bounds = match zip_index_bounds(&mut reader) {
+        Ok(Some(bounds)) => Some(bounds),
+        Ok(None) => None,
+        Err(_) if read_budget_hit.load(Ordering::Relaxed) => {
+            *limit_hit = true;
+            return false;
+        }
+        Err(_) => None,
+    };
+    if index_bounds.is_some_and(|bounds| {
+        bounds.entries > ARCHIVE_ZIP_MAX_INDEX_ENTRIES
+            || bounds.directory_bytes > ARCHIVE_ZIP_MAX_DIRECTORY_BYTES
+    }) {
+        *limit_hit = true;
+        return false;
+    }
+    let Ok(mut archive) = zip::ZipArchive::new(reader) else {
+        *limit_hit = read_budget_hit.load(Ordering::Relaxed);
         return false;
     };
     let total = archive.len();
@@ -704,22 +1361,35 @@ fn read_zip_entries(
     summary.truncated = total > shown;
     for i in 0..shown {
         let Ok(entry) = archive.by_index(i) else {
+            summary.truncated = true;
+            *limit_hit = read_budget_hit.load(Ordering::Relaxed);
+            if *limit_hit {
+                break;
+            }
             continue;
         };
         let is_dir = entry.is_dir();
         let size = entry.size();
+        let path = entry.name().replace('\\', "/");
+        if !archive_path_is_bounded(&path) {
+            summary.truncated = true;
+            continue;
+        }
         if is_dir {
             summary.dirs += 1;
         } else {
+            if !add_archive_size(summary, size) {
+                break;
+            }
             summary.files += 1;
-            summary.total_uncompressed += size;
         }
-        entries.push(ArchiveEntry {
-            path: entry.name().to_string(),
-            is_dir,
-            size,
-        });
+        entries.push(ArchiveEntry { path, is_dir, size });
     }
+    *limit_hit |= read_budget_hit.load(Ordering::Relaxed);
+    if *limit_hit && entries.is_empty() {
+        return false;
+    }
+    summary.truncated |= *limit_hit;
     true
 }
 
@@ -732,56 +1402,90 @@ fn read_tar_entries(
     entries: &mut Vec<naygo_core::archive_tree::ArchiveEntry>,
     summary: &mut naygo_core::archive_tree::ArchiveSummary,
     gz: bool,
+    limit_hit: &mut bool,
 ) -> bool {
     use naygo_core::archive_tree::ArchiveEntry;
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
+    let compressed_limit_hit = Arc::new(AtomicBool::new(false));
+    let uncompressed_limit_hit = Arc::new(AtomicBool::new(false));
     let reader: Box<dyn std::io::Read> = if gz {
-        Box::new(flate2::read::GzDecoder::new(file))
+        let compressed = ArchiveReadBudget::new(
+            file,
+            ARCHIVE_MAX_COMPRESSED_BYTES,
+            compressed_limit_hit.clone(),
+        );
+        let decoder = flate2::read::GzDecoder::new(compressed);
+        Box::new(ArchiveReadBudget::new(
+            decoder,
+            ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+            uncompressed_limit_hit.clone(),
+        ))
     } else {
-        Box::new(file)
-    };
-    let mut archive = tar::Archive::new(reader);
-    let Ok(iter) = archive.entries() else {
-        return false;
+        Box::new(ArchiveReadBudget::new(
+            file,
+            ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+            uncompressed_limit_hit.clone(),
+        ))
     };
     let mut had_error = false;
-    for entry in iter {
-        if entries.len() >= ARCHIVE_MAX_ENTRIES {
-            summary.truncated = true;
-            break;
-        }
-        let e = match entry {
-            Ok(e) => e,
-            Err(_) => {
-                had_error = true;
+    let mut inspected = 0;
+    {
+        let mut archive = tar::Archive::new(reader);
+        let Ok(iter) = archive.entries() else {
+            *limit_hit = compressed_limit_hit.load(Ordering::Relaxed)
+                || uncompressed_limit_hit.load(Ordering::Relaxed);
+            return false;
+        };
+        for entry in iter {
+            if inspected >= ARCHIVE_MAX_ENTRIES {
+                summary.truncated = true;
+                break;
+            }
+            inspected += 1;
+            let e = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    had_error = true;
+                    if compressed_limit_hit.load(Ordering::Relaxed)
+                        || uncompressed_limit_hit.load(Ordering::Relaxed)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let header = e.header();
+            let is_dir = header.entry_type().is_dir();
+            let size = header.size().unwrap_or(0);
+            let path_str = e
+                .path()
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if path_str.is_empty() || !archive_path_is_bounded(&path_str) {
+                summary.truncated = true;
                 continue;
             }
-        };
-        let header = e.header();
-        let is_dir = header.entry_type().is_dir();
-        let size = header.size().unwrap_or(0);
-        let path_str = e
-            .path()
-            .ok()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        if path_str.is_empty() {
-            continue;
+            if is_dir {
+                summary.dirs += 1;
+            } else {
+                if !add_archive_size(summary, size) {
+                    break;
+                }
+                summary.files += 1;
+            }
+            entries.push(ArchiveEntry {
+                path: path_str,
+                is_dir,
+                size,
+            });
         }
-        if is_dir {
-            summary.dirs += 1;
-        } else {
-            summary.files += 1;
-            summary.total_uncompressed += size;
-        }
-        entries.push(ArchiveEntry {
-            path: path_str,
-            is_dir,
-            size,
-        });
     }
+    *limit_hit = compressed_limit_hit.load(Ordering::Relaxed)
+        || uncompressed_limit_hit.load(Ordering::Relaxed);
+    summary.truncated |= *limit_hit;
     // Si no se pudo leer ninguna entrada Y hubo errores, el archivo es corrupto/inválido.
     if entries.is_empty() && had_error {
         return false;
@@ -794,18 +1498,33 @@ fn read_tar_entries(
     // No sumamos un "+1" engañoso: dejamos `total_entries == entries.len()` y confiamos en
     // `truncated` para que el preview muestre "… y más entradas" (sin un número falso).
     summary.total_entries = entries.len();
+    if *limit_hit && entries.is_empty() {
+        return false;
+    }
     true
 }
 
 /// Lee el archivo como texto y, si `lang` está presente (la regla fuerza un lenguaje), resalta
 /// el texto YA recortado con `core::highlight` (defensa i16 intacta: se resalta lo recortado).
+#[cfg(test)]
 fn read_text(path: &Path, lang: Option<CodeLang>, msgs: &PreviewMessages) -> Payload {
-    use naygo_core::preview::{truncate_text, TEXT_MAX_BYTES};
+    read_text_with_limit(path, lang, msgs, preview::DEFAULT_TEXT_MAX_BYTES as usize)
+}
+
+fn read_text_with_limit(
+    path: &Path,
+    lang: Option<CodeLang>,
+    msgs: &PreviewMessages,
+    max_bytes: usize,
+) -> Payload {
+    use naygo_core::preview::truncate_text;
     use std::io::Read;
+    let max_bytes =
+        preview::normalize_text_max_bytes(max_bytes.min(preview::TEXT_MAX_BYTES) as u32) as usize;
     let Ok(mut file) = std::fs::File::open(path) else {
         return Payload::Message(msgs.read.clone());
     };
-    let mut buf = Vec::with_capacity(TEXT_MAX_BYTES.min(8192));
+    let mut buf = Vec::with_capacity(max_bytes.min(8192));
     let mut chunk = [0u8; 8192];
     let mut hit_cap = false;
     loop {
@@ -813,8 +1532,8 @@ fn read_text(path: &Path, lang: Option<CodeLang>, msgs: &PreviewMessages) -> Pay
             Ok(0) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
-                if buf.len() >= TEXT_MAX_BYTES {
-                    buf.truncate(TEXT_MAX_BYTES);
+                if buf.len() >= max_bytes {
+                    buf.truncate(max_bytes);
                     hit_cap = true;
                     break;
                 }
@@ -829,12 +1548,22 @@ fn read_text(path: &Path, lang: Option<CodeLang>, msgs: &PreviewMessages) -> Pay
     Payload::Text {
         text: t.text,
         truncated: t.truncated,
+        bytes_read: Some(buf.len()),
         highlighted,
     }
 }
 
+#[cfg(test)]
 fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
-    use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
+    read_image_with_quality(path, token, msgs, Quality::default())
+}
+fn read_image_with_quality(
+    path: &Path,
+    token: &CancellationToken,
+    msgs: &PreviewMessages,
+    quality: Quality,
+) -> Payload {
+    use naygo_core::preview::IMAGE_MAX_BYTES;
     match std::fs::metadata(path) {
         Ok(m) if m.len() > IMAGE_MAX_BYTES => return Payload::Message(msgs.image_big.clone()),
         Ok(_) => {}
@@ -843,15 +1572,35 @@ fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) ->
     if token.is_cancelled() {
         return Payload::Message(msgs.cancelled.clone());
     }
-    let Ok(img) = image::open(path) else {
+    let bytes = match read_bounded(path, IMAGE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(_) => return Payload::Message(msgs.image_big.clone()),
+    };
+    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
+    else {
         return Payload::Message(msgs.decode.clone());
+    };
+    // Decoder limits are defense in depth, NOT a claim about total process memory.
+    // The Windows Job is the hard committed-memory backstop for non-cooperative codecs.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let img = match reader.decode() {
+        Ok(img) if u64::from(img.width()) * u64::from(img.height()) <= 16 * 1024 * 1024 => img,
+        Ok(_) | Err(image::ImageError::Limits(_)) => {
+            return Payload::Message(msgs.image_big.clone())
+        }
+        Err(_) => return Payload::Message(msgs.decode.clone()),
     };
     if token.is_cancelled() {
         return Payload::Message(msgs.cancelled.clone());
     }
     let (w, h) = (img.width(), img.height());
-    let scaled = if w > IMAGE_MAX_SIDE || h > IMAGE_MAX_SIDE {
-        img.thumbnail(IMAGE_MAX_SIDE, IMAGE_MAX_SIDE)
+    let side = quality.image_side();
+    let scaled = if w > side || h > side {
+        img.thumbnail(side, side)
     } else {
         img
     };
@@ -869,11 +1618,32 @@ fn read_image(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) ->
 /// Flash/Animate usan coordenadas negativas y, con el canvas SVG implícito de 100×100, quedaban
 /// recortados en la vista previa. Como el SVG es vectorial, se respeta el tope de bytes del
 /// ARCHIVO fuente (no del bitmap resultante). Cancelable entre etapas.
+fn read_bounded(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        return Err(std::io::Error::other("preview input limit"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
 fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> Payload {
-    use naygo_core::preview::{IMAGE_MAX_BYTES, IMAGE_MAX_SIDE};
+    read_svg_with_quality(path, token, msgs, Quality::default())
+}
+fn read_svg_with_quality(
+    path: &Path,
+    token: &CancellationToken,
+    msgs: &PreviewMessages,
+    quality: Quality,
+) -> Payload {
+    use naygo_core::preview::IMAGE_MAX_BYTES;
     let bytes = match std::fs::metadata(path) {
         Ok(m) if m.len() > IMAGE_MAX_BYTES => return Payload::Message(msgs.svg_big.clone()),
-        Ok(_) => match std::fs::read(path) {
+        Ok(_) => match read_bounded(path, IMAGE_MAX_BYTES) {
             Ok(b) => b,
             Err(_) => return Payload::Message(msgs.read.clone()),
         },
@@ -884,7 +1654,10 @@ fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> P
     }
     // usvg parsea el SVG a un árbol simplificado. Opciones por defecto (sin fuentes externas:
     // el texto del SVG usa la BD de fuentes por defecto, suficiente para un preview).
-    let opt = usvg::Options::default();
+    // Embedded data images remain available; arbitrary external file/UNC references are
+    // not part of a self-contained preview and must never trigger extra filesystem reads.
+    let mut opt = usvg::Options::default();
+    opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let tree = match usvg::Tree::from_data(&bytes, &opt) {
         Ok(t) => t,
         Err(_) => return Payload::Message(msgs.svg_bad.clone()),
@@ -898,9 +1671,13 @@ fn read_svg(path: &Path, token: &CancellationToken, msgs: &PreviewMessages) -> P
     // sigue estrictamente acotado por IMAGE_MAX_SIDE.
     let (sw, sh) = (canvas.width, canvas.height);
     let longest = sw.max(sh).max(1.0);
-    let scale = (IMAGE_MAX_SIDE as f32 / longest).max(0.01);
-    let pw = (sw * scale).ceil().max(1.0) as u32;
-    let ph = (sh * scale).ceil().max(1.0) as u32;
+    if !longest.is_finite() || !sw.is_finite() || !sh.is_finite() {
+        return Payload::Message(msgs.svg_big.clone());
+    }
+    let side = quality.image_side() as f32;
+    let scale = side / longest;
+    let pw = (sw * scale).ceil().clamp(1.0, side) as u32;
+    let ph = (sh * scale).ceil().clamp(1.0, side) as u32;
     let mut pixmap = match tiny_skia::Pixmap::new(pw, ph) {
         Some(p) => p,
         None => return Payload::Message(msgs.rasterize.clone()),
@@ -959,16 +1736,23 @@ fn svg_canvas(tree: &usvg::Tree, bytes: &[u8]) -> SvgCanvas {
 /// Lee solo la etiqueta raíz. No pretendemos reemplazar un parser XML: usvg ya valida el SVG;
 /// este chequeo decide si debe respetarse su canvas o corregirse el viewport implícito.
 fn svg_has_explicit_canvas(bytes: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(bytes);
-    let lower = text.to_ascii_lowercase();
-    let Some(start) = lower.find("<svg") else {
+    // Attribute names are ASCII. Inspect only the root tag so a 20 MiB SVG does not need a
+    // lossy String and a second full-size lowercase copy just to answer this question.
+    let Some(start) = bytes
+        .windows(b"<svg".len())
+        .position(|window| window.eq_ignore_ascii_case(b"<svg"))
+    else {
         return true;
     };
-    let Some(end_rel) = lower[start..].find('>') else {
+    let Some(end_rel) = bytes[start..].iter().position(|byte| *byte == b'>') else {
         return true;
     };
-    let tag = &lower[start..start + end_rel];
-    tag.contains("viewbox") || (tag.contains("width") && tag.contains("height"))
+    let tag = &bytes[start..start + end_rel];
+    let has = |attribute: &[u8]| {
+        tag.windows(attribute.len())
+            .any(|window| window.eq_ignore_ascii_case(attribute))
+    };
+    has(b"viewbox") || (has(b"width") && has(b"height"))
 }
 
 /// Convierte RGBA premultiplicado (tiny-skia) a RGBA recto (lo que espera el panel). Divide cada
@@ -991,6 +1775,142 @@ fn unpremultiply_rgba(data: &[u8], w: u32, h: u32) -> Vec<u8> {
 const PDF_TEXT_MAX_CHARS: usize = 8000;
 /// Tope de bytes del PDF a abrir (archivos enormes se evitan).
 const PDF_MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// Tope de páginas cuyo contenido se recorre; `get_pages()` sigue contando el total para el título.
+const PDF_MAX_PAGES: usize = 500;
+
+/// Writer acotado para cortar la extracción dentro de `pdf-extract`, antes de construir un
+/// `String` completo para documentos que contienen muchísimo texto. El parser corre en el proceso
+/// aislado de preview y termina cuando recibe `fmt::Error` al alcanzar el máximo.
+#[derive(Debug)]
+struct BoundedPdfText {
+    text: String,
+    chars: usize,
+    max_chars: usize,
+    truncated: bool,
+}
+
+impl BoundedPdfText {
+    fn new(max_chars: usize) -> Self {
+        Self {
+            text: String::with_capacity(max_chars.min(8192)),
+            chars: 0,
+            max_chars,
+            truncated: false,
+        }
+    }
+}
+
+impl std::fmt::Write for BoundedPdfText {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        let mut chars = value.chars();
+        let remaining = self.max_chars.saturating_sub(self.chars);
+        for _ in 0..remaining {
+            let Some(ch) = chars.next() else {
+                return Ok(());
+            };
+            self.text.push(ch);
+            self.chars += 1;
+        }
+        if chars.next().is_some() {
+            self.truncated = true;
+            Err(std::fmt::Error)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl pdf_extract::ConvertToFmt for &mut BoundedPdfText {
+    type Writer = Self;
+
+    fn convert(self) -> Self::Writer {
+        self
+    }
+}
+
+/// Limita las páginas de contenido procesadas, sin cambiar el algoritmo de extracción de texto
+/// que ofrece `pdf-extract` para cada página.
+struct BoundedPdfOutput<'a> {
+    inner: pdf_extract::PlainTextOutput<&'a mut BoundedPdfText>,
+    pages: usize,
+    max_pages: usize,
+    page_limit_reached: bool,
+}
+
+impl<'a> BoundedPdfOutput<'a> {
+    fn new(text: &'a mut BoundedPdfText, max_pages: usize) -> Self {
+        Self {
+            inner: pdf_extract::PlainTextOutput::new(text),
+            pages: 0,
+            max_pages,
+            page_limit_reached: false,
+        }
+    }
+}
+
+impl pdf_extract::OutputDev for BoundedPdfOutput<'_> {
+    fn begin_page(
+        &mut self,
+        page_num: u32,
+        media_box: &pdf_extract::MediaBox,
+        art_box: Option<(f64, f64, f64, f64)>,
+    ) -> Result<(), pdf_extract::OutputError> {
+        if self.pages >= self.max_pages {
+            self.page_limit_reached = true;
+            return Err(pdf_extract::OutputError::FormatError(std::fmt::Error));
+        }
+        self.pages += 1;
+        self.inner.begin_page(page_num, media_box, art_box)
+    }
+
+    fn end_page(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_page()
+    }
+
+    fn output_character(
+        &mut self,
+        transform: &pdf_extract::Transform,
+        width: f64,
+        spacing: f64,
+        font_size: f64,
+        character: &str,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner
+            .output_character(transform, width, spacing, font_size, character)
+    }
+
+    fn begin_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.begin_word()
+    }
+
+    fn end_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_word()
+    }
+
+    fn end_line(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_line()
+    }
+
+    fn stroke(
+        &mut self,
+        transform: &pdf_extract::Transform,
+        colorspace: &pdf_extract::ColorSpace,
+        color: &[f64],
+        path: &pdf_extract::Path,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner.stroke(transform, colorspace, color, path)
+    }
+
+    fn fill(
+        &mut self,
+        transform: &pdf_extract::Transform,
+        colorspace: &pdf_extract::ColorSpace,
+        color: &[f64],
+        path: &pdf_extract::Path,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner.fill(transform, colorspace, color, path)
+    }
+}
 
 /// Preview LIVIANO de un PDF: extrae el texto (puro Rust, sin DLLs) y un encabezado con el nº de
 /// páginas. NO renderiza la página (eso requeriría una DLL nativa). Devuelve `Payload::Text`.
@@ -1000,39 +1920,48 @@ fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
         Ok(_) => {}
         Err(_) => return Payload::Message(msgs.read.clone()),
     }
-    // Nº de páginas vía lopdf (barato: solo recorre el árbol de páginas).
-    let pages = lopdf::Document::load(path)
-        .ok()
-        .map(|d| d.get_pages().len());
+    // `pdf-extract` reexporta el `Document` que usa internamente (lopdf 0.38). Leer las páginas
+    // y extraer texto desde una sola carga conserva el mismo parser y formato de PlainTextOutput.
+    // La metadata general continúa usando lopdf 0.41 desde naygo-core.
+    let mut doc =
+        match crate::logging::catch_recoverable_panic(|| pdf_extract::Document::load(path)) {
+            Ok(Ok(doc)) => doc,
+            Ok(Err(_)) | Err(_) => {
+                return Payload::Text {
+                    text: msgs.pdf_no_text.clone(),
+                    truncated: false,
+                    bytes_read: None,
+                    highlighted: None,
+                };
+            }
+        };
+    let pages = Some(doc.get_pages().len());
     // Frase traducida con el nº de páginas (placeholder `{n}`). El código añade la puntuación
     // final (`.` sin texto, `:` con texto) y los saltos; así una sola clave i18n cubre ambas.
     let pages_phrase = |n: usize| msgs.pdf_pages.replace("{n}", &n.to_string());
-    // `pdf-extract` 0.10 puede hacer panic ante streams sintácticamente válidos pero con
-    // operandos faltantes. El PDF es input hostil: lo convertimos en el mismo resultado discreto
-    // que un error normal y silenciamos el panic hook solo alrededor de esta llamada recuperable.
-    let extracted = crate::logging::catch_recoverable_panic(|| pdf_extract::extract_text(path));
-    let text = match extracted {
-        Ok(Ok(t)) => t,
-        Ok(Err(error)) => {
-            crate::logging::log_line(&format!(
-                "preview PDF: no se pudo extraer texto de {}: {error}",
-                path.display()
-            ));
-            let head = match pages {
-                Some(n) => format!("{}.\n\n", pages_phrase(n)),
-                None => String::new(),
+    // `pdf-extract` puede hacer panic ante streams sintácticamente válidos pero con operandos
+    // faltantes. El writer se detiene al alcanzar el máximo, antes de acumular texto ilimitado.
+    // El proceso aislado conserva su límite de memoria, timeout y cancelación.
+    let extracted = crate::logging::catch_recoverable_panic(|| {
+        let mut bounded = BoundedPdfText::new(PDF_TEXT_MAX_CHARS);
+        let (result, page_limit_reached) = {
+            let mut output = BoundedPdfOutput::new(&mut bounded, PDF_MAX_PAGES);
+            let result = if doc.is_encrypted() {
+                pdf_extract::output_doc_encrypted(&mut doc, &mut output, "")
+            } else {
+                pdf_extract::output_doc(&doc, &mut output)
             };
-            return Payload::Text {
-                text: format!("{head}{}", msgs.pdf_no_text),
-                truncated: false,
-                highlighted: None,
-            };
+            (result, output.page_limit_reached)
+        };
+        (result, bounded, page_limit_reached)
+    });
+    let (text, truncated) = match extracted {
+        Ok((result, bounded, page_limit_reached))
+            if result.is_ok() || bounded.truncated || page_limit_reached =>
+        {
+            (bounded.text, bounded.truncated || page_limit_reached)
         }
-        Err(_) => {
-            crate::logging::log_line(&format!(
-                "preview PDF: pdf-extract hizo panic controlado para {}",
-                path.display()
-            ));
+        Ok(_) | Err(_) => {
             let head = match pages {
                 Some(n) => format!("{}.\n\n", pages_phrase(n)),
                 None => String::new(),
@@ -1040,6 +1969,7 @@ fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
             return Payload::Text {
                 text: format!("{head}{}", msgs.pdf_no_text),
                 truncated: false,
+                bytes_read: None,
                 highlighted: None,
             };
         }
@@ -1049,15 +1979,14 @@ fn read_pdf(path: &Path, msgs: &PreviewMessages) -> Payload {
         None => "PDF:\n\n".to_string(),
     };
     let trimmed = text.trim();
-    let too_long = trimmed.chars().count() > PDF_TEXT_MAX_CHARS;
-    let capped: String = trimmed.chars().take(PDF_TEXT_MAX_CHARS).collect();
     // Recorte por línea: el texto extraído de un PDF puede traer líneas larguísimas que
     // desbordarían el render por software (glifo fuera del rango i16). Misma defensa que el
     // preview de texto.
-    let (body, clipped) = naygo_core::preview::clip_long_lines(&capped);
+    let (body, clipped) = naygo_core::preview::clip_long_lines(trimmed);
     Payload::Text {
         text: format!("{header}{body}"),
-        truncated: too_long || clipped,
+        truncated: truncated || clipped,
+        bytes_read: None,
         highlighted: None,
     }
 }
@@ -1080,6 +2009,84 @@ mod tests {
     /// Mensajes de error en español para los tests (valores por defecto del struct).
     fn msgs_es() -> PreviewMessages {
         PreviewMessages::default()
+    }
+
+    #[test]
+    fn preflight_zip32_lee_cantidad_y_tamano_del_indice() {
+        use std::io::Cursor;
+
+        let mut eocd = vec![0u8; 22];
+        eocd[..4].copy_from_slice(b"PK\x05\x06");
+        eocd[8..10].copy_from_slice(&7u16.to_le_bytes());
+        eocd[10..12].copy_from_slice(&7u16.to_le_bytes());
+        eocd[12..16].copy_from_slice(&512u32.to_le_bytes());
+        let bounds = zip_index_bounds(&mut Cursor::new(eocd))
+            .unwrap()
+            .expect("footer ZIP32");
+        assert_eq!(bounds.entries, 7);
+        assert_eq!(bounds.directory_bytes, 512);
+    }
+
+    #[test]
+    fn preflight_zip64_lee_contadores_de_64_bits() {
+        use std::io::Cursor;
+
+        let mut bytes = vec![0u8; 56 + 20 + 22];
+        bytes[..4].copy_from_slice(b"PK\x06\x06");
+        bytes[4..12].copy_from_slice(&44u64.to_le_bytes());
+        bytes[24..32].copy_from_slice(&10_001u64.to_le_bytes());
+        bytes[32..40].copy_from_slice(&10_001u64.to_le_bytes());
+        bytes[40..48].copy_from_slice(&700_000u64.to_le_bytes());
+        let locator = 56;
+        bytes[locator..locator + 4].copy_from_slice(b"PK\x06\x07");
+        bytes[locator + 8..locator + 16].copy_from_slice(&0u64.to_le_bytes());
+        let eocd = locator + 20;
+        bytes[eocd..eocd + 4].copy_from_slice(b"PK\x05\x06");
+        bytes[eocd + 10..eocd + 12].copy_from_slice(&u16::MAX.to_le_bytes());
+        bytes[eocd + 12..eocd + 16].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let bounds = zip_index_bounds(&mut Cursor::new(bytes))
+            .unwrap()
+            .expect("footer ZIP64");
+        assert_eq!(bounds.entries, 10_001);
+        assert_eq!(bounds.directory_bytes, 700_000);
+        assert!(bounds.entries > ARCHIVE_ZIP_MAX_INDEX_ENTRIES);
+    }
+
+    #[test]
+    fn presupuesto_de_archivo_limita_bytes_y_registra_intento_posterior() {
+        use std::io::Read as _;
+
+        let hit = Arc::new(AtomicBool::new(false));
+        let mut reader = ArchiveReadBudget::new(std::io::Cursor::new(vec![7; 8]), 5, hit.clone());
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, vec![7; 5]);
+        assert!(hit.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn ruta_de_archivo_limita_largo_y_profundidad() {
+        assert!(archive_path_is_bounded("carpeta/archivo.txt"));
+        assert!(!archive_path_is_bounded(
+            &"x".repeat(ARCHIVE_MAX_PATH_BYTES + 1)
+        ));
+        let deep = format!(
+            "{}/file",
+            vec!["x"; ARCHIVE_MAX_PATH_COMPONENTS + 1].join("/")
+        );
+        assert!(!archive_path_is_bounded(&deep));
+    }
+
+    #[test]
+    fn suma_de_tamano_de_archivo_no_desborda() {
+        let mut summary = naygo_core::archive_tree::ArchiveSummary {
+            total_uncompressed: u64::MAX,
+            ..Default::default()
+        };
+        assert!(!add_archive_size(&mut summary, 1));
+        assert_eq!(summary.total_uncompressed, u64::MAX);
+        assert!(summary.truncated);
     }
 
     #[test]
@@ -1122,6 +2129,67 @@ mod tests {
         assert_eq!(canvas.y, 0.0);
         assert_eq!(canvas.width, 320.0);
         assert_eq!(canvas.height, 180.0);
+    }
+
+    #[test]
+    fn canvas_svg_detecta_atributos_ascii_sin_convertir_el_documento() {
+        assert!(svg_has_explicit_canvas(
+            br#"<SVG WIDTH="320" HEIGHT="180">"#
+        ));
+        assert!(svg_has_explicit_canvas(br#"<svg viewBox="0 0 320 180">"#));
+        assert!(!svg_has_explicit_canvas(
+            br#"<svg xmlns="http://www.w3.org/2000/svg">"#
+        ));
+    }
+
+    #[test]
+    fn svg_con_muchos_elementos_se_rasteriza_a_dimensiones_acotadas() {
+        let mut source =
+            String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">"#);
+        for index in 0..4_000 {
+            let x = index % 64;
+            let y = (index / 64) % 64;
+            source.push_str(&format!(r#"<circle cx="{x}" cy="{y}" r="1"/>"#));
+        }
+        source.push_str("</svg>");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("muchos-elementos.svg");
+        std::fs::write(&path, source).unwrap();
+
+        match read_svg(&path, &CancellationToken::new(), &msgs_es()) {
+            Payload::Image {
+                width,
+                height,
+                rgba,
+            } => {
+                assert_eq!((width, height), (2048, 2048));
+                assert_eq!(rgba.len(), 2048 * 2048 * 4);
+            }
+            other => panic!("esperaba SVG rasterizado, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn imagen_con_ancho_mayor_al_limite_se_rechaza_antes_de_escalar() {
+        let width = 16_385;
+        let image = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+            width,
+            1,
+            vec![0; width as usize * 4],
+        )
+        .unwrap();
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ancho-extremo.png");
+        std::fs::write(&path, encoded.into_inner()).unwrap();
+
+        assert!(matches!(
+            read_image(&path, &CancellationToken::new(), &msgs_es()),
+            Payload::Message(message) if message == msgs_es().image_big
+        ));
     }
 
     #[test]
@@ -1172,6 +2240,82 @@ mod tests {
     }
 
     #[test]
+    fn writer_pdf_limita_caracteres_unicode_y_senala_el_corte() {
+        use std::fmt::Write as _;
+
+        let mut output = BoundedPdfText::new(4);
+        assert!(write!(&mut output, "abá中de").is_err());
+        assert_eq!(output.text, "abá中");
+        assert_eq!(output.chars, 4);
+        assert!(output.truncated);
+
+        let mut exact = BoundedPdfText::new(4);
+        assert!(write!(&mut exact, "abá中").is_ok());
+        assert_eq!(exact.text, "abá中");
+        assert!(!exact.truncated);
+    }
+
+    #[test]
+    fn output_pdf_detiene_recorrido_al_limite_de_paginas() {
+        use pdf_extract::OutputDev as _;
+
+        let mut text = BoundedPdfText::new(PDF_TEXT_MAX_CHARS);
+        let mut output = BoundedPdfOutput::new(&mut text, 2);
+        let media_box = pdf_extract::MediaBox {
+            llx: 0.0,
+            lly: 0.0,
+            urx: 612.0,
+            ury: 792.0,
+        };
+        assert!(output.begin_page(1, &media_box, None).is_ok());
+        assert!(output.begin_page(2, &media_box, None).is_ok());
+        assert!(output.begin_page(3, &media_box, None).is_err());
+        assert!(output.page_limit_reached);
+    }
+
+    #[test]
+    fn pdf_muy_largo_se_corta_durante_la_extraccion() {
+        use lopdf::{dictionary, Document, Stream};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("texto-extenso.pdf");
+        let mut doc = Document::with_version("1.5");
+        let pages = doc.new_object_id();
+        let font = doc.add_object(
+            dictionary! {"Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica"},
+        );
+        let content = format!(
+            "BT /F1 12 Tf ({}) Tj ET",
+            "A".repeat(PDF_TEXT_MAX_CHARS + 500)
+        );
+        let content = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}},
+            "Contents" => content,
+        });
+        doc.objects.insert(
+            pages,
+            dictionary! {"Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1}.into(),
+        );
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        doc.save(&path).unwrap();
+
+        let Payload::Text {
+            text, truncated, ..
+        } = read_pdf(&path, &msgs_es())
+        else {
+            panic!("se esperaba texto de preview PDF")
+        };
+        assert!(truncated, "la salida debe indicar el corte por límite");
+        let (_, body) = text.split_once("\n\n").expect("encabezado y cuerpo");
+        assert!(body.chars().count() <= PDF_TEXT_MAX_CHARS);
+        assert!(body.chars().count() >= naygo_core::preview::TEXT_MAX_LINE_CHARS);
+    }
+
+    #[test]
     fn debounce_no_arranca_antes_del_plazo() {
         let mut s = PreviewState::new();
         let t0 = Instant::now();
@@ -1200,15 +2344,18 @@ mod tests {
     }
 
     #[test]
-    fn cancelar_preview_se_ofrece_solo_despues_de_cinco_segundos_sin_contenido() {
+    fn cancelar_preview_se_ofrece_desde_el_debounce() {
         let mut s = PreviewState::new();
         let t0 = Instant::now();
         s.set_wanted(Some(PathBuf::from("C:/x/lento.stl")), t0);
         // Simula el instante en que ya arrancó un worker (el test no toca disco ni hilos).
-        s.loading_since = Some(t0);
         assert!(s.loading());
-        assert!(!s.can_cancel(t0 + PREVIEW_CANCEL_AFTER - Duration::from_millis(1)));
-        assert!(s.can_cancel(t0 + PREVIEW_CANCEL_AFTER));
+        assert!(s.can_cancel(t0));
+        assert!(s.cancel());
+        assert!(!s.busy());
+        assert!(!s.should_start(t0 + PREVIEW_DEBOUNCE));
+        assert!(s.retry(t0));
+        assert!(s.should_start(t0 + PREVIEW_DEBOUNCE));
     }
 
     #[test]
@@ -1274,6 +2421,57 @@ mod tests {
     }
 
     #[test]
+    fn zip_lista_hasta_el_limite_y_marca_entradas_restantes() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("muchas-entradas.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            for index in 0..=ARCHIVE_MAX_ENTRIES {
+                writer
+                    .start_file(format!("archivo-{index:03}.txt"), options)
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let Payload::Text {
+            text, truncated, ..
+        } = read_archive_listing(&zip_path, &labels_es(), &msgs_es())
+        else {
+            panic!("se esperaba el listado ZIP parcial")
+        };
+        assert!(truncated);
+        assert!(text.contains("archivo-000.txt"));
+        assert!(!text.contains("archivo-500.txt"));
+        assert!(text.contains("… y 1 más"));
+    }
+
+    #[test]
+    fn zip_con_indice_mayor_al_presupuesto_se_detiene_con_mensaje_de_limite() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("indice-grande.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            let prefix = "x".repeat(65_000);
+            for index in 0..130 {
+                writer
+                    .start_file(format!("{prefix}-{index:03}.txt"), options)
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let payload = read_archive_listing(&zip_path, &labels_es(), &msgs_es());
+        assert!(
+            matches!(payload, Payload::Message(message) if message == msgs_es().reader_stopped)
+        );
+    }
+
+    #[test]
     fn read_archive_listing_targz_muestra_entradas() {
         let dir = tempfile::tempdir().unwrap();
         let tgz_path = dir.path().join("demo.tar.gz");
@@ -1297,6 +2495,42 @@ mod tests {
             }
             _ => panic!("se esperaba Payload::Text, fue {:?}", payload),
         }
+    }
+
+    #[test]
+    fn targz_detiene_expansion_y_conserva_listado_parcial() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("expansion-grande.tar.gz");
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(encoder);
+            let data = vec![0u8; ARCHIVE_MAX_UNCOMPRESSED_BYTES as usize + 1];
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "grande.bin", &data[..])
+                .unwrap();
+            let small = b"despues";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(small.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "despues.txt", &small[..])
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let Payload::Text {
+            text, truncated, ..
+        } = read_archive_listing(&path, &labels_es(), &msgs_es())
+        else {
+            panic!("se esperaba un listado TAR.GZ parcial")
+        };
+        assert!(truncated);
+        assert!(text.contains("grande.bin"));
+        assert!(!text.contains("despues.txt"));
     }
 
     #[test]
@@ -1403,20 +2637,47 @@ mod tests {
     }
 
     #[test]
-    fn sif_tratado_como_texto_se_previsualiza() {
-        // Con una regla .sif→Text (lo que configura el usuario), el contenido se lee como texto.
+    fn sif_automatico_se_previsualiza_como_texto() {
+        // `.sif` en Auto debe seguir la clasificación textual nueva y no exigir ajuste manual.
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("modelo.sif");
         std::fs::write(&p, b"linea de texto\n").unwrap();
-        let rules = vec![preview::PreviewRule {
-            ext: "sif".to_string(),
-            enabled: true,
-            view: preview::ViewMode::Text,
-        }];
+        let rules = preview::default_preview_rules();
         let token = CancellationToken::new();
         match build_payload(&p, &rules, false, &labels_es(), &msgs_es(), &token) {
             Payload::Text { text, .. } => assert!(text.contains("linea de texto")),
             other => panic!("esperaba texto para .sif, fue {other:?}"),
         }
+    }
+
+    #[test]
+    fn shell_script_textual_se_lee_con_modo_automatico() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordenar.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho listo\n").unwrap();
+        let rules = preview::default_preview_rules();
+        let token = CancellationToken::new();
+
+        match build_payload(&path, &rules, false, &labels_es(), &msgs_es(), &token) {
+            Payload::Text { text, .. } => assert!(text.contains("echo listo")),
+            other => panic!("esperaba texto para .sh, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reader_usa_el_limite_configurado_y_reporta_bytes_leidos() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grande.txt");
+        std::fs::write(&path, "x\n".repeat(400_000)).unwrap();
+
+        let payload = read_text_with_limit(&path, None, &msgs_es(), 512 * 1024);
+        assert!(matches!(
+            payload,
+            Payload::Text {
+                truncated: true,
+                bytes_read: Some(bytes_read),
+                ..
+            } if bytes_read == 512 * 1024
+        ));
     }
 }

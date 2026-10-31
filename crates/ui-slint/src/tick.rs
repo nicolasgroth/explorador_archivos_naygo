@@ -22,6 +22,7 @@ use std::rc::Rc;
 /// Dependencias que el tick necesita del arranque de `main` (canales, handles y flags
 /// compartidos). Agruparlas evita una firma de 15 parámetros sueltos.
 pub(crate) struct TickDeps {
+    pub start_animation_timer: Rc<dyn Fn()>,
     pub ctrl: Rc<RefCell<WorkspaceCtrl>>,
     pub sync_rows: Rc<dyn Fn()>,
     pub sync_layout: Rc<dyn Fn()>,
@@ -38,16 +39,75 @@ pub(crate) struct TickDeps {
     /// en cada tick para no llenar el log mientras winit termina de realizar el HWND.
     pub drop_registration_attempt: Rc<Cell<Option<std::time::Instant>>>,
     pub tray: Rc<Option<tray::Tray>>,
-    pub tray_active: bool,
+    pub tray_active: Rc<Cell<bool>>,
     pub hotkey_id: Rc<std::cell::Cell<Option<u32>>>,
     pub geometry_restored: Rc<std::cell::Cell<bool>>,
     pub si_show_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub si_shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Se instala después de construir las closures de refresco; permite repintar la toolbar,
+    /// galerías y picker cuando el worker entrega PNGs externos.
+    pub icon_refresh: crate::DeferredCallback,
+    pub pack_io: Rc<RefCell<crate::packs::PackIo>>,
+    pub pack_result: crate::packs::PackOutcomeCallback,
+    /// Reaplica globales de UI cuando el snapshot inicial de configuración llega del worker.
+    pub startup_refresh: crate::DeferredCallback,
+    /// Repinta la tira al terminar el worker de unidades o expulsión.
+    pub drive_refresh: crate::DeferredCallback,
+}
+
+/// Muestra la confirmación genérica sólo después de que el probe worker confirmó destino libre.
+fn show_drop_confirmation(
+    ui_weak: &slint::Weak<AppWindow>,
+    pd: &crate::workspace_ctrl::PendingDrop,
+) {
+    let Some(ui) = ui_weak.upgrade() else {
+        return;
+    };
+    let tr = ui.global::<Tr>();
+    let dest_name = pd
+        .dest_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| pd.dest_dir.display().to_string());
+    let more_tmpl = tr.get_drop_confirm_more().to_string();
+    let items = pd.names_summary(|n| more_tmpl.replace("{n}", &n.to_string()));
+    let template = if pd.is_move {
+        tr.get_drop_confirm_move()
+    } else {
+        tr.get_drop_confirm_copy()
+    };
+    let body = template
+        .replace("{items}", &items)
+        .replace("{dest}", &dest_name);
+    let confirm_label = if pd.is_move {
+        tr.get_dlg_move()
+    } else {
+        tr.get_dlg_copy()
+    };
+    ui.set_message(MessageVm {
+        kind: 3,
+        level: 0,
+        title: tr.get_drop_confirm_title(),
+        body: body.into(),
+        confirm_label,
+        cancel_label: tr.get_dlg_cancel(),
+        danger: false,
+    });
+    // OLE acaba de salir de su bucle modal: diferir el foco para que el primer clic active el botón.
+    let uiw2 = ui_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = uiw2.upgrade() {
+            if let Some(hwnd) = naygo_hwnd(&ui) {
+                naygo_platform::window::bring_to_front(hwnd);
+            }
+        }
+    });
 }
 
 /// Construye `start_timer`: la factory que (re)arranca el timer de 30 ms con el tick completo.
 pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
     let TickDeps {
+        start_animation_timer,
         ctrl,
         sync_rows,
         sync_layout,
@@ -67,7 +127,14 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         geometry_restored,
         si_show_requested,
         si_shutdown_requested,
+        icon_refresh,
+        pack_io,
+        pack_result,
+        startup_refresh,
+        drive_refresh,
     } = deps;
+    #[cfg(not(windows))]
+    let _ = (hotkey_id, geometry_restored);
     let ctrl = ctrl.clone();
     let sync_rows = sync_rows.clone();
     let sync_layout = sync_layout.clone();
@@ -90,6 +157,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
     #[cfg(windows)]
     let geometry_restored = geometry_restored.clone();
     Rc::new(move || {
+        let start_animation_timer = start_animation_timer.clone();
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let sync_layout = sync_layout.clone();
@@ -104,6 +172,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         let drop_guard = drop_guard.clone();
         let drop_registration_attempt = drop_registration_attempt.clone();
         let tray = tray.clone();
+        let tray_active = tray_active.clone();
         // Solo se clona `hotkey_id` para LEER si hay registro vivo en el tick (bajo cfg
         // windows). El registro lo mantiene vivo el binding `global_hotkey_slot` del scope de
         // `main` (vive hasta después de `ui.run()`, toda la sesión), NO este closure.
@@ -113,6 +182,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
         // instancia del exe avisó antes de salir).
         let si_show_requested = si_show_requested.clone();
         let si_shutdown_requested = si_shutdown_requested.clone();
+        let icon_refresh = icon_refresh.clone();
+        let pack_io = pack_io.clone();
+        let pack_result = pack_result.clone();
+        let startup_refresh = startup_refresh.clone();
+        let drive_refresh = drive_refresh.clone();
         // One-shot de geometría guardada (se intenta en cada tick hasta aplicarla; barata:
         // un get() de Cell una vez consumida).
         #[cfg(windows)]
@@ -121,6 +195,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
             TimerMode::Repeated,
             std::time::Duration::from_millis(30),
             move || {
+                let _tick_metric = crate::metrics::span("ui.tick");
                 let now = std::time::Instant::now();
                 // Cinturón de seguridad anti-reentrancia: el bucle modal de `DoDragDrop`
                 // (arrastre OLE hacia afuera) corre dentro del mismo hilo de UI y RE-ENTRA
@@ -132,6 +207,23 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // liveness: soltamos el préstamo de inmediato.
                 if ctrl.try_borrow_mut().is_err() {
                     return;
+                }
+                let startup_was_loading = ctrl
+                    .try_borrow()
+                    .is_ok_and(|controller| controller.startup_loading());
+                let startup_applied = ctrl
+                    .try_borrow_mut()
+                    .is_ok_and(|mut controller| controller.pump_startup_load());
+                let startup_finished = startup_was_loading
+                    && ctrl
+                        .try_borrow()
+                        .is_ok_and(|controller| !controller.startup_loading());
+                if startup_applied || startup_finished {
+                    sync_rows();
+                    sync_layout();
+                    if let Some(refresh) = startup_refresh.borrow().as_ref() {
+                        refresh();
+                    }
                 }
                 // Registrar el destino de drop OLE una sola vez, cuando el HWND ya es válido
                 // (primer tick con la ventana realizada). El guard vive toda la sesión.
@@ -302,89 +394,33 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     // Tras soltar, el resaltado de arrastre debe irse aunque el `Leave` del
                     // OLE no haya llegado/procesado todavía (defensa: que el borde no se quede
                     // pegado). Si ya estaba limpio, `set_drag_over` no marca cambio.
-                    if ctrl.borrow_mut().set_drag_over(None) {
+                    // Separa la mutación del render: sync_rows vuelve a tomar `ctrl` y debe
+                    // ejecutarse después de que este RefMut quede fuera de alcance.
+                    let drag_over_cleared = { ctrl.borrow_mut().set_drag_over(None) };
+                    if drag_over_cleared {
                         sync_rows();
                     }
                     // CONFIRMAR AL SOLTAR (PUNTO 1b): si `drop_at` dejó un drop pendiente (intra-app
                     // entre paneles), NO se ejecutó todavía. Abrimos el modal de confirmación
                     // "¿Copiar/Mover N a «destino»?". Al confirmar, `on_message_confirm` (kind 3)
                     // llama a `confirm_pending_drop`; al cancelar, `cancel_pending_drop` lo descarta.
-                    let pending = {
-                        let c = ctrl.borrow();
-                        c.pending_drop.clone()
-                    };
-                    // Con la confirmación de drop DESACTIVADA, `drop_at` arrancó la op directo
-                    // y consumió el pendiente: `routed` es true pero `pending` quedó None.
-                    // (Distinto de "cayó fuera de todo panel": ahí `routed` es false.)
-                    let direct_drop_ran = routed && pending.is_none();
+                    let pending = ctrl.borrow_mut().take_pending_drop_confirmation();
+                    // Los destinos lógicos como la bandeja se resuelven de inmediato y no crean
+                    // pendiente ni probe. Los drops a Files esperan el resultado del worker.
+                    let direct_drop_ran = routed
+                        && pending.is_none()
+                        && ctrl.borrow().pending_drop.is_none()
+                        && ctrl.borrow().drop_collision_rx.is_none();
                     // Un drop directo también puede haber mutado solo la bandeja temporal. En
                     // ambos casos sincronizar filas ahora evita que el panel parezca parpadear o
                     // quede vacío hasta el siguiente evento periódico.
                     if direct_drop_ran {
                         sync_rows();
                     }
-                    if let (Some(pd), Some(ui)) = (pending, ui_weak.upgrade()) {
-                        let tr = ui.global::<Tr>();
-                        let dest_name = pd
-                            .dest_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| pd.dest_dir.display().to_string());
-                        // Nombres de lo que se va a copiar/mover (pedido de Nicolás): 1 →
-                        // «a.txt»; pocos → «a.txt», «b.txt», …; muchos → primeros + " y N más"
-                        // (el sufijo lo da la clave i18n `drop-confirm-more`, con {n} resuelto).
-                        let more_tmpl = tr.get_drop_confirm_more().to_string();
-                        let items = pd.names_summary(|n| more_tmpl.replace("{n}", &n.to_string()));
-                        // Cuerpo: "¿Copiar/Mover <nombres> a «destino»?" — la plantilla i18n
-                        // lleva {items} y {dest}; el verbo lo elige según copiar/mover.
-                        let template = if pd.is_move {
-                            tr.get_drop_confirm_move()
-                        } else {
-                            tr.get_drop_confirm_copy()
-                        };
-                        let body = template
-                            .replace("{items}", &items)
-                            .replace("{dest}", &dest_name);
-                        let confirm_label = if pd.is_move {
-                            tr.get_dlg_move()
-                        } else {
-                            tr.get_dlg_copy()
-                        };
-                        ui.set_message(MessageVm {
-                            kind: 3, // 3 = confirmar drop entre paneles (2 botones, velo=cancela)
-                            level: 0,
-                            title: tr.get_drop_confirm_title(),
-                            body: body.into(),
-                            confirm_label,
-                            cancel_label: tr.get_dlg_cancel(),
-                            danger: false,
-                        });
-                        // BUG A (doble clic en el modal kind 3): tras el bucle modal de
-                        // `DoDragDrop` (OLE) la ventana de Naygo deja de ser la foreground del
-                        // SO. Hacer `bring_to_front` AQUÍ (mismo tick que desenrolla el
-                        // DoDragDrop) NO basta: el SO aún no terminó de soltar el foreground del
-                        // arrastre, así que el primer clic se gasta reactivando la ventana. Por
-                        // eso DIFERIMOS el `bring_to_front` un tick con `invoke_from_event_loop`
-                        // —igual que `start_drag`—: cuando corre, el desenrollado del drag ya
-                        // cerró y la ventana toma el foreground limpio, así el PRIMER clic va al
-                        // botón. El timer sigue vivo porque el modal kind 3 mantiene
-                        // `get_message().kind != 0`.
-                        let uiw2 = ui_weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = uiw2.upgrade() {
-                                if let Some(hwnd) = naygo_hwnd(&ui) {
-                                    naygo_platform::window::bring_to_front(hwnd);
-                                }
-                            }
-                        });
+                    if let Some(pd) = pending {
+                        show_drop_confirmation(&ui_weak, &pd);
                     } else if direct_drop_ran {
-                        // Confirmación de drop DESACTIVADA o drop CON conflicto: `drop_at` ya
-                        // arrancó la op directo (sin modal kind 3). Refrescar la disposición
-                        // (pudo aparecer el panel Operaciones); el timer sigue vivo y `pump_ops`
-                        // drenará el progreso y abrirá el modal de CONFLICTO si el archivo ya
-                        // existía en el destino. Diferimos el `bring_to_front` un tick (igual
-                        // que arriba) para que ESE modal (que llega un par de ticks después)
-                        // reciba el foreground limpio y el primer clic vaya al botón.
+                        // La bandeja u otro destino lógico pudo mutar el modelo de filas.
                         sync_layout();
                         let uiw2 = ui_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -396,11 +432,50 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         });
                     }
                 }
+                // La preconsulta se drena en ticks posteriores. Sólo entonces se abre la
+                // confirmación genérica o se lanza el drop en conflicto directamente.
+                // `Started` sincroniza filas y layout, closures que vuelven a prestar `ctrl`.
+                // Guardar el evento en una sentencia propia libera el RefMut antes del match.
+                let drop_probe_event = { ctrl.borrow_mut().pump_drop_collision_probe() };
+                match drop_probe_event {
+                    crate::workspace_ctrl::DropProbeEvent::Confirmation => {
+                        if let Some(pd) = ctrl.borrow_mut().take_pending_drop_confirmation() {
+                            show_drop_confirmation(&ui_weak, &pd);
+                        }
+                    }
+                    crate::workspace_ctrl::DropProbeEvent::Started => {
+                        sync_rows();
+                        sync_layout();
+                        let uiw2 = ui_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = uiw2.upgrade() {
+                                if let Some(hwnd) = naygo_hwnd(&ui) {
+                                    naygo_platform::window::bring_to_front(hwnd);
+                                }
+                            }
+                        });
+                    }
+                    crate::workspace_ctrl::DropProbeEvent::Idle
+                    | crate::workspace_ctrl::DropProbeEvent::Waiting
+                    | crate::workspace_ctrl::DropProbeEvent::Failed => {}
+                }
                 // Tray (F5E): drenar los mensajes del ícono de bandeja. Abrir = mostrar y
                 // elevar la ventana; Salir = terminar el bucle de verdad.
                 if let Some(t) = tray.as_ref() {
                     while let Ok(msg) = t.rx.try_recv() {
                         match msg {
+                            #[cfg(target_os = "linux")]
+                            tray::TrayMsg::Availability(available) => {
+                                // Linux crea y controla el indicador en un worker GLib; solo el
+                                // resultado asíncrono puede autorizar ocultar la ventana.
+                                tray_active
+                                    .set(available && ctrl.borrow().config.settings.tray_enabled);
+                                if !available {
+                                    crate::logging::log_line(
+                                        "[tray] backend GLib no disponible; cierre seguirá visible",
+                                    );
+                                }
+                            }
                             tray::TrayMsg::Open => {
                                 if let Some(ui) = ui_weak.upgrade() {
                                     restore_window(&ui);
@@ -446,15 +521,25 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 }
                             }
                             tray::TrayMsg::Exit => {
-                                ctrl.borrow().save_session();
+                                let tickets = {
+                                    let c = ctrl.borrow();
+                                    c.config.save();
+                                    let mut tickets = c.config.persistence_tickets();
+                                    match c.save_session_async() {
+                                        Ok(ticket) => tickets.push(ticket),
+                                        Err(error) => crate::logging::log_line(&format!(
+                                            "no se pudo encolar la sesión al salir: {error}"
+                                        )),
+                                    }
+                                    tickets
+                                };
                                 // Quitar el ícono de la bandeja ANTES de salir, para que no
                                 // quede "fantasma" hasta que Windows lo repinte al pasar el
                                 // mouse. `Drop` al terminar el proceso no basta (no es síncrono).
                                 if let Some(t) = tray.as_ref() {
                                     t.hide_icon();
                                 }
-                                tray::arm_exit_watchdog();
-                                let _ = slint::quit_event_loop();
+                                tray::quit_after_persistence(tickets);
                             }
                         }
                     }
@@ -469,7 +554,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     let pressed = naygo_platform::global_hotkey::was_pressed();
                     if pressed && hotkey_id.get().is_some() {
                         if let Some(ui) = ui_weak.upgrade() {
-                            toggle_window_visibility(&ui, tray_active);
+                            toggle_window_visibility(&ui, tray_active.get());
                         }
                     }
                 }
@@ -478,16 +563,27 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // Restaurar la ventana y, si dejó una carpeta en el spool, abrirla en un
                 // panel NUEVO (split del activo), sin perder lo que el usuario tenía.
                 if si_shutdown_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    ctrl.borrow().save_session();
+                    let tickets = {
+                        let c = ctrl.borrow();
+                        c.config.save();
+                        let mut tickets = c.config.persistence_tickets();
+                        tickets.extend(c.additional_persistence_tickets());
+                        match c.save_session_async() {
+                            Ok(ticket) => tickets.push(ticket),
+                            Err(error) => crate::logging::log_line(&format!(
+                                "no se pudo encolar la sesión al cerrar instancia: {error}"
+                            )),
+                        }
+                        tickets
+                    };
                     if let Some(t) = tray.as_ref() {
                         t.hide_icon();
                     }
-                    tray::arm_exit_watchdog();
-                    let _ = slint::quit_event_loop();
+                    tray::quit_after_persistence(tickets);
                 } else if si_show_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     if let Some(ui) = ui_weak.upgrade() {
                         restore_window(&ui);
-                        if let Some(dir) = naygo_platform::single_instance::take_open_request() {
+                        while let Some(dir) = naygo_platform::single_instance::take_open_request() {
                             let area = Rect {
                                 x: 0.0,
                                 y: 0.0,
@@ -495,8 +591,8 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 h: ui.get_content_h().max(0.0),
                             };
                             ctrl.borrow_mut().open_dir_in_new_pane(dir, area);
-                            sync_layout();
                         }
+                        sync_layout();
                     }
                 }
                 // Geometría guardada: aplicarla apenas la ventana esté visible (una vez por
@@ -511,18 +607,95 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // los paneles cuya carpeta desapareció, re-listarlos y refrescar la tira de
                 // discos. La misma lógica corre en `on_wake` (refresh en vivo).
                 apply_device_change();
+                let drives_changed = ctrl.borrow_mut().pump_drive_refresh(waker.clone());
+                if drives_changed {
+                    if let Some(refresh) = drive_refresh.borrow().as_ref() {
+                        refresh();
+                    }
+                    sync_rows();
+                    sync_layout();
+                }
+                if let Some(completion) = ctrl.borrow_mut().pump_eject_drive() {
+                    let mut message = None;
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let tr = ui.global::<Tr>();
+                        match completion.outcome {
+                            crate::workspace_ctrl::EjectOutcome::Ok => {
+                                {
+                                    let mut c = ctrl.borrow_mut();
+                                    for pane in completion.panes {
+                                        c.mark_pane_ejected(pane);
+                                    }
+                                    c.refresh_missing_cache();
+                                }
+                                sync_rows();
+                                sync_layout();
+                                message = Some(tr.get_drive_eject_ok());
+                            }
+                            crate::workspace_ctrl::EjectOutcome::InUse => {
+                                message = Some(tr.get_drive_eject_in_use_external());
+                            }
+                            crate::workspace_ctrl::EjectOutcome::Failed(error) => {
+                                crate::logging::log_line(&format!(
+                                    "expulsar USB {}: fallo — {error}",
+                                    completion.root.display()
+                                ));
+                                message = Some(tr.get_drive_eject_failed());
+                            }
+                        }
+                    }
+                    if let Some(refresh) = drive_refresh.borrow().as_ref() {
+                        refresh();
+                    }
+                    if let (Some(ui), Some(message)) = (ui_weak.upgrade(), message) {
+                        ui.invoke_show_toast(message);
+                    }
+                }
                 // Asegurar que cada panel Files vigile su carpeta actual (barato si nada
                 // cambió). Arranca/re-arranca watchers tras navegar/agregar/cerrar paneles.
                 ctrl.borrow_mut().reconcile_watchers(waker.clone());
-                let files_done = ctrl.borrow_mut().pump_listings();
-                let tree_done = ctrl.borrow_mut().pump_tree();
-                let preview_busy = ctrl.borrow_mut().drive_preview(now);
+                let mut listing_budget = crate::listing::PollBudget::new();
+                // Si ambos grupos compiten, reserva una mitad para cada uno; si sólo uno está
+                // activo puede usar todo el presupuesto. Cada controlador rota el primer worker.
+                let (mut files_allowance, mut tree_allowance) = {
+                    let ctrl = ctrl.borrow();
+                    match (
+                        ctrl.has_file_listing_work(),
+                        !ctrl.tree_listings.is_empty() || !ctrl.pending_tree_listings.is_empty(),
+                    ) {
+                        (true, true) => (512, 512),
+                        (true, false) => (1_024, 0),
+                        (false, true) => (0, 1_024),
+                        (false, false) => (0, 0),
+                    }
+                };
+                let files_done = ctrl
+                    .borrow_mut()
+                    .pump_listings_with_budget(&mut listing_budget, &mut files_allowance);
+                let tree_done = ctrl
+                    .borrow_mut()
+                    .pump_tree_with_budget(&mut listing_budget, &mut tree_allowance);
+                let preview_window_visible = ui_weak.upgrade().is_some_and(|ui| {
+                    #[cfg(windows)]
+                    {
+                        naygo_hwnd(&ui).is_some_and(naygo_platform::window::content_visible)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        ui.window().is_visible()
+                    }
+                });
+                let preview_busy = ctrl
+                    .borrow_mut()
+                    .drive_preview_visible(now, preview_window_visible);
                 let preview_ready = ctrl.borrow_mut().preview.poll().is_some();
+                start_animation_timer();
                 let _ = preview_ready;
                 // Autocompletado async de la path-bar (por tecla): arrancar el worker vencido
                 // el debounce y aplicar su resultado SOLO si el editor sigue abierto y con el
                 // mismo buffer (un resultado tardío de un tipeo anterior se descarta).
-                let ac_busy = ctrl.borrow_mut().drive_autocomplete(now);
+                // Drenar ANTES de decidir reposo: si acaba una consulta vencida y hay un
+                // borrador nuevo, el mismo tick debe lanzar/dejar pendiente la última petición.
                 if let Some((buffer, sugg)) = ctrl.borrow_mut().poll_autocomplete() {
                     if let Some(ui) = ui_weak.upgrade() {
                         if ui.get_edit_pane() >= 0 && ui.get_edit_text().as_str() == buffer {
@@ -532,9 +705,9 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         }
                     }
                 }
+                let ac_busy = ctrl.borrow_mut().drive_autocomplete(now);
                 // Autocompletado de «Buscar desde»: canal separado para que el resultado nunca
                 // aparezca en la path-bar (ni viceversa). Se aplica solo al buffer vigente.
-                let search_ac_busy = ctrl.borrow_mut().drive_search_autocomplete(now);
                 if let Some((buffer, sugg)) = ctrl.borrow_mut().poll_search_autocomplete() {
                     if let Some(ui) = ui_weak.upgrade() {
                         if ui.get_search_root_buffer().as_str() == buffer {
@@ -544,10 +717,49 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         }
                     }
                 }
+                let search_ac_busy = ctrl.borrow_mut().drive_search_autocomplete(now);
                 // Probe async de "carpeta no encontrada": aplicar los resultados al caché.
                 let missing_done = ctrl.borrow_mut().pump_missing_probe();
+                let icon_pump = ctrl.borrow_mut().icons.pump_external();
+                for error in icon_pump.errors {
+                    crate::logging::log_line(&format!(
+                        "no se pudo cargar un ícono externo: {error}"
+                    ));
+                }
+                if icon_pump.changed {
+                    if let Some(refresh) = icon_refresh.borrow().as_ref() {
+                        refresh();
+                    }
+                }
+                // Importar/exportar/comprimir corre en el worker serial; aquí sólo se aplican
+                // los resultados ya listos y se actualizan los modelos/catálogos.
+                let pack_outcomes = pack_io.borrow().drain();
+                for outcome in pack_outcomes {
+                    if let Some(apply) = pack_result.borrow().as_ref() {
+                        apply(outcome);
+                    }
+                }
+                let paste_done = ctrl.borrow_mut().pump_paste_probe();
+                let basket_clipboard_done = ctrl.borrow_mut().pump_basket_clipboard();
+                if let Some(error) = ctrl.borrow_mut().take_paste_probe_error() {
+                    crate::logging::log_line(&format!(
+                        "consulta de destino al pegar falló: {error}"
+                    ));
+                    let message = ctrl.borrow().config.t("ops.plan_failed");
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.invoke_show_toast(message.into());
+                    }
+                }
                 // Drenar el progreso de las operaciones de archivo (F3).
                 let ops_done = ctrl.borrow_mut().ops.pump_ops();
+                ctrl.borrow_mut().reconcile_completed_operations();
+                if let Some(error) = ctrl.borrow_mut().ops.take_clipboard_error() {
+                    crate::logging::log_line(&format!("operación de portapapeles falló: {error}"));
+                    let message = ctrl.borrow().config.t("ops.plan_failed");
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.invoke_show_toast(format!("{message}: {error}").into());
+                    }
+                }
                 let sync_done = ctrl.borrow_mut().pump_sync();
                 let text_transform_done = ctrl.borrow_mut().pump_text_transform();
                 // Extraer el error en una sentencia separada. Un `if let` sobre `borrow_mut()`
@@ -579,6 +791,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     let base = ctrl.borrow().config.t("shell.error");
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.invoke_show_toast(format!("{base}: {err}").into());
+                    }
+                }
+                if let Some(message) = ctrl.borrow_mut().pending_listing_error.take() {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.invoke_show_toast(message.into());
                     }
                 }
                 // Drenar el cálculo de tamaño de carpeta (F3 «calcular tamaño»).
@@ -652,10 +869,15 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // timer puede dormir cuando no hay trabajo NI resaltados pendientes NI modales.
                 if files_done
                     && tree_done
+                    && !ctrl.borrow().has_file_listing_work()
+                    && ctrl.borrow().tree_listings.is_empty()
+                    && ctrl.borrow().pending_tree_listings.is_empty()
                     && !preview_busy
                     && !ac_busy
                     && !search_ac_busy
                     && missing_done
+                    && paste_done
+                    && basket_clipboard_done
                     && ops_done
                     && sync_done
                     && text_transform_done
@@ -663,6 +885,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && meta_done
                     && zone_unblock_done
                     && basket_import_done
+                    && ctrl.borrow().drop_collision_rx.is_none()
                     && delivery_done
                     && spaces_done
                     && retry_done

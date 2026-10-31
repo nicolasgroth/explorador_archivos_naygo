@@ -1,0 +1,154 @@
+// Naygo — ruta superior confirmada y editor expandido de destino capturado.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { ListView } from "std-widgets.slint";
+import { PathEditor } from "path-editor.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+component PathAction inherits Rectangle {
+    in property <int> kind; // 0 editar, 1 copiar, 2 favorito
+    in property <string> tip;
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    callback clicked();
+    callback hover-tip(string, length, length);
+    width: 26px;
+    background: touch.has-hover ? Theme.hover-bg : transparent;
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    Path {
+        width: 16px; height: 16px;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        viewbox-width: 16; viewbox-height: 16;
+        stroke: root.selected ? Theme.icon-accent : Theme.text;
+        stroke-width: 1.2px;
+        fill: root.selected ? Theme.icon-accent : transparent;
+        opacity: root.enabled ? 1 : 0.4;
+        commands: root.kind == 0 ? "M3 10 L10 3 L13 6 L6 13 L2 14 Z M9 4 L12 7"
+            : root.kind == 1 ? "M5 2 H13 V11 H5 Z M3 5 H2 V14 H10 V13"
+            : "M8 1 L10 5.5 L15 6 L11.5 9.5 L12.5 15 L8 12 L3.5 15 L4.5 9.5 L1 6 L6 5.5 Z";
+    }
+    touch := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            root.hover-tip(self.has-hover ? root.tip : "",
+                self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height);
+        }
+    }
+}
+
+export component ToolbarPath inherits Rectangle {
+    in property <bool> editing: false;
+    in property <bool> enabled: true;
+    in property <string> confirmed;
+    in property <bool> favorite;
+    in-out property <string> draft;
+    in property <int> session;
+    in property <int> caret: -1;
+    in property <int> caret-revision;
+    in property <[string]> suggestions;
+    in property <string> error;
+    in property <bool> validating;
+    in property <length> dropdown-limit: 154px;
+    property <int> suggestion-index: -1;
+    out property <bool> input-focused;
+    callback start();
+    callback edited(string);
+    callback commit(string);
+    callback cancel();
+    callback suggest(string);
+    callback copy();
+    callback toggle-favorite();
+    callback hover-tip(string, length, length);
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    background: Theme.header-bg;
+    border-width: 1px; border-color: Theme.divider; border-radius: Theme.radius-md;
+    changed suggestions => { root.suggestion-index = -1; }
+    function choose-suggestion() {
+        if root.suggestion-index >= 0 && root.suggestion-index < root.suggestions.length {
+            root.suggest(root.suggestions[root.suggestion-index]);
+        }
+    }
+    HorizontalLayout {
+        padding: 1px; spacing: 1px;
+        if !root.editing: Rectangle {
+            min-width: 0px; horizontal-stretch: 1;
+            accessible-role: button; accessible-label: Tr.edit-path-tip;
+            accessible-description: root.confirmed; accessible-enabled: root.enabled;
+            accessible-action-default => { if root.enabled { root.start(); } }
+            Text {
+                x: 6px; width: max(0px, parent.width - 12px);
+                text: root.confirmed; overflow: elide; vertical-alignment: center;
+                color: Theme.text-dim; font-size: Theme.font-sm;
+            }
+            TouchArea {
+                enabled: root.enabled; mouse-cursor: text;
+                clicked => { root.start(); }
+                changed has-hover => { root.hover-tip(self.has-hover ? root.confirmed : "",
+                    self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+            }
+        }
+        if root.editing: PathEditor {
+            text <=> root.draft; session: root.session; caret: root.caret;
+            caret-revision: root.caret-revision; suggestion-index: root.suggestion-index;
+            error: root.validating ? "" : root.error;
+            focus-changed(focused) => { root.input-focused = focused; }
+            edited(value) => { root.suggestion-index = -1; root.edited(value); }
+            commit(value) => { root.commit(value); }
+            cancel => { root.cancel(); }
+            accept-suggestion => { root.choose-suggestion(); }
+            move-suggestion(delta) => {
+                if root.suggestions.length > 0 {
+                    root.suggestion-index = root.suggestion-index < 0
+                        ? (delta > 0 ? 0 : root.suggestions.length - 1)
+                        : mod(root.suggestion-index + delta + root.suggestions.length, root.suggestions.length);
+                }
+            }
+            hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+        }
+        if !root.editing: PathAction {
+            kind: 0; tip: Tr.edit-path-tip; enabled: root.enabled;
+            clicked => { root.start(); }
+            hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+        }
+        PathAction {
+            kind: 1; tip: Tr.pathbar-copy-tip; enabled: root.enabled;
+            clicked => { root.copy(); }
+            hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+        }
+        PathAction {
+            kind: 2; tip: Tr.pathbar-fav-tip; enabled: root.enabled; selected: root.favorite;
+            clicked => { root.toggle-favorite(); }
+            hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+        }
+    }
+    // El padre coloca el editor después del contenido, antes de los modales. No hay PopupWindow
+    // nativo ni cierre al perder foco: el destino y la revisión siguen perteneciendo a Rust.
+    if root.editing && (root.error != "" || root.suggestions.length > 0): Rectangle {
+        y: root.height; width: root.width;
+        height: min(root.dropdown-limit, root.error != "" ? 26px : root.suggestions.length * 24px + 4px);
+        background: Theme.surface-floating; border-width: 1px; border-color: Theme.divider;
+        clip: true;
+        if root.error != "": Text {
+            x: 6px; width: max(0px, parent.width - 12px); text: root.error;
+            color: root.validating ? Theme.text-dim : Theme.error;
+            vertical-alignment: center; overflow: elide;
+        }
+        if root.error == "": ListView {
+            for s[i] in root.suggestions: Rectangle {
+                height: 24px;
+                background: i == root.suggestion-index ? Theme.selection-bg
+                    : (touch.has-hover ? Theme.hover-bg : transparent);
+                accessible-role: button; accessible-label: s;
+                accessible-action-default => { root.suggest(s); }
+                Text { x: 6px; width: max(0px, parent.width - 12px); text: s;
+                    color: Theme.text; vertical-alignment: center; overflow: elide; }
+                touch := TouchArea { clicked => { root.suggest(s); } }
+            }
+        }
+    }
+}

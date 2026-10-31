@@ -65,6 +65,11 @@ export component DriveBtn inherits Rectangle {
             color: Theme.text;
             font-size: Theme.font-md;
             vertical-alignment: center;
+            // La acción principal es un nodo hermano del chevron accesible, no el contenedor padre:
+            // así los lectores de pantalla pueden descubrir navegación y expulsión por separado.
+            accessible-role: button;
+            accessible-label: root.label + ": " + root.tip;
+            accessible-action-default => { root.clicked(); }
         }
         // Triángulo ▾ (estilo combobox): solo en unidades extraíbles. Abre un menú
         // ("Expulsar") en vez de expulsar directo. Su TouchArea atrapa el clic antes
@@ -72,6 +77,12 @@ export component DriveBtn inherits Rectangle {
         if root.removable: chevron := Rectangle {
             width: 14px;
             height: root.height;
+            accessible-role: button;
+            accessible-label: root.eject-tip;
+            accessible-enabled: root.removable;
+            accessible-action-default => {
+                root.eject-menu(chevron.absolute-position.x + chevron.width / 2);
+            }
             border-radius: 3px;
             background: etouch.has-hover ? Theme.accent : transparent;
             Path {

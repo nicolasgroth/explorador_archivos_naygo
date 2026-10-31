@@ -168,14 +168,119 @@ fn is_usb_bus(letter: char) -> bool {
     ok.is_ok() && desc.BusType == BusTypeUsb
 }
 
-/// Stub para plataformas no-Windows: devuelve la raíz `/` como única "unidad".
-#[cfg(not(windows))]
+/// Enumeración Linux desde `/proc/self/mountinfo`. La función se invoca por el worker de
+/// `workspace_ctrl::drive_io`; nunca debe llamarse desde el hilo de UI. Conserva las rutas en
+/// bytes nativos y omite pseudofs del listado de accesos, sin impedir navegar hacia ellas por ruta.
+#[cfg(target_os = "linux")]
 pub fn drives() -> Vec<DriveInfo> {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    match File::open("/proc/self/mountinfo")
+        .map(BufReader::new)
+        .and_then(drives_from_mountinfo)
+    {
+        Ok(drives) if !drives.is_empty() => drives,
+        Ok(_) => root_fallback(),
+        Err(error) => {
+            tracing::warn!(%error, "no se pudo enumerar mountinfo; se conserva la raíz Linux");
+            root_fallback()
+        }
+    }
+}
+
+/// Stub para plataformas distintas de Windows/Linux: devuelve la raíz `/` como única "unidad".
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn drives() -> Vec<DriveInfo> {
+    root_fallback()
+}
+
+#[cfg(not(windows))]
+fn root_fallback() -> Vec<DriveInfo> {
     vec![DriveInfo {
         path: PathBuf::from("/"),
         label: "/".into(),
         kind: DriveKind::Fixed,
     }]
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_pseudo_filesystem(filesystem_type: &[u8]) -> bool {
+    matches!(
+        filesystem_type,
+        b"autofs"
+            | b"binfmt_misc"
+            | b"bpf"
+            | b"cgroup"
+            | b"cgroup2"
+            | b"configfs"
+            | b"debugfs"
+            | b"devpts"
+            | b"devtmpfs"
+            | b"efivarfs"
+            | b"fusectl"
+            | b"hugetlbfs"
+            | b"mqueue"
+            | b"nsfs"
+            | b"proc"
+            | b"pstore"
+            | b"ramfs"
+            | b"securityfs"
+            | b"sysfs"
+            | b"tracefs"
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn mount_drive_kind(filesystem_type: &[u8]) -> DriveKind {
+    if matches!(
+        filesystem_type,
+        b"9p" | b"afs" | b"cifs" | b"ceph" | b"nfs" | b"nfs4" | b"smb3"
+    ) {
+        DriveKind::Network
+    } else {
+        // Mountinfo alone cannot safely prove that a block device is removable. Keep the
+        // generic icon and never offer eject until a platform-specific probe confirms it.
+        DriveKind::Unknown
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn drives_from_mountinfo<R: std::io::BufRead>(reader: R) -> std::io::Result<Vec<DriveInfo>> {
+    use std::collections::BTreeMap;
+    use std::os::unix::ffi::OsStringExt;
+
+    let snapshot = super::mountinfo::parse_mountinfo(reader)?;
+    if snapshot.malformed_lines > 0 {
+        tracing::warn!(
+            malformed_lines = snapshot.malformed_lines,
+            "se omitieron registros inválidos de /proc/self/mountinfo"
+        );
+    }
+
+    let mut by_mount_point = BTreeMap::new();
+    for mount in snapshot.entries {
+        if is_pseudo_filesystem(&mount.filesystem_type) {
+            continue;
+        }
+        let mount_point = std::path::PathBuf::from(std::ffi::OsString::from_vec(mount.mount_point));
+        if !mount_point.is_absolute() {
+            continue;
+        }
+        let kind = mount_drive_kind(&mount.filesystem_type);
+        let label = mount_point.to_string_lossy().into_owned();
+        // A path may be mounted more than once. The last mountinfo record is the visible top
+        // mount, so replacement keeps one toolbar/tree root per path.
+        by_mount_point.insert(
+            mount_point.clone(),
+            DriveInfo {
+                path: mount_point,
+                label,
+                kind,
+            },
+        );
+    }
+    Ok(by_mount_point.into_values().collect())
 }
 
 #[cfg(test)]
@@ -187,5 +292,49 @@ mod tests {
         let d = drives();
         assert!(!d.is_empty(), "debe haber al menos una unidad");
         assert!(d.iter().all(|x| !x.path.as_os_str().is_empty()));
+    }
+
+    #[test]
+    fn linux_mount_policy_hides_pseudofs_and_marks_network_filesystems() {
+        assert!(is_pseudo_filesystem(b"proc"));
+        assert!(is_pseudo_filesystem(b"sysfs"));
+        assert!(!is_pseudo_filesystem(b"ext4"));
+        assert!(!is_pseudo_filesystem(b"fuse.sshfs"));
+        assert_eq!(mount_drive_kind(b"cifs"), DriveKind::Network);
+        assert_eq!(mount_drive_kind(b"nfs4"), DriveKind::Network);
+        assert_eq!(mount_drive_kind(b"ext4"), DriveKind::Unknown);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_mount_enumeration_omits_pseudofs_and_keeps_network_mounts() {
+        use std::io::Cursor;
+
+        let text = concat!(
+            "1 0 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n",
+            "2 1 0:1 / /proc rw,nosuid - proc proc rw\n",
+            "3 1 0:42 / /mnt/share rw,relatime - cifs //server/share rw\n",
+        );
+        let mounts = drives_from_mountinfo(Cursor::new(text)).unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].path, PathBuf::from("/"));
+        assert_eq!(mounts[0].kind, DriveKind::Unknown);
+        assert_eq!(mounts[1].path, PathBuf::from("/mnt/share"));
+        assert_eq!(mounts[1].kind, DriveKind::Network);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_mount_enumeration_preserves_non_utf8_and_deduplicates_stacked_paths() {
+        use std::io::Cursor;
+        use std::os::unix::ffi::OsStrExt;
+
+        let text = b"1 0 8:1 / /media rw - ext4 /dev/sda1 rw\n\
+                     2 1 8:2 / /media rw - btrfs /dev/sdb1 rw\n\
+                     3 1 8:3 / /mnt/name\\377 rw - ext4 /dev/sdc1 rw\n";
+        let mounts = drives_from_mountinfo(Cursor::new(text)).unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].path, PathBuf::from("/media"));
+        assert_eq!(mounts[1].path.as_os_str().as_bytes(), b"/mnt/name\xff");
     }
 }

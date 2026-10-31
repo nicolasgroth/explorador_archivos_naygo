@@ -85,6 +85,7 @@ export global Tr {
     in property <string> points-recycled;
     in property <string> pane-maximize;
     in property <string> edit-path;
+    in property <string> edit-path-tip;
     // Barra de herramientas.
     in property <string> toolbar-up: "Subir";
     in property <string> toolbar-up-tip: "Subir un nivel (Backspace)";
@@ -131,6 +132,7 @@ export global Tr {
     in property <string> layout-save-current: "Guardar disposición actual…";
     in property <string> layout-save-title: "Guardar disposición como plantilla";
     in property <string> layout-save-placeholder: "Nombre de la plantilla";
+    in property <string> layout-save-non-utf8-path: "No se pudo guardar la plantilla porque la ruta fija de una carpeta no se puede representar como UTF-8.";
 
     // Menú desplegable "agregar panel" (▾).
     in property <string> add-files: "Panel de archivos";
@@ -166,6 +168,9 @@ export global Tr {
     in property <string> queries-basket;
     in property <string> spaces-help;
     in property <string> spaces-root-help;
+    in property <string> spaces-favorites-scope;
+    in property <string> spaces-favorites-global;
+    in property <string> spaces-favorites-private;
     in property <string> spaces-root;
     in property <string> spaces-working;
     in property <string> spaces-save-as;
@@ -460,6 +465,7 @@ export global Tr {
     in property <string> batch-col-after: "Después";
     in property <string> batch-collision: "(colisión)";
     in property <string> batch-invalid: "(inválido)";
+    in property <string> batch-non-utf8: "(no editable: bytes no UTF-8)";
     in property <string> batch-items: "elementos";
     in property <string> batch-apply: "Aplicar";
 
@@ -496,6 +502,7 @@ export global Tr {
     in property <string> inspector-kind: "Tipo";
     in property <string> inspector-size: "Tamaño";
     in property <string> inspector-calc-size: "Calcular";
+    in property <string> inspector-unblock: "Quitar marca de procedencia";
     in property <string> inspector-modified: "Modificado";
     in property <string> inspector-created: "Creado";
     in property <string> inspector-path: "Ruta";
@@ -524,6 +531,7 @@ export global Tr {
     in property <string> preview-title: "Vista previa";
     in property <string> preview-select: "Selecciona un archivo";
     in property <string> preview-truncated: "… (recortado)";
+    in property <string> preview-text-info: "Leídos {bytes} bytes · se muestran {chars} caracteres en {lines} líneas";
 
     // Menú de dirección del botón "+".
     in property <string> split-right: "Dividir a la derecha";
@@ -562,6 +570,7 @@ export global Tr {
     // Modos de vista de la previsualización (combobox de la sección Previsualización).
     in property <string> preview-view-auto: "Automático";
     in property <string> preview-view-text: "Ver como texto";
+    in property <string> preview-content: "Contenido de la vista previa de texto";
     in property <string> preview-view-image: "Ver como imagen";
     in property <string> preview-view-code: "Ver como código";
     in property <string> preview-lang: "Lenguaje";
@@ -572,6 +581,9 @@ export global Tr {
     in property <string> preview-cancel-tip: "Detener esta vista previa";
     in property <string> preview-copy-tip: "Copiar todo el texto";
     in property <string> preview-image-fit-tip: "Ajustar imagen al panel";
+    in property <string> preview-animation-pause: "Pausar";
+    in property <string> preview-animation-resume: "Reanudar";
+    in property <string> preview-animation-repeat: "Repetir";
     in property <string> preview-image-natural-tip: "Ver imagen a tamaño natural";
     in property <string> comparison-select-different-tip: "Seleccionar distintos";
     in property <string> comparison-select-only-here-tip: "Seleccionar solo aquí";
@@ -583,6 +595,16 @@ export global Tr {
     in property <string> preview-wrap-on-tip: "Activar ajuste de línea";
     in property <string> preview-wrap-off-tip: "Desactivar ajuste de línea";
     in property <string> preview-reset-view-tip: "Restaurar vista 3D";
+    in property <string> preview-mesh-color: "Cambiar color 3D";
+    in property <string> preview-mesh-source: "Color del archivo";
+    in property <string> preview-mesh-blue: "Azul";
+    in property <string> preview-mesh-white: "Blanco";
+    in property <string> preview-mesh-warm: "Cálido";
+    in property <string> preview-mesh-surface: "Cambiar vista 3D";
+    in property <string> preview-mesh-solid: "Sólido";
+    in property <string> preview-mesh-edges: "Bordes";
+    in property <string> preview-mesh-wire: "Malla";
+    in property <string> preview-mesh-controls-tip: "Arrastra para girar · rueda para acercar";
     // Sección Avanzado.
     in property <string> cfg-ops-display: "Mostrar progreso de operaciones";
     in property <string> cfg-ops-display-panel: "Panel acoplado";
@@ -605,6 +627,10 @@ export global Tr {
     in property <string> cfg-factory-reset-confirm: "¿Seguro? Volver a valores por defecto";
     // Auto-resaltado de código (Previsualización) + pie de panel + Home (Avanzado).
     in property <string> cfg-auto-highlight: "Resaltar código automáticamente";
+    in property <string> cfg-preview-economical: "Modo económico del preview";
+    in property <string> cfg-tip-preview-economical: "Reduce resolución y frecuencia de las animaciones. No modifica los archivos originales.";
+    in property <string> cfg-preview-text-limit: "Lectura máxima de texto";
+    in property <string> cfg-tip-preview-text-limit: "Máximo de bytes leídos por archivo de texto en el preview. Valores mayores permiten mostrar más contenido, con mayor uso temporal de memoria.";
     in property <string> cfg-footer-section: "Pie de panel";
     in property <string> cfg-footer-enabled: "Mostrar pie de panel";
     in property <string> cfg-footer-template: "Plantilla";
@@ -678,6 +704,8 @@ export global Tr {
     in property <string> theme-tok-active-bar: "Barra activa";
     in property <string> theme-tok-error: "Error";
     in property <string> theme-tok-highlight: "Resaltado";
+    in property <string> theme-tok-icon-accent;
+    in property <string> icons-open-settings;
     in property <string> theme-tok-border: "Borde";
     in property <string> theme-tok-row-inactive-bg: "Fila de panel inactivo";
     in property <string> theme-tok-active-panel-bg: "Fondo del panel activo";
@@ -692,6 +720,7 @@ export global Tr {
     in property <string> theme-use-inactive-row-color: "Color propio para filas inactivas";
     in property <string> cfg-language: "Idioma";
     in property <string> cfg-icon-set: "Set de íconos";
+    in property <string> cfg-system-file-icons: "Usar íconos del sistema para archivos";
     in property <string> cfg-date-format: "Formato de fecha";
     in property <string> cfg-size-format: "Formato de tamaño";
     in property <string> cfg-size-auto: "Automático";
@@ -772,6 +801,7 @@ export global Tr {
     // Apariencia (cat 3).
     in property <string> cfg-tip-theme: "Elige el tema de colores. Se aplica en caliente. «Personalizar» abre el editor para crear el tuyo.";
     in property <string> cfg-tip-icon-set: "Elige el set de íconos. Se aplica en caliente. «Personalizar» salta a la pestaña Íconos.";
+    in property <string> cfg-tip-system-file-icons: "Usa el ícono asociado por Windows a cada extensión. La consulta se hace en segundo plano y se limita a 512 tipos; desactivado por defecto.";
     in property <string> cfg-tip-animations: "Activa animaciones adicionales (como el brillo de la barra de progreso del panel de operaciones). Consumen un poco más de CPU.";
     in property <string> cfg-tip-date-format: "Formato con que se muestran las fechas de los archivos en los paneles.";
     in property <string> cfg-tip-size-format: "Unidad para mostrar los tamaños. Automático elige la más legible según el tamaño.";

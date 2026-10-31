@@ -155,17 +155,33 @@ pub fn resolve_with_overrides(
     key: IconKey,
     config_dir: &std::path::Path,
 ) -> Vec<u8> {
+    resolve_with_overrides_from(base_set, overrides, key, config_dir, config_dir)
+}
+
+/// Resuelve los assets de usuario desde XDG data, con lectura de compatibilidad desde config.
+/// Dentro de cada recurso prevalece primero el archivo de `data_dir`. No mueve datos antiguos:
+/// los packs existentes siguen visibles hasta que el usuario los reimporte o retire.
+pub fn resolve_with_overrides_from(
+    base_set: &str,
+    overrides: &std::collections::BTreeMap<String, crate::icon_source::IconSource>,
+    key: IconKey,
+    data_dir: &std::path::Path,
+    legacy_config_dir: &std::path::Path,
+) -> Vec<u8> {
     if let Some(src) = overrides.get(file_name(key)) {
         match src {
             crate::icon_source::IconSource::Builtin { set_id } => {
-                let b = resolve_set_bytes(set_id, key, config_dir);
+                let b = resolve_set_bytes_from(set_id, key, data_dir, legacy_config_dir);
                 if !b.is_empty() {
                     return b;
                 }
             }
             crate::icon_source::IconSource::UserPng { rel_path } => {
-                let p = config_dir.join("icons").join("_user").join(rel_path);
-                if let Ok(bytes) = std::fs::read(&p) {
+                if let Some(bytes) = read_user_icon_from_roots(
+                    data_dir,
+                    legacy_config_dir,
+                    std::path::Path::new("icons").join("_user").join(rel_path),
+                ) {
                     if !bytes.is_empty() {
                         return bytes;
                     }
@@ -173,7 +189,7 @@ pub fn resolve_with_overrides(
             }
         }
     }
-    let b = resolve_set_bytes(base_set, key, config_dir);
+    let b = resolve_set_bytes_from(base_set, key, data_dir, legacy_config_dir);
     if !b.is_empty() {
         return b;
     }
@@ -183,15 +199,32 @@ pub fn resolve_with_overrides(
 /// Bytes de un set por id: embebido (de fábrica) o pack suelto en disco. Devuelve
 /// Vec vacío si el archivo del pack suelto falta — el fallback lo maneja
 /// `resolve_with_overrides` (punto único de fallback).
-fn resolve_set_bytes(set_id: &str, key: IconKey, config_dir: &std::path::Path) -> Vec<u8> {
+fn resolve_set_bytes_from(
+    set_id: &str,
+    key: IconKey,
+    data_dir: &std::path::Path,
+    legacy_config_dir: &std::path::Path,
+) -> Vec<u8> {
     if table_for_id(set_id).is_some() {
         return bytes_for_id(set_id, key);
     }
-    let path = config_dir
-        .join("icons")
-        .join(set_id)
-        .join(format!("{}.png", file_name(key)));
-    std::fs::read(&path).unwrap_or_default()
+    read_user_icon_from_roots(
+        data_dir,
+        legacy_config_dir,
+        std::path::Path::new("icons")
+            .join(set_id)
+            .join(format!("{}.png", file_name(key))),
+    )
+    .unwrap_or_default()
+}
+
+fn read_user_icon_from_roots(
+    data_dir: &std::path::Path,
+    legacy_config_dir: &std::path::Path,
+    relative: std::path::PathBuf,
+) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(data_dir.join(&relative)).ok();
+    bytes.or_else(|| std::fs::read(legacy_config_dir.join(relative)).ok())
 }
 
 /// Resolución sin overrides (solo set base). Compat con código que no necesita overrides.
@@ -504,5 +537,82 @@ mod tests {
         let dir = std::path::Path::new("");
         let bytes = resolve_with_overrides("lucide", &ov, IconKey::Folder, dir);
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn assets_en_data_prevalecen_y_config_legacy_sigue_como_fallback() {
+        let data = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let data_icon = data.path().join("icons").join("custom").join("folder.png");
+        let legacy_icon = config
+            .path()
+            .join("icons")
+            .join("custom")
+            .join("folder.png");
+        std::fs::create_dir_all(data_icon.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(legacy_icon.parent().unwrap()).unwrap();
+        std::fs::write(&data_icon, b"data").unwrap();
+        std::fs::write(&legacy_icon, b"legacy").unwrap();
+
+        let resolved = resolve_with_overrides_from(
+            "custom",
+            &std::collections::BTreeMap::new(),
+            IconKey::Folder,
+            data.path(),
+            config.path(),
+        );
+        assert_eq!(resolved, b"data");
+
+        std::fs::remove_file(&data_icon).unwrap();
+        let resolved = resolve_with_overrides_from(
+            "custom",
+            &std::collections::BTreeMap::new(),
+            IconKey::Folder,
+            data.path(),
+            config.path(),
+        );
+        assert_eq!(resolved, b"legacy");
+    }
+
+    #[test]
+    fn user_png_override_resuelve_primero_en_data_y_luego_en_config_legacy() {
+        use crate::icon_source::IconSource;
+        let data = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert(
+            "folder".into(),
+            IconSource::UserPng {
+                rel_path: "folder.png".into(),
+            },
+        );
+        let data_icon = data.path().join("icons/_user/folder.png");
+        let legacy_icon = config.path().join("icons/_user/folder.png");
+        std::fs::create_dir_all(data_icon.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(legacy_icon.parent().unwrap()).unwrap();
+        std::fs::write(&data_icon, b"data-user").unwrap();
+        std::fs::write(&legacy_icon, b"legacy-user").unwrap();
+
+        assert_eq!(
+            resolve_with_overrides_from(
+                "lucide",
+                &overrides,
+                IconKey::Folder,
+                data.path(),
+                config.path()
+            ),
+            b"data-user"
+        );
+        std::fs::remove_file(&data_icon).unwrap();
+        assert_eq!(
+            resolve_with_overrides_from(
+                "lucide",
+                &overrides,
+                IconKey::Folder,
+                data.path(),
+                config.path()
+            ),
+            b"legacy-user"
+        );
     }
 }

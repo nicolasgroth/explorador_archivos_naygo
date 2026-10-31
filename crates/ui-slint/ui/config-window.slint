@@ -343,11 +343,11 @@ export component ConfigWindow inherits Window {
         Tr.cfg-show-parent + " " + Tr.cfg-icon-only + " " + Tr.cfg-bar-position + " " + Tr.cfg-window-title + " " + Tr.cfg-size-no-subdirs + " " + Tr.cfg-autostart + " " + Tr.cfg-autostart-minimized + " " + Tr.cfg-default-table + " " + Tr.cfg-language,
         Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-animations,
         Tr.cfg-paste-confirm + " " + Tr.cfg-paste-name + " " + Tr.cfg-paste-ext + " " + Tr.cfg-paste-image-name + " " + Tr.cfg-paste-image-fmt + " " + Tr.cfg-paste-jpg-quality,
-        Tr.fonts-title + " " + Tr.fonts-interface + " " + Tr.fonts-listings + " " + Tr.fonts-preview + " " + Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
+        Tr.theme-tok-icon-accent + " " + Tr.icons-open-settings + " " + Tr.fonts-title + " " + Tr.fonts-interface + " " + Tr.fonts-listings + " " + Tr.fonts-preview + " " + Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.cfg-system-file-icons + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
         Tr.cfg-reset-all + " " + Tr.cfg-sc-action + " " + Tr.cfg-sc-combo + " " + Tr.cfg-change + " " + Tr.cfg-reset,
         Tr.cfg-export-hint + " " + Tr.cfg-ie-lang + " " + Tr.cfg-export-lang + " " + Tr.cfg-import-lang + " " + Tr.cfg-ie-themes + " " + Tr.cfg-export-theme + " " + Tr.cfg-import-theme + " " + Tr.cfg-ie-icons + " " + Tr.icons-export + " " + Tr.icons-import + " " + Tr.cfg-ie-config + " " + Tr.cfg-export-config + " " + Tr.cfg-import-config,
         Tr.cfg-ops-display + " " + Tr.cfg-low-power + " " + Tr.cfg-new-items-at-end + " " + Tr.cfg-tray-enabled + " " + Tr.cfg-close-to-tray + " " + Tr.cfg-global-hotkey + " " + Tr.cfg-recent-limit + " " + Tr.cfg-frequent-dirs-limit + " " + Tr.cfg-footer-section + " " + Tr.cfg-footer-enabled + " " + Tr.cfg-footer-template + " " + Tr.cfg-footer-tokens + " " + Tr.cfg-footer-preview + " " + Tr.cfg-home-dir,
-        Tr.cfg-auto-highlight + " " + Tr.cfg-preview-hint + " " + Tr.cfg-preview-ext + " " + Tr.cfg-preview-on + " " + Tr.cfg-preview-as + " " + Tr.cfg-preview-add-title,
+        Tr.cfg-preview-economical + " " + Tr.cfg-preview-text-limit + " " + Tr.cfg-auto-highlight + " " + Tr.cfg-preview-hint + " " + Tr.cfg-preview-ext + " " + Tr.cfg-preview-on + " " + Tr.cfg-preview-as + " " + Tr.cfg-preview-add-title,
         Tr.about-version + " " + Tr.about-author + " " + Tr.about-company + " " + Tr.about-license + " " + Tr.about-stack + " " + Tr.about-notices + " " + Tr.about-repo + " " + Tr.about-news-title,
         Tr.icons-section-base + " " + Tr.icons-section-objects + " " + Tr.icons-section-custom + " " + Tr.icons-change + " " + Tr.icons-import + " " + Tr.icons-export + " " + Tr.icons-reset + " " + Tr.icons-user-png,
     ];
@@ -371,6 +371,7 @@ export component ConfigWindow inherits Window {
     callback set-show-op-summary(bool);
     callback set-show-parent(bool);
     callback set-icon-only(bool);
+    callback set-system-file-icons(bool);
     callback set-font(int, string);
     callback set-bar-position(int);
     callback set-size-no-subdirs(bool);
@@ -390,7 +391,7 @@ export component ConfigWindow inherits Window {
     callback theme-customize(string);
     callback theme-edit(string);
     callback theme-delete(string);
-    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 15 tokens
+    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 16 tokens
     // como hex "#rrggbb" + sus componentes r/g/b (para inicializar el picker, que no parsea hex).
     in property <bool> editing-active: false;
     in property <string> editing-name: "";
@@ -399,21 +400,22 @@ export component ConfigWindow inherits Window {
     in property <[int]> editing-token-r;
     in property <[int]> editing-token-g;
     in property <[int]> editing-token-b;
-    // Nombres legibles de los 15 tokens (orden = índice del token).
+    // Nombres legibles de los 16 tokens (orden = índice del token).
     property <[string]> token-names: [
         Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
         Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
         Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border, Tr.theme-tok-row-inactive-bg,
         Tr.theme-tok-active-panel-bg, Tr.theme-tok-inactive-panel-bg,
         Tr.theme-tok-toolbar-bg,
+        Tr.theme-tok-icon-accent,
     ];
     // Orden visual del editor. Los índices siguen siendo los índices estables del tema para que
     // los perfiles existentes y el callback `theme-set-token` no cambien de significado.
     property <[int]> token-order: [
         1, 14, 10, 12, 13, // superficies y paneles
-        2, 3, 11,          // filas y tablas
-        4, 5,              // texto
-        0, 6, 7, 9,        // interacción y foco
+        2, 3, 11, 9,       // filas y tablas, incluidas novedades
+        4, 5, 15,          // texto y énfasis de íconos
+        0, 6, 7,           // interacción y foco
         8,                 // alertas
     ];
     // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
@@ -452,6 +454,10 @@ export component ConfigWindow inherits Window {
     // Auto-resaltado de código (Previsualización).
     in property <bool> auto-highlight-code: true;
     callback set-auto-highlight-code(bool);
+    in property <bool> preview-economical: false;
+    callback set-preview-economical(bool);
+    in property <int> preview-text-limit-index: 1;
+    callback set-preview-text-limit(int);
     // Animaciones adicionales de mayor costo (p. ej. el brillo de la barra del panel de operaciones).
     in property <bool> animations-enabled: false;
     callback set-animations-enabled(bool);
@@ -548,6 +554,7 @@ export component ConfigWindow inherits Window {
                         LineEdit {
                             height: 28px;
                             placeholder-text: Tr.cfg-search;
+                            accessible-label: Tr.cfg-search;
                             text: root.search-text;
                             edited => { root.search-text = self.text; }
                         }
@@ -574,6 +581,9 @@ export component ConfigWindow inherits Window {
                                 enabled: parent.matches;
                                 accessible-role: button;
                                 accessible-label: it.label;
+                                accessible-action-default => {
+                                    root.cat = it.cat; root.capturing = ""; root.reset-armed = false;
+                                }
                                 key-pressed(ev) => {
                                     if ev.text == Key.Return || ev.text == " " {
                                         root.cat = it.cat; root.capturing = ""; root.reset-armed = false;
@@ -676,7 +686,7 @@ export component ConfigWindow inherits Window {
                                         spacing: 6px;
                                         Text {
                                             text: root.vm.default-table-on ? Tr.cfg-default-table-on : Tr.cfg-default-table-off;
-                                            color: root.vm.default-table-on ? Theme.highlight : Theme.text-dim;
+                                            color: root.vm.default-table-on ? Theme.icon-accent : Theme.text-dim;
                                             font-size: 11px;
                                             vertical-alignment: center;
                                         }
@@ -757,6 +767,7 @@ export component ConfigWindow inherits Window {
                                     tip: Tr.cfg-tip-paste-name;
                                     LineEdit {
                                         text: root.vm.paste-text-name;
+                                        accessible-label: Tr.cfg-paste-name;
                                         width: 220px;
                                         edited => { root.set-paste-text-name(self.text); }
                                     }
@@ -766,6 +777,7 @@ export component ConfigWindow inherits Window {
                                     tip: Tr.cfg-tip-paste-ext;
                                     LineEdit {
                                         text: root.vm.paste-text-ext;
+                                        accessible-label: Tr.cfg-paste-ext;
                                         width: 100px;
                                         edited => { root.set-paste-text-ext(self.text); }
                                     }
@@ -775,6 +787,7 @@ export component ConfigWindow inherits Window {
                                     label: Tr.cfg-paste-image-name;
                                     LineEdit {
                                         text: root.vm.paste-image-name;
+                                        accessible-label: Tr.cfg-paste-image-name;
                                         width: 220px;
                                         edited => { root.set-paste-image-name(self.text); }
                                     }
@@ -795,6 +808,7 @@ export component ConfigWindow inherits Window {
                                     label: Tr.cfg-paste-jpg-quality;
                                     LineEdit {
                                         text: root.vm.paste-jpg-quality + "";
+                                        accessible-label: Tr.cfg-paste-jpg-quality;
                                         width: root.ctl-w;
                                         placeholder-text: "1–100";
                                         edited(t) => {
@@ -975,7 +989,7 @@ export component ConfigWindow inherits Window {
                                     }
                                 }
                                 // ---------- Editor de tema (se muestra cuando hay un tema en edición) ----------
-                                // Vista expandible debajo de la galería: nombre + base + lista de los 15 tokens
+                                // Vista expandible debajo de la galería: nombre + base + lista de los 16 tokens
                                 // (muestra de color + nombre + hex; clic abre el ColorPicker para ESE token, cuyo
                                 // `changed(hex)` dispara el preview en vivo en TODA la app). Botones guardar/
                                 // restaurar/cancelar al final.
@@ -1015,6 +1029,7 @@ export component ConfigWindow inherits Window {
                                             LineEdit {
                                                 width: root.ctl-w;
                                                 text: root.editing-name;
+                                                accessible-label: Tr.theme-name;
                                                 edited(t) => { root.theme-set-name(t); }
                                             }
                                         }
@@ -1169,85 +1184,21 @@ export component ConfigWindow inherits Window {
                                 }
                                 // (El selector de idioma se movió a su propia categoría "Idioma"
                                 // del sidebar para que sea fácil de encontrar; ya no vive aquí.)
-                                // Galería de sets de íconos: misma estructura que la galería de temas.
-                                // Las tarjetas se posicionan por fila/columna calculadas; un clic aplica
-                                // el set en caliente y el botón "Personalizar" lo activa Y salta a Íconos.
-                                HorizontalLayout {
-                                    spacing: 5px;
-                                    alignment: start;
-                                    Text { text: Tr.cfg-icon-set; color: Theme.text-dim; font-size: 12px; vertical-alignment: center; }
-                                    HelpIcon { tip: Tr.cfg-tip-icon-set; }
+                                // Un único catálogo en Íconos; abrirlo no aplica otro set.
+                                Field {
+                                    label: Tr.cfg-icon-set;
+                                    tip: Tr.cfg-tip-icon-set;
+                                    CfgBtn {
+                                        label: Tr.icons-open-settings;
+                                        clicked => { root.cat = 9; root.search-text = ""; root.capturing = ""; }
+                                    }
                                 }
-                                icon-gallery := Rectangle {
-                                    property <length> gap: 8px;
-                                    property <length> card-w: 160px;
-                                    property <length> card-h: 100px;
-                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
-                                    property <int> rows: ceil(root.vm.icon-set-cards.length / self.cols);
-                                    height: self.rows * (self.card-h + self.gap) - self.gap;
-
-                                    for ic[i] in root.vm.icon-set-cards: icard := Rectangle {
-                                        property <int> gcol: mod(i, icon-gallery.cols);
-                                        property <int> grow: floor(i / icon-gallery.cols);
-                                        x: icard.gcol * (icon-gallery.card-w + icon-gallery.gap);
-                                        y: icard.grow * (icon-gallery.card-h + icon-gallery.gap);
-                                        width: icon-gallery.card-w;
-                                        height: icon-gallery.card-h;
-                                        background: Theme.row-bg;
-                                        border-radius: 7px;
-                                        border-width: ic.selected ? 2px : 1px;
-                                        border-color: ic.selected ? Theme.accent : Theme.border;
-                                        VerticalLayout {
-                                            padding: 8px;
-                                            spacing: 6px;
-                                            // Muestra de íconos de muestra del set.
-                                            HorizontalLayout {
-                                                spacing: 4px;
-                                                for s in ic.samples: Image {
-                                                    source: s;
-                                                    width: 18px;
-                                                    height: 18px;
-                                                    image-fit: contain;
-                                                }
-                                            }
-                                            Text {
-                                                text: ic.label;
-                                                color: Theme.text;
-                                                font-size: 12px;
-                                                font-weight: ic.selected ? 800 : 500;
-                                                overflow: elide;
-                                            }
-                                        }
-                                        // TouchArea del cuerpo: aplica el set al hacer clic. Declarada ANTES
-                                        // del botón para que este quede encima y capture sus propios clics.
-                                        TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => { root.set-icon-set(ic.id); }
-                                        }
-                                        // Botón "Personalizar": activa el set Y salta a la pestaña Íconos.
-                                        // Al estar declarado DESPUÉS del TouchArea del cuerpo, su propia
-                                        // TouchArea queda encima y no dispara el "aplicar set" al hacer clic.
-                                        Rectangle {
-                                            x: 8px;
-                                            y: parent.height - self.height - 8px;
-                                            width: parent.width - 16px;
-                                            height: 22px;
-                                            border-radius: 4px;
-                                            background: pers-touch.has-hover ? Theme.accent : Theme.row-bg;
-                                            border-width: 1px;
-                                            border-color: Theme.border;
-                                            Text {
-                                                text: Tr.icons-personalize;
-                                                color: pers-touch.has-hover ? white : Theme.text;
-                                                font-size: 11px;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
-                                            pers-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => { root.personalize-icon-set(ic.id); }
-                                            }
-                                        }
+                                if root.vm.system-file-icons-supported: Field {
+                                    label: Tr.cfg-system-file-icons;
+                                    tip: Tr.cfg-tip-system-file-icons;
+                                    Switch {
+                                        checked: root.vm.use-system-file-icons;
+                                        toggled => { root.set-system-file-icons(self.checked); }
                                     }
                                 }
                                 Field {
@@ -1290,7 +1241,7 @@ export component ConfigWindow inherits Window {
                                     spacing: 5px;
                                     Text {
                                         text: root.capturing != "" ? Tr.cfg-capturing : Tr.cfg-shortcuts-hint;
-                                        color: root.capturing != "" ? Theme.highlight : Theme.text-dim;
+                                        color: root.capturing != "" ? Theme.icon-accent : Theme.text-dim;
                                         vertical-alignment: center;
                                     }
                                     HelpIcon { tip: Tr.cfg-tip-shortcuts; y: (parent.height - self.height) / 2; }
@@ -1544,6 +1495,7 @@ export component ConfigWindow inherits Window {
                                     tip: Tr.cfg-tip-recent-limit;
                                     LineEdit {
                                         text: root.recent-limit + "";
+                                        accessible-label: Tr.cfg-recent-limit;
                                         width: root.ctl-w;
                                         placeholder-text: "1–1000";
                                         edited(t) => {
@@ -1564,6 +1516,7 @@ export component ConfigWindow inherits Window {
                                     tip: Tr.cfg-tip-frequent-dirs-limit;
                                     LineEdit {
                                         text: root.frequent-dirs-limit + "";
+                                        accessible-label: Tr.cfg-frequent-dirs-limit;
                                         width: root.ctl-w;
                                         placeholder-text: "1–50";
                                         edited(t) => {
@@ -1615,6 +1568,7 @@ export component ConfigWindow inherits Window {
                                             horizontal-stretch: 1;
                                             text: root.footer-custom-template;
                                             placeholder-text: "{sel}/{total} · {marked}";
+                                            accessible-label: Tr.cfg-footer-template;
                                             edited(t) => { root.set-footer-custom-template(t); }
                                         }
                                         HelpIcon { tip: Tr.cfg-tip-footer-custom; y: (parent.height - self.height) / 2; }
@@ -1656,6 +1610,7 @@ export component ConfigWindow inherits Window {
                                         LineEdit {
                                             width: root.ctl-w - 90px;
                                             text: root.home-dir;
+                                            accessible-label: Tr.cfg-home-dir;
                                             // Sin placeholder largo aquí (se cortaba en el campo
                                             // angosto). La explicación va completa en el Text de abajo.
                                             edited(t) => { root.set-home-dir(t); }
@@ -1696,6 +1651,24 @@ export component ConfigWindow inherits Window {
                             // === Previsualización (cat 7) ===
                             if root.cat == 7: VerticalLayout {
                                 spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-preview-economical;
+                                    tip: Tr.cfg-tip-preview-economical;
+                                    Switch {
+                                        checked: root.preview-economical;
+                                        toggled => { root.set-preview-economical(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-preview-text-limit;
+                                    tip: Tr.cfg-tip-preview-text-limit;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: ["64 KiB", "256 KiB", "512 KiB", "1 MiB"];
+                                        current-index: root.preview-text-limit-index;
+                                        selected => { root.set-preview-text-limit(self.current-index); }
+                                    }
+                                }
                                 // Auto-resaltado de código: ARRIBA de la tabla de reglas.
                                 Field {
                                     label: Tr.cfg-auto-highlight;
@@ -1809,6 +1782,7 @@ export component ConfigWindow inherits Window {
                                             width: 110px;
                                             text: root.preview-add-draft;
                                             placeholder-text: Tr.cfg-preview-add-ph;
+                                            accessible-label: Tr.cfg-preview-add-title;
                                             edited(t) => { root.preview-add-draft = t; }
                                             accepted => { add-fn.add-rule(); }
                                         }
@@ -1940,14 +1914,14 @@ export component ConfigWindow inherits Window {
                             if root.cat == 9: VerticalLayout {
                                 spacing: 6px;
 
-                                // -- Set base: galería de tarjetas (misma que Apariencia) --
+                                // -- Set base: único catálogo de tarjetas --
                                 HorizontalLayout {
                                     spacing: 5px;
                                     alignment: start;
                                     Text { text: Tr.icons-section-base; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
                                     HelpIcon { tip: Tr.cfg-tip-icon-set-base; }
                                 }
-                                // Galería de sets en la pestaña Íconos: igual que en Apariencia pero
+                                // Galería de sets en Íconos, sin duplicación en Apariencia y
                                 // sin botón "Personalizar" (ya estamos aquí). Un clic aplica el set en
                                 // caliente y la cuadrícula de objetos de abajo refleja el set nuevo.
                                 icon-gallery-9 := Rectangle {

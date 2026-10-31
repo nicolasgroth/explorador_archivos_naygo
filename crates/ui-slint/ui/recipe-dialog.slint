@@ -39,7 +39,7 @@ export component RecipeDialog inherits Rectangle {
                     VerticalLayout {
                         spacing: 6px;
                         Text { text: Tr.recipes-help; color: Theme.text-dim; wrap: word-wrap; }
-                        LineEdit { text <=> root.query.name; placeholder-text: Tr.recipes-name; enabled: !root.busy; edited => { root.invalidate(); } }
+                        LineEdit { text <=> root.query.name; placeholder-text: Tr.recipes-name; accessible-label: Tr.recipes-name; enabled: !root.busy; edited => { root.invalidate(); } }
                         HorizontalLayout {
                             Button { text: Tr.recipes-open; enabled: !root.busy; clicked => { root.action(1); } }
                             Button { text: Tr.spaces-save-as; enabled: !root.busy; clicked => { root.action(3); } }
@@ -50,11 +50,11 @@ export component RecipeDialog inherits Rectangle {
                         ComboBox { model: [Tr.recipes-selection, Tr.recipes-query]; current-index <=> root.source; enabled: !root.busy; selected(_) => { root.invalidate(); } }
                         Button { text: Tr.recipes-import-query; enabled: !root.busy; clicked => { root.action(5); } }
                         Text { text: Tr.recipes-roots; color: Theme.text-dim; wrap: word-wrap; }
-                        TextEdit { text <=> root.query.roots; preferred-height: 60px; enabled: !root.busy; edited => { root.invalidate(); } }
+                        TextEdit { text <=> root.query.roots; accessible-label: Tr.recipes-roots; preferred-height: 60px; enabled: !root.busy; edited => { root.invalidate(); } }
                         Text { text: Tr.recipes-filter; color: Theme.text; }
                         HorizontalLayout {
-                            LineEdit { text <=> root.query.name-query; placeholder-text: Tr.recipes-pattern; enabled: !root.busy; edited => { root.invalidate(); } }
-                            LineEdit { text <=> root.query.content-query; placeholder-text: Tr.recipes-content; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.name-query; placeholder-text: Tr.recipes-pattern; accessible-label: Tr.recipes-pattern; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.content-query; placeholder-text: Tr.recipes-content; accessible-label: Tr.recipes-content; enabled: !root.busy; edited => { root.invalidate(); } }
                         }
                         HorizontalLayout {
                             CheckBox { text: Tr.recipes-case; checked <=> root.query.ignore-case; enabled: !root.busy; toggled => { root.invalidate(); } }
@@ -62,25 +62,25 @@ export component RecipeDialog inherits Rectangle {
                             CheckBox { text: Tr.points-recursive; checked <=> root.query.recursive; enabled: !root.busy; toggled => { root.invalidate(); } }
                         }
                         HorizontalLayout {
-                            LineEdit { text <=> root.query.min-bytes; placeholder-text: Tr.queries-min; enabled: !root.busy; edited => { root.invalidate(); } }
-                            LineEdit { text <=> root.query.max-bytes; placeholder-text: Tr.queries-max; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.min-bytes; placeholder-text: Tr.queries-min; accessible-label: Tr.queries-min; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.query.max-bytes; placeholder-text: Tr.queries-max; accessible-label: Tr.queries-max; enabled: !root.busy; edited => { root.invalidate(); } }
                             ComboBox { model: [Tr.queries-any, Tr.queries-today, Tr.queries-week, Tr.queries-days7, Tr.queries-days30, Tr.queries-month];
                                 current-index <=> root.query.modified; enabled: !root.busy; selected(_) => { root.invalidate(); } }
                         }
                         Text { text: Tr.recipes-output; color: Theme.text; }
                         Text { text: Tr.recipes-destination-help; color: Theme.text-dim; wrap: word-wrap; }
                         HorizontalLayout {
-                            LineEdit { text <=> root.destination; placeholder-text: Tr.recipes-destination; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.destination; placeholder-text: Tr.recipes-destination; accessible-label: Tr.recipes-destination; enabled: !root.busy; edited => { root.invalidate(); } }
                             Button { text: "…"; accessible-label: Tr.recipes-destination; enabled: !root.busy; clicked => { root.action(10); } }
                         }
-                        LineEdit { text <=> root.output-name; enabled: !root.busy; edited => { root.invalidate(); } }
+                        LineEdit { text <=> root.output-name; accessible-label: Tr.recipes-output; enabled: !root.busy; edited => { root.invalidate(); } }
                         HorizontalLayout {
                             ComboBox { model: [Tr.delivery-flat, Tr.delivery-grouped, Tr.delivery-relative]; current-index <=> root.layout; enabled: !root.busy; selected(_) => { root.invalidate(); } }
                             CheckBox { text: "ZIP"; checked <=> root.zip; enabled: !root.busy; toggled => { root.invalidate(); } }
                         }
                         CheckBox { text: Tr.delivery-rename; checked <=> root.number-duplicates; enabled: !root.busy && root.layout == 0; toggled => { root.invalidate(); } }
                         CheckBox { text: Tr.delivery-hash; checked <=> root.hashes; enabled: !root.busy; toggled => { root.invalidate(); } }
-                        TextEdit { text: root.report; read-only: true; preferred-height: 220px; }
+                        TextEdit { text: root.report; accessible-label: Tr.recipes-title; read-only: true; preferred-height: 220px; }
                         if root.busy: Text { text: Tr.spaces-working + " · " + root.progress; color: Theme.text-dim; }
                         if root.waiting: Text { text: Tr.delivery-waiting; color: Theme.text-dim; wrap: word-wrap; }
                     }

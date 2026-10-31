@@ -9,6 +9,7 @@
 use crate::workspace::layout::SplitDir;
 use crate::workspace::PanePurpose;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// De dónde arranca un panel `Files` de una plantilla.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +17,13 @@ pub enum TemplateDir {
     /// El home del usuario.
     Home,
     /// Una ruta fija.
-    Fixed(String),
+    Fixed(PathBuf),
+}
+
+/// A template can only be persisted in the existing JSON schema when its fixed paths are UTF-8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TemplateCaptureError {
+    NonUtf8FixedPath,
 }
 
 /// Un panel descrito por una plantilla (tipo + carpeta inicial si es Files).
@@ -283,7 +290,7 @@ pub struct RecentUse {
 const MAX_RECENTS: usize = 8;
 
 /// Plantillas del usuario + recientes. Lo que se persiste en `templates.json`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TemplateStore {
     /// Plantillas creadas por el usuario (builtin = false).
     pub user: Vec<LayoutTemplate>,
@@ -292,6 +299,26 @@ pub struct TemplateStore {
 }
 
 impl TemplateStore {
+    /// Integra plantillas/recientes modificados antes de terminar la carga inicial.
+    /// Conserva lo persistido y aplica por nombre las ediciones que ya vio el usuario.
+    pub fn merge_startup_edits(&mut self, edits: &Self) {
+        for edited in &edits.user {
+            if let Some(saved) = self.user.iter_mut().find(|item| item.name == edited.name) {
+                *saved = edited.clone();
+            } else {
+                self.user.push(edited.clone());
+            }
+        }
+        let mut merged = edits.recents.clone();
+        for saved in &self.recents {
+            if !merged.iter().any(|item| item.name == saved.name) {
+                merged.push(saved.clone());
+            }
+        }
+        merged.truncate(MAX_RECENTS);
+        self.recents = merged;
+    }
+
     /// Registra el uso de una plantilla: la pone al frente de recientes (sin
     /// duplicar) y respeta el tope. `at` es el timestamp inyectado por la ui.
     pub fn record_use(&mut self, name: &str, at: u64) {

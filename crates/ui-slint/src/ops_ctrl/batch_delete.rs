@@ -7,6 +7,33 @@
 
 use super::*;
 
+/// Transforma los fallos indexados del worker Shell al resumen por origen de la UI. La ruta del
+/// recibo puede estar normalizada a absoluta; el índice evita compararla con una entrada relativa.
+fn partial_trash_items(
+    sources: &[PathBuf],
+    failures: &[naygo_platform::trash::TrashItemFailure],
+) -> (Vec<OpItem>, usize) {
+    let items = sources
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(source_index, path)| {
+            let outcome = failures
+                .iter()
+                .find(|failure| failure.source_index == source_index)
+                .map(|failure| OpOutcome::Failed(failure.detail.clone()))
+                .unwrap_or(OpOutcome::Done);
+            OpItem {
+                dest: path.clone(),
+                outcome,
+                src: Some(path),
+            }
+        })
+        .collect();
+    let succeeded = sources.len().saturating_sub(failures.len());
+    (items, succeeded)
+}
+
 impl OpsCtrl {
     /// Restaura una entrada previamente enviada a Papelera sin bloquear la UI.
     pub fn start_trash_restore(
@@ -146,47 +173,56 @@ impl OpsCtrl {
                     std::sync::Arc::new(move || cancel_token.is_cancelled()),
                 );
                 let _ = bridge.join();
-                let summary = OpSummary {
-                    bytes_done: if result.is_ok() { total_bytes } else { 0 },
-                    elapsed_secs: 0.0,
-                    items: if result.is_ok() {
-                        completed_items
-                    } else {
-                        Vec::new()
-                    },
+                let (receipts, items, successful_count, error_detail) = match result {
+                    Ok(receipts) => (receipts, completed_items, total_items, None),
+                    Err(naygo_platform::trash::TrashError::Partial { receipts, failures }) => {
+                        let (items, succeeded) = partial_trash_items(&sources, &failures);
+                        let detail = failures
+                            .iter()
+                            .map(|failure| {
+                                format!("{}: {}", failure.original.display(), failure.detail)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        (receipts, items, succeeded, Some(detail))
+                    }
+                    Err(error) => {
+                        let detail = format!("{error:?}");
+                        (Vec::new(), failed_items(&detail), 0, Some(detail))
+                    }
                 };
+                if !receipts.is_empty() {
+                    let _ = receipt_tx.send(receipts);
+                }
+                if let Some(detail) = error_detail {
+                    crate::logging::log_line(&format!(
+                        "Papelera completó {successful_count}/{} ítem(s): {detail}",
+                        sources.len()
+                    ));
+                }
+                let summary = OpSummary {
+                    bytes_done: if successful_count == total_items {
+                        total_bytes
+                    } else {
+                        // El Shell no informa un tamaño fiable para los elementos parciales.
+                        0
+                    },
+                    elapsed_secs: 0.0,
+                    items,
+                };
+                if successful_count == total_items {
+                    let _ = tx.send(OpMsg::Progress(OpProgress {
+                        bytes_done: total_bytes,
+                        bytes_total: total_bytes,
+                        files_done: total_items,
+                        files_total: total_items,
+                        current,
+                    }));
+                }
                 if worker_token.is_cancelled() {
                     let _ = tx.send(OpMsg::Cancelled(summary));
                 } else {
-                    match result {
-                        Ok(receipts) => {
-                            let _ = receipt_tx.send(receipts);
-                            let _ = tx.send(OpMsg::Progress(OpProgress {
-                                bytes_done: total_bytes,
-                                bytes_total: total_bytes,
-                                files_done: total_items,
-                                files_total: total_items,
-                                current,
-                            }));
-                            let _ = tx.send(OpMsg::Done(summary));
-                        }
-                        Err(error) => {
-                            // No enviar `OpMsg::Failed` pelado: el panel sólo recibe un resumen
-                            // por ítem y antes lo convertía en «hecho: 0» sin indicar que la
-                            // Papelera había fallado. Mantener el motivo por ruta evita una
-                            // confirmación falsa y deja el detalle disponible en el historial.
-                            let detail = format!("{error:?}");
-                            crate::logging::log_line(&format!(
-                                "Papelera no completó {} ítem(s): {detail}",
-                                sources.len()
-                            ));
-                            let _ = tx.send(OpMsg::Done(OpSummary {
-                                bytes_done: 0,
-                                elapsed_secs: 0.0,
-                                items: failed_items(&detail),
-                            }));
-                        }
-                    }
+                    let _ = tx.send(OpMsg::Done(summary));
                 }
             });
         let op = &mut self.active_ops[idx];
@@ -197,5 +233,35 @@ impl OpsCtrl {
         op.scan_files = 0;
         op.scan_bytes = 0;
         op.trash_receipts_rx = Some(receipt_rx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resultados_parciales_mapean_por_indice_si_la_ruta_es_relativa() {
+        let sources = vec![
+            PathBuf::from(r"docs\ok.txt"),
+            PathBuf::from(r"docs\fail.txt"),
+        ];
+        let failures = vec![naygo_platform::trash::TrashItemFailure {
+            source_index: 1,
+            original: PathBuf::from(r"C:\work\docs\fail.txt"),
+            detail: "acceso denegado".to_string(),
+        }];
+
+        let (items, succeeded) = partial_trash_items(&sources, &failures);
+
+        assert_eq!(succeeded, 1);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].src.as_ref(), Some(&sources[0]));
+        assert!(matches!(items[0].outcome, OpOutcome::Done));
+        assert_eq!(items[1].src.as_ref(), Some(&sources[1]));
+        assert!(matches!(
+            &items[1].outcome,
+            OpOutcome::Failed(detail) if detail == "acceso denegado"
+        ));
     }
 }

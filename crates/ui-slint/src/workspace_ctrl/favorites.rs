@@ -64,10 +64,33 @@ impl WorkspaceCtrl {
         )
     }
 
-    /// Persiste el árbol de favoritos a disco. Se llama tras CADA mutación (anclar/quitar,
-    /// nuevo grupo, renombrar, eliminar, mover) para no perder cambios si la app cae.
-    fn persist_favorites(&self) {
-        save_favorites(&self.config.config_dir, &self.favorites);
+    /// Persiste Favoritos globales tras cada mutación. Si el espacio activo tiene Favoritos
+    /// propios, la mutación forma parte del snapshot sin guardar y se marca en el gestor; la
+    /// publicación sigue el guardado explícito del documento .naygospace.
+    pub(super) fn persist_favorites(&mut self) {
+        if matches!(
+            self.task_spaces.active_favorite_scope(),
+            naygo_core::task_space::FavoriteScope::PerSpace
+        ) {
+            self.refresh_space_report();
+            return;
+        }
+        self.startup_favorites_dirty.set(true);
+        self.task_spaces.global_favorites = self.favorites.clone();
+        if self.startup_async_enabled || self.startup_load_failed {
+            return;
+        }
+        match naygo_core::config::save_favorites_async(&self.config.config_dir, &self.favorites) {
+            Ok(ticket) => {
+                *self
+                    .last_favorites_save
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(ticket);
+            }
+            Err(error) => crate::logging::log_line(&format!(
+                "no se pudo encolar el guardado de favoritos: {error}"
+            )),
+        }
     }
 
     /// Quita un favorito por ruta (y persiste).
@@ -293,14 +316,14 @@ impl WorkspaceCtrl {
     }
 
     /// Copia la ruta de la carpeta del panel `id` al portapapeles (botón 📋).
-    pub fn copy_pane_path(&self, id: PaneId) {
+    pub fn copy_pane_path(&mut self, id: PaneId) {
         if let Some(dir) = self
             .ws
             .pane(id)
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
         {
-            let _ = naygo_platform::clipboard::write_text(&dir.display().to_string());
+            let _ = self.ops.write_clipboard_text(&dir.display().to_string());
         }
     }
 }

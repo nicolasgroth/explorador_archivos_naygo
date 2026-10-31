@@ -1,0 +1,43 @@
+// Naygo — nombre continuo con coincidencia resaltada, sin repartir espacios entre tramos.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Theme } from "theme.slint";
+export component MatchedName inherits Rectangle {
+    in property <string> prefix;
+    in property <string> matched;
+    in property <string> suffix;
+    in property <color> text-color: Theme.text;
+    clip: true;
+    HorizontalLayout {
+        spacing: 0; padding: 0; alignment: start;
+        Text {
+            text: root.prefix;
+            max-width: self.preferred-width;
+            horizontal-stretch: 0;
+            font-family: Theme.listings-font;
+            color: root.text-color;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.matched;
+            max-width: self.preferred-width;
+            horizontal-stretch: 0;
+            font-family: Theme.listings-font;
+            font-weight: 700;
+            color: Theme.accent;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.suffix;
+            max-width: self.preferred-width;
+            horizontal-stretch: 0;
+            font-family: Theme.listings-font;
+            color: root.text-color;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        // El único elemento flexible absorbe TODO el sobrante después del nombre.
+        Rectangle { horizontal-stretch: 1; }
+    }
+}

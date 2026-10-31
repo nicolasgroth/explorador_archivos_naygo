@@ -16,14 +16,17 @@ use naygo_core::ops::{
     ConflictPrompt, FolderConflict, FolderDecision, OpItem, OpKind, OpMsg, OpOutcome, OpPlan,
     OpProgress, OpRequest, OpSummary, PlanError, PlanMsg,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 mod archive;
 mod batch_delete;
+mod clipboard_io;
 mod delivery;
 mod resume;
+
+use clipboard_io::{ClipboardIo, ClipboardIoHandle, ClipboardWriteKind, PendingClipboardWrite};
 
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
 /// el modal queda para crear archivo/carpeta, confirmar el nombre al pegar y renombrar un
@@ -251,14 +254,61 @@ pub struct OpsCtrl {
     /// resultado llega por aquí: `Ok(path)` si escribió, `Err((path, error))` si falló — antes
     /// el fallo se tragaba en silencio y el usuario creía haber pegado. `pump_ops` lo drena.
     paste_write_rx: Option<Receiver<Result<PathBuf, (PathBuf, String)>>>,
+    paste_write_pending: Vec<Receiver<Result<PathBuf, (PathBuf, String)>>>,
     /// Error de la escritura de un pegado, pendiente de ser anunciado por la UI (toast).
     pending_paste_error: Option<(PathBuf, String)>,
+    /// Worker único y serial para todos los accesos al portapapeles del sistema.
+    clipboard_io: Option<ClipboardIo>,
+    pending_clipboard_writes: VecDeque<PendingClipboardWrite>,
+    pending_clipboard_errors: VecDeque<String>,
+    /// Notificaciones terminales, no snapshots del historial: se consumen una sola vez.
+    completed_changes: Vec<(OpRequest, bool)>,
+}
+
+/// Escritura exclusivamente en worker. `create_new` arbitra colisiones concurrentes;
+/// sólo se elimina un parcial reservado por esta llamada si su escritura falla.
+fn write_unique_paste(preferred: &std::path::Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    loop {
+        let path = naygo_core::ops::names::dedup_name(preferred, &|p| p.exists());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let result = file.write_all(bytes);
+                drop(file);
+                if let Err(error) = result {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error);
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipboardHistoryEntry {
     pub paths: Vec<PathBuf>,
     pub cut: bool,
+}
+
+/// Candidato inicial para el modal de renombrado de conflictos. La UI no comprueba el disco:
+/// el motor vuelve a validar y deduplicar el nombre en su worker al ejecutar la decisión.
+fn conflict_rename_suggestion(existing: &Path) -> PathBuf {
+    let dir = existing.parent().unwrap_or_else(|| Path::new(""));
+    let stem = existing
+        .file_stem()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    match existing.extension() {
+        Some(extension) => dir.join(format!("{} (2).{}", stem, extension.to_string_lossy())),
+        None => dir.join(format!("{stem} (2)")),
+    }
 }
 
 impl OpsCtrl {
@@ -276,7 +326,12 @@ impl OpsCtrl {
             next_op_id: 1,
             pending_plan_error: None,
             paste_write_rx: None,
+            paste_write_pending: Vec::new(),
             pending_paste_error: None,
+            clipboard_io: None,
+            pending_clipboard_writes: VecDeque::new(),
+            pending_clipboard_errors: VecDeque::new(),
+            completed_changes: Vec::new(),
         }
     }
 
@@ -302,12 +357,14 @@ impl OpsCtrl {
     pub fn spawn_paste_write(&mut self, path: PathBuf, bytes: Vec<u8>) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = std::fs::write(&path, &bytes)
-                .map(|()| path.clone())
-                .map_err(|e| (path, e.to_string()));
+            // Reservar el nombre atómicamente: dos pegados en el mismo segundo nunca pisan
+            // contenido, ni siquiera si ambos fueron planificados antes de escribir.
+            let result = write_unique_paste(&path, &bytes).map_err(|e| (path, e.to_string()));
             let _ = tx.send(result);
         });
-        self.paste_write_rx = Some(rx);
+        if let Some(previous) = self.paste_write_rx.replace(rx) {
+            self.paste_write_pending.push(previous);
+        }
     }
 
     /// Drena la escritura async del pegado (sin bloquear). Un fallo queda en
@@ -317,7 +374,17 @@ impl OpsCtrl {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(_path)) => {
+            Ok(Ok(path)) => {
+                if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+                    self.completed_changes.push((
+                        naygo_core::ops::create(
+                            dir.to_path_buf(),
+                            name.to_string_lossy().into(),
+                            false,
+                        ),
+                        true,
+                    ));
+                }
                 self.paste_write_rx = None;
             }
             Ok(Err((path, err))) => {
@@ -333,11 +400,18 @@ impl OpsCtrl {
                 self.paste_write_rx = None;
             }
         }
+        if self.paste_write_rx.is_none() {
+            self.paste_write_rx = self.paste_write_pending.pop();
+        }
     }
 
     /// Consume el error de escritura de un pegado, si lo hay, para que la UI lo anuncie.
     pub fn take_paste_error(&mut self) -> Option<(PathBuf, String)> {
         self.pending_paste_error.take()
+    }
+
+    pub fn take_completed_changes(&mut self) -> Vec<(OpRequest, bool)> {
+        std::mem::take(&mut self.completed_changes)
     }
 
     /// Reserva el próximo id estable de operación (monótono, único en la sesión).
@@ -349,20 +423,98 @@ impl OpsCtrl {
 
     // --- Clipboard interno (corte visual) ---
 
-    /// Copia `paths` al portapapeles del SO; limpia la marca de corte.
+    /// Encola `paths` al portapapeles del SO fuera de UI; el corte visual se aplica al confirmar.
     pub fn set_copy(&mut self, paths: &[PathBuf]) {
-        if naygo_platform::clipboard::write_files(paths, false).is_ok() {
-            self.remember_clipboard(paths, false);
+        if paths.is_empty() {
+            return;
         }
-        self.cut_set.clear();
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_files(paths.to_vec(), false))
+        {
+            Ok(pending) => self.pending_clipboard_writes.push_back(pending),
+            Err(error) => self.pending_clipboard_errors.push_back(error),
+        }
     }
 
-    /// Corta `paths`: escribe al portapapeles con efecto MOVE y los marca como cortados.
+    /// Encola un corte; la marca visual e historial sólo cambian si el SO acepta la escritura.
     pub fn set_cut(&mut self, paths: &[PathBuf]) {
-        if naygo_platform::clipboard::write_files(paths, true).is_ok() {
-            self.remember_clipboard(paths, true);
-            self.cut_set = paths.iter().cloned().collect();
+        if paths.is_empty() {
+            return;
         }
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_files(paths.to_vec(), true))
+        {
+            Ok(pending) => self.pending_clipboard_writes.push_back(pending),
+            Err(error) => self.pending_clipboard_errors.push_back(error),
+        }
+    }
+
+    /// Encola una escritura de texto del clipboard desde el hilo de UI.
+    pub fn write_clipboard_text(&mut self, text: &str) -> bool {
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_text(text.to_string()))
+        {
+            Ok(pending) => {
+                self.pending_clipboard_writes.push_back(pending);
+                true
+            }
+            Err(error) => {
+                self.pending_clipboard_errors.push_back(error);
+                false
+            }
+        }
+    }
+
+    pub(crate) fn clipboard_io_handle(&mut self) -> Result<ClipboardIoHandle, String> {
+        if self.clipboard_io.is_none() {
+            self.clipboard_io = Some(ClipboardIo::new().map_err(|error| error.to_string())?);
+        }
+        Ok(self
+            .clipboard_io
+            .as_ref()
+            .expect("worker inicializado")
+            .handle())
+    }
+
+    /// Aplica resultados en orden. El worker serializa lecturas y escrituras del SO; el modelo
+    /// local sólo cambia después de que la operación correspondiente terminó correctamente.
+    fn pump_clipboard_writes(&mut self) {
+        while let Some(front) = self.pending_clipboard_writes.front() {
+            match front.receiver.try_recv() {
+                Ok(Ok(())) => {
+                    let completed = self.pending_clipboard_writes.pop_front().unwrap();
+                    if let ClipboardWriteKind::Files { paths, cut } = completed.kind {
+                        self.remember_clipboard(&paths, cut);
+                        if cut {
+                            self.cut_set = paths.iter().cloned().collect();
+                        } else {
+                            self.cut_set.clear();
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.pending_clipboard_writes.pop_front();
+                    self.pending_clipboard_errors.push_back(error);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.pending_clipboard_writes.pop_front();
+                    self.pending_clipboard_errors
+                        .push_back("worker del portapapeles desconectado".to_string());
+                }
+            }
+        }
+    }
+
+    pub fn take_clipboard_error(&mut self) -> Option<String> {
+        self.pending_clipboard_errors.pop_front()
+    }
+
+    pub(crate) fn report_clipboard_error(&mut self, error: String) {
+        self.pending_clipboard_errors.push_back(error);
     }
 
     fn remember_clipboard(&mut self, paths: &[PathBuf], cut: bool) {
@@ -410,23 +562,6 @@ impl OpsCtrl {
     }
 
     // --- Lanzar y drenar operaciones ---
-
-    /// ¿Algún source de `req` chocaría con un archivo ya existente en el destino? Pre-check
-    /// para decidir si el motor debe preguntar (Ask) o no (Overwrite directo). Solo aplica a
-    /// Copy/Move (los Create/Rename los maneja su propia ruta).
-    pub fn first_collision(&self, req: &OpRequest) -> bool {
-        let Some(dest) = req.dest_dir.as_ref() else {
-            return false;
-        };
-        if !matches!(req.kind, OpKind::Copy | OpKind::Move) {
-            return false;
-        }
-        req.sources.iter().any(|s| {
-            s.file_name()
-                .map(|n| dest.join(n).exists())
-                .unwrap_or(false)
-        })
-    }
 
     /// Lanza una operación. `record_undo` indica si registrar el deshacer al terminar.
     /// Copy/Move/Delete NO planifican en línea: recorrer un árbol grande con `read_dir`/`metadata`
@@ -492,11 +627,9 @@ impl OpsCtrl {
                 return;
             }
         };
-        let conflict = if self.first_collision(&req) {
-            ConflictPolicy::Ask
-        } else {
-            ConflictPolicy::Overwrite
-        };
+        // Esta rama sólo incluye Rename/Create/BatchRename; conserva la política previa, ya que
+        // La preconsulta sólo aplicaba a Copy/Move (que toman el camino de planificación worker).
+        let conflict = ConflictPolicy::Overwrite;
         if self.ops_mode == OpsMode::Queue && self.any_running() {
             self.push_queued(
                 plan,
@@ -706,7 +839,15 @@ impl OpsCtrl {
         } else {
             (None, None)
         };
-        let (rx, _h) = engine::spawn(plan, kind, conflict, token.clone(), conflict_rx, journal);
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
+            plan,
+            kind,
+            conflict,
+            token.clone(),
+            conflict_rx,
+            journal,
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
+        );
         self.active_ops.push(ActiveOp {
             id,
             rx: Some(rx),
@@ -766,7 +907,15 @@ impl OpsCtrl {
             (None, None)
         };
         let size_map = size_map_of(&plan);
-        let (rx, _h) = engine::spawn(plan, kind, conflict, token, conflict_rx, journal);
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
+            plan,
+            kind,
+            conflict,
+            token,
+            conflict_rx,
+            journal,
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
+        );
         let op = &mut self.active_ops[idx];
         op.rx = Some(rx);
         op.conflict_tx = conflict_tx;
@@ -857,10 +1006,8 @@ impl OpsCtrl {
                 let req = self.active_ops[i].request.clone();
                 let kind = self.active_ops[i].plan_kind.clone();
                 let record_undo = self.active_ops[i].plan_record_undo;
-                let conflict = match &req {
-                    Some(r) if self.first_collision(r) => ConflictPolicy::Ask,
-                    _ => ConflictPolicy::Overwrite,
-                };
+                // La política se resuelve dentro del motor en worker; no hacer `exists()` aquí.
+                let conflict = ConflictPolicy::Ask;
                 let undo_req = if record_undo { req.clone() } else { None };
                 // La papelera necesita SIEMPRE las rutas originales para pasárselas a
                 // IFileOperation, aunque esta operación no registre Undo. Antes se reutilizaba
@@ -920,6 +1067,7 @@ impl OpsCtrl {
     /// op lo pide. Registra el undo de las que terminan. Lanza la siguiente de la cola si
     /// nada corre. Devuelve true si TODO está en reposo (para apagar el timer).
     pub fn pump_ops(&mut self) -> bool {
+        self.pump_clipboard_writes();
         // Primero, la fase "Calculando…": recoger planes terminados y arrancar/encolar.
         self.pump_planning();
         // La escritura async del pegado de texto/imagen (canal de una muestra).
@@ -972,6 +1120,9 @@ impl OpsCtrl {
                 self.active_ops[i].awaiting_conflict = Some(prompt);
             }
             if let Some(summary) = finished {
+                if let Some(req) = self.active_ops[i].request.clone() {
+                    self.completed_changes.push((req, summary.count_done() > 0));
+                }
                 // Registrar el deshacer si corresponde. NO se hace `.take()` del request: se CONSERVA
                 // en la op terminada para que el popup "Archivos de la operación" pueda mostrar el
                 // contexto (tipo, origen, destino) y calcular las rutas relativas al destino (PUNTO
@@ -994,6 +1145,7 @@ impl OpsCtrl {
                             .into_iter()
                             .map(|receipt| UndoAction::RestoreTrash {
                                 original: receipt.original,
+                                trashed_path: receipt.trashed_path,
                             })
                             .collect()
                     } else if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
@@ -1134,6 +1286,7 @@ impl OpsCtrl {
         // que el modal siga vivo y la decisión se procese al volver. La escritura async de un
         // pegado (`paste_write_rx`) también mantiene el timer hasta entregar su resultado.
         self.paste_write_rx.is_none()
+            && self.pending_clipboard_writes.is_empty()
             && self
                 .active_ops
                 .iter()
@@ -1170,8 +1323,9 @@ impl OpsCtrl {
             }
             _ => return,
         };
-        // Sugerencia precargada: el primer nombre libre "(N)" para ese destino (p. ej. "a (2).txt").
-        let suggestion = naygo_core::ops::dedup_name(&existing, &|p: &Path| p.exists());
+        // Candidato sintáctico (2), sin tocar el filesystem desde el callback. El motor vuelve
+        // a deduplicar en su worker si ese nombre también se ocupó mientras el modal estaba abierto.
+        let suggestion = conflict_rename_suggestion(&existing);
         let suggested_name = suggestion
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -2441,19 +2595,6 @@ mod tests {
     }
 
     #[test]
-    fn first_collision_detecta_choque() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dst = tmp.path().join("dst");
-        std::fs::create_dir(&dst).unwrap();
-        std::fs::write(dst.join("a.txt"), b"x").unwrap();
-        let c = OpsCtrl::new(tmp.path().to_path_buf());
-        let req = naygo_core::ops::transfer(false, vec![tmp.path().join("a.txt")], dst.clone());
-        assert!(c.first_collision(&req), "a.txt ya existe en dst");
-        let req2 = naygo_core::ops::transfer(false, vec![tmp.path().join("z.txt")], dst);
-        assert!(!c.first_collision(&req2));
-    }
-
-    #[test]
     fn start_op_copia_y_pump_la_completa() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("a.txt");
@@ -2637,6 +2778,37 @@ mod tests {
         );
         assert_eq!(std::fs::read(&dest).unwrap(), b"hola pegado");
         assert!(c.pending_dialog.is_none(), "el modal se cerró");
+    }
+
+    #[test]
+    fn nav052_simultaneous_pastes_keep_both_contents_and_completion_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("paste 2026-09-10 12.34.56.txt");
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.spawn_paste_write(path.clone(), b"one".to_vec());
+        c.spawn_paste_write(path, b"two".to_vec());
+        for _ in 0..2000 {
+            if c.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(c.take_paste_error().is_none());
+        let changes = c.take_completed_changes();
+        assert_eq!(changes.len(), 2);
+        let mut contents: Vec<_> = changes
+            .into_iter()
+            .map(|(req, ok)| {
+                assert!(ok);
+                let OpKind::CreateFile { name } = req.kind else {
+                    panic!("expected file")
+                };
+                std::fs::read(req.dest_dir.unwrap().join(name)).unwrap()
+            })
+            .collect();
+        contents.sort();
+        assert_eq!(contents, vec![b"one".to_vec(), b"two".to_vec()]);
+        assert!(c.take_completed_changes().is_empty());
     }
 
     #[test]
@@ -3426,8 +3598,8 @@ mod tests {
 
     #[test]
     fn begin_conflict_rename_abre_modal_de_nombre_con_sugerencia() {
-        // BUG 1: "Renombrar" en el conflicto abre el modal de NOMBRE (kind 3) precargado con la
-        // sugerencia "(2)" (el primer nombre libre), en modo ConflictRename ligado a la op.
+        // "Renombrar" abre el modal de NOMBRE (kind 3) con un candidato "(2)", en modo
+        // ConflictRename ligado a la op. El candidato no consulta disco; el motor lo revalida.
         let (mut c, _rx, _tmp) = ctrl_en_conflicto_de_archivo();
         c.begin_conflict_rename(42);
         match &c.pending_dialog {
@@ -3439,13 +3611,25 @@ mod tests {
                         display: "a.txt".to_string()
                     }
                 );
-                assert_eq!(buf, "a (2).txt", "sugiere el primer nombre libre");
+                assert_eq!(buf, "a (2).txt", "sugiere un nombre inicial editable");
             }
             other => panic!("esperaba el modal de nombre, hay {other:?}"),
         }
         // El VM expone el nombre original para el título traducido.
         assert_eq!(c.dialog_vm().name_conflict_for, "a.txt");
         assert_eq!(c.dialog_vm().kind, 3);
+    }
+
+    #[test]
+    fn sugerencia_rename_es_sintactica_y_preserva_extension() {
+        assert_eq!(
+            conflict_rename_suggestion(Path::new("C:/dest/a.tar.gz")),
+            PathBuf::from("C:/dest/a.tar (2).gz")
+        );
+        assert_eq!(
+            conflict_rename_suggestion(Path::new("C:/dest/README")),
+            PathBuf::from("C:/dest/README (2)")
+        );
     }
 
     #[test]

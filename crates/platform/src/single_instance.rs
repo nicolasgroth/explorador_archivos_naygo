@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 
-//! Garantiza que corra UNA sola instancia de Naygo por sesión de usuario, con un mutex Win32
-//! con nombre. Si ya hay una corriendo, la secundaria le avisa "muéstrate" vía un evento con
-//! nombre (y opcionalmente le deja una carpeta a abrir en un archivo de *spool* en temp) y sale.
+//! Coordina una instancia de Naygo por usuario: mutex/eventos con nombre en Windows y lock más
+//! Unix socket privado en Linux. Si ya hay una corriendo, la secundaria solicita «muéstrate» y
+//! puede enviar una ruta de carpeta; el transporte y la recepción son específicos del SO.
 //!
 //! Decisiones de diseño:
 //! - **Namespace LOCAL de sesión** (sin prefijo `Global\`): la instancia única es POR SESIÓN de
@@ -23,7 +23,11 @@ use std::sync::Arc;
 
 use crate::dir_watch::Waker;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 /// Nombre del archivo de spool (en `%TEMP%`) donde la secundaria deja la carpeta pedida.
+#[cfg(windows)]
 const SPOOL_FILE: &str = "naygo-open-request.txt";
 
 /// Resultado de intentar ser la instancia única.
@@ -35,15 +39,15 @@ pub enum Instance {
     AlreadyRunning,
 }
 
-/// Retiene los handles Win32 del mutex y del evento mientras el proceso vive.
+/// Retiene los recursos de exclusión del SO mientras el proceso vive.
 ///
 /// Los handles se guardan como `isize` (y no como `HANDLE`) porque `HANDLE` envuelve un puntero
 /// crudo y no es `Send`; `isize` sí lo es, y así el guard puede cruzar hilos y el handle del
 /// evento puede pasarse al hilo vigilante de [`Guard::watch`]. Un valor `0` marca un guard
 /// inerte (sin mutex o sin evento), producto de un fallo Win32 tolerado.
 ///
-/// A propósito NO implementa `Drop`: los handles viven toda la vida del proceso y Windows los
-/// libera al terminar; cerrarlos antes de tiempo abriría la puerta a una segunda instancia.
+/// Windows libera sus handles al terminar el proceso; Linux conserva abierto el lockfile y el
+/// listener hasta que termina la instancia primaria.
 pub struct Guard {
     /// Handle del mutex `NaygoSingleInstance` (0 = inerte). Solo se retiene, nunca se usa.
     _mutex: isize,
@@ -53,6 +57,9 @@ pub struct Guard {
     /// Evento separado para pedir cierre limpio (instalador / `--shutdown`).
     #[cfg_attr(not(windows), allow(dead_code))]
     shutdown_event: isize,
+    /// Lock y listener de la instancia única Linux.
+    #[cfg(target_os = "linux")]
+    linux: Option<linux::LinuxGuard>,
 }
 
 impl Guard {
@@ -63,6 +70,8 @@ impl Guard {
             _mutex: 0,
             event: 0,
             shutdown_event: 0,
+            #[cfg(target_os = "linux")]
+            linux: None,
         }
     }
 
@@ -121,14 +130,19 @@ impl Guard {
         }
         #[cfg(not(windows))]
         {
-            // Stub no-Windows: no hay evento que vigilar.
+            // El backend Linux recibe IPC en un worker; nunca bloquea el event loop.
+            #[cfg(target_os = "linux")]
+            if let Some(guard) = &self.linux {
+                guard.watch(requested.clone(), shutdown_requested.clone(), waker.clone());
+            }
+            #[cfg(not(target_os = "linux"))]
             let _ = (requested, shutdown_requested, waker);
         }
     }
 }
 
-/// Intenta ser la instancia única. NUNCA bloquea ni falla el arranque: ante cualquier error
-/// Win32 inesperado, devuelve `Primary` (mejor dos instancias que ninguna).
+/// Intenta ser la instancia única. Ante un fallo del SO, conserva la disponibilidad de Naygo y
+/// devuelve una primaria inerte; el log advierte que esa sesión no tiene coordinación.
 ///
 /// Mecanismo: crea el mutex con nombre `NaygoSingleInstance`. Si el SO reporta
 /// `ERROR_ALREADY_EXISTS`, otro proceso ya lo tiene → [`Instance::AlreadyRunning`]. Si somos
@@ -197,8 +211,14 @@ pub fn acquire() -> Instance {
     }
 }
 
-/// Stub no-Windows: no hay mutex con nombre; siempre somos la primaria (guard inerte).
-#[cfg(not(windows))]
+/// Implementación Linux con lock y socket privados por sesión de usuario.
+#[cfg(target_os = "linux")]
+pub fn acquire() -> Instance {
+    linux::acquire()
+}
+
+/// Stub para targets que todavía no implementan instancia única.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn acquire() -> Instance {
     Instance::Primary(Guard::inert())
 }
@@ -226,8 +246,14 @@ pub fn notify_running(folder: Option<&Path>) {
     }
 }
 
-/// Stub no-Windows: no hay a quién avisar.
-#[cfg(not(windows))]
+/// Solicita mostrar la instancia primaria en Linux mediante IPC local.
+#[cfg(target_os = "linux")]
+pub fn notify_running(folder: Option<&Path>) {
+    linux::notify_running(folder);
+}
+
+/// Stub para targets que todavía no implementan IPC de instancia única.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn notify_running(_folder: Option<&Path>) {}
 
 /// Desde una instancia secundaria solicita que la primaria termine. Usa el mismo evento de
@@ -247,11 +273,17 @@ pub fn notify_shutdown() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn notify_shutdown() {
+    linux::notify_shutdown();
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn notify_shutdown() {}
 
 /// Ruta FIJA del archivo de spool en temp. Fija a propósito: primaria y secundaria son procesos
 /// distintos y deben coincidir en la ruta sin coordinarse.
+#[cfg(windows)]
 fn spool_path() -> PathBuf {
     std::env::temp_dir().join(SPOOL_FILE)
 }
@@ -259,11 +291,24 @@ fn spool_path() -> PathBuf {
 /// Lee Y BORRA el archivo de spool con la carpeta pedida por una secundaria. `None` si no hay,
 /// no parsea, o la ruta no existe como carpeta (defensa: el spool podría ser viejo o basura).
 /// Cross-platform a propósito (el spool es solo filesystem), para poder testearlo en cualquier OS.
+#[cfg(windows)]
 pub fn take_open_request() -> Option<PathBuf> {
     take_open_request_at(&spool_path())
 }
 
+/// Drena la ruta recibida por IPC desde memoria; no consulta el filesystem desde el hilo UI.
+#[cfg(target_os = "linux")]
+pub fn take_open_request() -> Option<PathBuf> {
+    linux::take_open_request()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn take_open_request() -> Option<PathBuf> {
+    None
+}
+
 /// Implementación con ruta parametrizable, para que los tests no choquen con la ruta fija real.
+#[cfg(any(windows, test))]
 fn take_open_request_at(spool: &Path) -> Option<PathBuf> {
     let contenido = std::fs::read_to_string(spool).ok()?;
     // Borrar SIEMPRE tras leer (consumo destructivo). Si el borrado falla se ignora: el peor

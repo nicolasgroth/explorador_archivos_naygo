@@ -128,6 +128,7 @@ export component SearchPanel inherits Rectangle {
                 LineEdit {
                     horizontal-stretch: 1;
                     text <=> root.draft-root;
+                    accessible-label: Tr.search-root;
                     enabled: !root.vm.advanced;
                     edited(t) => {
                         root.root-suggestion-index = -1;
@@ -200,6 +201,7 @@ export component SearchPanel inherits Rectangle {
                 input := LineEdit {
                     horizontal-stretch: 1;
                     placeholder-text: Tr.search-placeholder;
+                    accessible-label: Tr.search-placeholder;
                     text <=> root.draft;
                     enabled: !root.vm.advanced;
                     // Enter lanza la búsqueda.
@@ -242,6 +244,7 @@ export component SearchPanel inherits Rectangle {
                 LineEdit {
                     horizontal-stretch: 1;
                     placeholder-text: Tr.search-content-placeholder;
+                    accessible-label: Tr.search-content;
                     text <=> root.draft-content;
                     enabled: !root.vm.advanced;
                     accepted(t) => {

@@ -43,6 +43,7 @@
 //! ninguna ruta resuelve a un PIDL, devuelve `NoItems` **antes** de mostrar
 //! cualquier menú (esto hace los tests no interactivos).
 
+#[cfg(windows)]
 use std::path::PathBuf;
 
 /// Resultado de mostrar el menú: el usuario eligió un comando o canceló.

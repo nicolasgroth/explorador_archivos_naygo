@@ -118,6 +118,10 @@ fn drop_con_confirmacion_off_ejecuta_directo_y_sin_conflicto_copia() {
         routed,
         "drop_at enruta igual (devuelve true en ambos modos)"
     );
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Started
+    );
     assert!(
         c.pending_drop.is_none(),
         "confirmación OFF: no queda un drop esperando el modal kind 3"
@@ -158,6 +162,10 @@ fn drop_con_confirmacion_off_pero_archivo_existente_pide_conflicto() {
 
     // Soltar con la confirmación OFF → arranca directo, sin modal kind 3. (copy_forced=Ctrl.)
     assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Started
+    );
     assert!(c.pending_drop.is_none(), "no hay confirmación de drop");
 
     // El motor debe DETENERSE en el conflicto, no sobrescribir.
@@ -189,7 +197,7 @@ fn drop_con_confirmacion_off_pero_archivo_existente_pide_conflicto() {
 
 /// REGRESIÓN (reportado por Nicolás): arrastrar un archivo a otro panel donde YA EXISTE, y
 /// confirmar el drop, debe DETENERSE en el conflicto (preguntar) — no sobrescribir en silencio.
-/// Reproduce el flujo completo drop_at → confirm_pending_drop → motor con first_collision.
+/// Reproduce el flujo completo drop_at → preconsulta worker → motor y su diálogo de conflicto.
 /// Distingue si el bug está en el MOTOR (este test falla) o solo en la UI/timing (pasa).
 #[test]
 fn drop_sobre_archivo_existente_confirmado_pide_conflicto_no_sobrescribe() {
@@ -214,6 +222,10 @@ fn drop_sobre_archivo_existente_confirmado_pide_conflicto_no_sobrescribe() {
     // como HAY conflicto (doc.txt ya existe en el destino), `drop_at` NO deja un drop pendiente de
     // confirmación — ejecuta directo y va al diálogo de CONFLICTO (que ya es la confirmación).
     assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("doc.txt")]));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Started
+    );
     assert!(
         c.pending_drop.is_none(),
         "con conflicto NO se pide confirmación de drop (un solo popup: el de conflicto)"
@@ -275,6 +287,10 @@ fn drop_un_solo_popup_segun_haya_conflicto() {
 
     // Drop SIN choque → deja pending_drop (sale el modal de confirmación). copy_forced=Ctrl.
     assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("nuevo.txt")]));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     assert!(
         c.pending_drop.is_some(),
         "sin conflicto + confirmación ON → se pide confirmar el drop"
@@ -283,6 +299,10 @@ fn drop_un_solo_popup_segun_haya_conflicto() {
 
     // Drop CON choque → NO deja pending_drop (va directo al conflicto, un solo popup). copy_forced=Ctrl.
     assert!(c.drop_at(cx, cy, false, true, vec![a.path().join("choca.txt")]));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Started
+    );
     assert!(
         c.pending_drop.is_none(),
         "con conflicto → sin confirmación de drop (el conflicto es la confirmación)"
@@ -678,6 +698,164 @@ fn crear_archivo_con_ctrl_shift_n() {
 
 // ===================== 3. Crear varias carpetas anidadas (a\b\c) ==========================
 
+#[test]
+fn nav052_create_selects_after_completion_and_refreshes_tree_without_watcher() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    let files = c.active_files_id().unwrap();
+    let tree_id = c.ws.add_pane(PanePurpose::Tree, PathBuf::new());
+    let mut tree = DirTree::default();
+    tree.roots.push(naygo_core::tree::TreeNode::folder(
+        root.path().to_path_buf(),
+    ));
+    c.trees.insert(tree_id, tree);
+    c.tree_expand(tree_id, root.path().to_path_buf());
+    for _ in 0..2000 {
+        if c.pump_tree() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    c.set_active(files);
+    c.ws.active_files_mut().unwrap().restored_scroll_row = Some(0);
+    c.ctrl_down = true;
+    c.shift_down = true;
+    c.new_folder_open_active();
+    assert!(
+        !c.ctrl_down && !c.shift_down,
+        "abrir el modal limpia modificadores viejos"
+    );
+    c.new_folder_set_text("new folder");
+    c.ctrl_down = true;
+    c.shift_down = true;
+    c.new_folder_apply();
+    assert!(
+        !c.ctrl_down && !c.shift_down,
+        "crear con el modal limpia modificadores"
+    );
+    assert!(drain_ops(&mut c));
+    c.reconcile_completed_operations();
+    assert_eq!(c.ws.active_files().unwrap().restored_scroll_row, None);
+    assert!(drain(&mut c));
+    for _ in 0..2000 {
+        if c.pump_tree() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let f = c.ws.pane(files).unwrap().files.as_ref().unwrap();
+    assert_eq!(
+        f.focused_view_entry().unwrap().path,
+        root.path().join("new folder")
+    );
+    assert_eq!(f.selected.len(), 1);
+    assert_eq!(f.restored_scroll_row, f.focused);
+    assert!(c.trees[&tree_id]
+        .node_at(&root.path().join("new folder"))
+        .is_some());
+    assert_eq!(c.trees[&tree_id].active_path.as_deref(), Some(root.path()));
+
+    // El gesto siguiente al modal debe navegar en el mismo panel aunque el key-release de Ctrl
+    // no haya llegado mientras se confirmaba la creación (p. ej. Ctrl+Enter).
+    let created_pos = active_pos_of(&c, "new folder").expect("la carpeta creada queda en la vista");
+    assert!(c.on_row_double_clicked_native(files, created_pos, false, false));
+    assert_eq!(c.ws.active_id(), Some(files));
+    assert_eq!(
+        c.ws.active_files().unwrap().current_dir,
+        root.path().join("new folder"),
+        "el doble clic normal posterior entra en la carpeta en el panel actual"
+    );
+    assert!(drain(&mut c));
+
+    c.new_folder_open_active();
+    assert!(c.new_folder_text().is_empty());
+}
+
+#[test]
+fn nav052_up_and_refresh_keep_path_identity_after_sort() {
+    let root = tempfile::tempdir().unwrap();
+    let child = root.path().join("z child");
+    std::fs::create_dir(&child).unwrap();
+    std::fs::create_dir(root.path().join("a sibling")).unwrap();
+    let (mut c, _cfg) = ctrl_en(&child);
+    assert!(c.on_go_up());
+    assert!(drain(&mut c));
+    assert_eq!(
+        c.ws.active_files()
+            .unwrap()
+            .focused_view_entry()
+            .unwrap()
+            .path,
+        child
+    );
+    assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
+    std::fs::create_dir(root.path().join("b inserted")).unwrap();
+    c.refresh_active();
+    assert!(drain(&mut c));
+    assert_eq!(
+        c.ws.active_files()
+            .unwrap()
+            .focused_view_entry()
+            .unwrap()
+            .path,
+        child
+    );
+    assert_eq!(c.ws.active_files().unwrap().selected.len(), 1);
+}
+
+#[test]
+fn nav052_watch_during_listing_reconciles_and_rescan_reloads() {
+    let root = tempfile::tempdir().unwrap();
+    let gone = root.path().join("gone.txt");
+    std::fs::write(&gone, "old").unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    let id = c.active_files_id().unwrap();
+    c.start_listing(id, root.path().to_path_buf());
+    std::fs::remove_file(&gone).unwrap();
+    c.apply_watch_events_resolved(
+        id,
+        &[naygo_core::listing::DirEvent::Removed(gone.clone())],
+        &Default::default(),
+    );
+    assert!(c.dirty_listings.contains(&id));
+    assert!(drain(&mut c));
+    assert!(c
+        .ws
+        .active_files()
+        .unwrap()
+        .entries
+        .iter()
+        .all(|e| e.path != gone));
+    let arrived = root.path().join("arrived.txt");
+    std::fs::write(&arrived, "new").unwrap();
+    c.apply_watch_events_resolved(id, &[], &Default::default());
+    assert!(drain(&mut c));
+    assert!(c
+        .ws
+        .active_files()
+        .unwrap()
+        .entries
+        .iter()
+        .any(|e| e.path == arrived));
+}
+
+#[test]
+fn nav052_create_finishing_after_navigation_does_not_steal_focus() {
+    let root = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    c.new_folder_open_active();
+    c.new_folder_set_text("nested\\child");
+    c.new_folder_apply();
+    let id = c.active_files_id().unwrap();
+    c.open_in_pane(id, other.path().to_path_buf());
+    assert!(drain_ops(&mut c));
+    c.reconcile_completed_operations();
+    assert!(drain(&mut c));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, other.path());
+    assert!(c.ws.active_files().unwrap().selected.is_empty());
+}
+
 /// GESTO: abrir el cuadro "nueva(s) carpeta(s)" (botón de la toolbar) y escribir varias líneas,
 /// cada una una carpeta SUELTA, y aplicar. RESULTADO: todas existen en disco. Cubre el alta
 /// MULTILÍNEA (varias carpetas de una vez), que es el camino distinto del modal de nombre simple.
@@ -828,6 +1006,10 @@ fn mover_archivo_arrastrando_al_panel_destino() {
     // Soltar sobre el panel destino con move_hint=true (Shift real del OLE) → MOVER.
     let routed = c.drop_at(cx, cy, true, false, vec![src.path().join("clip.txt")]);
     assert!(routed, "el drop debe enrutar al panel destino");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles ahora pide confirmación antes de
     // ejecutar; lo confirmamos (equivale a pulsar Mover en el modal).
     assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
@@ -865,6 +1047,10 @@ fn arrastrar_mismo_disco_sin_modificadores_mueve() {
     // move_hint=false, copy_forced=false → mismo disco → Mover.
     let routed = c.drop_at(cx, cy, false, false, vec![src.path().join("nota.txt")]);
     assert!(routed, "el drop debe enrutar");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
     assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");
     assert!(drain_ops(&mut c), "la operación debe terminar");
@@ -1066,6 +1252,12 @@ fn conflicto_al_mover_sobrescribir() {
     }
     assert!(resuelto, "debe aparecer y resolverse el conflicto");
     assert!(termino, "la operación debe terminar tras resolver");
+    assert_eq!(
+        c.ops.active_ops[0].summary.as_ref().unwrap().count_failed(),
+        0,
+        "Move con RenameTo debe terminar sin errores: {:?}",
+        c.ops.active_ops[0].summary
+    );
 
     assert_eq!(
         std::fs::read_to_string(dst.path().join("dato.txt")).unwrap(),
@@ -1158,6 +1350,10 @@ fn move_hint_fuerza_mover_con_modificadores_stale() {
     // copy_forced=false, pero move_hint del OLE = true (Shift real al soltar) → MOVER.
     let routed = c.drop_at(cx, cy, true, false, vec![src.path().join("reg.txt")]);
     assert!(routed, "el drop debe enrutar");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     // CONFIRMAR AL SOLTAR (PUNTO 1b): el drop entre paneles pide confirmación antes de ejecutar.
     // El move_hint queda guardado en el pendiente, así que confirmar MUEVE igual.
     assert!(c.confirm_pending_drop(), "confirmar arranca el movimiento");

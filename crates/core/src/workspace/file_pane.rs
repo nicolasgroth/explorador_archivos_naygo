@@ -14,6 +14,7 @@ use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::{NavContext, NavHistory};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Estado de un panel de archivos. Lo serializable se persiste; `entries` no
 /// (se re-lista al abrir) y `history` tampoco (arranca limpio cada sesión).
@@ -64,6 +65,13 @@ pub struct FilePaneState {
     /// Revisión monotónica del contenido de `entries`. Permite a la UI invalidar modelos en
     /// O(1), incluso cuando un watcher modifica metadata sin cambiar la cantidad de filas.
     entries_revision: std::cell::Cell<u64>,
+    /// Último delta de rutas que solo modificó contenido visible sin cambiar identidad/orden.
+    /// Si hubo más de una revisión desde que la UI lo leyó, el delta se descarta y se reconstruye.
+    entries_rows_delta: std::cell::RefCell<Option<EntriesRowsDelta>>,
+    /// Último tramo añadido físicamente al listado. Permite que la UI pruebe si puede
+    /// extender el modelo visible sin reconstruir filas previas; cualquier mutación que no
+    /// sea append invalida esta pista.
+    entries_append_delta: std::cell::RefCell<Option<EntriesAppendDelta>>,
     /// Revisión de selección/foco para evitar hashear selecciones masivas en cada frame.
     presentation_revision: std::cell::Cell<u64>,
     /// Contador de recomputes de la vista (solo para tests; mide aciertos del caché).
@@ -75,7 +83,22 @@ pub struct FilePaneState {
 #[derive(Debug)]
 struct ViewCache {
     signature: u64,
-    indices: Vec<usize>,
+    indices: Arc<[usize]>,
+}
+
+#[derive(Clone, Debug)]
+struct EntriesRowsDelta {
+    from_revision: u64,
+    to_revision: u64,
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct EntriesAppendDelta {
+    from_revision: u64,
+    to_revision: u64,
+    start: usize,
+    end: usize,
 }
 
 impl Clone for FilePaneState {
@@ -102,6 +125,10 @@ impl Clone for FilePaneState {
             // El caché NO se arrastra: el clon lo reconstruye a demanda.
             view_cache: std::cell::RefCell::new(None),
             entries_revision: std::cell::Cell::new(self.entries_revision.get()),
+            entries_rows_delta: std::cell::RefCell::new(self.entries_rows_delta.borrow().clone()),
+            entries_append_delta: std::cell::RefCell::new(
+                self.entries_append_delta.borrow().clone(),
+            ),
             presentation_revision: std::cell::Cell::new(self.presentation_revision.get()),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
@@ -112,6 +139,9 @@ impl Clone for FilePaneState {
 /// Lo que se persiste de un panel de archivos (sin entries ni history).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilePanePersist {
+    /// Las rutas UTF-8 conservan el string histórico. En Unix, rutas con bytes inválidos usan
+    /// un objeto etiquetado/versionado para que guardar una sesión no las convierta en `�`.
+    #[serde(with = "crate::path_wire")]
     pub current_dir: PathBuf,
     pub sort: SortSpec,
     pub view: ViewMode,
@@ -151,6 +181,8 @@ impl FilePaneState {
             hidden_paths: std::collections::HashSet::new(),
             view_cache: std::cell::RefCell::new(None),
             entries_revision: std::cell::Cell::new(1),
+            entries_rows_delta: std::cell::RefCell::new(None),
+            entries_append_delta: std::cell::RefCell::new(None),
             presentation_revision: std::cell::Cell::new(1),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
@@ -165,9 +197,59 @@ impl FilePaneState {
     /// Notifica que `entries` fue reemplazado o mutado. El vector sigue siendo público por
     /// compatibilidad, pero los productores runtime deben llamar esto tras cada lote/evento.
     pub fn entries_changed(&self) {
-        self.entries_revision
-            .set(self.entries_revision.get().wrapping_add(1));
+        self.advance_entries_revision(None);
+        *self.entries_append_delta.borrow_mut() = None;
         *self.view_cache.borrow_mut() = None;
+    }
+
+    /// Notifica un lote que se añadió al final de `entries`. Varios lotes consecutivos
+    /// conservan el mismo inicio para que un tick atrasado pueda recuperar el rango agregado.
+    /// La UI aún valida contexto y orden antes de aplicar el append visible.
+    pub fn entries_appended(&self, start: usize) {
+        let from_revision = self.entries_revision.get();
+        let to_revision = from_revision.wrapping_add(1);
+        self.entries_revision.set(to_revision);
+        *self.entries_rows_delta.borrow_mut() = None;
+        let end = self.entries.len();
+        let mut delta = self.entries_append_delta.borrow_mut();
+        let continuous = delta
+            .as_ref()
+            .is_some_and(|old| old.to_revision == from_revision && old.end == start);
+        if continuous {
+            if let Some(old) = delta.as_mut() {
+                old.to_revision = to_revision;
+                old.end = end;
+            }
+        } else {
+            *delta = Some(EntriesAppendDelta {
+                from_revision,
+                to_revision,
+                start,
+                end,
+            });
+        }
+        *self.view_cache.borrow_mut() = None;
+    }
+
+    /// Notifica modificaciones de contenido en entradas con identidad, visibilidad y orden
+    /// estables. Conserva los índices de vista porque no cambió ningún campo que los determina.
+    /// Inserciones, borrados, renombres, visibilidad, cambios de orden o varios lotes se
+    /// notifican con `entries_changed`, que invalida la vista completa/incremental.
+    pub fn entries_rows_changed(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        let paths: Vec<PathBuf> = paths.into_iter().collect();
+        self.advance_entries_revision((!paths.is_empty()).then_some(paths));
+        *self.entries_append_delta.borrow_mut() = None;
+    }
+
+    fn advance_entries_revision(&self, paths: Option<Vec<PathBuf>>) {
+        let from_revision = self.entries_revision.get();
+        let to_revision = from_revision.wrapping_add(1);
+        self.entries_revision.set(to_revision);
+        *self.entries_rows_delta.borrow_mut() = paths.map(|paths| EntriesRowsDelta {
+            from_revision,
+            to_revision,
+            paths,
+        });
     }
 
     /// Oculta exactamente las rutas indicadas de la vista actual. Reubica foco/selección con el
@@ -184,6 +266,33 @@ impl FilePaneState {
     /// Revisión barata para cachés externos de presentación.
     pub fn entries_revision(&self) -> u64 {
         self.entries_revision.get()
+    }
+
+    /// Rutas modificadas desde `revision` si esta es la única actualización de entries posterior.
+    pub fn entries_rows_changed_since(&self, revision: u64) -> Option<Vec<PathBuf>> {
+        let current = self.entries_revision.get();
+        self.entries_rows_delta
+            .borrow()
+            .as_ref()
+            .filter(|delta| delta.from_revision == revision && delta.to_revision == current)
+            .map(|delta| delta.paths.clone())
+    }
+
+    /// Rango físico añadido de forma contigua desde `revision`, si no hubo otra clase de
+    /// mutación de entries. El consumidor verifica que la vista conserva su prefijo.
+    pub fn entries_appended_since(&self, revision: u64, expected_start: usize) -> Option<usize> {
+        let current = self.entries_revision.get();
+        self.entries_append_delta
+            .borrow()
+            .as_ref()
+            .filter(|delta| {
+                delta.from_revision <= revision
+                    && revision < delta.to_revision
+                    && delta.to_revision == current
+                    && delta.start <= expected_start
+                    && expected_start < delta.end
+            })
+            .map(|delta| delta.end)
     }
 
     pub fn presentation_changed(&self) {
@@ -351,7 +460,6 @@ impl FilePaneState {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.entries.len().hash(&mut h);
-        self.entries_revision.get().hash(&mut h);
         // SortSpec deriva Hash: cubre key, ascending y dirs_first.
         self.sort.hash(&mut h);
         // Filtros: el BTreeMap es ordenado, así que el recorrido (y el hash) es estable.
@@ -376,20 +484,26 @@ impl FilePaneState {
     /// que en carpetas grandes saturaba la CPU bajo render por software. Es el único
     /// espacio de índices que usan foco/selección/teclado/activación/render.
     pub fn view_indices(&self) -> Vec<usize> {
+        self.view_indices_shared().as_ref().to_vec()
+    }
+
+    /// Acceso inmutable compartido: clonar el `Arc` no copia todos los índices y no mantiene
+    /// préstamos de `RefCell` mientras otro método muta el panel.
+    pub fn view_indices_shared(&self) -> Arc<[usize]> {
         let sig = self.view_signature();
         // ¿Caché válido? (misma firma). Si sí, servirlo.
         if let Some(c) = self.view_cache.borrow().as_ref() {
             if c.signature == sig {
-                return c.indices.clone();
+                return Arc::clone(&c.indices);
             }
         }
         // Recalcular, guardar y devolver.
-        let indices = self.compute_view_indices(self.group_new_at_end);
+        let indices: Arc<[usize]> = self.compute_view_indices(self.group_new_at_end).into();
         #[cfg(test)]
         self.view_recomputes.set(self.view_recomputes.get() + 1);
         *self.view_cache.borrow_mut() = Some(ViewCache {
             signature: sig,
-            indices: indices.clone(),
+            indices: Arc::clone(&indices),
         });
         indices
     }
@@ -458,6 +572,7 @@ impl FilePaneState {
     /// (La UI lanzará el listado de `dir` tras llamar esto.)
     pub fn navigate_to(&mut self, dir: PathBuf) {
         self.capture_current_nav_context();
+        self.pending_nav_context = None;
         self.history.push(dir.clone());
         self.enter(dir);
     }
@@ -502,9 +617,34 @@ impl FilePaneState {
 
     /// Sube al directorio padre (entra al historial). Devuelve el padre si existe.
     pub fn go_up(&mut self) -> Option<PathBuf> {
+        let child = self.current_dir.clone();
         let parent = self.current_dir.parent()?.to_path_buf();
         self.navigate_to(parent.clone());
+        self.visual_filter = None;
+        self.reveal_after_listing(vec![child]);
         Some(parent)
+    }
+
+    /// Re-listar conserva identidad, no índices que pueden apuntar a otra fila al ordenar.
+    /// No pisa un reveal explícito ni el contexto de Atrás/Adelante pendiente.
+    pub fn preserve_context_for_listing(&mut self) {
+        if self.pending_nav_context.is_none() {
+            self.capture_current_nav_context();
+            self.pending_nav_context = self.history.current_context().cloned();
+        }
+    }
+
+    /// Seleccionar y desplazar a rutas confirmadas cuando termine el listado incremental.
+    pub fn reveal_after_listing(&mut self, paths: Vec<PathBuf>) {
+        // Rearmar el observador Slint aunque dos reveals terminen en el mismo índice.
+        self.restored_scroll_row = None;
+        self.pending_nav_context = Some(NavContext {
+            focused_path: paths.first().cloned(),
+            scroll_anchor_path: paths.first().cloned(),
+            selected_paths: paths,
+            table: None,
+            visual_filter: self.visual_filter.clone(),
+        });
     }
 
     /// Reemplaza la carpeta actual sin tocar el historial (uso interno).
@@ -821,6 +961,62 @@ mod tests {
     }
 
     #[test]
+    fn delta_de_filas_solo_cubre_una_revision_contigua() {
+        let pane = FilePaneState::new(p("C:/a"));
+        let initial = pane.entries_revision();
+        pane.view_indices_shared();
+        let view_recomputes = pane.view_recomputes_for_test();
+        let changed = p("C:/a/file.txt");
+        pane.entries_rows_changed([changed.clone()]);
+        pane.view_indices_shared();
+        assert_eq!(pane.view_recomputes_for_test(), view_recomputes);
+        assert_eq!(
+            pane.entries_rows_changed_since(initial),
+            Some(vec![changed])
+        );
+
+        let after_delta = pane.entries_revision();
+        pane.entries_changed();
+        assert_eq!(pane.entries_rows_changed_since(initial), None);
+        assert_eq!(pane.entries_rows_changed_since(after_delta), None);
+    }
+
+    #[test]
+    fn delta_append_coalesce_lotes_y_se_invalida_con_mutaciones_no_append() {
+        fn entry(name: &str) -> crate::fs_model::Entry {
+            crate::fs_model::Entry {
+                name: name.to_owned(),
+                path: p(&format!("C:/a/{name}")),
+                kind: crate::fs_model::EntryKind::File,
+                size: Some(1),
+                modified: None,
+                created: None,
+                hidden: false,
+                system: false,
+            }
+        }
+
+        let mut pane = FilePaneState::new(p("C:/a"));
+        pane.entries.extend([entry("a.txt"), entry("b.txt")]);
+        pane.entries_changed();
+        let initial = pane.entries_revision();
+
+        pane.entries.push(entry("c.txt"));
+        pane.entries_appended(2);
+        pane.entries.push(entry("d.txt"));
+        pane.entries_appended(3);
+        assert_eq!(pane.entries_appended_since(initial, 2), Some(4));
+        assert_eq!(
+            pane.entries_appended_since(pane.entries_revision() - 1, 3),
+            Some(4)
+        );
+
+        let before_modified = pane.entries_revision();
+        pane.entries_rows_changed([p("C:/a/c.txt")]);
+        assert_eq!(pane.entries_appended_since(before_modified, 3), None);
+    }
+
+    #[test]
     fn navigate_y_back_actualizan_carpeta_e_historial() {
         let mut s = FilePaneState::new(p("C:/a"));
         s.navigate_to(p("C:/a/b"));
@@ -885,6 +1081,67 @@ mod tests {
         };
         let s = FilePaneState::from_persist(persist);
         assert_eq!(s.table, table);
+    }
+
+    #[test]
+    fn persist_path_utf8_keeps_the_legacy_json_string_shape() {
+        let persist = FilePanePersist {
+            current_dir: PathBuf::from("/home/nico/Documentos"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: None,
+            table: None,
+        };
+
+        let json = serde_json::to_value(&persist).unwrap();
+        assert_eq!(json["current_dir"], "/home/nico/Documentos");
+        let restored: FilePanePersist = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.current_dir, persist.current_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_non_utf8_path_uses_versioned_native_bytes_without_loss() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let native_bytes = b"/home/nico/archivos-\xff";
+        let persist = FilePanePersist {
+            current_dir: PathBuf::from(std::ffi::OsString::from_vec(native_bytes.to_vec())),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: None,
+            table: None,
+        };
+
+        let json = serde_json::to_value(&persist).unwrap();
+        assert_eq!(json["current_dir"]["encoding"], "unix-bytes-v1");
+        assert_eq!(
+            json["current_dir"]["bytes_hex"],
+            "2f686f6d652f6e69636f2f6172636869766f732dff"
+        );
+        let restored: FilePanePersist = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.current_dir.as_os_str().as_bytes(), native_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_rejects_unknown_or_malformed_native_path_encodings() {
+        let persist = FilePanePersist {
+            current_dir: PathBuf::from("/home/nico"),
+            sort: SortSpec::default(),
+            view: ViewMode::default(),
+            show_dirs: true,
+            text_filter: None,
+            table: None,
+        };
+        let mut json = serde_json::to_value(persist).unwrap();
+        json["current_dir"] = serde_json::json!({
+            "encoding": "unix-bytes-v1",
+            "bytes_hex": "not-hex",
+        });
+        assert!(serde_json::from_value::<FilePanePersist>(json).is_err());
     }
 
     #[test]
@@ -1196,6 +1453,27 @@ mod tests {
         let d = p.view_indices();
         assert_eq!(d.len(), 51);
         assert_eq!(p.view_recomputes_for_test(), 3, "agregar entry recalcula");
+    }
+
+    #[test]
+    fn vista_compartida_reutiliza_allocation_y_se_invalida_por_revision() {
+        let mut pane = pane_n(20);
+        let first = pane.view_indices_shared();
+        let second = pane.view_indices_shared();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "cache hit comparte el mismo buffer"
+        );
+        assert_eq!(first.as_ref(), pane.view_indices().as_slice());
+
+        pane.sort.ascending = !pane.sort.ascending;
+        let after_sort = pane.view_indices_shared();
+        assert!(
+            !Arc::ptr_eq(&first, &after_sort),
+            "cambio de orden invalida el buffer"
+        );
+        assert_eq!(after_sort.len(), 20);
+        assert_eq!(pane.view_recomputes_for_test(), 2);
     }
 
     #[test]

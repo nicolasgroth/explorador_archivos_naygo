@@ -141,6 +141,13 @@ impl Watchers {
         std::thread::spawn(move || {
             // Tanto registrar la carpeta como liberar el watcher pueden bloquear en red.
             let _watch = dir_watch::watch(&dir, pane_tx, Arc::new(|| {}));
+            // Registro completado: reconciliar la ventana entre snapshot y watcher listo.
+            // Un lote vacío es una invalidación, no un evento de archivo inventado.
+            if canceled.load(Ordering::Acquire)
+                || !forward_batch(&tx, pane, generation, Vec::new(), &waker)
+            {
+                return;
+            }
             while let Ok(events) = pane_rx.recv() {
                 if canceled.load(Ordering::Acquire)
                     || !forward_batch(&tx, pane, generation, events, &waker)

@@ -8,6 +8,7 @@
 
 use super::names::{is_valid_name, relative_components};
 use super::{OpKind, OpPlan, OpRequest, OpStep};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Error de planificación (antes de empezar a ejecutar).
@@ -123,10 +124,10 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
             .ok_or(PlanError::MissingDest)?;
         pending.push((src.clone(), to));
     }
-    // Clave case-insensitive (semántica de nombres de Windows).
-    let key = |p: &Path| p.to_string_lossy().to_lowercase();
+    // La clave POSIX conserva bytes/case; Windows mantiene su comparación histórica.
+    let key = crate::path_identity::key;
     let mut steps: Vec<OpStep> = Vec::with_capacity(pending.len());
-    let mut freed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut freed = std::collections::HashSet::new();
     loop {
         let mut progressed = false;
         pending.retain(|(from, to)| {
@@ -188,7 +189,7 @@ pub(super) fn plan_duplicate_with(
     let mut steps = Vec::new();
     let mut total_bytes = 0u64;
     let mut total_files = 0usize;
-    let mut reserved = std::collections::HashSet::<String>::new();
+    let mut reserved = std::collections::HashSet::<crate::path_identity::PathIdentityKey>::new();
     for src in &req.sources {
         if cancelled() {
             break;
@@ -196,10 +197,9 @@ pub(super) fn plan_duplicate_with(
         let parent = src.parent().ok_or(PlanError::MissingDest)?;
         let name = src
             .file_name()
-            .and_then(|n| n.to_str())
             .ok_or_else(|| PlanError::InvalidName(src.display().to_string()))?;
         let dest = unique_duplicate_path(parent, name, &reserved);
-        reserved.insert(dest.to_string_lossy().to_lowercase());
+        reserved.insert(crate::path_identity::key(&dest));
         expand(
             src,
             &dest,
@@ -208,6 +208,7 @@ pub(super) fn plan_duplicate_with(
             &mut total_files,
             sink,
             cancelled,
+            false,
         )?;
     }
     Ok(OpPlan {
@@ -220,16 +221,12 @@ pub(super) fn plan_duplicate_with(
 
 fn unique_duplicate_path(
     parent: &Path,
-    name: &str,
-    reserved: &std::collections::HashSet<String>,
+    name: &OsStr,
+    reserved: &std::collections::HashSet<crate::path_identity::PathIdentityKey>,
 ) -> PathBuf {
     let path = Path::new(name);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
+    let stem = path.file_stem().unwrap_or(name);
+    let ext = path.extension();
     let mut n = 1usize;
     loop {
         let suffix = if n == 1 {
@@ -237,8 +234,14 @@ fn unique_duplicate_path(
         } else {
             format!(" - copia ({n})")
         };
-        let candidate = parent.join(format!("{stem}{suffix}{ext}"));
-        if !candidate.exists() && !reserved.contains(&candidate.to_string_lossy().to_lowercase()) {
+        let mut candidate_name = OsString::from(stem);
+        candidate_name.push(suffix);
+        if let Some(ext) = ext {
+            candidate_name.push(".");
+            candidate_name.push(ext);
+        }
+        let candidate = parent.join(candidate_name);
+        if !candidate.exists() && !reserved.contains(&crate::path_identity::key(&candidate)) {
             return candidate;
         }
         n += 1;
@@ -276,7 +279,7 @@ pub(super) fn plan_transfer_with(
         // Copiar/mover un origen a SU PROPIO lugar (`dest.join(name) == src`) es un no-op: no
         // generamos pasos `from == to` (que serían ruidosos y, en el caso de carpeta, podrían
         // alimentar un `pre_delete` peligroso aguas arriba). Saltamos ese origen. Comparamos
-        // case-insensitive: en Windows `D:\Foto` y `D:\foto` son el MISMO directorio.
+        // según la plataforma: Windows ignora case; Unix distingue nombres y bytes nativos.
         if paths_eq_ci(&base_to, src) {
             continue;
         }
@@ -288,6 +291,7 @@ pub(super) fn plan_transfer_with(
             &mut total_files,
             sink,
             cancelled,
+            matches!(&req.kind, OpKind::Move),
         )?;
     }
     Ok(OpPlan {
@@ -346,7 +350,7 @@ fn expand_delete(
         let entries =
             std::fs::read_dir(path).map_err(|_| PlanError::SourceUnreadable(path.to_path_buf()))?;
         for entry in entries {
-            let entry = entry.map_err(|_| PlanError::SourceUnreadable(path.to_path_buf()))?;
+            let entry = map_directory_entry(entry, path)?;
             expand_delete(
                 &entry.path(),
                 steps,
@@ -373,6 +377,13 @@ fn expand_delete(
     Ok(())
 }
 
+/// Convierte los errores que aparecen mientras se consume `ReadDir` en un error tipado con
+/// la carpeta que no pudo enumerarse. No se deben descartar con `flatten()`: en una transferencia
+/// eso produciría un plan parcial antes de que el usuario pueda revisar o cancelar.
+fn map_directory_entry<T>(entry: std::io::Result<T>, directory: &Path) -> Result<T, PlanError> {
+    entry.map_err(|_| PlanError::SourceUnreadable(directory.to_path_buf()))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn expand(
     src: &Path,
@@ -382,6 +393,7 @@ fn expand(
     total_files: &mut usize,
     sink: &mut dyn FnMut(usize, u64),
     cancelled: &dyn Fn() -> bool,
+    directories_postorder: bool,
 ) -> Result<(), PlanError> {
     // Cortar limpio si se canceló a mitad del recorrido (el worker emitirá `Cancelled`).
     if cancelled() {
@@ -390,15 +402,18 @@ fn expand(
     let meta =
         std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
     if meta.is_dir() {
-        steps.push(OpStep {
-            from: Some(src.to_path_buf()),
-            to: to.to_path_buf(),
-            bytes: 0,
-            is_dir: true,
-        });
+        if !directories_postorder {
+            steps.push(OpStep {
+                from: Some(src.to_path_buf()),
+                to: to.to_path_buf(),
+                bytes: 0,
+                is_dir: true,
+            });
+        }
         let entries =
             std::fs::read_dir(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = map_directory_entry(entry, src)?;
             if cancelled() {
                 return Ok(());
             }
@@ -412,7 +427,16 @@ fn expand(
                 total_files,
                 sink,
                 cancelled,
+                directories_postorder,
             )?;
+        }
+        if directories_postorder {
+            steps.push(OpStep {
+                from: Some(src.to_path_buf()),
+                to: to.to_path_buf(),
+                bytes: 0,
+                is_dir: true,
+            });
         }
     } else {
         let bytes = meta.len();
@@ -431,11 +455,10 @@ fn expand(
     Ok(())
 }
 
-/// ¿`a` y `b` son la MISMA ruta en un FS case-insensitive (Windows trata `D:\Proj` y
-/// `D:\proj` como el mismo directorio)? Compara componente a componente, en minúscula,
-/// para no dar falsos negativos por capitalización distinta. Mismo estilo que la `key()`
-/// del renombrado en lote, pero por componente (no por string completo), para que sea
-/// consistente con `path_starts_with_ci`.
+/// ¿`a` y `b` son la misma ruta según la identidad léxica de la plataforma?
+/// Windows conserva su comparación case-insensitive histórica; Unix compara componentes
+/// nativos con sensibilidad a mayúsculas y sin convertir bytes no UTF-8 a texto.
+#[cfg(windows)]
 pub(super) fn paths_eq_ci(a: &Path, b: &Path) -> bool {
     let ca: Vec<_> = a.components().collect();
     let cb: Vec<_> = b.components().collect();
@@ -447,10 +470,14 @@ pub(super) fn paths_eq_ci(a: &Path, b: &Path) -> bool {
         })
 }
 
-/// ¿`child` está dentro de (o es igual a) `ancestor`, comparando case-insensitive?
-/// Compara componente a componente: evita tanto el falso negativo por capitalización
-/// (`D:\foto\backup` bajo `D:\Foto`) como el falso positivo de comparar el string crudo
-/// (`D:\fotos` NO está bajo `D:\foto`, aunque sea prefijo textual).
+#[cfg(not(windows))]
+pub(super) fn paths_eq_ci(a: &Path, b: &Path) -> bool {
+    a == b
+}
+
+/// ¿`child` está dentro de (o es igual a) `ancestor` según la plataforma?
+/// La comprobación usa límites de componentes; en Unix conserva case y bytes nativos.
+#[cfg(windows)]
 pub(super) fn path_starts_with_ci(child: &Path, ancestor: &Path) -> bool {
     let cc: Vec<_> = child.components().collect();
     let ca: Vec<_> = ancestor.components().collect();
@@ -462,7 +489,12 @@ pub(super) fn path_starts_with_ci(child: &Path, ancestor: &Path) -> bool {
         })
 }
 
-/// `true` si `inner` está dentro de (o es igual a) `outer`. Case-insensitive (Windows).
+#[cfg(not(windows))]
+pub(super) fn path_starts_with_ci(child: &Path, ancestor: &Path) -> bool {
+    child == ancestor || child.starts_with(ancestor)
+}
+
+/// `true` si `inner` está dentro de (o es igual a) `outer` según la plataforma.
 fn is_inside(inner: &Path, outer: &Path) -> bool {
     path_starts_with_ci(inner, outer)
 }
@@ -480,6 +512,18 @@ mod tests {
             dest_dir: dest,
             conflict: ConflictPolicy::Overwrite,
         }
+    }
+
+    #[test]
+    fn error_de_entrada_read_dir_reporta_la_carpeta_y_no_se_omite() {
+        let directory = Path::new("/fixture/inaccesible");
+        let entry: std::io::Result<()> =
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        assert_eq!(
+            map_directory_entry(entry, directory),
+            Err(PlanError::SourceUnreadable(directory.to_path_buf()))
+        );
     }
 
     #[test]
@@ -522,6 +566,31 @@ mod tests {
             .steps
             .iter()
             .all(|step| step.from.as_ref() != Some(&step.to)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_conserva_bytes_no_utf8_y_resuelve_colisiones() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b"archivo-\xff.txt".to_vec()));
+        fs::write(&src, b"fixture").unwrap();
+        let occupied = dir.path().join(std::ffi::OsString::from_vec(
+            b"archivo-\xff - copia.txt".to_vec(),
+        ));
+        fs::write(&occupied, b"existing").unwrap();
+
+        let plan = plan(&req(OpKind::Duplicate, vec![src.clone()], None)).unwrap();
+        let expected = dir.path().join(std::ffi::OsString::from_vec(
+            b"archivo-\xff - copia (2).txt".to_vec(),
+        ));
+
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].from, Some(src));
+        assert_eq!(plan.steps[0].to, expected);
     }
 
     #[test]
@@ -811,6 +880,28 @@ mod tests {
         assert_eq!(e, PlanError::MissingDest);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn copy_entre_directorios_que_solo_difieren_en_case_es_valido_en_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("A");
+        let dest = dir.path().join("a");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::write(src.join("contenido.txt"), b"fixture").unwrap();
+
+        let plan = plan(&req(OpKind::Copy, vec![src.clone()], Some(dest.clone())))
+            .expect("Unix distingue los directorios A y a");
+
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(
+            plan.steps[0].from.as_deref(),
+            Some(src.join("contenido.txt").as_path())
+        );
+        assert_eq!(plan.steps[0].to, dest.join("A").join("contenido.txt"));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn paths_eq_ci_ignora_capitalizacion() {
         // Misma ruta con distinta capitalización → iguales (semántica de Windows).
@@ -828,6 +919,7 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
     #[test]
     fn path_starts_with_ci_contiene_case_insensitive() {
         // Hijo bajo un ancestro con otra capitalización → contenido.
@@ -850,6 +942,46 @@ mod tests {
         assert!(!path_starts_with_ci(
             Path::new("D:\\foto\\a"),
             Path::new("D:\\otra")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paths_eq_ci_en_unix_preserva_case_y_bytes_no_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(paths_eq_ci(
+            Path::new("/tmp/archivo"),
+            Path::new("/tmp/archivo")
+        ));
+        assert!(!paths_eq_ci(
+            Path::new("/tmp/archivo"),
+            Path::new("/tmp/Archivo")
+        ));
+        assert!(!paths_eq_ci(
+            Path::new(std::ffi::OsStr::from_bytes(b"/tmp/name-\xff")),
+            Path::new(std::ffi::OsStr::from_bytes(b"/tmp/name-\xfe")),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_starts_with_ci_en_unix_respeta_componentes_y_case() {
+        assert!(path_starts_with_ci(
+            Path::new("/tmp/parent/child"),
+            Path::new("/tmp/parent")
+        ));
+        assert!(path_starts_with_ci(
+            Path::new("/tmp/parent"),
+            Path::new("/tmp/parent")
+        ));
+        assert!(!path_starts_with_ci(
+            Path::new("/tmp/Parent/child"),
+            Path::new("/tmp/parent")
+        ));
+        assert!(!path_starts_with_ci(
+            Path::new("/tmp/parentish"),
+            Path::new("/tmp/parent")
         ));
     }
 }

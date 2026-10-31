@@ -11,7 +11,14 @@ component FolderRows inherits Rectangle {
     callback navigate(string);
     callback focus-pane();
     ListView {
+        accessible-role: AccessibleRole.list;
+        accessible-item-count: root.rows.length;
         for r[i] in root.rows: Rectangle {
+            accessible-role: AccessibleRole.list_item;
+            accessible-label: r.label + ", " + r.path;
+            accessible-item-index: i;
+            accessible-item-count: root.rows.length;
+            accessible-action-default => { root.focus-pane(); root.navigate(r.path); }
             height: 28px;
             background: row-touch.has-hover ? Theme.hover-bg : transparent;
             border-radius: Theme.radius-sm;

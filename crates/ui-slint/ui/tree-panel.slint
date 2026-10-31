@@ -138,6 +138,10 @@ export component TreePanel inherits Rectangle {
         padding: Theme.space-sm;
         Rectangle {
             height: 24px;
+            accessible-role: button;
+            accessible-label: root.link-label;
+            accessible-checked: root.linked;
+            accessible-action-default => { root.focus-pane(); root.toggle-link(); }
             border-radius: Theme.radius-sm;
             background: link-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
             HorizontalLayout {
@@ -169,11 +173,21 @@ export component TreePanel inherits Rectangle {
             }
         }
         list := ListView {
+            accessible-role: AccessibleRole.list;
+            accessible-label: Tr.tree-title;
+            accessible-item-count: root.rows.length;
             vertical-stretch: 1;
             // `ListView` no revela automáticamente una fila que cambió fuera de él; el
             // FocusScope superior centra `reveal-row` cuando llega desde el controlador.
             for n[i] in root.rows: row-rect := Rectangle {
                 height: root.row-h;
+                accessible-role: AccessibleRole.list_item;
+                accessible-label: n.name;
+                accessible-item-index: i;
+                accessible-item-count: root.rows.length;
+                accessible-item-selectable: true;
+                accessible-item-selected: n.active;
+                accessible-action-default => { root.navigate(n.path); }
                 background: n.active
                     ? (root.active ? Theme.selection-bg : Theme.selection-inactive-bg)
                     : (node-touch.has-hover ? Theme.hover-bg : transparent);
@@ -235,7 +249,7 @@ export component TreePanel inherits Rectangle {
                             x: 0;
                             width: parent.width * (n.disk-percent / 100);
                             height: parent.height;
-                            background: n.disk-percent > 90 ? Theme.error : (n.disk-percent > 75 ? Theme.highlight : Theme.accent);
+                            background: n.disk-percent > 90 ? Theme.error : (n.disk-percent > 75 ? Theme.icon-accent : Theme.accent);
                             border-radius: 4px;
                         }
                     }

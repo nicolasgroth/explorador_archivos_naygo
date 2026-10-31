@@ -29,7 +29,7 @@ pub enum PreviewKind {
 
 /// Extensiones de imagen previsualizables. Fijas en v1 (el decoder de `image` soporta
 /// todas: png/jpeg/bmp/gif/webp/ico).
-pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "gif", "webp", "ico"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "apng", "bmp", "gif", "webp", "ico"];
 
 /// Extensión de imagen vectorial: se rasteriza con resvg (no la decodifica `image`).
 pub const SVG_EXTENSIONS: &[&str] = &["svg"];
@@ -45,15 +45,29 @@ pub const MESH_EXTENSIONS: &[&str] = &["stl", "3mf"];
 pub const DEFAULT_TEXT_EXTENSIONS: &[&str] = &[
     "txt", "log", "md", "json", "xml", "csv", "toml", "yaml", "yml", "ini", "rs", "py", "js",
     "html", "java", "ts", "c", "cpp", "h", "css", "sh", "bat", "cfg", "conf", "go", "rb", "php",
-    "sql", "kt", "swift", "lua",
+    "sql", "kt", "swift", "lua", "sif",
 ];
 
 /// Tope de líneas que se muestran de un archivo de texto. 250 líneas deja recorrer un bloque
 /// útil de letras, logs y README sin transformar la vista previa en un editor ni aumentar el
 /// límite de lectura en memoria (que continúa fijo en `TEXT_MAX_BYTES`).
 pub const TEXT_MAX_LINES: usize = 250;
-/// Tope de bytes que se leen de un archivo de texto (lo que llegue primero con las líneas).
-pub const TEXT_MAX_BYTES: usize = 64 * 1024;
+/// Límites que la persona puede elegir para la lectura del preview de texto. El máximo de 1 MiB
+/// queda bajo el límite del protocolo aislado y mantiene acotado el trabajo incluso con resaltado.
+pub const TEXT_MAX_BYTES_OPTIONS: &[u32] = &[64 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024];
+/// Tope conservador usado cuando una configuración antigua no contiene la opción.
+pub const DEFAULT_TEXT_MAX_BYTES: u32 = 256 * 1024;
+/// Máximo fijo para validar settings importados o editados externamente.
+pub const TEXT_MAX_BYTES: usize = 1024 * 1024;
+
+/// Normaliza un límite persistido a una de las opciones expuestas por la interfaz.
+pub fn normalize_text_max_bytes(bytes: u32) -> u32 {
+    TEXT_MAX_BYTES_OPTIONS
+        .iter()
+        .copied()
+        .min_by_key(|candidate| candidate.abs_diff(bytes))
+        .unwrap_or(DEFAULT_TEXT_MAX_BYTES)
+}
 /// Tope de caracteres por línea. Una línea más larga se recorta (con marcador). Defensa dura:
 /// el renderizador por software de Slint posiciona cada glifo en coordenadas i16 (máx ~32767px);
 /// una línea larguísima (típica en logs) sin ajuste empuja un glifo fuera de ese rango y la app
@@ -500,6 +514,14 @@ pub fn clip_long_lines(s: &str) -> (String, bool) {
 /// Marca `truncated` si había más líneas que el tope O si el buffer ya venía cortado por
 /// bytes (`hit_byte_cap`). No agrega el aviso: eso es presentación (i18n) de la UI.
 pub fn truncate_text(bytes: &[u8], hit_byte_cap: bool) -> TruncatedText {
+    // A preview byte cap can land in the middle of a UTF-8 scalar or UTF-16 code unit.
+    // Preserve the valid prefix in that case; otherwise decode_text_bytes would classify the
+    // entire UTF-8 file as Windows-1252 (or lose UTF-16's BOM) and corrupt otherwise valid text.
+    let bytes = if hit_byte_cap {
+        text_prefix_at_encoding_boundary(bytes)
+    } else {
+        bytes
+    };
     let s = decode_text_bytes(bytes);
     let mut out = String::new();
     let mut more_lines = false;
@@ -526,6 +548,35 @@ pub fn truncate_text(bytes: &[u8], hit_byte_cap: bool) -> TruncatedText {
         text: out,
         truncated: more_lines || hit_byte_cap || clipped_line,
     }
+}
+
+fn text_prefix_at_encoding_boundary(bytes: &[u8]) -> &[u8] {
+    if let Some(rest) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        return utf16_prefix_at_boundary(bytes, rest, true);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        return utf16_prefix_at_boundary(bytes, rest, false);
+    }
+    match std::str::from_utf8(bytes) {
+        Err(error) if error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        _ => bytes,
+    }
+}
+
+fn utf16_prefix_at_boundary<'a>(bytes: &'a [u8], rest: &[u8], little_endian: bool) -> &'a [u8] {
+    let mut end = bytes.len() - (rest.len() % 2);
+    if end >= 4 {
+        let last = if little_endian {
+            u16::from_le_bytes([bytes[end - 2], bytes[end - 1]])
+        } else {
+            u16::from_be_bytes([bytes[end - 2], bytes[end - 1]])
+        };
+        // Do not turn a valid but cut surrogate pair into U+FFFD at the end of the preview.
+        if (0xd800..=0xdbff).contains(&last) {
+            end -= 2;
+        }
+    }
+    &bytes[..end]
 }
 
 #[cfg(test)]
@@ -559,6 +610,12 @@ mod tests {
         let rules = default_preview_rules();
         assert_eq!(classify_rules(Path::new("a.svg"), &rules), PreviewKind::Svg);
         assert_eq!(classify_rules(Path::new("a.pdf"), &rules), PreviewKind::Pdf);
+        // `.sif` se usa como archivo de texto; Auto debe mostrarlo como texto sin que el
+        // usuario tenga que cambiar el modo manualmente.
+        assert_eq!(
+            classify_rules(Path::new("a.sif"), &rules),
+            PreviewKind::Text
+        );
     }
 
     #[test]
@@ -577,6 +634,23 @@ mod tests {
     fn texto_utf16_con_bom_se_decodifica() {
         let bytes = [0xff, 0xfe, b'H', 0, b'o', 0, b'l', 0, b'a', 0];
         assert_eq!(decode_text_bytes(&bytes), "Hola");
+    }
+
+    #[test]
+    fn limite_de_bytes_utf8_no_corrompe_un_caracter_multibyte_cortado() {
+        let bytes = [b'A', b' ', 0xe2, 0x82]; // prefijo incompleto de “€” al alcanzar el tope
+        let text = truncate_text(&bytes, true);
+        assert_eq!(text.text, "A ");
+        assert!(text.truncated);
+    }
+
+    #[test]
+    fn limite_de_bytes_utf16_descarta_unidad_o_surrogate_incompleto() {
+        let odd_unit = [0xff, 0xfe, b'H', 0, b'i', 0, 0x3d];
+        assert_eq!(truncate_text(&odd_unit, true).text, "Hi");
+
+        let cut_pair = [0xfe, 0xff, 0xd8, 0x3d]; // surrogate alto sin su pareja baja
+        assert_eq!(truncate_text(&cut_pair, true).text, "");
     }
 
     #[test]
@@ -765,8 +839,20 @@ mod tests {
     fn default_rules_tiene_texto_e_imagen_habilitados() {
         let rules = default_preview_rules();
         assert!(rules.iter().any(|r| r.ext == "txt" && r.enabled));
+        assert!(rules.iter().any(|r| r.ext == "sif" && r.enabled));
         assert!(rules.iter().any(|r| r.ext == "png" && r.enabled));
         assert!(rules.iter().all(|r| r.enabled && r.view == ViewMode::Auto));
+    }
+
+    #[test]
+    fn limite_textual_admite_opciones_acotadas_y_normaliza_valores_invalidos() {
+        assert_eq!(
+            TEXT_MAX_BYTES_OPTIONS,
+            &[64 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024]
+        );
+        assert_eq!(DEFAULT_TEXT_MAX_BYTES, 256 * 1024);
+        assert_eq!(normalize_text_max_bytes(512 * 1024), 512 * 1024);
+        assert_eq!(normalize_text_max_bytes(u32::MAX), 1024 * 1024);
     }
 
     #[test]

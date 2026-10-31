@@ -8,29 +8,51 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1"
 
-# Naygo compila con CARGO_BUILD_JOBS=2: las dependencias de SVG/PDF crashean el compilador
-# de Slint con alta paralelización (los runners tienen varios cores).
+# El gate y el benchmark sólo necesitan leer el checkout.
+permissions:
+  contents: read
+
+# Mantener una sola compilación simultánea como en el build local validado.
 env:
-  CARGO_BUILD_JOBS: "2"
+  CARGO_BUILD_JOBS: "1"
 
 jobs:
   gate:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+
+      - name: Verificar Windows Server 2025
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "$($os.Caption) version $($os.Version) build $($os.BuildNumber)"
+          if ($os.Caption -notmatch 'Windows Server 2025') {
+            throw "Se esperaba Windows Server 2025, pero el runner reportó '$($os.Caption)'."
+          }
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3fc1e40d4c4ce3007de028907c886bc3996ce2ea # 1.96.0, verificado por GitHub API el 2026-10-15
         with:
           components: clippy, rustfmt
 
       - name: Cache de dependencias
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, verificado por GitHub API el 2026-10-15
 
       - name: Formato
         run: cargo fmt --all -- --check
+
+      - name: Verificar pins inmutables de acciones
+        run: python scripts/check_action_pins.py
+
+      - name: Probar verificación de firma SignPath
+        shell: pwsh
+        run: ./scripts/test-signing.ps1
 
       # Paridad de i18n: cada idioma debe tener las mismas claves y placeholders
       # que es.json (fuente de verdad). Falla el gate si hay drift.
@@ -46,7 +68,124 @@ jobs:
           exit $rc
 
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy (warnings = error)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # Validación nativa Linux opt-in mientras L-03/L-04 cierran sus capacidades y su matriz.
+  # No forma parte del gate Windows por defecto: no debe retrasar una entrega Windows antes
+  # de que la aceptación Linux esté cerrada. Se ejecuta al despachar CI manualmente.
+  linux-native:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+
+      - name: Verificar Ubuntu 26.04 x86_64
+        shell: bash
+        run: |
+          source /etc/os-release
+          printf 'OS: %s %s; kernel: %s; arch: %s\n' "$NAME" "$VERSION_ID" "$(uname -r)" "$(uname -m)"
+          [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 && "$(uname -m)" == x86_64 ]]
+
+      - name: Instalar dependencias nativas de Slint/Winit
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential \
+            libfontconfig1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            pkg-config \
+            xinput
+          dpkg-query -W -f='${Package} ${Version}\n' \
+            build-essential libfontconfig1-dev libwayland-dev libx11-dev \
+            libx11-xcb-dev libxcursor-dev libxi-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev pkg-config xinput
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@3fc1e40d4c4ce3007de028907c886bc3996ce2ea # 1.96.0, verificado por GitHub API el 2026-10-15
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache de dependencias
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, verificado por GitHub API el 2026-10-15
+
+      - name: Formato
+        run: cargo fmt --all -- --check
+
+      - name: i18n parity (todos los idiomas contra es.json)
+        shell: bash
+        run: |
+          for f in crates/core/src/i18n/*.json; do
+            code=$(basename "$f" .json)
+            [ "$code" = "es" ] && continue
+            python scripts/check_i18n_lang.py "$code"
+          done
+
+      - name: Pruebas nativas de core y platform
+        run: cargo test -p naygo-core -p naygo-platform --locked
+
+      - name: Clippy de core y platform
+        run: cargo clippy -p naygo-core -p naygo-platform --all-targets --locked -- -D warnings
+
+      - name: Compilar UI Linux y todos sus targets
+        run: cargo check -p naygo-ui-slint --all-targets --locked
+
+      - name: Clippy de UI Linux
+        run: cargo clippy -p naygo-ui-slint --all-targets --locked -- -D warnings
+
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-2025
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+
+      - name: Verificar Windows Server 2025
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "$($os.Caption) version $($os.Version) build $($os.BuildNumber)"
+          if ($os.Caption -notmatch 'Windows Server 2025') {
+            throw "Se esperaba Windows Server 2025, pero el runner reportó '$($os.Caption)'."
+          }
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@3fc1e40d4c4ce3007de028907c886bc3996ce2ea # 1.96.0, verificado por GitHub API el 2026-10-15
+
+      - name: Cache de dependencias
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, verificado por GitHub API el 2026-10-15
+
+      - name: Capturar huella del runner
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          if ($os.Caption -notmatch 'Windows Server 2025') {
+            throw "Se esperaba Windows Server 2025, pero el runner reportó '$($os.Caption)'."
+          }
+          $env:NAYGO_BENCH_RUSTC_VERSION = (& rustc --version)
+          $env:NAYGO_BENCH_OS_VERSION = "$($os.Caption) $($os.Version) (build $($os.BuildNumber))"
+          $cpuModels = Get-CimInstance Win32_Processor | ForEach-Object { $_.Name.Trim() } | Sort-Object -Unique
+          $env:NAYGO_BENCH_CPU = ($cpuModels -join '; ')
+          $env:NAYGO_BENCH_RAM_BYTES = [string](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+          cargo bench -p naygo-core --bench large_directory --locked -- --json |
+            Tee-Object -FilePath benchmark-report.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Guardar informe sintético (informativo)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        with:
+          name: naygo-benchmark-${{ github.run_id }}
+          path: benchmark-report.jsonl
+          if-no-files-found: error
+          retention-days: 30

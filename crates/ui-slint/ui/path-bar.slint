@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
 export component PathBar inherits Rectangle {
     in property <string> path;
     callback go-up();
@@ -13,6 +14,9 @@ export component PathBar inherits Rectangle {
         spacing: 6px;
         Rectangle {
             width: 30px;
+            accessible-role: button;
+            accessible-label: Tr.toolbar-up-tip;
+            accessible-action-default => { root.go-up(); }
             background: up-touch.has-hover ? Theme.selection-bg : transparent;
             border-radius: 4px;
             Text {

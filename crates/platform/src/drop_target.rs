@@ -36,6 +36,7 @@ pub struct StagedDropGuard {
 }
 
 impl StagedDropGuard {
+    #[cfg(windows)]
     fn new(root: PathBuf) -> Self {
         Self { root }
     }
@@ -842,8 +843,9 @@ mod windows_impl {
 
         /// El usuario suelta: priorizamos la variante virtual si está disponible; así evitamos
         /// rutas temporales efímeras de archivadores. Si la fuente solo ofrece `CF_HDROP`, usamos
-        /// sus rutas reales. El método vuelve enseguida: los streams y el disco nunca bloquean el
-        /// hilo de UI.
+        /// sus rutas reales. La materialización posterior usa workers, pero `GetData` se invoca en
+        /// este callback y algunos proveedores pueden bloquearlo al extraer contenido; además el
+        /// snapshot de temporales espera hasta dos segundos. Esa latencia aún requiere solución.
         fn Drop(
             &self,
             pdataobj: Ref<IDataObject>,
@@ -1097,6 +1099,199 @@ mod windows_impl {
         use super::*;
 
         #[test]
+        fn sondeo_cowait_mide_despacho_de_mensaje_de_ventana() {
+            use std::sync::atomic::AtomicUsize;
+            use windows::core::w;
+            use windows::Win32::Foundation::{
+                CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+            };
+            use windows::Win32::System::Com::{
+                CoWaitForMultipleHandles, COINIT_APARTMENTTHREADED, COWAIT_DISPATCH_CALLS,
+                COWAIT_DISPATCH_WINDOW_MESSAGES,
+            };
+            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows::Win32::System::Threading::{CreateEventW, SetEvent};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
+                PostMessageW, RegisterClassW, UnregisterClassW, HWND_MESSAGE, MSG, PM_REMOVE,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WNDCLASSW,
+            };
+
+            static SEEN: AtomicUsize = AtomicUsize::new(0);
+            unsafe extern "system" fn proc(
+                hwnd: HWND,
+                msg: u32,
+                wp: WPARAM,
+                lp: LPARAM,
+            ) -> LRESULT {
+                if msg == WM_APP + 47 {
+                    SEEN.fetch_add(1, Ordering::SeqCst);
+                    LRESULT(0)
+                } else {
+                    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+                }
+            }
+            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
+                .ok()
+                .unwrap();
+            let _com = ComWorkerGuard;
+            SEEN.store(0, Ordering::SeqCst);
+            let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }.unwrap().0);
+            let class = w!("NaygoCoWaitProbeWindow");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: instance,
+                lpszClassName: class,
+                ..Default::default()
+            };
+            assert_ne!(unsafe { RegisterClassW(&wc) }, 0);
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    class,
+                    w!(""),
+                    WINDOW_STYLE::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    Some(HWND_MESSAGE),
+                    None,
+                    Some(instance),
+                    None,
+                )
+            }
+            .unwrap();
+            let event = unsafe { CreateEventW(None, true, false, None) }.unwrap();
+            let raw_event = event.0 as isize;
+            let raw_hwnd = hwnd.0 as isize;
+            let worker = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                unsafe {
+                    PostMessageW(
+                        Some(HWND(raw_hwnd as *mut _)),
+                        WM_APP + 47,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                }
+                .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                unsafe { SetEvent(HANDLE(raw_event as *mut _)) }.unwrap();
+            });
+            let flags = (COWAIT_DISPATCH_WINDOW_MESSAGES.0 | COWAIT_DISPATCH_CALLS.0) as u32;
+            let waited = unsafe { CoWaitForMultipleHandles(flags, 5_000, &[event]) };
+            worker.join().unwrap();
+            let during_wait = SEEN.load(Ordering::SeqCst);
+            let mut message = MSG::default();
+            while unsafe {
+                PeekMessageW(
+                    &mut message,
+                    Some(hwnd),
+                    WM_APP + 47,
+                    WM_APP + 47,
+                    PM_REMOVE,
+                )
+            }
+            .as_bool()
+            {
+                unsafe { DispatchMessageW(&message) };
+            }
+            let after_pump = SEEN.load(Ordering::SeqCst);
+            unsafe { DestroyWindow(hwnd) }.unwrap();
+            unsafe { UnregisterClassW(class, Some(instance)) }.unwrap();
+            unsafe { CloseHandle(event) }.unwrap();
+            assert!(waited.is_ok(), "espera no completó: {waited:?}");
+            assert_eq!(after_pump, 1, "el mensaje de control se perdió");
+            eprintln!("cowait_window_message_during_wait={during_wait} after_pump={after_pump}");
+            // Sondeo informativo: no certifica repintado, entrada, winit ni portabilidad.
+        }
+
+        #[test]
+        fn com_marshaling_worker_puede_consultar_hdrop_con_espera_sta() {
+            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows::Win32::System::Com::{
+                CoWaitForMultipleHandles, COINIT_APARTMENTTHREADED, COWAIT_DISPATCH_CALLS,
+                COWAIT_DISPATCH_WINDOW_MESSAGES,
+            };
+            use windows::Win32::System::Threading::{CreateEventW, SetEvent};
+
+            struct Event(isize);
+            impl Drop for Event {
+                fn drop(&mut self) {
+                    let _ = unsafe { CloseHandle(HANDLE(self.0 as *mut _)) };
+                }
+            }
+            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
+                .ok()
+                .unwrap();
+            let _com = ComWorkerGuard;
+            let expected = std::env::temp_dir().join("naygo-ole-synthetic-file.txt");
+            let object = crate::dnd::test_file_data_object(vec![expected.clone()]);
+            let marshaled =
+                unsafe { CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &object) }
+                    .unwrap();
+            let raw = marshaled.into_raw() as usize;
+            let event = Arc::new(Event(
+                unsafe { CreateEventW(None, true, false, None) }.unwrap().0 as isize,
+            ));
+            let worker_event = event.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = (|| -> Result<Vec<PathBuf>, String> {
+                    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+                        .ok()
+                        .map_err(|e| e.to_string())?;
+                    let _com = ComWorkerGuard;
+                    let stream = unsafe { IStream::from_raw(raw as *mut _) };
+                    let data: windows::core::Result<IDataObject> =
+                        unsafe { CoGetInterfaceAndReleaseStream(&stream) };
+                    std::mem::forget(stream);
+                    let data = data.map_err(|e| e.to_string())?;
+                    let mut medium =
+                        unsafe { data.GetData(&hdrop_formatetc()) }.map_err(|e| e.to_string())?;
+                    let paths = unsafe {
+                        crate::clipboard::windows_impl::extract_hdrop_paths(HDROP(
+                            medium.u.hGlobal.0,
+                        ))
+                    };
+                    unsafe { ReleaseStgMedium(&mut medium) };
+                    Ok(paths)
+                })();
+                let _ = tx.send(result);
+                let _ = unsafe { SetEvent(HANDLE(worker_event.0 as *mut _)) };
+            });
+            // Prueba limitada de COM STA/MTA; no demuestra respuesta de Slint ni del proveedor real.
+            let handle = HANDLE(event.0 as *mut _);
+            let waited_with_dispatch = unsafe {
+                CoWaitForMultipleHandles(COWAIT_DISPATCH_WINDOW_MESSAGES.0 as u32, 5_000, &[handle])
+            };
+            // La prueba exige llamadas COM, no respuesta de UI. El flag de mensajes puede ser
+            // rechazado según el entorno; en ese caso se prueba solo la espera COM ordinaria.
+            let waited = match waited_with_dispatch {
+                Ok(index) => Ok(index),
+                Err(error) => {
+                    eprintln!("despacho de ventana no disponible: {error:?}");
+                    let flags =
+                        (COWAIT_DISPATCH_WINDOW_MESSAGES.0 | COWAIT_DISPATCH_CALLS.0) as u32;
+                    match unsafe { CoWaitForMultipleHandles(flags, 5_000, &[handle]) } {
+                        Ok(index) => {
+                            eprintln!("espera con ambos flags completó");
+                            Ok(index)
+                        }
+                        Err(error) => {
+                            eprintln!("despacho combinado no disponible: {error:?}");
+                            unsafe { CoWaitForMultipleHandles(0, 5_000, &[handle]) }
+                        }
+                    }
+                }
+            };
+            assert!(waited.is_ok(), "la espera COM no completó: {waited:?}");
+            assert_eq!(rx.recv().unwrap().unwrap(), vec![expected]);
+            worker.join().unwrap();
+        }
+
+        #[test]
         fn archivador_con_ambos_formatos_prefiere_staging_virtual() {
             assert_eq!(preferred_drop_kind(true, true), ACCEPT_VIRTUAL);
             assert_eq!(preferred_drop_kind(true, false), ACCEPT_VIRTUAL);
@@ -1121,6 +1316,80 @@ mod windows_impl {
             let (paths, _guard) = stage_opened_hdrop_files(opened).unwrap();
             assert_eq!(paths.len(), 1);
             assert_eq!(std::fs::read(&paths[0]).unwrap(), b"contenido de prueba");
+        }
+
+        #[test]
+        fn hdrop_temporal_de_archivo_funciona_por_interfaz_ole() {
+            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
+            let parent = temp.path().join("7zE1234567");
+            std::fs::create_dir(&parent).unwrap();
+            let source = parent.join("file.txt");
+            std::fs::write(&source, b"contenido").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .DragEnter(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                    .unwrap();
+                target
+                    .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                    .unwrap();
+            }
+            let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
+            assert!(payload.staging.is_some());
+            assert_eq!(payload.paths.len(), 1);
+            assert_eq!(std::fs::read(&payload.paths[0]).unwrap(), b"contenido");
+        }
+
+        // Caso de aceptación pendiente: el proveedor sintético entrega CF_HDROP como un
+        // archivador, pero no reproduce extracción ni ciclo de vida COM de 7-Zip.
+        #[test]
+        #[ignore = "pendiente soporte de carpetas temporales y validación OLE real"]
+        fn hdrop_temporal_de_carpeta_preserva_arbol_y_vacios() {
+            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
+            let source = temp.path().join("7zE8765432").join("carpeta");
+            std::fs::create_dir_all(source.join("nested/empty")).unwrap();
+            std::fs::write(source.join("nested/file.txt"), b"contenido").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .DragEnter(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                    .unwrap();
+                target
+                    .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                    .unwrap();
+            }
+            let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
+            assert!(payload.staging.is_some());
+            assert_eq!(payload.paths.len(), 1);
+            assert_eq!(
+                std::fs::read(payload.paths[0].join("nested/file.txt")).unwrap(),
+                b"contenido"
+            );
+            assert!(payload.paths[0].join("nested/empty").is_dir());
         }
 
         #[test]
@@ -1217,8 +1486,7 @@ mod tests {
     fn register_hwnd_nulo_o_no_windows_es_inerte() {
         let (tx, _rx) = channel::<DropPayload>();
         let (drag_tx, _drag_rx) = channel::<DragHover>();
-        let guard = register(0, tx, drag_tx, noop_waker());
-        // El guard se dropea aquí sin panic.
-        drop(guard);
+        // Al salir del scope se libera sin panic; en Windows también ejerce su Drop RAII.
+        let _guard = register(0, tx, drag_tx, noop_waker());
     }
 }

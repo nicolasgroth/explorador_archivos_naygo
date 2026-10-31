@@ -16,6 +16,10 @@ component MenuRow inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
     callback clicked();
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
     height: 26px;
     background: t.has-hover && root.enabled ? Theme.hover-bg : transparent;
     border-radius: Theme.radius-sm;
@@ -109,6 +113,7 @@ export component ColumnMenu inherits Rectangle {
                     spacing: 5px;
                     LineEdit {
                         placeholder-text: Tr.colfilter-contains;
+                        accessible-label: Tr.colfilter-contains;
                         text: root.vm.text-draft;
                         edited(t) => { root.set-text(t); }
                         accepted => { root.apply(); }
@@ -134,6 +139,12 @@ export component ColumnMenu inherits Rectangle {
                     border-radius: 4px;
                     ListView {
                         for e[i] in root.vm.exts: Rectangle {
+                            accessible-role: AccessibleRole.checkbox;
+                            accessible-label: e.label;
+                            accessible-checked: e.checked;
+                            accessible-item-index: i;
+                            accessible-item-count: root.vm.exts.length;
+                            accessible-action-default => { root.toggle-ext(e.ext); }
                             height: 24px;
                             background: ext-touch.has-hover ? Theme.hover-bg : transparent;
                             border-radius: Theme.radius-sm;
@@ -142,7 +153,7 @@ export component ColumnMenu inherits Rectangle {
                                 spacing: 6px;
                                 Text {
                                     text: e.checked ? "✓" : "  ";
-                                    color: Theme.highlight;
+                                    color: Theme.icon-accent;
                                     width: 14px;
                                     vertical-alignment: center;
                                 }
@@ -175,6 +186,7 @@ export component ColumnMenu inherits Rectangle {
                     }
                     LineEdit {
                         placeholder-text: root.vm.kind == 2 ? Tr.colfilter-size-hint : Tr.colfilter-date-hint;
+                        accessible-label: Tr.colfilter-min;
                         text: root.vm.min-draft;
                         edited(t) => { root.set-min(t); }
                         accepted => { root.apply(); }
@@ -186,6 +198,7 @@ export component ColumnMenu inherits Rectangle {
                     }
                     LineEdit {
                         placeholder-text: root.vm.kind == 2 ? Tr.colfilter-size-hint : Tr.colfilter-date-hint;
+                        accessible-label: Tr.colfilter-max;
                         text: root.vm.max-draft;
                         edited(t) => { root.set-max(t); }
                         accepted => { root.apply(); }
@@ -198,6 +211,9 @@ export component ColumnMenu inherits Rectangle {
                     Rectangle {
                         height: 28px;
                         horizontal-stretch: 1;
+                        accessible-role: button;
+                        accessible-label: Tr.colfilter-apply;
+                        accessible-action-default => { root.apply(); }
                         background: apply-touch.has-hover ? Theme.accent.darker(10%) : Theme.accent;
                         border-radius: 4px;
                         Text {
@@ -211,6 +227,9 @@ export component ColumnMenu inherits Rectangle {
                     Rectangle {
                         height: 28px;
                         width: 80px;
+                        accessible-role: button;
+                        accessible-label: Tr.colfilter-clear;
+                        accessible-action-default => { root.clear-filter(); }
                         background: clear-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                         border-radius: Theme.radius-md;
                         Text {

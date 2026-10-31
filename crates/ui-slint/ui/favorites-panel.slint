@@ -122,7 +122,7 @@ export component FavoritesPanel inherits Rectangle {
                 width: 52px;
                 background: pin-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                 border-radius: Theme.radius-sm;
-                Text { text: Tr.fav-pin; color: Theme.highlight; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: Tr.fav-pin; color: Theme.icon-accent; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 pin-touch := TouchArea { clicked => { root.pin-current(); } }
             }
         }
@@ -182,7 +182,7 @@ export component FavoritesPanel inherits Rectangle {
                     // del favorito continúa siendo su ruta absoluta, mostrada a la derecha.
                     Text {
                         text: f.name;
-                        color: f.is-group ? Theme.text : Theme.highlight;
+                        color: f.is-group ? Theme.text : Theme.icon-accent;
                         font-weight: f.is-group ? 700 : 400;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -355,6 +355,7 @@ export component FavoritesPanel inherits Rectangle {
                     font-weight: 700;
                 }
                 name-input := LineEdit {
+                    accessible-label: Tr.fav-new-group;
                     placeholder-text: Tr.fav-new-group;
                     text: root.name-modal-text;
                     edited(t) => { root.name-modal-text = t; }

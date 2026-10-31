@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
+/// Clave interna de filtro/conteo para carpetas. NUL no puede aparecer en un nombre de archivo
+/// válido en Windows ni POSIX, así que no colisiona con una extensión real.
+pub const DIRECTORY_TYPE_FILTER_KEY: &str = "\0directory";
+
 /// Filtro de una columna, según su tipo de dato.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColumnFilter {
@@ -31,8 +35,13 @@ pub enum ColumnFilter {
     },
 }
 
-/// Extensión de un `Entry` en minúsculas; "" si no tiene.
+/// Tipo que representa la columna Extensión/filtro: una clave reservada para carpetas y, para
+/// archivos u otros entries, la extensión en minúsculas o "" si no tienen. `Other` conserva su
+/// extensión porque puede ser un enlace a un archivo y no se asume que sea carpeta.
 pub fn entry_extension(entry: &Entry) -> String {
+    if entry.is_dir() {
+        return DIRECTORY_TYPE_FILTER_KEY.to_string();
+    }
     entry
         .path
         .extension()
@@ -143,8 +152,8 @@ fn match_one(entry: &Entry, kind: ColumnKind, f: &ColumnFilter) -> bool {
     }
 }
 
-/// Cuenta cuántos entries hay por extensión (para el filtro de tipos). "" = sin
-/// extensión.
+/// Cuenta entries por tipo mostrado en Extensión (para el filtro): la clave reservada agrupa
+/// todas las carpetas; "" agrupa archivos/otros sin extensión.
 pub fn extension_counts(entries: &[Entry]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for e in entries {
@@ -328,5 +337,55 @@ mod tests {
         assert_eq!(counts.get("txt"), Some(&2));
         assert_eq!(counts.get("pdf"), Some(&1));
         assert_eq!(counts.get(""), Some(&1));
+    }
+
+    #[test]
+    fn carpetas_con_punto_se_cuentan_como_tipo_carpeta_y_no_como_extension() {
+        let entries = vec![
+            entry("1.The Buddha", None),
+            entry("2.3DBenchy", None),
+            entry("modelo.stl", Some(1)),
+            entry("LEEME", Some(1)),
+        ];
+
+        let counts = extension_counts(&entries);
+        assert_eq!(counts.get(DIRECTORY_TYPE_FILTER_KEY), Some(&2));
+        assert_eq!(counts.get("stl"), Some(&1));
+        assert_eq!(counts.get(""), Some(&1));
+        assert!(!counts.contains_key("buddha"));
+        assert!(!counts.contains_key("3dbenchy"));
+    }
+
+    #[test]
+    fn filtro_extension_separa_carpetas_de_archivos_y_conserva_other() {
+        use crate::fs_model::Entry;
+
+        let mut directory = entry("1.The Buddha", None);
+        directory.kind = EntryKind::Directory;
+        let file = entry("pieza.stl", Some(1));
+        let other = Entry {
+            name: "pieza-link.stl".into(),
+            path: PathBuf::from("pieza-link.stl"),
+            kind: EntryKind::Other,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: false,
+            system: false,
+        };
+        let directories = BTreeSet::from([DIRECTORY_TYPE_FILTER_KEY.to_string()]);
+        let mut filters = no_filters();
+        filters.insert(ColumnKind::Extension, ColumnFilter::Extensions(directories));
+        assert!(matches(&directory, &filters));
+        assert!(!matches(&file, &filters));
+        assert!(!matches(&other, &filters));
+
+        filters.insert(
+            ColumnKind::Extension,
+            ColumnFilter::Extensions(BTreeSet::from(["stl".to_string()])),
+        );
+        assert!(!matches(&directory, &filters));
+        assert!(matches(&file, &filters));
+        assert!(matches(&other, &filters));
     }
 }

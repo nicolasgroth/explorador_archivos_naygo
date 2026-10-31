@@ -6,6 +6,39 @@ use super::*;
 use slint::Model;
 use std::time::Duration;
 
+#[test]
+fn preview_respects_tabs_maximized_panel_window_visibility_and_close() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("one.txt"), "one").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let files = c.active_id().unwrap();
+    c.set_area(area());
+    c.add_pane_of(PanePurpose::Preview, area());
+    let preview = c.active_id().unwrap();
+    let now = std::time::Instant::now();
+    assert!(c.drive_preview_visible(now, true));
+    assert!(c.preview.can_cancel(now));
+    assert!(!c.drive_preview_visible(now, false));
+    assert!(!c.preview.busy());
+    assert!(c.drive_preview_visible(now, true));
+    c.toggle_maximize(files);
+    assert!(!c.drive_preview_visible(now, true));
+    c.toggle_maximize(files);
+    assert!(c.drive_preview_visible(now, true));
+    c.stack_into(preview, files);
+    c.set_active_tab(files);
+    assert!(!c.drive_preview_visible(now, true));
+    c.set_active_tab(preview);
+    assert!(c.drive_preview_visible(now, true));
+    assert!(c.cancel_preview());
+    assert!(!c.drive_preview_visible(now, true));
+    c.close_pane(preview);
+    assert!(!c.drive_preview_visible(now, true));
+    assert!(c.preview.wanted.is_none());
+}
+
 /// Drena los listados hasta que todos terminan (con timeout), simulando los ticks del
 /// Timer. Devuelve true si terminaron.
 fn drain(c: &mut WorkspaceCtrl) -> bool {
@@ -16,6 +49,77 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     false
+}
+
+#[test]
+fn navegaciones_sin_plaza_coalescen_a_la_ultima_ruta_del_panel() {
+    let work = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let latest = tempfile::tempdir().unwrap();
+    let mut ctrl = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    assert!(drain(&mut ctrl));
+
+    ctrl.listing_admission = naygo_core::listing::ListingAdmission::new(1);
+    let held = ctrl.listing_admission.try_acquire().unwrap();
+    let pane = ctrl.active_id().unwrap();
+    for index in 0..100 {
+        let destination = if index == 99 {
+            latest.path().to_path_buf()
+        } else {
+            first.path().join(index.to_string())
+        };
+        ctrl.start_listing(pane, destination);
+    }
+
+    assert!(!ctrl.listings.contains_key(&pane));
+    assert_eq!(
+        ctrl.pending_file_listings.get(&pane),
+        Some(&latest.path().to_path_buf())
+    );
+    drop(held);
+    assert!(!ctrl.pump_listings());
+    assert!(ctrl.listings.contains_key(&pane));
+    assert!(drain(&mut ctrl));
+}
+
+fn wait_for_workspace_persistence(c: &WorkspaceCtrl) {
+    for ticket in c.additional_persistence_tickets() {
+        naygo_core::config::wait_settings_saved(&ticket, Duration::from_secs(5))
+            .expect("la persistencia asíncrona termina en la prueba");
+    }
+}
+
+#[test]
+fn navegar_invalida_resaltados_de_otra_carpeta_con_el_mismo_nombre() {
+    let work = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let target = work.path().join("destino");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("informe.txt"), b"actual").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.active_id().unwrap();
+    c.watchers.unwatch(id.0);
+    let stale_path = work.path().join("informe.txt");
+    c.visit_changes.insert(
+        id,
+        vec![naygo_core::listing_changes::ListingChange {
+            path: stale_path.clone(),
+            kind: naygo_core::listing_changes::ChangeKind::New,
+        }],
+    );
+    c.visit_highlights
+        .insert(id, std::collections::HashSet::from([stale_path.clone()]));
+
+    c.start_listing(id, target);
+    assert!(!c.visit_changes.contains_key(&id));
+    assert!(!c.visit_highlights.contains_key(&id));
+    assert!(drain(&mut c));
+    assert!(!c
+        .visit_highlights
+        .get(&id)
+        .is_some_and(|paths| paths.contains(&stale_path)));
 }
 
 #[test]
@@ -378,6 +482,24 @@ fn exportar_listado_usa_vista_o_seleccion_y_columnas_visibles() {
     c.ws.active_files_mut().unwrap().select_single(0);
     let selected = c.export_listing_csv(';').unwrap();
     assert_eq!(selected.lines().count(), 2, "encabezado + una fila");
+}
+
+#[test]
+fn exportacion_csv_muestra_tipo_carpeta_aunque_el_nombre_tenga_puntos() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir(work.path().join("1.The Buddha")).unwrap();
+    std::fs::create_dir(work.path().join("2.3DBenchy")).unwrap();
+    std::fs::write(work.path().join("pieza.stl"), b"stl").unwrap();
+
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let csv = c.export_listing_csv(';').expect("panel activo");
+
+    assert!(csv.contains(";Carpeta;"));
+    assert!(!csv.contains(";buddha;"));
+    assert!(!csv.contains(";3dbenchy;"));
+    assert!(csv.contains(";stl;"));
 }
 
 #[test]
@@ -892,6 +1014,9 @@ fn reglas_de_preview_crud() {
         .preview_rules()
         .iter()
         .any(|(e, on, _, _)| e == "sif" && !*on));
+    c.config
+        .wait_for_settings_save(std::time::Duration::from_secs(5))
+        .unwrap();
     // Persistió: reabrir y la regla sigue (modo Código + XML).
     let c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     assert!(c2
@@ -1403,6 +1528,10 @@ fn drop_at_enruta_al_panel_bajo_el_cursor_no_al_activo() {
         vec![a.path().join("doc.txt")],
     );
     assert!(routed, "drop_at debe enrutar (no caer al fallback)");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     // CONFIRMAR AL SOLTAR: `drop_at` ya no ejecuta; deja el drop pendiente. La op real arranca
     // al confirmar (lo que hace el botón Copiar/Mover del modal). Sanity: nada se copió todavía.
     assert!(
@@ -1552,6 +1681,46 @@ fn on_row_clicked_usa_modificadores_del_evento_no_el_estado_sticky() {
         4,
         "clic con Shift real extiende: de la fila 3 a la 0 → 4 filas"
     );
+}
+
+#[test]
+fn doble_clic_normal_no_hereda_ctrl_atrapado_por_un_modal() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("carpeta");
+    std::fs::create_dir(&folder).unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    let pos = active_pos_of(&c, "carpeta").unwrap();
+
+    // Simula Ctrl pegado porque el modal tomó el foco antes del key-release. Los eventos de
+    // ambos clics llegan explícitamente sin Ctrl, así que deben navegar en este panel.
+    c.ctrl_down = true;
+    let now = std::time::Instant::now();
+    assert!(!c.on_row_clicked(id, pos, false, false, now));
+    assert!(c.on_row_clicked(id, pos, false, false, now + Duration::from_millis(120)));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, folder);
+}
+
+#[test]
+fn doble_clic_nativo_usa_modificadores_del_mouse_y_no_estado_sticky() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("carpeta");
+    std::fs::create_dir(&folder).unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+    let pos = active_pos_of(&c, "carpeta").unwrap();
+
+    // Simula que el key-release se perdió mientras un modal tenía el foco. El gesto de mouse
+    // entrega Ctrl=false; el callback nativo debe navegar aquí en vez de abrir otro panel.
+    c.ctrl_down = true;
+    c.shift_down = true;
+    assert!(c.on_row_double_clicked_native(id, pos, false, false));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, folder);
+    assert!(!c.ctrl_down && !c.shift_down);
 }
 
 /// El flujo de comprimir desde el menú: `op_compress_prompt` abre el modal de nombre con el
@@ -1732,6 +1901,10 @@ fn drop_at_mismo_panel_sobre_subcarpeta_usa_la_carpeta_como_destino() {
         vec![work.path().join("documento.txt")],
     );
     assert!(routed, "el drop intra-panel sobre carpeta se enruta");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     let pending = c.pending_drop.as_ref().expect("espera confirmación");
     assert_eq!(pending.dest_dir, work.path().join("archivo"));
     assert!(!pending.is_move, "Ctrl conserva la regla de copiar");
@@ -1822,6 +1995,10 @@ fn drop_at_move_hint_del_ole_fuerza_mover() {
     // MOVER → el original desaparece. (El estado de teclado de la app ya no se pasa: llega stale.)
     let routed = c.drop_at(cx, cy, true, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     // El drop queda pendiente: debe ser MOVER (el move_hint del OLE manda).
     assert_eq!(
         c.pending_drop.as_ref().map(|p| p.is_move),
@@ -1881,6 +2058,10 @@ fn drop_at_mismo_disco_sin_modificadores_mueve_por_defecto() {
     // move_hint=false, copy_forced=false → la decisión depende del disco. Mismo disco → Mover.
     let routed = c.drop_at(cx, cy, false, false, vec![a.path().join("doc.txt")]);
     assert!(routed, "drop_at debe enrutar");
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
     assert!(c.confirm_pending_drop(), "confirmar arranca la op");
     for _ in 0..2000 {
         if c.ops.pump_ops() {
@@ -2025,11 +2206,12 @@ fn plantillas_aplicar_guardar_y_borrar() {
     );
 
     // Guardar la disposición actual como plantilla de usuario.
-    c.save_current_template("Mi setup");
+    c.save_current_template("Mi setup").unwrap();
     assert!(c
         .layout_templates()
         .iter()
         .any(|(n, builtin)| n == "Mi setup" && !builtin));
+    wait_for_workspace_persistence(&c);
     // Persistió: un controlador nuevo (mismo config_dir) la ve.
     let c2 = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
     assert!(c2.templates.user.iter().any(|t| t.name == "Mi setup"));
@@ -2037,6 +2219,7 @@ fn plantillas_aplicar_guardar_y_borrar() {
     // Borrarla.
     c.delete_template("Mi setup");
     assert!(!c.layout_templates().iter().any(|(n, _)| n == "Mi setup"));
+    wait_for_workspace_persistence(&c);
 }
 
 /// Primera ejecución (sin sesión guardada): `apply_first_run_layout` arma la disposición
@@ -2643,13 +2826,53 @@ fn carpeta_perdida_se_detecta_por_panel_y_sube_al_ancestro() {
         c.pane_dir_missing(id),
         "el panel detecta su carpeta perdida"
     );
+    assert!(
+        c.pane_has_existing_ancestor(id),
+        "el worker conserva la ruta del ancestro para el botón subir"
+    );
     assert_eq!(c.ws.active_files().unwrap().current_dir, sub);
+    c.missing_folder_retry(id);
+    assert!(
+        c.listings.contains_key(&id),
+        "reintentar siempre delega al listing worker"
+    );
+    assert!(drain(&mut c));
+    assert!(
+        c.pane_dir_missing(id),
+        "si sigue ausente, se conserva el aviso"
+    );
     // "Subir al ancestro existente": el panel queda en tmp (el padre que sigue vivo).
     c.missing_folder_go_ancestor(id);
     // El aviso se limpia de inmediato: la entrada cacheada era de la carpeta VIEJA y queda
     // invalidada al navegar (sin esperar al probe nuevo).
     assert!(!c.pane_dir_missing(id), "ya no está perdida tras subir");
     assert_eq!(c.ws.active_files().unwrap().current_dir, tmp.path());
+}
+
+#[test]
+fn respaldos_de_home_usan_la_preferencia_del_usuario() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("unidad-desconectada");
+    let mut c = WorkspaceCtrl::new_in(missing.clone(), tmp.path().to_path_buf());
+    c.config.settings.home_dir = home.path().to_string_lossy().into_owned();
+    assert!(drain(&mut c));
+    let id = c.ws.active_id().unwrap();
+
+    assert_eq!(c.configured_home_dir(), home.path());
+
+    c.missing_folder_close_pane(id);
+    assert_eq!(c.ws.active_files().unwrap().current_dir, home.path());
+    assert_eq!(c.template_home(), home.path());
+    assert!(drain(&mut c));
+
+    // Crear un panel cuando el activo no es Files debe conservar Home como su ruta inicial.
+    c.ws = Workspace::new();
+    let anchor = c.ws.add_pane(PanePurpose::Operations, PathBuf::new());
+    c.ws.set_active(anchor);
+    c.add_pane_split_dir(SplitDir::Horizontal, false);
+    assert_eq!(c.ws.active_files().unwrap().current_dir, home.path());
+    assert!(drain(&mut c));
 }
 
 /// REVEAL: al fijar un destino, el árbol expande progresivamente los ancestros hasta él.
@@ -3057,6 +3280,7 @@ fn favoritos_arbol_editable_y_persistente() {
         .iter()
         .any(|r| r.path == b.display().to_string() && r.depth == 1));
 
+    wait_for_workspace_persistence(&c);
     // Persistió: un controlador nuevo (mismo config_dir) ve el grupo renombrado con su hoja.
     let mut c2 = WorkspaceCtrl::new_in(a.clone(), cfg.clone());
     assert!(drain(&mut c2));
@@ -3694,9 +3918,17 @@ fn watch_events_usa_la_metadata_preresuelta() {
     assert!(drain(&mut c));
     let id = c.active_id().unwrap();
     let path = tmp.path().join("a.txt");
-    // Pre-resolver un Entry con tamaño marcador (999): el evento Modified debe aplicar ESTE,
-    // no el tamaño real del archivo (que es 1).
-    let mut prefetched = naygo_core::listing::entry_from_path(&path, None);
+    let initial_revision = c.ws.active_files().unwrap().entries_revision();
+    // El fixture debe conservar identidad, tipo y visibilidad del listado (como el watcher real)
+    // para verificar el delta puntual, y cambiar solo el tamaño marcador.
+    let mut prefetched =
+        c.ws.active_files()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .unwrap()
+            .clone();
     prefetched.size = Some(999);
     let mut resolved = std::collections::HashMap::new();
     resolved.insert(path.clone(), Some(prefetched));
@@ -3708,6 +3940,11 @@ fn watch_events_usa_la_metadata_preresuelta() {
     let f = c.ws.active_files().unwrap();
     let entry = f.entries.iter().find(|e| e.path == path).unwrap();
     assert_eq!(entry.size, Some(999), "usa la metadata pre-resuelta");
+    assert_eq!(
+        f.entries_rows_changed_since(initial_revision),
+        Some(vec![path]),
+        "un Modified con identidad y visibilidad estables habilita el refresco puntual"
+    );
 }
 
 /// Regresión del bug "tipear `_`/`!`/`#` en el editor de rename REEMPLAZA todo el texto":
@@ -3899,5 +4136,46 @@ fn flechas_ciclan_coincidencias_del_filtro() {
         focused_name(&c),
         "dd.txt",
         "sin filtro, ↓ avanza una fila normal"
+    );
+}
+
+#[test]
+fn carga_de_sesion_tardia_no_pisa_navegacion_del_usuario() {
+    let initial_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let saved_config_dir = tempfile::tempdir().unwrap();
+    let mut ctrl = WorkspaceCtrl::new_in(
+        initial_dir.path().to_path_buf(),
+        config_dir.path().to_path_buf(),
+    );
+    ctrl.apply_first_run_layout();
+    ctrl.mark_startup_session_baseline();
+
+    let saved = WorkspaceCtrl::new_in(
+        initial_dir.path().to_path_buf(),
+        saved_config_dir.path().to_path_buf(),
+    )
+    .session_persist();
+    assert!(ctrl.navigate_active_to(user_dir.path().to_path_buf()));
+
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    ctrl.startup_load_rx = Some(rx);
+    tx.send(Ok(crate::startup_load::StartupData {
+        settings: naygo_core::config::Settings::default(),
+        i18n: naygo_core::i18n::I18n::embedded(&naygo_core::i18n::LangId::new("es")),
+        keymap: naygo_core::keymap::KeyMap::defaults(),
+        workspace: Some(saved),
+        favorites: Favorites::default(),
+        templates: naygo_core::workspace::TemplateStore::default(),
+        first_launch_save_ticket: None,
+    }))
+    .unwrap();
+
+    assert!(ctrl.pump_startup_load());
+    assert_eq!(
+        ctrl.ws.active_files().unwrap().current_dir,
+        user_dir.path(),
+        "el snapshot viejo no reemplaza la navegación que ocurrió mientras esperaba"
     );
 }

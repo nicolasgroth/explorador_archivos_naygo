@@ -55,7 +55,9 @@ pub fn compare(
     let before_gaps: HashSet<_> = before.gaps.iter().map(|p| key(p)).collect();
     let now_gaps: HashSet<_> = now.gaps.iter().map(|p| key(p)).collect();
     // Consultar ancestros indexados evita O(entradas × zonas inaccesibles).
-    let covers = |point: &ComparisonPoint, gaps: &HashSet<String>, path: &Path| {
+    let covers = |point: &ComparisonPoint,
+                  gaps: &HashSet<crate::path_identity::PathIdentityKey>,
+                  path: &Path| {
         !point.truncated && !path.ancestors().any(|p| gaps.contains(&key(p)))
     };
     for entry in &before.entries {
@@ -71,7 +73,9 @@ pub fn compare(
     for (_, (old, new)) in all {
         checkpoint(token)?;
         let entry = new.or(old).ok_or(SpaceError::Invalid)?;
-        let known = |e: &Record, p: &ComparisonPoint, gaps: &HashSet<String>| {
+        let known = |e: &Record,
+                     p: &ComparisonPoint,
+                     gaps: &HashSet<crate::path_identity::PathIdentityKey>| {
             e.kind != EntryKind::Other
                 && !gaps.contains(&key(&e.path))
                 && e.modified_ns.is_some()

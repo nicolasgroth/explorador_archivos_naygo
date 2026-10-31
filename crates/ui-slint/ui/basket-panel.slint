@@ -25,6 +25,11 @@ component BasketIconButton inherits Rectangle {
     accessible-role: button;
     accessible-label: root.tooltip;
     accessible-enabled: root.enabled;
+    // UI Automation/lectores de pantalla deben poder activar el mismo callback que el clic.
+    // Mantener foco y guard de enabled coherentes con Enter/Espacio y el área táctil.
+    accessible-action-default => {
+        if root.enabled { button-focus.focus(); root.clicked(); }
+    }
     forward-focus: button-focus;
     border-width: 1px;
     border-color: button-focus.has-focus ? Theme.accent : Theme.border;

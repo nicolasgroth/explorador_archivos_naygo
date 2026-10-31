@@ -19,7 +19,10 @@ pub mod undo;
 pub use actions::{
     batch_rename, create, delete, parse_new_folders, rename, transfer, FolderSpec, NewFolderError,
 };
-pub use engine::{run_plan, spawn};
+pub use engine::{
+    recover_tree_replacements_in_parent, run_plan, run_plan_with_no_replace_rename, spawn,
+    spawn_with_no_replace_rename, NativeNoReplaceRename, NoReplaceRename,
+};
 pub use journal::{
     journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan,
 };
@@ -100,10 +103,10 @@ pub struct OpPlan {
     pub steps: Vec<OpStep>,
     pub total_bytes: u64,
     pub total_files: usize,
-    /// Carpetas destino a BORRAR (`remove_dir_all`) antes de copiar, por una decisión
-    /// "Reemplazar" en un conflicto de carpeta. El motor las procesa al inicio de `run_plan`
-    /// (cancelable, error tipado). Vacío en el caso normal. `#[serde(default)]` para que los
-    /// journals viejos (sin este campo) sigan deserializando.
+    /// Raíces destino elegidas para "Reemplazar" en un conflicto de carpeta. El motor prepara
+    /// cada árbol completo en staging junto al destino y sólo entonces publica con rollback del
+    /// destino anterior si falla el rename final. El campo mantiene su nombre serializado para
+    /// compatibilidad con journals 0.5.x; `#[serde(default)]` permite leer planes anteriores.
     #[serde(default)]
     pub pre_delete: Vec<PathBuf>,
 }
@@ -325,9 +328,9 @@ pub fn folder_conflicts(req: &OpRequest) -> Vec<FolderConflict> {
 /// - `Merge`: no toca nada (el plan ya copia dentro de la existente).
 /// - `Skip`: excluye todos los pasos cuyo destino cae bajo `dest_root` (no se copia ese
 ///   subárbol) y recalcula los totales del plan.
-/// - `Replace`: agrega `dest_root` a `plan.pre_delete` (el motor lo borra con `remove_dir_all`
-///   ANTES de copiar, de forma cancelable y con error tipado). No quita pasos: tras borrar, la
-///   copia repuebla el destino con SOLO el contenido del origen.
+/// - `Replace`: agrega `dest_root` a `plan.pre_delete`. El motor escribe los pasos en un staging
+///   hermano del destino y lo publica al terminar; cancelar/fallar durante la preparación deja
+///   intacto el destino anterior. No quita pasos: el árbol nuevo contiene sólo el origen.
 ///
 /// `dest_root` es la ruta destino exacta (`dest_dir.join(nombre)`): solo se filtra/borra ESE
 /// destino, nunca el origen ni otra carpeta.

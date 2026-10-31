@@ -1,0 +1,22 @@
+{
+  "name": "Arena",
+  "base": "light",
+  "panel_bg": "#f0ede5",
+  "toolbar_bg": "#e6e0d4",
+  "active_panel_bg": "#faf7ee",
+  "inactive_panel_bg": "#eee8de",
+  "row_bg": "#f8f5ec",
+  "row_alt_bg": "#efeade",
+  "row_inactive_bg": "#eee9df",
+  "text": "#342f27",
+  "text_dim": "#615747",
+  "selection_bg": "#e8dfc9",
+  "accent": "#785c2b",
+  "error": "#ae3235",
+  "highlight": "#e7ebd5",
+  "border": "#b0a38c",
+  "active_bar": "#785c2b",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#785c2b"
+}

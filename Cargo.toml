@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/platform", "crates/ui-slint"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.4"
 edition = "2021"
 authors = ["Nicolás Groth <ngroth@gmail.com>"]
 license = "MIT"
@@ -13,8 +13,6 @@ repository = "https://github.com/nicolasgroth/explorador_archivos_naygo"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 windows = "0.62"
 # Metadata/preview de PDF. Versión única para core y ui-slint. OJO: `pdf-extract 0.10`
 # arrastra su propio lopdf 0.38 de forma transitiva; no se puede unificar sin cambiar
@@ -33,22 +31,25 @@ tempfile = "3"
 # panic handler igual loguea. `debug = true` genera el naygo.pdb con los símbolos:
 # en MSVC los símbolos viven en el .pdb y el .exe solo guarda un puntero a él, así
 # que el exe casi no crece, y el backtrace del panic handler muestra nombres de
-# función reales en vez de `<unknown>`. El .pdb se distribuye junto al exe
-# (instalador Inno y ZIP portable).
+# función reales en vez de `<unknown>`. El .pdb es opcional en el instalador y no
+# se incluye en el ZIP portable. ThinLTO evita unir toda la app en un único módulo
+# gigante; 16 unidades reducen el tamaño del trabajo individual. Mantener un solo
+# trabajo Cargo al empaquetar y supervisar memoria; no es un techo de RSS del producto.
+# Revalidar tamaño/rendimiento al cambiar este perfil, no asumir equivalencia con fat LTO.
 [profile.release]
 opt-level = "s"
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 debug = true
 
 # Perfil de DIAGNÓSTICO: mismo código que release pero compilado RÁPIDO (sin LTO y con
-# codegen-units=16, ~2 min en vez de ~20), para cazar una caída sin esperar el build
+# codegen-units=16), para cazar una caída sin esperar el build
 # completo. Los símbolos ya no lo diferencian (release también los genera desde que
 # se agregó `debug = true` arriba). Build: `cargo build --profile diag -p naygo-ui-slint`.
 # El .exe queda en target/diag/. NO es el binario de distribución; solo para cazar caídas.
 [profile.diag]
 inherits = "release"
-# Sin LTO ni codegen-units=1: el diagnóstico no necesita el binario más chico/rápido,
-# y así compila en ~2 min en vez de ~20. El panic se reproduce igual.
+# Sin LTO: el diagnóstico no necesita la optimización entre crates del distribuible.
+# El tiempo depende del equipo y caché; reproducir el fallo también contra release.
 lto = false
 codegen-units = 16

@@ -38,13 +38,13 @@ export component ComparisonPointsDialog inherits Rectangle {
                         spacing: 6px;
                         Text { text: Tr.points-help; color: Theme.text-dim; wrap: word-wrap; }
                         Text { text: Tr.points-root; color: Theme.text; }
-                        LineEdit { text <=> root.folder; enabled: !root.busy && !root.loaded; }
+                        LineEdit { text <=> root.folder; accessible-label: Tr.points-root; enabled: !root.busy && !root.loaded; }
                         HorizontalLayout {
                             CheckBox { text: Tr.points-recursive; checked <=> root.recursive; enabled: !root.busy && !root.loaded; }
                             CheckBox { text: Tr.points-hashed; checked <=> root.hashed; enabled: !root.busy && !root.loaded; }
                         }
                         Text { text: Tr.points-exclusions; color: Theme.text-dim; wrap: word-wrap; }
-                        TextEdit { text <=> root.exclusions; read-only: root.busy || root.loaded; preferred-height: 65px; }
+                        TextEdit { text <=> root.exclusions; accessible-label: Tr.points-exclusions; read-only: root.busy || root.loaded; preferred-height: 65px; }
                         HorizontalLayout {
                             Button { text: Tr.points-new; enabled: !root.busy && !root.confirm-delete; clicked => { root.action(7); } }
                             Button { text: Tr.points-capture; enabled: !root.busy && !root.loaded; clicked => { root.action(1); } }
@@ -56,7 +56,7 @@ export component ComparisonPointsDialog inherits Rectangle {
                             Button { text: Tr.points-delete; enabled: !root.busy && root.loaded; clicked => { root.action(5); } }
                         }
                         if root.confirm-delete: Text { text: Tr.points-delete-confirm; color: Theme.text; wrap: word-wrap; }
-                        TextEdit { text: root.report; read-only: true; preferred-height: 85px; }
+                        TextEdit { text: root.report; accessible-label: Tr.points-title; read-only: true; preferred-height: 85px; }
                         if root.busy: Text { text: Tr.spaces-working + " · " + root.progress; color: Theme.text-dim; }
                         ListView {
                             preferred-height: 220px;

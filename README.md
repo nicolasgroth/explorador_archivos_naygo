@@ -27,6 +27,12 @@ incluidos, temas y sets de íconos personalizables.
 > **Novedades por versión:** [`CHANGELOG.md`](CHANGELOG.md) (y la sección "Acerca de" muestra
 > las de la versión instalada).
 
+**Documentación del proyecto:** [índice](docs/README.md), [estado local validado](docs/ESTADO-ACTUAL.md)
+y [arquitectura](docs/ARQUITECTURA.md). El [plan de rutas y preview](docs/plans/2026-09-09-rutas-preview-y-configuracion.md)
+separa avances locales por bloque de mejoras pendientes, sin anunciarlas como ya publicadas.
+[Code signing policy (política de firma de código)](docs/POLITICA-DE-FIRMA.md) describe el estado de
+la solicitud OSS y el procedimiento previsto para firmar las descargas.
+
 ## Objetivos
 
 - **Rápido ante todo.** Navegar entre carpetas se siente instantáneo, incluso con decenas de
@@ -85,6 +91,9 @@ incluidos, temas y sets de íconos personalizables.
   editable, resultados incrementales y rutas relativas.
 - Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código, modelos
   3D STL/3MF rasterizados por CPU y contenido de archivos ZIP, TAR y TAR.GZ.
+  Imágenes/SVG/PDF/comprimidos usan lectores aislados cancelables con límites Windows.
+  WebP/GIF/APNG animados con pausa/reanudación y repetición, decodificación secuencial
+  acotada y reloj dedicado al preview; sin convertir Naygo en reproductor de audio/vídeo.
 - Cálculo de tamaño de carpetas bajo demanda.
 - Barra de unidades de disco con espacio libre/total y porcentaje usado; ícono propio para
   unidades USB y expulsión segura.
@@ -92,7 +101,8 @@ incluidos, temas y sets de íconos personalizables.
   administrador con Shift o clic derecho, detección de cambios y de
   dispositivos, drag & drop —incluidos archivos virtuales desde 7-Zip/WinRAR—, bandeja del
   sistema y arranque opcional con el sistema.
-- Sets de íconos: seis de fábrica (Lucide, Mono, Tabler, Material, Flat Color y Fluent),
+- Sets de íconos: diez de fábrica (Lucide, Mono, Tabler, Material, Flat Color, Fluent,
+  Outline, Tiles, Vivid y Pastel),
   cambio de ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
 - Atajo global **Ctrl+Alt+Z** (configurable) que muestra Naygo y lo trae al frente desde
   cualquier aplicación.
@@ -183,7 +193,7 @@ naygo.exe [<carpeta>] [--theme <id>] [--layout <nombre>] [--help] [--version]
 - `<carpeta>`: abre Naygo en esa carpeta al iniciar (debe existir). Es lo que usa "Abrir en
   Naygo" del menú contextual del Explorador.
 - `--theme <id>`: aplica un tema solo en esa sesión (no cambia tu configuración). Los ids son
-  los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `macos`, `solarized-dark`).
+  los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `paper`, `solarized-dark`).
 - `--layout <nombre>`: aplica una plantilla de disposición de paneles (de las del menú Layouts,
   incluidas las tuyas).
 - `--tray`: arranca minimizado en la bandeja (sin mostrar la ventana). Es el argumento que
@@ -200,6 +210,9 @@ Los valores que no existan se ignoran (la app abre igual y deja un aviso).
 Libre de usar, modificar y distribuir. Si te sirve, se agradece mencionar a Nicolás Groth e
 ISGroth.
 
-Naygo usa software de terceros, cada uno bajo su propia licencia (todas permisivas; la interfaz
-usa [Slint](https://slint.dev) bajo su licencia *royalty-free*). Los avisos están en
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Naygo usa software de terceros bajo sus propias licencias. La edición Windows mantiene MIT y
+publica su inventario en [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). La alfa Linux
+requiere avisos específicos, incluida la excepción GPL-3 Linux-only para la bandeja; su estado
+documental y los pendientes de validación están en
+[`THIRD-PARTY-NOTICES-LINUX.md`](THIRD-PARTY-NOTICES-LINUX.md). La interfaz usa
+[Slint](https://slint.dev) bajo la licencia *royalty-free* seleccionada por el proyecto.

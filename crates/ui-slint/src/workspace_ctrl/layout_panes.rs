@@ -318,7 +318,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
         self.apply_default_table(new_id);
@@ -351,7 +351,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(purpose, dir);
         if matches!(purpose, PanePurpose::Files) {
@@ -363,7 +363,7 @@ impl WorkspaceCtrl {
                 .split_leaf(active, SplitDir::Horizontal, new_id);
         }
         if matches!(purpose, PanePurpose::Tree) {
-            self.trees.insert(new_id, build_tree());
+            self.trees.insert(new_id, self.build_tree());
             // Resalta de entrada la carpeta del panel Files activo y arranca el reveal hacia ella
             // (el árbol nuevo aparece ya expandido hasta la carpeta donde está el usuario).
             if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
@@ -407,7 +407,7 @@ impl WorkspaceCtrl {
             .and_then(|id| self.ws.pane(id))
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let id = self.ws.add_pane(PanePurpose::Search, root);
         if let Some(anchor) = anchor {
             self.ws.layout.split_leaf(anchor, SplitDir::Horizontal, id);
@@ -425,7 +425,7 @@ impl WorkspaceCtrl {
             .and_then(|id| self.ws.pane(id))
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let anchor = self.ws.active_id();
         let files = self.ws.add_pane(PanePurpose::Files, dir.clone());
         self.apply_default_table(files);
@@ -443,7 +443,7 @@ impl WorkspaceCtrl {
         self.ws.layout.swap_split_children(files, tree);
         self.ws.link_tree(tree, files);
 
-        let mut model = build_tree();
+        let mut model = self.build_tree();
         model.set_active(dir.clone());
         self.trees.insert(tree, model);
         self.reveal_targets.insert(tree, dir.clone());
@@ -471,7 +471,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let split = active
             .and_then(|id| {
@@ -508,12 +508,17 @@ impl WorkspaceCtrl {
     /// workspace. Se comparte entre el cierre normal y el de una pestaña para que el cierre
     /// de una pareja enlazada no deje workers ni estado visual huérfanos.
     fn release_pane_resources(&mut self, id: PaneId) {
+        if let Some(cancel) = &self.missing_probe_cancel {
+            cancel.cancel();
+        }
+        self.missing_probe_revision = self.missing_probe_revision.wrapping_add(1);
         if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Search) {
             self.close_search();
         }
         if let Some(l) = self.listings.remove(&id) {
             l.cancel();
         }
+        self.pending_file_listings.remove(&id);
         self.trees.remove(&id);
         self.reveal_targets.remove(&id);
         // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
@@ -525,6 +530,7 @@ impl WorkspaceCtrl {
                 true
             }
         });
+        self.pending_tree_listings.retain(|(pane, _)| *pane != id);
     }
 
     /// `true` si el panel `id` se puede cerrar. Los miembros de un explorador enlazado cuentan
@@ -1052,9 +1058,8 @@ impl WorkspaceCtrl {
     /// etiqueta = letra (p. ej. "C:"), ícono de disco cacheado, ruta = raíz. Clic navega el
     /// panel Files activo a la raíz. Se reconsulta al cambiar los dispositivos (USB).
     pub fn drive_strip(&mut self) -> Vec<NavRow> {
-        let drives = naygo_platform::drives::drives();
-        drives
-            .into_iter()
+        self.drive_snapshot
+            .iter()
             .map(|d| {
                 let icon = self
                     .icons
@@ -1069,42 +1074,6 @@ impl WorkspaceCtrl {
                 }
             })
             .collect()
-    }
-
-    /// ¿La unidad cuya raíz es `root` es extraíble (USB)? Se usa para mostrar el
-    /// botón/menú de expulsión solo en unidades extraíbles. Consulta el tipo de
-    /// la unidad en caliente (barato: una llamada a GetDriveTypeW por unidad).
-    pub fn is_removable(&self, root: &Path) -> bool {
-        naygo_platform::drives::drives()
-            .into_iter()
-            .any(|d| d.path == root && d.kind == naygo_core::icon_kind::DriveKind::Removable)
-    }
-
-    /// Expulsa de forma segura la unidad extraíble cuya raíz es `root`. Devuelve
-    /// `Ok(())` si se desmontó y expulsó sin forzar. Si hay archivos abiertos
-    /// (volumen bloqueado) NO fuerza: devuelve [`EjectOutcome::InUse`]. La UI
-    /// mapea el resultado a un toast localizado.
-    pub fn eject_drive(&self, root: PathBuf) -> EjectOutcome {
-        crate::logging::breadcrumb(&format!("expulsar USB {}", root.display()));
-        // Guardia de seguridad: solo se expulsan unidades extraíbles. Nunca se debe
-        // intentar desmontar una fija/de red aunque la UI lo pidiera por error.
-        if !self.is_removable(&root) {
-            let msg = format!("expulsar USB {}: no es extraíble", root.display());
-            crate::logging::log_line(&msg);
-            return EjectOutcome::Failed("not a removable drive".into());
-        }
-        match naygo_platform::eject::eject_drive(&root) {
-            Ok(()) => EjectOutcome::Ok,
-            Err(naygo_platform::eject::EjectError::InUse) => {
-                crate::logging::log_line(&format!("expulsar USB {}: en uso", root.display()));
-                EjectOutcome::InUse
-            }
-            Err(e) => {
-                let msg = format!("expulsar USB {}: fallo — {}", root.display(), e);
-                crate::logging::log_line(&msg);
-                EjectOutcome::Failed(e.to_string())
-            }
-        }
     }
 
     /// Suelta el handle que la app mantiene sobre la carpeta del panel `id`: cierra su watcher.

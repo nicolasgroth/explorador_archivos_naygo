@@ -299,6 +299,7 @@ export component ColorPicker inherits Rectangle {
                 // Campo numérico para entrada EXACTA del canal (0-255). Fallback robusto del slider.
                 num := LineEdit {
                     width: 48px;
+                    accessible-label: ch.name;
                     text: ch.val;
                     horizontal-alignment: center;
                     edited(t) => {
@@ -328,6 +329,7 @@ export component ColorPicker inherits Rectangle {
                     Text { text: "Hex"; color: Theme.text-dim; font-size: 11px; }
                     LineEdit {
                         width: 100px;
+                        accessible-label: "Hex";
                         // Derivado de r/g/b para reflejar SIEMPRE el color vivo (incluido el inicial
                         // por binding, antes del primer commit). `root.hex` solo se actualiza al
                         // commitear; el display debe seguir a los sliders/init en todo momento.

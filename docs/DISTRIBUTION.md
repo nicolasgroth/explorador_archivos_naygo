@@ -5,6 +5,9 @@ Naygo se distribuye de dos formas, generadas por `scripts\build-release.ps1`
 
 ## Portable (ZIP)
 
+Última distribución comprobada y estado: [ESTADO-ACTUAL.md](ESTADO-ACTUAL.md).
+Una actualización de documentación no implica que se hayan regenerado estos paquetes.
+
 `Naygo-<versión>-portable.zip` contiene `naygo.exe`, `LICENSE`, `LEEME.txt` y
 `THIRD-PARTY-NOTICES.md`.
 Descomprimir y ejecutar — no instala nada. **La configuración se guarda junto al
@@ -57,10 +60,29 @@ el ejecutable, los accesos directos y las claves de registro creadas. **No** bor
 configuración del usuario (queda en su ubicación; puedes borrarla a mano si quieres un
 reinicio total).
 
+## Probar mejoras sin afectar la instalación de trabajo
+
+Conservar el instalador/portable validado y respaldar la configuración antes de migraciones.
+Usar una copia portable en una carpeta de prueba con preferencias propias y datos ficticios.
+La configuración portable se resuelve junto al ejecutable; no asumir que cambiar el directorio
+de trabajo la aísla ni inventar un parámetro `--config-dir` no implementado.
+
+La base 0.5.1 usa esquema 4. El intento de preview propone 5, aún no integrado: abrir una
+configuración futura con el ejecutable anterior carga defaults y puede acabar sobrescribiendo
+preferencias al guardar. No alternar ambos sobre la misma configuración. Evaluar primero si
+el cambio de esquema es necesario y probar downgrade con copias, nunca con originales.
+
+La instancia única puede redirigir un arranque al proceso ya abierto. Para una validación
+instalada, coordinar con Nicolás salir desde la bandeja (la X normalmente sólo oculta),
+verificar la versión/build efectiva y no cerrar ni modificar su sesión sin autorización.
+Probar 7-Zip, Papelera, teclado, DPI y red usando escenarios controlados según
+[PRUEBAS.md](PRUEBAS.md). No publicar configuraciones ni rutas personales.
+
 ## Advertencia de SmartScreen (importante)
 
-El `.exe` y el instalador **no están firmados** (no hay certificado de firma de código
-por ahora). La primera vez que los ejecutes, Windows SmartScreen puede mostrar:
+La distribución 0.5.2 actualmente en `dist/` tiene el `.exe` y el instalador **sin firmar**;
+SignPath aún no está configurado ni aprobado. Al ejecutar esos archivos, Windows SmartScreen puede
+mostrar:
 
 > "Windows protegió tu PC — Editor desconocido"
 
@@ -130,18 +152,59 @@ Para generar los artefactos en `dist\` sin crear un release:
 powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 ```
 
-### Firma del instalador (mantenedores)
+### Firma de código (mantenedores)
 
-El build puede firmar y verificar el `setup.exe` con Authenticode cuando ISGroth disponga de un
-certificado. No guarda secretos en el repositorio: configurar `NAYGO_SIGNTOOL` con la ruta de
-`signtool.exe` y `NAYGO_SIGN_CERT_SHA1` con el thumbprint SHA-1 del certificado disponible en el
-store de Windows; opcionalmente `NAYGO_SIGN_TIMESTAMP_URL` para el servidor RFC 3161. También se
-pueden pasar como parámetros a `build-release.ps1`.
+La firma Authenticode identifica al publicador y detecta cambios posteriores al firmado. No es una
+firma manuscrita ni se inventa localmente: una CA valida la identidad y emite el certificado. Una
+firma autofirmada sirve para pruebas controladas, pero Windows no la confía por defecto y no sirve
+para distribuir Naygo públicamente.
 
-Sin ambos valores el build deja una advertencia y genera artefactos sin firma, conservando el
-procedimiento de SmartScreen de arriba. La integración con SignPath.io requiere que Nicolás/ISGroth
-cree y autorice la organización y el certificado; una vez disponible, se puede alimentar este
-gancho o incorporar su acción oficial al workflow de release.
+El workflow de SignPath valida que las firmas del `naygo.exe` portable y del instalador estén
+`Valid` y que el nombre simple del certificado firmante sea exactamente `SignPath Foundation`.
+Registra sujeto, emisor y thumbprint para revisar el certificado recibido en la primera corrida real.
+
+Cuando hay un certificado autorizado en el store de Windows, `build-release.ps1` firma/verifica
+`naygo.exe` antes de armar el ZIP portable y el instalador; después firma/verifica `setup.exe` y
+calcula los SHA-256 finales. Configura `NAYGO_SIGNTOOL` con `signtool.exe` del Windows SDK,
+`NAYGO_SIGN_CERT_SHA1` con el thumbprint del certificado y, opcionalmente,
+`NAYGO_SIGN_TIMESTAMP_URL` para RFC 3161. Los secretos no se escriben en el repositorio. Un ZIP no
+recibe una firma Authenticode propia; el `.exe` que contiene sí queda firmado.
+Sin certificado local, el empaquetador continúa únicamente si el artefacto está `NotSigned` o ya
+tiene una firma `Valid`; cualquier otro estado Authenticode aborta el build para no distribuir ni
+volver a firmar silenciosamente un archivo alterado o no confiable.
+
+#### Preparación para SignPath Foundation
+
+Nicolás eligió evaluar la modalidad OSS gratuita. Aún no se creó la organización/proyecto ni se
+solicitó la aprobación; por tanto, los artefactos actuales siguen sin firma. El certificado sería
+de SignPath Foundation y ese sería el publicador visible en Windows. La elegibilidad exige licencia
+OSS aprobada por OSI para todos los componentes, proyecto ya publicado y documentado, sin código
+propietario, repositorio/build verificables, MFA en GitHub y SignPath para los mantenedores, y
+aprobación manual para cada release. SignPath debe aceptar el proyecto; el flujo local no puede
+reemplazar esa aprobación. La postulación se inicia en [SignPath Foundation](https://signpath.org/apply).
+
+El workflow de release admite SignPath una vez habilitado en la configuración del repositorio:
+
+- Variable `NAYGO_SIGNPATH_ENABLED=true`.
+- Secret `SIGNPATH_API_TOKEN`.
+- Variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`,
+  `SIGNPATH_SIGNING_POLICY_SLUG`, `SIGNPATH_EXE_ARTIFACT_CONFIGURATION` y
+  `SIGNPATH_SETUP_ARTIFACT_CONFIGURATION`.
+- En SignPath, importar `signpath/naygo-exe.xml` y `signpath/naygo-setup.xml` como configuraciones
+  del proyecto; ambas restringen el nombre del producto a `Naygo` y exigen la versión del build.
+  Vincular GitHub.com como Trusted Build System y configurar la política OSS con aprobación manual.
+  [La Code signing policy](POLITICA-DE-FIRMA.md) está preparada y enlazada desde README y las
+  notas que generará el workflow de Release;
+  revisar los roles con el equipo real y publicarla junto con el aviso de privacidad antes de
+  firmar releases.
+
+Con SignPath habilitado, el workflow compila el EXE en runner GitHub-hosted, pasa la versión de
+Cargo a las restricciones de metadata de ambos artefactos, lo envía para firma,
+reconstruye ambos paquetes desde ese EXE firmado, firma el instalador, verifica las dos firmas y
+calcula hashes después de firmar. La aprobación puede dejar el workflow esperando hasta una hora.
+Si la variable está deshabilitada, el build conserva el modo sin firmar y el release lo declara.
+Una firma válida no garantiza que SmartScreen elimine avisos en la primera descarga: la reputación
+se acumula con las versiones y el uso.
 
 ### Integración continua
 

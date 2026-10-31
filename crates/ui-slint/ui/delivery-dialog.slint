@@ -47,21 +47,21 @@ export component DeliveryDialog inherits Rectangle {
                         Text { text: Tr.delivery-help; color: Theme.text-dim; wrap: word-wrap; }
                         Text { text: Tr.delivery-destination; color: Theme.text; }
                         HorizontalLayout {
-                            LineEdit { text <=> root.destination; horizontal-stretch: 1; enabled: !root.busy; edited => { root.invalidate(); } }
+                            LineEdit { text <=> root.destination; accessible-label: Tr.delivery-destination; horizontal-stretch: 1; enabled: !root.busy; edited => { root.invalidate(); } }
                             Button { text: "…"; accessible-label: Tr.destination-radar-browse; enabled: !root.busy; clicked => { root.browse(); } }
                         }
                         HorizontalLayout {
                             ComboBox { model: [Tr.delivery-grouped, Tr.delivery-flat, Tr.delivery-relative]; current-index <=> root.mode; enabled: !root.busy; horizontal-stretch: 1; selected(_) => { root.invalidate(); } }
                             CheckBox { text: "ZIP"; checked <=> root.zip; enabled: !root.busy; toggled => { root.invalidate(); } }
                         }
-                        if root.mode == 2: LineEdit { text <=> root.relative-root; placeholder-text: Tr.delivery-root; enabled: !root.busy; edited => { root.invalidate(); } }
+                        if root.mode == 2: LineEdit { text <=> root.relative-root; placeholder-text: Tr.delivery-root; accessible-label: Tr.delivery-root; enabled: !root.busy; edited => { root.invalidate(); } }
                         if root.mode == 0: Text { text: Tr.delivery-group-names; color: Theme.text-dim; wrap: word-wrap; }
-                        if root.mode == 0: TextEdit { text <=> root.group-names; min-height: 70px; preferred-height: 90px;
+                        if root.mode == 0: TextEdit { text <=> root.group-names; accessible-label: Tr.delivery-group-names; min-height: 70px; preferred-height: 90px;
                             enabled: !root.busy; edited => { root.invalidate(); } }
                         if root.mode == 1: CheckBox { text: Tr.delivery-rename; checked <=> root.rename-duplicates;
                             enabled: !root.busy; toggled => { root.invalidate(); } }
                         CheckBox { text: Tr.delivery-hash; checked <=> root.hashes; enabled: !root.busy; toggled => { root.invalidate(); } }
-                        TextEdit { text: root.report; read-only: true; min-height: 160px; preferred-height: 260px; }
+                        TextEdit { text: root.report; accessible-label: Tr.delivery-title; read-only: true; min-height: 160px; preferred-height: 260px; }
                         if root.waiting: Text { text: Tr.delivery-waiting; color: Theme.text-dim; wrap: word-wrap; }
                     }
                 }

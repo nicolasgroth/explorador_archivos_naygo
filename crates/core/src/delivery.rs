@@ -8,7 +8,7 @@
 use crate::ops::{ConflictPolicy, OpKind, OpMsg, OpPlan, OpStep};
 use crate::CancellationToken;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, Metadata};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -24,7 +24,7 @@ static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Structure {
-    /// Archivos al mismo nivel; rechaza homónimos, incluso si difieren solo en mayúsculas.
+    /// Archivos al mismo nivel; usa las reglas de identidad de nombres de la plataforma.
     Flat,
     /// Conserva el árbol desde una raíz elegida expresamente.
     Relative(PathBuf),
@@ -61,7 +61,7 @@ pub fn suggested_group_names(sources: &[PathBuf]) -> Vec<String> {
             format!(
                 "{:02}-{}",
                 i + 1,
-                p.file_name().unwrap_or_default().to_string_lossy()
+                crate::path_display::display_os_str(p.file_name().unwrap_or_default())
             )
         })
         .collect()
@@ -201,8 +201,8 @@ fn checked_metadata(path: &Path) -> Result<Metadata, DeliveryError> {
     Ok(metadata)
 }
 
-fn key(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\").to_lowercase()
+fn key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    crate::path_identity::key(path)
 }
 
 fn safe_relative(path: &Path) -> bool {
@@ -276,7 +276,7 @@ pub fn prepare_review(
     let destination = parent.join(name);
     ensure_absent(&destination)?;
     let mut roots = Vec::new();
-    let mut root_keys = BTreeSet::new();
+    let mut root_keys = HashSet::new();
     for source in sources {
         checkpoint(token)?;
         checked_metadata(source)?;
@@ -285,22 +285,19 @@ pub fn prepare_review(
             return Err(DeliveryError::Invalid("overlapping sources"));
         }
         if key(&destination) == key(&source)
-            || key(&destination).starts_with(&(key(&source) + "\\"))
+            || crate::path_identity::is_under(&destination, &source)
         {
             return Err(DeliveryError::Invalid("destination inside source"));
         }
         roots.push(source);
     }
-    // No comparar cada pareja: miles de referencias deben planificarse en O(n log n).
-    for source in &root_keys {
+    // Comprobar ancestros por componentes conserva bytes POSIX y cuesta O(n * profundidad).
+    for source in &roots {
         checkpoint(token)?;
-        let prefix = source.clone() + "\\";
-        if root_keys
-            .range(prefix.clone()..)
-            .next()
-            .is_some_and(|next| next.starts_with(&prefix))
-        {
-            return Err(DeliveryError::Invalid("overlapping sources"));
+        for parent in source.ancestors().skip(1) {
+            if root_keys.contains(&key(parent)) {
+                return Err(DeliveryError::Invalid("overlapping sources"));
+            }
         }
     }
     let relative_root = if let Structure::Relative(root) = structure {
@@ -326,7 +323,7 @@ pub fn prepare_review(
     let mut entries = Vec::new();
     let mut names = HashSet::from([key(Path::new(MANIFEST)), key(Path::new(LIST))]);
     let mut counters = HashMap::new();
-    let mut owners: BTreeMap<String, NameConflict> = BTreeMap::new();
+    let mut owners: BTreeMap<crate::path_identity::PathIdentityKey, NameConflict> = BTreeMap::new();
     for reserved in [MANIFEST, LIST] {
         owners.insert(
             key(Path::new(reserved)),
@@ -420,8 +417,8 @@ pub fn prepare_review(
 
 fn unique_flat_name(
     candidate: &Path,
-    used: &HashSet<String>,
-    counters: &mut HashMap<String, u32>,
+    used: &HashSet<crate::path_identity::PathIdentityKey>,
+    counters: &mut HashMap<crate::path_identity::PathIdentityKey, u32>,
     token: &CancellationToken,
 ) -> Result<PathBuf, DeliveryError> {
     if !used.contains(&key(candidate)) {
@@ -677,6 +674,20 @@ pub fn execute(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn suggested_group_names_escape_non_utf8_without_colliding_with_literal_escape() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = PathBuf::from(OsStr::from_bytes(b"model-\xff.stl"));
+        let literal = PathBuf::from(OsStr::from_bytes(b"model-\\xFF.stl"));
+        assert_eq!(
+            suggested_group_names(&[invalid, literal]),
+            vec![r"01-model-\xFF.stl", r"02-model-\\xFF.stl"]
+        );
+    }
+
     #[test]
     fn sha256_verifica_contenido_y_detecta_cambio_con_metadata_identica() {
         let temp = tempfile::tempdir().unwrap();
@@ -930,6 +941,30 @@ mod tests {
         assert!(sources.iter().all(|p| p.exists()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn plan_plano_posix_conserva_nombres_con_case_distinto() {
+        let temp = tempfile::tempdir().unwrap();
+        let lower = temp.path().join("a");
+        let upper = temp.path().join("A");
+        fs::create_dir(&lower).unwrap();
+        fs::create_dir(&upper).unwrap();
+        let lower_file = lower.join("info.txt");
+        let upper_file = upper.join("INFO.txt");
+        fs::write(&lower_file, b"lower").unwrap();
+        fs::write(&upper_file, b"upper").unwrap();
+
+        let plan = prepare(
+            &[lower_file, upper_file],
+            &temp.path().join("out"),
+            &Structure::Flat,
+            Output::Folder,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(plan.entries.len(), 2);
+    }
+
     #[test]
     fn grupos_editables_conservan_descendientes_y_rechazan_colisiones() {
         let temp = tempfile::tempdir().unwrap();
@@ -960,6 +995,7 @@ mod tests {
             .iter()
             .any(|e| e.relative == Path::new("Cliente A/info.txt")));
         options.group_names[1] = "cliente a".into();
+        #[cfg(windows)]
         assert!(matches!(
             prepare_review(
                 &sources,
@@ -971,6 +1007,16 @@ mod tests {
             ),
             Err(DeliveryError::Conflicts(_))
         ));
+        #[cfg(unix)]
+        assert!(prepare_review(
+            &sources,
+            &destination,
+            &Structure::Grouped,
+            Output::Zip,
+            &options,
+            &token
+        )
+        .is_ok());
         for invalid in ["../outside", "x/y", "foo/", "foo\\", "", "bad.", "bad "] {
             options.group_names[0] = invalid.into();
             assert!(prepare_review(
@@ -996,6 +1042,7 @@ mod tests {
         assert!(!destination.exists());
     }
 
+    #[cfg(windows)]
     #[test]
     fn renombrado_plano_respeta_reservados_sufijos_y_cancelacion() {
         let used: HashSet<_> = ["info.txt", "info (2).txt", MANIFEST]
@@ -1017,5 +1064,17 @@ mod tests {
             unique_flat_name(Path::new("info.txt"), &used, &mut counters, &token),
             Err(DeliveryError::Cancelled)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn renombrado_plano_posix_no_confunde_case_distinto() {
+        let used = HashSet::from([key(Path::new("info.txt"))]);
+        let mut counters = HashMap::new();
+        let token = CancellationToken::new();
+        assert_eq!(
+            unique_flat_name(Path::new("INFO.txt"), &used, &mut counters, &token).unwrap(),
+            Path::new("INFO.txt")
+        );
     }
 }

@@ -31,7 +31,7 @@ pub fn rank(
     let mut result = Vec::new();
     for group in groups {
         for candidate in group {
-            let key = candidate.path.to_string_lossy().to_lowercase();
+            let key = crate::path_identity::key(&candidate.path);
             if seen.insert(key) {
                 result.push(candidate);
                 if result.len() == limit {
@@ -55,6 +55,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn ranking_respeta_precedencia_deduplica_windows_y_limita() {
         let got = rank(
@@ -71,5 +72,18 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].source, DestinationSource::OpenPanel);
         assert_eq!(got[1].path, PathBuf::from("D:/Dos"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ranking_posix_conserva_destinos_con_case_distinto() {
+        let got = rank(
+            [vec![
+                c("/tmp/a", DestinationSource::OpenPanel),
+                c("/tmp/A", DestinationSource::Favorite),
+            ]],
+            10,
+        );
+        assert_eq!(got.len(), 2);
     }
 }

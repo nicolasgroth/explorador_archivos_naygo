@@ -26,6 +26,27 @@ pub(crate) struct SyncHandles {
     pub sync_layout: Rc<dyn Fn()>,
 }
 
+#[derive(Clone)]
+struct AppliedRowsSource {
+    context: u64,
+    revision: u64,
+    entry_count: usize,
+    view_indices: std::sync::Arc<[usize]>,
+}
+
+fn applied_rows_source(
+    ctrl: &WorkspaceCtrl,
+    id: PaneId,
+    context: u64,
+) -> Option<AppliedRowsSource> {
+    Some(AppliedRowsSource {
+        context,
+        revision: ctrl.entries_revision_of(id)?,
+        entry_count: ctrl.row_entry_count(id)?,
+        view_indices: ctrl.row_view_indices_shared(id)?,
+    })
+}
+
 /// `set_vec` SOLO si el contenido cambió. Un `set_vec` incondicional resetea el modelo
 /// entero y Slint RE-CREA todos los delegates que lo consumen; el modelo de columnas se
 /// usa en el `for col[ci] in root.columns` de CADA fila, así que resetearlo en cada sync
@@ -47,18 +68,37 @@ fn set_vec_if_changed<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows:
 /// cambió. Los delegates fuera del tramo sobreviven (hover, scroll y el editor de rename
 /// intactos); el trabajo es O(cambio) en vez de O(todo el modelo). Caso típico: un archivo
 /// nuevo en una carpeta "viva" (Dropbox) → un insert, no un remontaje completo.
+#[cfg(test)]
 fn apply_rows_incremental<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    apply_rows_incremental_by(model, rows, |left, right| left == right);
+}
+
+fn apply_rows_incremental_by<T: Clone + 'static>(
+    model: &VecModel<T>,
+    rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
+) {
     let old_n = model.row_count();
     let new_n = rows.len();
     // Prefijo común (filas idénticas al inicio).
     let mut prefix = 0;
-    while prefix < old_n.min(new_n) && model.row_data(prefix).as_ref() == rows.get(prefix) {
+    while prefix < old_n.min(new_n)
+        && model
+            .row_data(prefix)
+            .as_ref()
+            .zip(rows.get(prefix))
+            .is_some_and(|(old, new)| same(old, new))
+    {
         prefix += 1;
     }
     // Sufijo común (filas idénticas al final, sin solapar el prefijo).
     let mut suffix = 0;
     while suffix < (old_n - prefix).min(new_n - prefix)
-        && model.row_data(old_n - 1 - suffix).as_ref() == rows.get(new_n - 1 - suffix)
+        && model
+            .row_data(old_n - 1 - suffix)
+            .as_ref()
+            .zip(rows.get(new_n - 1 - suffix))
+            .is_some_and(|(old, new)| same(old, new))
     {
         suffix += 1;
     }
@@ -76,6 +116,29 @@ fn apply_rows_incremental<T: PartialEq + Clone + 'static>(model: &VecModel<T>, r
     }
 }
 
+/// Compara el contenido visible de una fila. Slint representa `cells` como un modelo anidado;
+/// cada conversión crea un `VecModel` nuevo y comparar su `ModelRc` por identidad marcaba todas
+/// las filas como distintas aunque las celdas no hubieran cambiado. Eso disparaba 100k
+/// notificaciones al aplicar una sola alta/modificación en carpetas grandes.
+fn row_data_eq(left: &RowData, right: &RowData) -> bool {
+    left.name == right.name
+        && left.is_dir == right.is_dir
+        && left.selected == right.selected
+        && left.focused == right.focused
+        && left.cut == right.cut
+        && left.highlight == right.highlight
+        && left.compare_state == right.compare_state
+        && left.filter_match == right.filter_match
+        && left.match_pre == right.match_pre
+        && left.match_mid == right.match_mid
+        && left.match_post == right.match_post
+        && left.icon == right.icon
+        && left.depth == right.depth
+        && left.cells.row_count() == right.cells.row_count()
+        && (0..left.cells.row_count())
+            .all(|index| left.cells.row_data(index) == right.cells.row_data(index))
+}
+
 /// Construye `sync_rows` y `sync_layout` sobre los modelos estables compartidos.
 pub(crate) fn build_sync(
     ui_weak: slint::Weak<AppWindow>,
@@ -89,12 +152,24 @@ pub(crate) fn build_sync(
         let ctrl = ctrl.clone();
         let models = models.clone();
         let last_row_sig = last_row_sig.clone();
+        let row_sources = Rc::new(RefCell::new(HashMap::<u64, AppliedRowsSource>::new()));
+        let row_sources = row_sources.clone();
         let search_model = Rc::new(VecModel::<SearchHitVm>::default());
         let points_model = Rc::new(VecModel::<PointRowVm>::default());
         move || {
+            let _sync_metric = crate::metrics::span("ui.sync_rows");
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
+            // El borrador pertenece a la carpeta/panel capturados al abrirlo. Si se cierra
+            // ese panel o navega por otra vía, cancelar ANTES de tomar el préstamo mutable:
+            // el callback cancela también validaciones/sugerencias y vuelve a prestar ctrl.
+            let edit_id = ui.get_edit_pane();
+            let stale_edit = edit_id >= 0
+                && ctrl.borrow().path_of(PaneId(edit_id as u64)) != ui.get_edit_base().as_str();
+            if stale_edit {
+                ui.invoke_path_edit_cancel(edit_id);
+            }
             // `borrow_mut` porque `rows_of` necesita mutar el IconCache (decodifica on-demand).
             let mut c = ctrl.borrow_mut();
             ui.set_maximized_pane(c.maximized_pane.map_or(-1, |id| id.0 as i32));
@@ -190,7 +265,10 @@ pub(crate) fn build_sync(
                         // el tick anterior, `rows_of` daría las MISMAS filas → saltamos su
                         // construcción (O(n) con allocs de String) y el `set_vec`. `None` = no
                         // cachear (resaltado fresco vigente: el fundido cambia cada tick).
-                        let sig = c.rows_signature(id, hl_secs, hl_now);
+                        let sig = {
+                            let _metric = crate::metrics::span("ui.rows_signature");
+                            c.rows_signature(id, hl_secs, hl_now)
+                        };
                         let mut sigs = last_row_sig.borrow_mut();
                         let rows_unchanged = match sig {
                             Some(s) => {
@@ -205,6 +283,7 @@ pub(crate) fn build_sync(
                                 // Sin cache este tick: limpiar la firma guardada para que el
                                 // PRÓXIMO tick (ya sin fresh) reconstruya y vuelva a sembrarla.
                                 sigs.remove(&id.0);
+                                row_sources.borrow_mut().remove(&id.0);
                                 false
                             }
                         };
@@ -219,52 +298,212 @@ pub(crate) fn build_sync(
                             .map(to_column_toggle_vm)
                             .collect();
                         if !rows_unchanged {
-                            let rows: Vec<RowData> = c
-                                .rows_of(id, hl_secs, hl_now)
-                                .into_iter()
-                                .map(to_row_data)
-                                .collect();
                             let pm = m.models_for(id);
-                            // Actualización POR FILA cuando el largo no cambió. `set_vec`
-                            // resetea el modelo ENTERO y el ListView re-crea todas sus filas;
-                            // en una carpeta "en movimiento" (Dropbox sincronizando → eventos
-                            // del watcher → resaltado fresco activo → la firma no cachea) eso
-                            // ocurría en CADA tick de 30 ms: la cadena de hover del puntero se
-                            // invalidaba constantemente y los eventos de RUEDA dejaban de
-                            // llegar al panel (scroll "muerto" justo en esas carpetas), además
-                            // de reconstruir cientos de ítems por tick. Con `set_row_data`
-                            // solo se notifican las filas que de verdad cambiaron: los ítems
-                            // del ListView sobreviven, el hover queda válido y la rueda sigue
-                            // viva. Si el LARGO cambió (alta/baja real de archivos), sí se
-                            // resetea entero — es el caso raro y ahí sí cambia la estructura.
-                            if pm.rows.row_count() == rows.len() {
-                                // Fila bajo edición inline (rename): NO tocarla aunque cambien
-                                // sus datos (p. ej. expira su resaltado "fresco" o llega un
-                                // evento del watcher). Un `set_row_data` sobre ella RE-MONTA el
-                                // delegate y destruye el `LineEdit` del rename (se llevaba el
-                                // texto tipeado: bug del "_" que borraba todo). La fila queda
-                                // visualmente "congelada" mientras se edita, lo cual es invisible
-                                // porque el editor la tapa. Con el draft en `rename-draft` el
-                                // texto sobrevive incluso al `set_vec` (cambio de largo).
-                                let rename_row = c
-                                    .rename_active
+                            // Los eventos Modified estables pueden recalcular solo las filas
+                            // afectadas. Altas, bajas, reordenamientos y demás cambios mantienen
+                            // la reconciliación completa/incremental de abajo.
+                            let row_context = if sig.is_some()
+                                && c.rename_active
                                     .as_ref()
-                                    .filter(|r| r.pane == id)
-                                    .map(|r| r.pos);
-                                for (i, row) in rows.into_iter().enumerate() {
-                                    if rename_row == Some(i) {
-                                        continue;
-                                    }
-                                    if pm.rows.row_data(i).as_ref() != Some(&row) {
-                                        pm.rows.set_row_data(i, row);
+                                    .is_none_or(|rename| rename.pane != id)
+                            {
+                                c.rows_context_signature(id, hl_secs, hl_now)
+                            } else {
+                                row_sources.borrow_mut().remove(&id.0);
+                                None
+                            };
+                            let row_count = c.row_source_count(id);
+                            let current_revision = c.entries_revision_of(id);
+                            let previous_source = match (row_context, current_revision) {
+                                (Some(context), Some(_)) => row_sources
+                                    .borrow()
+                                    .get(&id.0)
+                                    .filter(|source| {
+                                        source.context == context
+                                            && pm.rows.row_count() == source.view_indices.len()
+                                    })
+                                    .cloned(),
+                                _ => None,
+                            };
+                            let previous_revision = previous_source.as_ref().and_then(|source| {
+                                (row_count == Some(pm.rows.row_count())).then_some(source.revision)
+                            });
+                            // El core solo marca los lotes que fueron agregados físicamente al
+                            // final. Además exigimos que su revisión/rango coincidan y que los
+                            // índices visibles ya aplicados sigan siendo un prefijo exacto. Así
+                            // un sort que intercale archivos, un refresh o un filtro/contexto
+                            // distinto cae en la reconciliación normal.
+                            let appended_rows = previous_source.as_ref().and_then(|source| {
+                                let end =
+                                    c.rows_appended_since(id, source.revision, source.entry_count)?;
+                                if c.row_entry_count(id)? != end {
+                                    return None;
+                                }
+                                let view = c.row_view_indices_shared(id)?;
+                                if view.len() < source.view_indices.len()
+                                    || view[..source.view_indices.len()]
+                                        != *source.view_indices.as_ref()
+                                {
+                                    return None;
+                                }
+                                let positions: Vec<usize> =
+                                    (source.view_indices.len()..view.len()).collect();
+                                let plain_rows = {
+                                    let _metric = crate::metrics::span("ui.rows_build");
+                                    c.rows_at(id, &positions, hl_secs, hl_now)?
+                                };
+                                Some((view, plain_rows))
+                            });
+                            let changed_positions = previous_revision.and_then(|revision| {
+                                c.dirty_row_positions(id, revision, hl_secs, hl_now)
+                                    .filter(|positions| positions.len() <= pm.rows.row_count() / 4)
+                            });
+
+                            if let Some((view, plain_rows)) = appended_rows {
+                                let rows: Vec<RowData> = {
+                                    let _metric = crate::metrics::span("ui.rows_convert");
+                                    plain_rows.into_iter().map(to_row_data).collect()
+                                };
+                                {
+                                    let _metric = crate::metrics::span("ui.rows_model_apply");
+                                    for row in rows {
+                                        pm.rows.push(row);
                                     }
                                 }
+                                if let (Some(context), Some(entry_count)) =
+                                    (row_context, c.row_entry_count(id))
+                                {
+                                    if let Some(revision) = current_revision {
+                                        row_sources.borrow_mut().insert(
+                                            id.0,
+                                            AppliedRowsSource {
+                                                context,
+                                                revision,
+                                                entry_count,
+                                                view_indices: view,
+                                            },
+                                        );
+                                    }
+                                }
+                            } else if let Some(positions) = changed_positions.as_ref() {
+                                let mut rows_built = positions.is_empty();
+                                if !positions.is_empty() {
+                                    let plain_rows = {
+                                        let _metric = crate::metrics::span("ui.rows_build");
+                                        c.rows_at(id, positions, hl_secs, hl_now)
+                                    };
+                                    if let Some(plain_rows) = plain_rows {
+                                        rows_built = true;
+                                        let rows: Vec<RowData> = {
+                                            let _metric = crate::metrics::span("ui.rows_convert");
+                                            plain_rows.into_iter().map(to_row_data).collect()
+                                        };
+                                        let _metric = crate::metrics::span("ui.rows_model_apply");
+                                        for (position, row) in positions.iter().copied().zip(rows) {
+                                            if c.rename_active.as_ref().is_some_and(|rename| {
+                                                rename.pane == id && rename.pos == position
+                                            }) {
+                                                continue;
+                                            }
+                                            if pm
+                                                .rows
+                                                .row_data(position)
+                                                .as_ref()
+                                                .is_none_or(|old| !row_data_eq(old, &row))
+                                            {
+                                                pm.rows.set_row_data(position, row);
+                                            }
+                                        }
+                                    }
+                                }
+                                if rows_built {
+                                    // El estado se mantiene bajo el préstamo de `ctrl` durante la
+                                    // traducción y la conversión; se puede avanzar la revisión.
+                                    if current_revision.is_some() {
+                                        if let Some(context) = row_context {
+                                            if let Some(source) =
+                                                applied_rows_source(&c, id, context)
+                                            {
+                                                row_sources.borrow_mut().insert(id.0, source);
+                                            } else {
+                                                row_sources.borrow_mut().remove(&id.0);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Si el delta dejó de ser aplicable, el siguiente tick debe
+                                    // reconciliar el modelo completo.
+                                    row_sources.borrow_mut().remove(&id.0);
+                                }
                             } else {
-                                // El largo cambió (alta/baja real): aplicación INCREMENTAL
-                                // (prefijo/sufijo intactos; solo el tramo del medio se
-                                // quita/inserta) en vez de un `set_vec` que re-creaba todos
-                                // los delegates — ver `apply_rows_incremental`.
-                                apply_rows_incremental(&pm.rows, rows);
+                                let plain_rows = {
+                                    let _metric = crate::metrics::span("ui.rows_build");
+                                    c.rows_of(id, hl_secs, hl_now)
+                                };
+                                let rows: Vec<RowData> = {
+                                    let _metric = crate::metrics::span("ui.rows_convert");
+                                    plain_rows.into_iter().map(to_row_data).collect()
+                                };
+                                // Actualización POR FILA cuando el largo no cambió. `set_vec`
+                                // resetea el modelo ENTERO y el ListView re-crea todas sus filas;
+                                // en una carpeta "en movimiento" (Dropbox sincronizando → eventos
+                                // del watcher → resaltado fresco activo → la firma no cachea) eso
+                                // ocurría en CADA tick de 30 ms: la cadena de hover del puntero se
+                                // invalidaba constantemente y los eventos de RUEDA dejaban de
+                                // llegar al panel (scroll "muerto" justo en esas carpetas), además
+                                // de reconstruir cientos de ítems por tick. Con `set_row_data`
+                                // solo se notifican las filas que de verdad cambiaron: los ítems
+                                // del ListView sobreviven, el hover queda válido y la rueda sigue
+                                // viva. Si el LARGO cambió (alta/baja real de archivos), sí se
+                                // resetea entero — es el caso raro y ahí sí cambia la estructura.
+                                let _metric = crate::metrics::span("ui.rows_model_apply");
+                                if pm.rows.row_count() == rows.len() {
+                                    // Fila bajo edición inline (rename): NO tocarla aunque cambien
+                                    // sus datos (p. ej. expira su resaltado "fresco" o llega un
+                                    // evento del watcher). Un `set_row_data` sobre ella RE-MONTA el
+                                    // delegate y destruye el `LineEdit` del rename (se llevaba el
+                                    // texto tipeado: bug del "_" que borraba todo). La fila queda
+                                    // visualmente "congelada" mientras se edita, lo cual es invisible
+                                    // porque el editor la tapa. Con el draft en `rename-draft` el
+                                    // texto sobrevive incluso al `set_vec` (cambio de largo).
+                                    let rename_row = c
+                                        .rename_active
+                                        .as_ref()
+                                        .filter(|r| r.pane == id)
+                                        .map(|r| r.pos);
+                                    for (i, row) in rows.into_iter().enumerate() {
+                                        if rename_row == Some(i) {
+                                            continue;
+                                        }
+                                        if pm
+                                            .rows
+                                            .row_data(i)
+                                            .as_ref()
+                                            .is_none_or(|old| !row_data_eq(old, &row))
+                                        {
+                                            pm.rows.set_row_data(i, row);
+                                        }
+                                    }
+                                } else {
+                                    // El largo cambió (alta/baja real): aplicación INCREMENTAL
+                                    // (prefijo/sufijo intactos; solo el tramo del medio se
+                                    // quita/inserta) en vez de un `set_vec` que re-creaba todos
+                                    // los delegates — ver `apply_rows_incremental`.
+                                    apply_rows_incremental_by(&pm.rows, rows, row_data_eq);
+                                }
+                                if let (Some(context), Some(count)) = (row_context, row_count) {
+                                    if count == pm.rows.row_count() {
+                                        if let Some(source) = applied_rows_source(&c, id, context) {
+                                            row_sources.borrow_mut().insert(id.0, source);
+                                        } else {
+                                            row_sources.borrow_mut().remove(&id.0);
+                                        }
+                                    } else {
+                                        row_sources.borrow_mut().remove(&id.0);
+                                    }
+                                } else {
+                                    row_sources.borrow_mut().remove(&id.0);
+                                }
                             }
                             set_vec_if_changed(&pm.columns, cols);
                             set_vec_if_changed(&pm.col_menu, col_menu);
@@ -482,13 +721,24 @@ pub(crate) fn build_sync(
             }
             if let Some(id) = active {
                 ui.set_active_path(SharedString::from(c.path_of(id).as_str()));
+                ui.set_active_path_pane(id.0 as i32);
+            } else {
+                ui.set_active_path("".into());
+                ui.set_active_path_pane(-1);
             }
+            let path_target = if ui.get_edit_toolbar() && ui.get_edit_pane() >= 0 {
+                Some(PaneId(ui.get_edit_pane() as u64))
+            } else {
+                active
+            };
+            ui.set_toolbar_path_favorite(path_target.is_some_and(|id| c.is_pane_dir_favorite(id)));
             ui.set_status(SharedString::from(c.status_line().as_str()));
             ui.set_sync_vm(c.sync_vm());
             ui.set_text_transform_vm(c.text_transform_vm());
             ui.set_delivery_visible(c.delivery.open);
             if c.task_spaces.open && !ui.get_spaces_visible() {
                 ui.set_spaces_root("".into());
+                ui.set_spaces_own_favorites(c.task_spaces.create_private_favorites);
             }
             ui.set_spaces_visible(c.task_spaces.open);
             if c.saved_queries.open
@@ -769,11 +1019,14 @@ pub(crate) fn build_sync(
             let colmenu = match c.column_menu_snapshot() {
                 Some(m) => {
                     let no_ext = ui.global::<Tr>().get_colfilter_no_ext();
+                    let folder = ui.global::<Tr>().get_dlg_kind_folder();
                     let exts: Vec<ExtRowVm> = m
                         .exts
                         .into_iter()
                         .map(|e| {
-                            let label = if e.ext.is_empty() {
+                            let label = if e.ext == naygo_core::filter::DIRECTORY_TYPE_FILTER_KEY {
+                                folder.clone()
+                            } else if e.ext.is_empty() {
                                 no_ext.clone()
                             } else {
                                 SharedString::from(e.ext.as_str())
@@ -835,6 +1088,7 @@ pub(crate) fn build_sync(
                                 RowStatus::Unchanged => 1,
                                 RowStatus::Invalid(_) => 2,
                                 RowStatus::Collision => 3,
+                                RowStatus::Unrepresentable => 4,
                             },
                         })
                         .collect();
@@ -898,6 +1152,7 @@ pub(crate) fn build_sync(
         let area_of = area_of.clone();
         let sync_rows = sync_rows.clone();
         Rc::new(move || {
+            let _sync_metric = crate::metrics::span("ui.sync_layout");
             let area = area_of();
             ctrl.borrow_mut().set_area(area);
             let pane_rects = ctrl.borrow().pane_rects(area);
@@ -943,18 +1198,21 @@ pub(crate) fn build_sync(
                         let c = ctrl.borrow();
                         let purpose = c.purpose_of(*id).map(purpose_to_int).unwrap_or(0);
                         // Si este id es la pestaña activa de un grupo, armar su barra.
-                        let tabs: Vec<TabVm> = groups
+                        let (tabs, active_tab_index): (Vec<TabVm>, i32) = groups
                             .iter()
                             .find(|(mem, a)| mem.get(*a) == Some(id))
                             .map(|(mem, a)| {
-                                mem.iter()
-                                    .enumerate()
-                                    .map(|(i, mid)| TabVm {
-                                        id: mid.0 as i32,
-                                        label: SharedString::from(c.pane_label(*mid).as_str()),
-                                        active: i == *a,
-                                    })
-                                    .collect()
+                                (
+                                    mem.iter()
+                                        .enumerate()
+                                        .map(|(i, mid)| TabVm {
+                                            id: mid.0 as i32,
+                                            label: SharedString::from(c.pane_label(*mid).as_str()),
+                                            active: i == *a,
+                                        })
+                                        .collect(),
+                                    *a as i32,
+                                )
                             })
                             .unwrap_or_default();
                         drop(c);
@@ -1033,6 +1291,7 @@ pub(crate) fn build_sync(
                             inspector: InspectorVm::default(),
                             preview: PreviewVm::default(),
                             basket_rows: ModelRc::from(pm.basket.clone()),
+                            active_tab_index,
                             tabs: ModelRc::from(Rc::new(VecModel::from(tabs))),
                         }
                     })
@@ -1174,7 +1433,9 @@ pub(crate) fn build_apply_device_change(
     devices: Rc<crate::devices::Devices>,
     home: Rc<std::path::PathBuf>,
     ui_weak: slint::Weak<AppWindow>,
+    waker: naygo_platform::dir_watch::Waker,
 ) -> Rc<dyn Fn()> {
+    let waker = waker.clone();
     Rc::new(move || {
         if !devices.drives_changed() {
             return;
@@ -1182,6 +1443,7 @@ pub(crate) fn build_apply_device_change(
         // El espacio en disco pudo cambiar (USB conectado/expulsado): invalida la caché del
         // footer para que se relea en el próximo tick, igual que se refresca la tira de discos.
         ctrl.borrow_mut().invalidate_footer_disk_cache();
+        ctrl.borrow_mut().request_drive_refresh(waker.clone());
         // Un disco que se va/llega puede cambiar el estado "carpeta no encontrada" de paneles
         // abiertos en él: recalcular el caché (fuera del tick de render).
         ctrl.borrow_mut().refresh_missing_cache();
@@ -1266,5 +1528,362 @@ mod tests {
         let m = VecModel::from(vec![1, 2, 3]);
         apply_rows_incremental(&m, vec![1, 2, 3]);
         assert_eq!(to_vec(&m), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn filas_compara_el_contenido_de_las_celdas_no_su_identidad() {
+        let icon =
+            slint::Image::from_rgba8(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1));
+        let make_row = |cell: &str| RowData {
+            name: SharedString::from("archivo.txt"),
+            cells: ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from(cell)]))),
+            is_dir: false,
+            selected: false,
+            focused: false,
+            cut: false,
+            highlight: false,
+            compare_state: 0,
+            filter_match: false,
+            match_pre: SharedString::new(),
+            match_mid: SharedString::new(),
+            match_post: SharedString::new(),
+            icon: icon.clone(),
+            depth: 0,
+        };
+
+        assert!(row_data_eq(&make_row("1 KiB"), &make_row("1 KiB")));
+        assert!(!row_data_eq(&make_row("1 KiB"), &make_row("2 KiB")));
+    }
+
+    #[test]
+    fn sync_rows_aplica_append_visible_y_reconcilia_append_que_intercala_el_sort() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{software_renderer::MinimalSoftwareWindow, Platform, WindowAdapter};
+        use std::time::SystemTime;
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        fn entry(root: &std::path::Path, name: &str) -> Entry {
+            Entry {
+                name: name.to_owned(),
+                path: root.join(name),
+                kind: EntryKind::File,
+                size: Some(1),
+                modified: Some(SystemTime::UNIX_EPOCH),
+                created: None,
+                hidden: false,
+                system: false,
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let adapter = MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+        );
+        slint::platform::set_platform(Box::new(Headless(adapter))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+        );
+        (sync.sync_layout)();
+        let id = ctrl.borrow().active_id().unwrap();
+        let rows = models.borrow_mut().models_for(id).rows.clone();
+        {
+            let mut workspace = ctrl.borrow_mut();
+            let files = workspace.ws.active_files_mut().unwrap();
+            files.entries = vec![entry(&root, "a.txt"), entry(&root, "z.txt")];
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.name.to_string())
+                .collect::<Vec<_>>(),
+            ["a.txt", "z.txt"]
+        );
+
+        {
+            let mut workspace = ctrl.borrow_mut();
+            let files = workspace.ws.active_files_mut().unwrap();
+            files.entries.push(entry(&root, "zz.txt"));
+            files.entries_appended(2);
+        }
+        (sync.sync_rows)();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.name.to_string())
+                .collect::<Vec<_>>(),
+            ["a.txt", "z.txt", "zz.txt"]
+        );
+
+        {
+            let mut workspace = ctrl.borrow_mut();
+            let files = workspace.ws.active_files_mut().unwrap();
+            files.entries.push(entry(&root, "m.txt"));
+            files.entries_appended(3);
+        }
+        (sync.sync_rows)();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.name.to_string())
+                .collect::<Vec<_>>(),
+            ["a.txt", "m.txt", "z.txt", "zz.txt"],
+            "un append que intercalaría el orden debe reconciliar el listado"
+        );
+    }
+
+    /// Invoca el callback de teclado generado por Slint, conectado en `wire_nav_keys`.
+    /// Es headless: mide el callback de producción, no el dispatch del SO ni Winit.
+    #[test]
+    #[ignore = "medición manual W-07 del callback Slint headless; usar el supervisor de release"]
+    fn w07_headless_keyboard_callback_measurement() {
+        use crate::wire::WireCtx;
+        use crate::workspace_ctrl::WorkspaceCtrl;
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{software_renderer::MinimalSoftwareWindow, Platform, WindowAdapter};
+        use std::time::{Duration, Instant};
+
+        const EVENT_COUNT: usize = 256;
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        fn median_us(mut samples: Vec<f64>) -> f64 {
+            samples.sort_by(f64::total_cmp);
+            samples[samples.len() / 2]
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let metrics_enabled =
+            std::env::var_os("NAYGO_PERF_METRICS").as_deref() == Some(std::ffi::OsStr::new("1"));
+        if metrics_enabled {
+            crate::logging::init(temp.path().join("logs"));
+            crate::metrics::init();
+        }
+
+        let adapter = MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+        );
+        slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root,
+            temp.path().join("settings"),
+        )));
+        let ui = AppWindow::new().unwrap();
+        let ctx = WireCtx {
+            ctrl,
+            sync_rows: Rc::new(|| {}),
+            sync_layout: Rc::new(|| {}),
+            start_timer: Rc::new(|| {}),
+            area_of: Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+            palette_cmds: Rc::new(RefCell::new(Vec::new())),
+            palette_cmd_indices: Rc::new(RefCell::new(Vec::new())),
+            pending_eject: Rc::new(RefCell::new(None)),
+            pending_eject_panes: Rc::new(RefCell::new(Vec::new())),
+            pending_undo: Rc::new(RefCell::new(None)),
+        };
+        crate::callbacks_nav::wire_nav_keys(&ui, &ctx);
+        let mut callback_samples = Vec::with_capacity(EVENT_COUNT);
+        for _ in 0..EVENT_COUNT {
+            let started = Instant::now();
+            ui.invoke_key("DownArrow".into(), false, false, false);
+            callback_samples.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+        }
+
+        if metrics_enabled {
+            crate::metrics::shutdown();
+            assert!(crate::logging::flush(Duration::from_secs(2)));
+            let log_path = crate::logging::log_path();
+            let log = std::fs::read_to_string(&log_path).unwrap();
+            assert!(
+                log.contains(&format!(
+                    "[perf] kind=ui.input.keyboard_callback count={EVENT_COUNT}"
+                )),
+                "Slint dispatch did not reach the production keyboard callback; log:\n{log}"
+            );
+        }
+        eprintln!(
+            "W-07 Slint callback samples={EVENT_COUNT} callback_p50_us={:.3} callback_max_us={:.3} metrics_enabled={metrics_enabled}",
+            median_us(callback_samples.clone()),
+            callback_samples.iter().copied().fold(0.0, f64::max),
+        );
+    }
+
+    /// Medición manual de `sync_rows` y el renderer software de Slint para W-07/W-10C. Se excluye del gate
+    /// porque crea 100k entradas y su rasterizado headless no representa interacción/presentación.
+    #[test]
+    #[ignore = "medición manual W-07/W-10C; correr explícitamente con --ignored --nocapture"]
+    fn w10c_headless_sync_measurement() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+            Platform, WindowAdapter,
+        };
+        use std::time::{Duration, Instant, SystemTime};
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        fn median_ms(mut samples: Vec<f64>) -> f64 {
+            samples.sort_by(f64::total_cmp);
+            samples[samples.len() / 2]
+        }
+
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        let models = Rc::new(RefCell::new(Models::new()));
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models,
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+        );
+        (sync.sync_layout)();
+        ui.show().unwrap();
+        window.set_size(slint::PhysicalSize::new(1280, 800));
+        let mut pixels = vec![slint::Rgb8Pixel::default(); 1280 * 800];
+
+        for count in [10_000usize, 100_000] {
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let files = workspace.ws.active_files_mut().unwrap();
+                files.entries.clear();
+                files.entries_changed();
+            }
+            (sync.sync_rows)();
+
+            let entries: Vec<Entry> = (0..count)
+                .map(|index| Entry {
+                    name: format!("entry-{index:06}.dat"),
+                    path: root.join(format!("entry-{index:06}.dat")),
+                    kind: EntryKind::File,
+                    size: Some(index as u64),
+                    modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(index as u64)),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                })
+                .collect();
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let files = workspace.ws.active_files_mut().unwrap();
+                files.entries = entries;
+                files.entries_changed();
+            }
+
+            let start = Instant::now();
+            (sync.sync_rows)();
+            let initial_ms = start.elapsed().as_secs_f64() * 1_000.0;
+
+            let mut no_op_samples = Vec::with_capacity(5);
+            for _ in 0..5 {
+                let start = Instant::now();
+                (sync.sync_rows)();
+                no_op_samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+            }
+
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let files = workspace.ws.active_files_mut().unwrap();
+                files.entries[count - 1].size = Some(u64::MAX);
+                let changed_path = files.entries[count - 1].path.clone();
+                files.entries_rows_changed([changed_path]);
+            }
+            let start = Instant::now();
+            (sync.sync_rows)();
+            let one_row_update_ms = start.elapsed().as_secs_f64() * 1_000.0;
+
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let files = workspace.ws.active_files_mut().unwrap();
+                files.entries.push(Entry {
+                    name: format!("entry-{count:06}.dat"),
+                    path: root.join(format!("entry-{count:06}.dat")),
+                    kind: EntryKind::File,
+                    size: Some(count as u64),
+                    modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(count as u64)),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+                files.entries_appended(count);
+            }
+            let start = Instant::now();
+            (sync.sync_rows)();
+            let append_ms = start.elapsed().as_secs_f64() * 1_000.0;
+
+            // Pide un frame explícito en cada pasada para separar rasterizado software del
+            // tiempo de sincronización de modelos medido arriba. El buffer/tamaño y la ventana
+            // de prueba son iguales para 10k y 100k; la UI virtualiza las filas fuera del viewport.
+            let mut render_samples = Vec::with_capacity(5);
+            for _ in 0..5 {
+                slint::platform::update_timers_and_animations();
+                window.request_redraw();
+                let start = Instant::now();
+                window.draw_if_needed(|renderer| {
+                    renderer.render(&mut pixels, 1280);
+                });
+                render_samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+            }
+            let render_median_ms = median_ms(render_samples);
+
+            println!(
+                "W-07/W-10C software rows={count} initial_ms={initial_ms:.3} no_op_median_ms={:.3} one_row_update_ms={one_row_update_ms:.3} append_ms={append_ms:.3} render_median_ms={render_median_ms:.3}",
+                median_ms(no_op_samples),
+            );
+        }
+        ui.hide().unwrap();
     }
 }

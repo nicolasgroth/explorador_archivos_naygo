@@ -273,7 +273,7 @@ impl Workspace {
         for tp in &tpl.panes {
             let dir = match &tp.dir {
                 TemplateDir::Home => home.to_path_buf(),
-                TemplateDir::Fixed(s) => std::path::PathBuf::from(s),
+                TemplateDir::Fixed(path) => path.clone(),
             };
             ids.push(w.add_pane(tp.purpose, dir));
         }
@@ -351,8 +351,15 @@ impl Workspace {
     /// Captura la disposición ACTUAL como una `LayoutTemplate` con el `name` dado (inverso de
     /// `from_template`). Los paneles se recogen en el orden en que aparecen en el árbol de
     /// disposición; los `Files` apuntan a su carpeta actual como `TemplateDir::Fixed`, los demás
-    /// a `Home`. Útil para «guardar la disposición actual como plantilla».
-    pub fn to_template(&self, name: &str) -> crate::workspace::template::LayoutTemplate {
+    /// a `Home`. Rechaza rutas fijas no UTF-8 porque el JSON vigente sólo admite texto y guardarlas
+    /// mediante sustitución cambiaría silenciosamente la carpeta.
+    pub fn to_template(
+        &self,
+        name: &str,
+    ) -> Result<
+        crate::workspace::template::LayoutTemplate,
+        crate::workspace::template::TemplateCaptureError,
+    > {
         use crate::workspace::layout::DockNode;
         use crate::workspace::template::{LayoutShape, LayoutTemplate, TemplateDir, TemplatePane};
 
@@ -428,14 +435,24 @@ impl Workspace {
         let panes: Vec<TemplatePane> = order
             .iter()
             .filter_map(|id| self.pane(*id))
-            .map(|p| TemplatePane {
-                purpose: p.purpose,
-                dir: match &p.files {
-                    Some(f) => TemplateDir::Fixed(f.current_dir.to_string_lossy().into_owned()),
+            .map(|p| {
+                let dir = match &p.files {
+                    Some(f) => {
+                        if f.current_dir.to_str().is_none() {
+                            return Err(
+                                crate::workspace::template::TemplateCaptureError::NonUtf8FixedPath,
+                            );
+                        }
+                        TemplateDir::Fixed(f.current_dir.clone())
+                    }
                     None => TemplateDir::Home,
-                },
+                };
+                Ok(TemplatePane {
+                    purpose: p.purpose,
+                    dir,
+                })
             })
-            .collect();
+            .collect::<Result<_, crate::workspace::template::TemplateCaptureError>>()?;
         let tree_links = self
             .tree_links()
             .into_iter()
@@ -446,14 +463,14 @@ impl Workspace {
                 ))
             })
             .collect();
-        LayoutTemplate {
+        Ok(LayoutTemplate {
             name: name.to_string(),
             builtin: false,
             favorite: false,
             panes,
             tree_links,
             layout,
-        }
+        })
     }
 
     /// Inserta un `PaneNode` ya construido (con su id propio), para reconstruir un workspace
@@ -678,7 +695,7 @@ mod tests {
             .split_leaf_grouped(tree, SplitDir::Horizontal, files, 0.25);
         assert!(w.link_tree(tree, files));
 
-        let tpl = w.to_template("Enlazada");
+        let tpl = w.to_template("Enlazada").unwrap();
         assert_eq!(tpl.tree_links, vec![(0, 1)]);
         let restored = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
         let ids = restored.layout.pane_ids();
@@ -741,9 +758,11 @@ mod tests {
         // from_template(dual_pane) → to_template debe reproducir tipos y forma del layout.
         let tpl = crate::workspace::template::LayoutTemplate::dual_pane();
         let w = Workspace::from_template(&tpl, std::path::Path::new("C:/home"));
-        let captured = w.to_template("Mi captura");
+        let captured = w.to_template("Mi captura").unwrap();
         assert_eq!(captured.name, "Mi captura");
         assert!(!captured.builtin);
+        let encoded = serde_json::to_value(&captured).unwrap();
+        assert_eq!(encoded["panes"][1]["dir"]["Fixed"], "C:/home");
         // Mismos tipos de panel en el mismo orden.
         let orig_purposes: Vec<_> = tpl.panes.iter().map(|p| p.purpose).collect();
         let cap_purposes: Vec<_> = captured.panes.iter().map(|p| p.purpose).collect();
@@ -771,7 +790,7 @@ mod tests {
         };
         w.set_active(a);
 
-        let captured = w.to_template("Fila de 3");
+        let captured = w.to_template("Fila de 3").unwrap();
         let w2 = Workspace::from_template(&captured, std::path::Path::new("C:/home"));
 
         // Los 3 paneles Files sobreviven, en el mismo orden que el árbol original.
@@ -789,6 +808,21 @@ mod tests {
                 PathBuf::from("C:/b"),
                 PathBuf::from("C:/c"),
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn to_template_rechaza_ruta_fija_no_utf8_sin_reemplazarla() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/carpeta-\xff".to_vec()));
+        let mut workspace = Workspace::new();
+        workspace.add_pane(PanePurpose::Files, path);
+
+        assert_eq!(
+            workspace.to_template("No debe guardarse"),
+            Err(crate::workspace::template::TemplateCaptureError::NonUtf8FixedPath)
         );
     }
 }

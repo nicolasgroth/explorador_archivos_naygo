@@ -113,7 +113,11 @@ export component PreviewPanel inherits Rectangle {
     callback mesh-orbit(float, float); // delta de arrastre para STL/3MF
     callback mesh-zoom(float);         // rueda/touchpad para STL/3MF
     callback reset-mesh();              // volver a la cámara inicial
-    callback cancel-preview();          // detener el worker si lleva demasiado tiempo
+    callback cycle-color();
+    callback cycle-surface();
+    callback cancel-preview();          // cancelar inmediatamente, incluso con miniatura
+    callback retry-preview();
+    callback toggle-animation();
     callback copy-text(string);         // copiar contenido textual ya cargado
     callback hover-tip(string, length, length);   // tooltip flotante (texto, x centrada, y borde inferior) → AppWindow
     // El wrap parte activado para que los textos siempre sean legibles en paneles angostos. El
@@ -151,17 +155,19 @@ export component PreviewPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 overflow: elide;
             }
-            // Estado de carga: se mantiene discreto mientras corre; después de cinco segundos se
-            // habilita una cancelación inequívoca para cualquier tipo de archivo.
+            // Cancelar no espera cinco segundos ni desaparece si ya existe una miniatura.
             if root.view.loading: Text {
                 text: Tr.preview-loading;
                 color: Theme.text-dim;
                 font-size: Theme.font-xs;
                 vertical-alignment: center;
             }
-            if root.view.loading && root.view.can-cancel: Rectangle {
+            if root.view.can-cancel: Rectangle {
                 width: 52px;
                 height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-cancel;
+                accessible-action-default => { root.cancel-preview(); }
                 background: cancel-touch.has-hover ? Theme.error.brighter(12%) : Theme.error;
                 border-radius: Theme.radius-sm;
                 Text { text: Tr.preview-cancel; color: #ffffff; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
@@ -171,10 +177,51 @@ export component PreviewPanel inherits Rectangle {
                     changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-cancel-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
                 }
             }
+            if root.view.can-retry: Rectangle {
+                width: max(66px, retry-label.preferred-width + 12px); height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.missing-retry;
+                accessible-action-default => { root.retry-preview(); }
+                background: retry-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                border-radius: Theme.radius-sm;
+                retry-label := Text { text: Tr.missing-retry; color: Theme.text; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+                retry-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.retry-preview(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.missing-retry : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.animation-state > 0: Rectangle {
+                width: max(65px, animation-label.preferred-width + 12px); height: 20px;
+                property <string> action-label: root.view.animation-state == 1 ? Tr.preview-animation-pause
+                    : root.view.animation-state == 2 ? Tr.preview-animation-resume : Tr.preview-animation-repeat;
+                background: animation-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                border-radius: Theme.radius-sm;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-action-default => { root.toggle-animation(); }
+                animation-label := Text { text: parent.action-label; color: Theme.text; font-size: Theme.font-xs;
+                    horizontal-alignment: center; vertical-alignment: center; }
+                animation-focus := FocusScope {
+                    key-pressed(event) => {
+                        if event.text == " " || event.text == "\n" { root.toggle-animation(); return accept; }
+                        return reject;
+                    }
+                }
+                animation-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { animation-focus.focus(); root.toggle-animation(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.action-label : "",
+                        self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
             // Copiar el texto completo. No se toca el portapapeles al enfocar un archivo: es una
             // acción explícita, predecible y útil aun en el renderer por software.
             if root.view.mode == 1: Rectangle {
                 width: 26px; height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-copy-tip;
+                accessible-action-default => { root.copy-text(root.view.text); }
                 background: copy-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 CopyIcon { width: 100%; height: 100%; tint: copy-touch.has-hover ? Theme.text : Theme.text-dim; }
@@ -187,6 +234,11 @@ export component PreviewPanel inherits Rectangle {
             // El botón de wrap es un control de lectura, no modifica el archivo ni la configuración.
             if root.view.mode == 1: Rectangle {
                 width: 26px; height: 20px;
+                property <string> action-label: root.wrap-text ? Tr.preview-wrap-off-tip : Tr.preview-wrap-on-tip;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-checked: root.wrap-text;
+                accessible-action-default => { root.wrap-text = !root.wrap-text; }
                 background: wrap-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 Text { text: root.wrap-text ? "↵" : "→"; color: wrap-touch.has-hover ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
@@ -202,6 +254,11 @@ export component PreviewPanel inherits Rectangle {
             // y alterna al otro. Evita dos botones que representaban estados mutuamente excluyentes.
             if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
                 width: 26px; height: 20px;
+                property <string> action-label: root.fit-image ? Tr.preview-image-natural-tip : Tr.preview-image-fit-tip;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-checked: root.fit-image;
+                accessible-action-default => { root.fit-image = !root.fit-image; }
                 background: image-scale-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 Text {
@@ -228,6 +285,43 @@ export component PreviewPanel inherits Rectangle {
             }
             if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
                 width: 26px; height: 20px;
+                property <string> tip: Tr.preview-mesh-color + ": " + (root.view.mesh-color == 0 ? Tr.preview-mesh-blue : root.view.mesh-color == 1 ? Tr.preview-mesh-white : root.view.mesh-color == 2 ? Tr.preview-mesh-warm : Tr.preview-mesh-source);
+                accessible-role: button;
+                accessible-label: self.tip;
+                accessible-action-default => { root.cycle-color(); }
+                background: mesh-color-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Rectangle {
+                    width: 12px; height: 12px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    background: root.view.mesh-color == 0 ? #75b5de : root.view.mesh-color == 1 ? #eeeeee : root.view.mesh-color == 2 ? #d6a273 : #80c68c;
+                    border-width: 1px; border-color: Theme.text; border-radius: 6px;
+                }
+                mesh-color-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cycle-color(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                property <string> tip: Tr.preview-mesh-surface + ": " + (root.view.mesh-surface == 0 ? Tr.preview-mesh-solid : root.view.mesh-surface == 1 ? Tr.preview-mesh-edges : Tr.preview-mesh-wire);
+                accessible-role: button;
+                accessible-label: self.tip;
+                accessible-action-default => { root.cycle-surface(); }
+                background: mesh-surface-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: root.view.mesh-surface == 0 ? "◆" : root.view.mesh-surface == 1 ? "▧" : "◇"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                mesh-surface-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cycle-surface(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-reset-view-tip;
+                accessible-action-default => { root.reset-mesh(); }
                 background: reset-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 ResetViewIcon { width: 100%; height: 100%; tint: reset-touch.has-hover ? Theme.text : Theme.text-dim; }
@@ -241,6 +335,9 @@ export component PreviewPanel inherits Rectangle {
             if root.view.mode != 0: Rectangle {
                 width: 26px;
                 height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-open-tip;
+                accessible-action-default => { root.open-in-system(); }
                 background: open-touch.has-hover ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 OpenExternalIcon {
@@ -305,6 +402,7 @@ export component PreviewPanel inherits Rectangle {
                     text-editor := TextInput {
                         text: root.view.text;
                         read-only: true;
+                        accessible-label: Tr.preview-content;
                         single-line: false;
                         color: Theme.text;
                         font-family: Theme.preview-font;
@@ -329,6 +427,13 @@ export component PreviewPanel inherits Rectangle {
                 }
             }
             if root.view.truncated: TruncatedPaperEdge { }
+            if root.view.text-info != "": Text {
+                text: root.view.text-info;
+                color: Theme.text-dim;
+                font-size: 10px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
         }
 
         if root.view.mode == 2: Rectangle {
@@ -336,8 +441,10 @@ export component PreviewPanel inherits Rectangle {
             // Ajustar al panel conserva el comportamiento por defecto. La calidad se decide en
             // el worker y la UI solo reescala el bitmap ya listo, por lo que no hace I/O.
             if root.fit-image || root.view.mesh-interactive: Image {
-                width: 100%;
-                height: 100%;
+                width: root.view.animation-state > 0 ? min(parent.width, root.view.image.width * 1px) : parent.width;
+                height: root.view.animation-state > 0 ? min(parent.height, root.view.image.height * 1px) : parent.height;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
                 source: root.view.image;
                 image-fit: contain;
                 image-rendering: smooth;
@@ -366,6 +473,13 @@ export component PreviewPanel inherits Rectangle {
                 mouse-cursor: self.pressed ? grabbing : grab;
                 property <length> last-x: 0px;
                 property <length> last-y: 0px;
+                changed has-hover => {
+                    root.hover-tip(
+                        self.has-hover ? Tr.preview-mesh-controls-tip : "",
+                        self.absolute-position.x + self.width / 2,
+                        self.absolute-position.y + self.height
+                    );
+                }
                 moved => {
                     if self.pressed {
                         root.mesh-orbit((self.mouse-x - self.last-x) / 1px, (self.mouse-y - self.last-y) / 1px);

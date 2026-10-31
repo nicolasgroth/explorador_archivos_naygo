@@ -46,10 +46,15 @@ mod icons;
 mod keys;
 mod listing;
 mod logging;
+mod metrics;
 mod models;
 mod ops_ctrl;
 mod packs;
+mod path_validation;
+mod path_window_events;
 mod preview;
+mod preview_animation_tick;
+mod startup_load;
 mod sync;
 mod theme_apply;
 mod tick;
@@ -62,6 +67,7 @@ mod workspace_ctrl;
 
 use models::Models;
 use vm_builders::*;
+#[cfg(windows)]
 use win_helpers::*;
 
 use naygo_core::workspace::layout::Rect;
@@ -71,6 +77,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use workspace_ctrl::WorkspaceCtrl;
+
+/// Callback compartido que se instala después de construir todos los controladores.
+pub(crate) type DeferredCallback = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
 slint::include_modules!();
 
@@ -121,15 +130,29 @@ fn cli_help_text() -> String {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
-    // diálogo, en vez de cerrarse en silencio (el log queda en naygo.log junto al ejecutable).
-    // Offset del huso local (minutos) ANTES de init(): el nombre del archivo de log lleva la
-    // fecha local del día (naygo-YYYY-MM-DD.log), así que el huso debe estar fijado antes de
-    // resolver la ruta. Si falla, queda en UTC.
+    // Internal readers must dispatch before logging, UI, settings, tray or single-instance.
+    // They only accept bounded stdin IPC, never a file path interpreted as a shell command.
+    if preview::isolated_dispatch() {
+        return Ok(());
+    }
+    // Offset local antes de resolver el nombre diario del log. XDG se resuelve sólo desde
+    // variables de entorno; crear directorios y leer/escribir logs queda en el worker.
     crate::logging::set_tz_offset(win_tz_offset_minutes());
-    // Logging a archivo + panic handler ANTES de todo: una caída se registra y se avisa con un
-    // diálogo, en vez de cerrarse en silencio (el log queda junto al ejecutable).
-    logging::init();
+    let app_dirs = match naygo_core::config::user_dirs::UserDirs::for_current_platform() {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Naygo")
+                .set_description(error.to_string())
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            return Ok(());
+        }
+    };
+    // Logging a archivo + panic handler ANTES de crear la ventana. Linux usa XDG_STATE_HOME;
+    // Windows conserva el directorio portable junto al ejecutable.
+    logging::init(app_dirs.state.clone());
 
     // Render por SOFTWARE forzado en código (no por variable de entorno). Naygo no debe
     // depender de GPU: en VMs/equipos sin GPU el backend acelerado de Slint dejaba la ventana
@@ -153,7 +176,8 @@ fn main() -> Result<(), slint::PlatformError> {
     // Argumentos de línea de comandos: el core ya los parsea (carpeta a abrir, --theme,
     // --layout, --help, --version). `--help`/`--version` muestran un diálogo y NO abren la
     // ventana; el resto se aplica más abajo, una vez construido el controlador.
-    let cli_args = naygo_core::cli::parse_args_real(&std::env::args().skip(1).collect::<Vec<_>>());
+    let cli_args =
+        naygo_core::cli::parse_args_os_real(&std::env::args_os().skip(1).collect::<Vec<_>>());
     if cli_args.help {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Info)
@@ -202,14 +226,18 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let ui = AppWindow::new()?;
+    metrics::init();
     // Título de la ventana limpio: solo "Naygo". El id de build (p. ej. "0.3.0+build.202607021614")
     // se muestra en el Acerca de (vía `set_app_version`) y en el splash de arranque, no en la barra
     // de título ni en la barra de tareas.
     ui.set_window_title("Naygo".into());
-    let start = std::env::var_os("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
-    let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new(start)));
+    // HOME en Linux / USERPROFILE en Windows; UserDirs ya validó HOME absoluto en Linux.
+    let start = naygo_core::config::resolve_home_dir("");
+    let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_for_ui(
+        start,
+        app_dirs.config.clone(),
+        app_dirs.data.clone(),
+    )));
     // Proveedor de metadata de versión de exe/dll (Win32 VerQueryValue). Se registra una
     // sola vez al arrancar, antes de que la UI pueda pedir metadata de un archivo.
     #[cfg(windows)]
@@ -218,7 +246,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // instalador puede crear la entrada Run sin pasar por la UI (o el usuario puede borrarla a
     // mano). Sincronizamos el ajuste guardado contra el registro real al arrancar.
     #[cfg(windows)]
-    {
+    if !ctrl.borrow().startup_loading() {
         let reg_on = naygo_platform::autostart::is_enabled();
         let mut c = ctrl.borrow_mut();
         if c.config.settings.autostart != reg_on {
@@ -283,9 +311,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // previa (primera ejecución), arrancar con la disposición clásica: árbol + dos paneles de
     // archivos + Propiedades + Vista previa, en vez del panel único de arranque. Las sesiones
     // guardadas se respetan (solo se aplica el clásico cuando load_session no restauró nada).
-    if !ctrl.borrow_mut().load_session() {
+    let startup_loading = ctrl.borrow().startup_loading();
+    let session_loaded = !startup_loading && ctrl.borrow_mut().load_session();
+    if startup_loading || !session_loaded {
         ctrl.borrow_mut().apply_first_run_layout();
     }
+    ctrl.borrow_mut().mark_startup_session_baseline();
     // Disponibilidad de terminales opcionales (Windows Terminal / WSL): se consulta una vez al
     // arranque (escanea el PATH) para decidir qué entradas mostrar en el combo de la toolbar.
     ui.set_has_wt(ctrl.borrow().windows_terminal_available());
@@ -316,49 +347,64 @@ fn main() -> Result<(), slint::PlatformError> {
     // ambas ventanas). Todo es para ESTA sesión: --theme/--layout NO persisten ni la carpeta
     // entra como tema/plantilla por defecto. Los problemas (plantilla/tema/ruta inválidos) se
     // juntan en `avisos`; la app abre igual.
-    {
-        let mut avisos: Vec<String> = Vec::new();
-        // 1) --layout: aplica la plantilla por nombre SIN persistir (built-in + usuario).
-        if let Some(name) = cli_args.layout.as_deref() {
-            if !ctrl.borrow_mut().apply_template_ephemeral(name) {
-                avisos.push(format!("La plantilla \"{name}\" no existe; se ignoró."));
+    if ctrl.borrow().startup_loading() {
+        ctrl.borrow_mut().defer_startup_cli_overrides(
+            cli_args.layout.clone(),
+            cli_args.dir.clone(),
+            cli_args
+                .dir_arg_raw
+                .as_deref()
+                .map(naygo_core::cli::display_os_argument),
+            cli_args.theme.clone(),
+        );
+    } else {
+        {
+            let mut avisos: Vec<String> = Vec::new();
+            // 1) --layout: aplica la plantilla por nombre SIN persistir (built-in + usuario).
+            if let Some(name) = cli_args.layout.as_deref() {
+                if !ctrl.borrow_mut().apply_template_ephemeral(name) {
+                    avisos.push(format!("La plantilla \"{name}\" no existe; se ignoró."));
+                }
             }
-        }
-        // 2) carpeta: navega el panel Files activo de la disposición resultante. Manda sobre la
-        // sesión restaurada/clásica (es un pedido explícito del usuario).
-        if let Some(dir) = cli_args.dir.clone() {
-            ctrl.borrow_mut().navigate_active_to(dir);
-        } else if let Some(raw) = cli_args.dir_arg_raw.as_deref() {
-            // 4) carpeta inválida: se pasó algo que no resolvió a una carpeta.
-            avisos.push(format!("La ruta \"{raw}\" no es una carpeta; se ignoró."));
-        }
-        // 3) --theme: aplica el tema por id SOLO en memoria y repinta ambas ventanas.
-        if let Some(id) = cli_args.theme.as_deref() {
-            let aplicado = ctrl
-                .borrow_mut()
-                .config
-                .set_theme_ephemeral(naygo_core::theme::ThemeId::new(id));
-            if aplicado {
-                let c = ctrl.borrow();
-                theme_apply::apply(&ui, c.config.active_theme());
-                theme_apply::apply(&*cfg_win, c.config.active_theme());
-            } else {
+            // 2) carpeta: navega el panel Files activo de la disposición resultante. Manda sobre la
+            // sesión restaurada/clásica (es un pedido explícito del usuario).
+            if let Some(dir) = cli_args.dir.clone() {
+                ctrl.borrow_mut().navigate_active_to(dir);
+            } else if let Some(raw) = cli_args.dir_arg_raw.as_deref() {
+                // 4) carpeta inválida: se pasó algo que no resolvió a una carpeta.
                 avisos.push(format!(
-                    "El tema \"{id}\" no existe; se usó el predeterminado."
+                    "La ruta \"{}\" no es una carpeta; se ignoró.",
+                    naygo_core::cli::display_os_argument(raw)
                 ));
             }
-        }
-        // 5) avisos: al log siempre; un diálogo solo si hubo alguno. La app abre igual.
-        for a in &avisos {
-            crate::logging::log_line(&format!("CLI: {a}"));
-        }
-        if !avisos.is_empty() {
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Warning)
-                .set_title("Naygo — argumentos")
-                .set_description(avisos.join("\n"))
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
+            // 3) --theme: aplica el tema por id SOLO en memoria y repinta ambas ventanas.
+            if let Some(id) = cli_args.theme.as_deref() {
+                let aplicado = ctrl
+                    .borrow_mut()
+                    .config
+                    .set_theme_ephemeral(naygo_core::theme::ThemeId::new(id));
+                if aplicado {
+                    let c = ctrl.borrow();
+                    theme_apply::apply(&ui, c.config.active_theme());
+                    theme_apply::apply(&*cfg_win, c.config.active_theme());
+                } else {
+                    avisos.push(format!(
+                        "El tema \"{id}\" no existe; se usó el predeterminado."
+                    ));
+                }
+            }
+            // 5) avisos: al log siempre; un diálogo solo si hubo alguno. La app abre igual.
+            for a in &avisos {
+                crate::logging::log_line(&format!("CLI: {a}"));
+            }
+            if !avisos.is_empty() {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("Naygo — argumentos")
+                    .set_description(avisos.join("\n"))
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            }
         }
     }
 
@@ -498,6 +544,10 @@ fn main() -> Result<(), slint::PlatformError> {
             });
         })
     };
+    ctrl.borrow_mut().start_startup_load(waker.clone());
+    ctrl.borrow_mut().icons.set_waker(waker.clone());
+    let pack_io = Rc::new(RefCell::new(packs::PackIo::new(waker.clone())));
+    let pack_result: packs::PackOutcomeCallback = Rc::new(RefCell::new(None));
 
     // Instancia única: hilo vigilante del evento "muéstrate" que disparan las instancias
     // secundarias (segundo lanzamiento del exe). Marca el flag y despierta el loop; el tick lo
@@ -527,16 +577,17 @@ fn main() -> Result<(), slint::PlatformError> {
     // Watcher de dispositivos (Fase 5B): detecta USB enchufado/quitado. Vive toda la sesión.
     let devices = Rc::new(devices::Devices::start(waker.clone()));
     // HOME para reubicar paneles cuya unidad desapareció.
-    let home: Rc<std::path::PathBuf> = Rc::new(
-        std::env::var_os("USERPROFILE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("C:/")),
-    );
+    let home: Rc<std::path::PathBuf> = Rc::new(naygo_core::config::resolve_home_dir(""));
 
     // Aplica un cambio de unidades (USB enchufado/quitado): drena el watcher, reubica paneles
     // huérfanos y RECONSTRUYE la tira de discos de la toolbar (construido en `sync.rs`).
-    let apply_device_change =
-        sync::build_apply_device_change(ctrl.clone(), devices.clone(), home.clone(), ui.as_weak());
+    let apply_device_change = sync::build_apply_device_change(
+        ctrl.clone(),
+        devices.clone(),
+        home.clone(),
+        ui.as_weak(),
+        waker.clone(),
+    );
 
     // Drag&drop OLE — RECIBIR (Fase 5D): canal de archivos soltados sobre la ventana. El
     // registro del IDropTarget se hace cuando el HWND ya es válido (y se reintenta si winit/OLE
@@ -595,12 +646,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 waker.clone(),
             )
         };
-        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log: sin este
-        // aviso el fallo era invisible. Ya no afecta al cierre (la X respeta close_to_tray aunque
-        // el tray falle), pero explica por qué no aparece el ícono en la bandeja.
-        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log (sin este aviso
-        // el fallo era invisible). No afecta al cierre (la X respeta close_to_tray aunque el tray
-        // falle), pero explica por qué no aparece el ícono de bandeja.
+        // Si el tray estaba pedido pero no se pudo crear, dejar constancia en el log; el cierre
+        // respetará close_to_tray solo si otra vía real de retorno sigue activa.
         if t.is_none() {
             crate::logging::log_line(
                 "[tray] tray_enabled=true pero la creación del tray falló; sin ícono de bandeja",
@@ -610,13 +657,31 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         None
     });
-    let tray_active = tray.is_some();
+    let tray_active = Rc::new(std::cell::Cell::new(
+        tray.as_ref()
+            .as_ref()
+            .is_some_and(|tray| tray.active_on_start())
+            && ctrl.borrow().config.settings.tray_enabled,
+    ));
 
     // Timer que drena listados de archivos + árbol + preview; se apaga cuando todo está en
     // reposo (0 trabajo). El preview cambia structs del PaneVm → en cada tick sync_rows.
     // El cuerpo del tick vive en `tick.rs` (extraído de aquí por tamaño de archivo).
     let timer = Rc::new(slint::Timer::default());
+    let icon_refresh: DeferredCallback = Rc::new(RefCell::new(None));
+    let startup_refresh: DeferredCallback = Rc::new(RefCell::new(None));
+    let drive_refresh: DeferredCallback = Rc::new(RefCell::new(None));
+    let tray_start_pending = Rc::new(std::cell::Cell::new(
+        cli_args.tray && ctrl.borrow().startup_loading(),
+    ));
+    let close_after_startup = Rc::new(std::cell::Cell::new(false));
+    let deferred_close_action: DeferredCallback = Rc::new(RefCell::new(None));
     let start_timer = tick::build_start_timer(tick::TickDeps {
+        start_animation_timer: preview_animation_tick::build(
+            ctrl.clone(),
+            models.clone(),
+            ui.as_weak(),
+        ),
         ctrl: ctrl.clone(),
         sync_rows: sync_rows.clone(),
         sync_layout: sync_layout.clone(),
@@ -631,7 +696,7 @@ fn main() -> Result<(), slint::PlatformError> {
         drop_guard: drop_guard.clone(),
         drop_registration_attempt: drop_registration_attempt.clone(),
         tray: tray.clone(),
-        tray_active,
+        tray_active: tray_active.clone(),
         hotkey_id: hotkey_id.clone(),
         #[cfg(windows)]
         geometry_restored: geometry_restored.clone(),
@@ -639,7 +704,13 @@ fn main() -> Result<(), slint::PlatformError> {
         geometry_restored: Rc::new(std::cell::Cell::new(false)),
         si_show_requested: si_show_requested.clone(),
         si_shutdown_requested: si_shutdown_requested.clone(),
+        icon_refresh: icon_refresh.clone(),
+        pack_io: pack_io.clone(),
+        pack_result: pack_result.clone(),
+        startup_refresh: startup_refresh.clone(),
+        drive_refresh: drive_refresh.clone(),
     });
+    path_window_events::wire(&ui);
     start_timer();
 
     // `wake`: lo dispara un worker (watcher de carpeta/dispositivos) vía invoke_from_event_loop.
@@ -731,10 +802,158 @@ fn main() -> Result<(), slint::PlatformError> {
     let refresh_toolbar_icons =
         callbacks_refresh::build_refresh_toolbar_icons(ctrl.clone(), ui.as_weak());
     refresh_toolbar_icons();
-    let refresh_drives = callbacks_refresh::build_refresh_drives(ctrl.clone(), ui.as_weak());
+    let render_drives = callbacks_refresh::build_render_drives(ctrl.clone(), ui.as_weak());
+    let refresh_drives =
+        callbacks_refresh::build_refresh_drives(ctrl.clone(), render_drives.clone(), waker.clone());
+    *drive_refresh.borrow_mut() = Some(render_drives.clone());
+    *icon_refresh.borrow_mut() = Some({
+        let sync_rows = sync_rows.clone();
+        let refresh_config_vm = refresh_config_vm.clone();
+        let refresh_toolbar_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        Rc::new(move || {
+            sync_rows();
+            refresh_toolbar_icons();
+            refresh_drives();
+            refresh_config_vm();
+        })
+    });
     refresh_drives();
     let refresh_layouts = callbacks_refresh::build_refresh_layouts(ctrl.clone(), ui.as_weak());
     refresh_layouts();
+    *startup_refresh.borrow_mut() = Some({
+        let ctrl = ctrl.clone();
+        let ui_weak_startup = ui.as_weak();
+        let cfg_win = cfg_win.as_weak();
+        let refresh_config_vm = refresh_config_vm.clone();
+        let refresh_toolbar_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        let refresh_layouts = refresh_layouts.clone();
+        let rearm_hotkey = rearm_hotkey.clone();
+        let tray = tray.clone();
+        let tray_active = tray_active.clone();
+        let tray_start_pending = tray_start_pending.clone();
+        let close_after_startup = close_after_startup.clone();
+        let deferred_close_action = deferred_close_action.clone();
+        let pack_io = pack_io.clone();
+        Rc::new(move || {
+            if let Some(ui) = ui_weak_startup.upgrade() {
+                let c = ctrl.borrow();
+                i18n_keys::apply(&ui, &c.config);
+                theme_apply::apply(&ui, c.config.active_theme());
+                if let Some(cfg_win) = cfg_win.upgrade() {
+                    i18n_keys::apply(&cfg_win, &c.config);
+                    theme_apply::apply(&cfg_win, c.config.active_theme());
+                }
+                let labels = archive_labels_from_config(&c.config);
+                let msgs = preview_msgs_from_config(&c.config);
+                drop(c);
+                let mut c = ctrl.borrow_mut();
+                c.preview.set_archive_labels(labels);
+                c.preview.set_preview_msgs(msgs);
+                #[cfg(windows)]
+                {
+                    let registered = naygo_platform::autostart::is_enabled();
+                    if c.config.settings.autostart != registered {
+                        c.config.settings.autostart = registered;
+                        c.config.save();
+                    }
+                }
+                if let Some(tray) = tray.as_ref() {
+                    let enabled = c.config.settings.tray_enabled;
+                    let visible = tray.set_visible(enabled).is_ok();
+                    if enabled && !visible {
+                        crate::logging::log_line(
+                            "[tray] no se pudo confirmar la visibilidad; el cierre no dependerá del ícono",
+                        );
+                    }
+                    tray_active.set(enabled && visible);
+                    let with_shortcut = |label: String, shortcut: &str| {
+                        if shortcut.is_empty() {
+                            label
+                        } else {
+                            format!("{label}\t{shortcut}")
+                        }
+                    };
+                    let open_shortcut = if c.config.settings.global_hotkey_enabled {
+                        config_ctrl::ConfigCtrl::chord_to_text(&c.config.settings.global_hotkey)
+                    } else {
+                        String::new()
+                    };
+                    let new_pane_shortcut = c
+                        .config
+                        .chord_text_for(naygo_core::keymap::Action::SplitPanel);
+                    let config_shortcut = c
+                        .config
+                        .chord_text_for(naygo_core::keymap::Action::OpenConfig);
+                    tray.set_labels([
+                        with_shortcut(c.config.t("slint.tray.open"), &open_shortcut),
+                        with_shortcut(c.config.t("slint.tray.new_pane"), &new_pane_shortcut),
+                        with_shortcut(c.config.t("slint.tray.config"), &config_shortcut),
+                        c.config.t("slint.tray.center"),
+                        c.config.t("slint.tray.exit"),
+                    ]);
+                } else {
+                    tray_active.set(false);
+                }
+                let catalog_job = packs::PackJob::LoadCatalogs {
+                    config_dir: c.config.config_dir.clone(),
+                    data_dir: c.config.icon_data_dir.clone(),
+                    active_theme: c
+                        .startup_catalog_theme()
+                        .unwrap_or_else(|| c.config.settings.theme.as_str().to_string()),
+                };
+                let show_after_startup = tray_start_pending.replace(false)
+                    && !(c.config.settings.autostart_minimized && tray_active.get());
+                drop(c);
+                if let Err(error) = pack_io.borrow().submit(catalog_job) {
+                    crate::logging::log_line(&format!(
+                        "no se pudo actualizar la carga de catálogos tras el arranque: {error}"
+                    ));
+                }
+                if show_after_startup {
+                    if let Some(ui) = ui_weak_startup.upgrade() {
+                        if let Err(error) = ui.show() {
+                            crate::logging::log_line(&format!(
+                                "no se pudo mostrar la ventana tras cargar la configuración: {error}"
+                            ));
+                        }
+                    }
+                }
+                let startup_warnings = ctrl.borrow_mut().take_startup_warnings();
+                for warning in &startup_warnings {
+                    crate::logging::log_line(&format!("CLI: {warning}"));
+                }
+                if !startup_warnings.is_empty() {
+                    rfd::MessageDialog::new()
+                        .set_level(rfd::MessageLevel::Warning)
+                        .set_title("Naygo — argumentos")
+                        .set_description(startup_warnings.join("\n"))
+                        .set_buttons(rfd::MessageButtons::Ok)
+                        .show();
+                }
+                if let Err(error) = rearm_hotkey() {
+                    crate::logging::log_line(&format!(
+                        "no se pudo aplicar el hotkey inicial: {error}"
+                    ));
+                }
+                refresh_toolbar_icons();
+                refresh_drives();
+                refresh_config_vm();
+                refresh_layouts();
+                if close_after_startup.replace(false) {
+                    if let Some(close) = deferred_close_action.borrow().as_ref() {
+                        close();
+                    }
+                }
+            }
+        }) as Rc<dyn Fn()>
+    });
+    if ctrl.borrow().startup_load_applied() || !ctrl.borrow().startup_loading() {
+        if let Some(refresh) = startup_refresh.borrow().as_ref() {
+            refresh();
+        }
+    }
     // Plantillas de disposición + batch-rename + ayuda.
     callbacks_layouts::wire_layouts(&ui, &wctx, &refresh_layouts);
     // Paleta de comandos (Ctrl+P).
@@ -744,13 +963,32 @@ fn main() -> Result<(), slint::PlatformError> {
         &ui,
         &cfg_win,
         &wctx,
-        &refresh_config_vm,
-        &refresh_toolbar_icons,
-        &refresh_drives,
-        &rearm_hotkey,
+        callbacks_config::ConfigRefreshCallbacks {
+            refresh_config_vm: &refresh_config_vm,
+            refresh_toolbar_icons: &refresh_toolbar_icons,
+            refresh_drives: &refresh_drives,
+            rearm_hotkey: &rearm_hotkey,
+        },
+        &pack_io,
+        &pack_result,
     );
+    // Los catálogos propios pueden estar en una unidad lenta. Se cargan después de registrar
+    // el aplicador; la primera pintura usa temas e íconos embebidos y se hidrata al responder.
+    {
+        let c = ctrl.borrow();
+        let job = packs::PackJob::LoadCatalogs {
+            config_dir: c.config.config_dir.clone(),
+            data_dir: c.config.icon_data_dir.clone(),
+            active_theme: c.config.settings.theme.as_str().to_string(),
+        };
+        if let Err(error) = pack_io.borrow().submit(job) {
+            logging::log_line(&format!(
+                "no se pudo encolar la carga de catálogos: {error}"
+            ));
+        }
+    }
     // Árbol / historial / menús de toolbar / discos / dispatcher del MessageModal.
-    callbacks_history::wire_history(&ui, &wctx, &refresh_drives);
+    callbacks_history::wire_history(&ui, &wctx, &refresh_drives, waker.clone());
     // Path-bar (breadcrumbs + edición con autocompletado) y árbol de favoritos.
     callbacks_pathbar::wire_pathbar(&ui, &wctx);
     // Operaciones de archivo y sus diálogos modales.
@@ -766,18 +1004,25 @@ fn main() -> Result<(), slint::PlatformError> {
     callbacks_points::wire_points(&ui, &wctx);
 
     // Al cerrar la ventana (Fase 5E, arregla la deuda de F4): persistir la sesión y luego SALIR
-    // DE VERDAD (quit_event_loop), salvo que el usuario haya pedido "cerrar a bandeja" y el tray
-    // esté activo, en cuyo caso se oculta a la bandeja y la app sigue viva a propósito.
+    // DE VERDAD (quit_event_loop), salvo que el usuario haya pedido "cerrar a bandeja" y exista
+    // una vía de retorno disponible (bandeja o hotkey global registrado).
     {
-        let ctrl = ctrl.clone();
+        let ctrl_close = ctrl.clone();
+        let ctrl_pending = ctrl.clone();
+        let tray_active = tray_active.clone();
+        let hotkey_id_close = hotkey_id.clone();
         let ui_weak_close = ui.as_weak();
-        ui.window().on_close_requested(move || {
+        let close_action: Rc<dyn Fn()> = Rc::new(move || {
+            ctrl_close
+                .borrow_mut()
+                .preview
+                .set_visible(false, std::time::Instant::now());
             // Capturar y persistir la geometría de la ventana ANTES de save_session/salir. Va en
             // su propio scope para que el borrow_mut() suelte `c` antes de los ctrl.borrow() que
             // siguen.
             #[cfg(windows)]
             {
-                let mut c = ctrl.borrow_mut();
+                let mut c = ctrl_close.borrow_mut();
                 if let Some(ui) = ui_weak_close.upgrade() {
                     if let Some(hwnd) = naygo_hwnd(&ui) {
                         if let Some(p) = naygo_platform::window_geometry::get(hwnd) {
@@ -791,16 +1036,35 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                 }
-                c.config.save();
             }
-            ctrl.borrow().save_session();
-            let close_to_tray = ctrl.borrow().config.settings.close_to_tray;
-            let quit = tray::should_quit_on_close(close_to_tray, tray_active);
+            // La preferencia puede haber cambiado justo antes de cerrar; encolar una última
+            // revisión y tomar snapshot de sesión sin consultar el disco desde este callback.
+            let mut save_tickets = {
+                let c = ctrl_close.borrow();
+                c.config.save();
+                let mut tickets = c.config.persistence_tickets();
+                tickets.extend(c.additional_persistence_tickets());
+                tickets
+            };
+            match ctrl_close.borrow().save_session_async() {
+                Ok(ticket) => save_tickets.push(ticket),
+                Err(error) => crate::logging::log_line(&format!(
+                    "no se pudo encolar la sesión al cerrar: {error}"
+                )),
+            }
+            let close_to_tray = ctrl_close.borrow().config.settings.close_to_tray;
+            let quit = tray::should_quit_on_close(
+                close_to_tray,
+                tray_active.get(),
+                hotkey_id_close.get().is_some(),
+            );
             if quit {
-                // Salir de verdad: terminar el loop y dejar que Slint oculte la ventana.
-                tray::arm_exit_watchdog();
-                let _ = slint::quit_event_loop();
-                slint::CloseRequestResponse::HideWindow
+                // Mantener vivo el event loop mientras el worker completa el último snapshot;
+                // la coordinación solicita quit desde el loop y tiene un plazo total de 3 s.
+                tray::quit_after_persistence(save_tickets);
+                if let Some(ui) = ui_weak_close.upgrade() {
+                    ui.window().set_minimized(true);
+                }
             } else {
                 // Ir a la BANDEJA sin matar la app. CLAVE: NO se puede responder `HideWindow` — al
                 // ocultar la única ventana visible, Slint baja su contador de ventanas a 0 y
@@ -824,8 +1088,21 @@ fn main() -> Result<(), slint::PlatformError> {
                     #[cfg(not(windows))]
                     ui.window().set_minimized(true);
                 }
-                slint::CloseRequestResponse::KeepWindowShown
             }
+        });
+        *deferred_close_action.borrow_mut() = Some(close_action.clone());
+        let close_after_startup = close_after_startup.clone();
+        let ui_weak_pending = ui.as_weak();
+        ui.window().on_close_requested(move || {
+            if ctrl_pending.borrow().startup_loading() {
+                close_after_startup.set(true);
+                if let Some(ui) = ui_weak_pending.upgrade() {
+                    ui.window().set_minimized(true);
+                }
+            } else {
+                close_action();
+            }
+            slint::CloseRequestResponse::KeepWindowShown
         });
     }
 
@@ -861,13 +1138,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // Si NO hay tray activo, `start_in_tray` es false y se muestra normal (sin tray, una ventana
     // oculta sería irrecuperable con el mouse).
     let start_in_tray =
-        cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active;
-    if !start_in_tray {
+        cli_args.tray && ctrl.borrow().config.settings.autostart_minimized && tray_active.get();
+    if !start_in_tray && !tray_start_pending.get() {
         ui.show()?;
-    } else {
+    } else if start_in_tray || tray_start_pending.get() {
         crate::logging::log_line("arranque directo a bandeja: ventana sin mostrar");
     }
-    slint::run_event_loop_until_quit()
+    let result = slint::run_event_loop_until_quit();
+    metrics::shutdown();
+    let _ = logging::flush(std::time::Duration::from_secs(3));
+    result
 }
 
 /// Devuelve el RGB que deben usar los íconos tintables: el color de texto del tema activo,
@@ -881,4 +1161,71 @@ pub(crate) fn theme_text_rgb(
     }
     let t = themes.get(&settings.theme);
     (t.text.r, t.text.g, t.text.b)
+}
+
+#[cfg(test)]
+mod responsive_toolbar_tests {
+    use crate::AppWindow;
+    use slint::platform::{
+        software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+        Platform, WindowAdapter,
+    };
+    use slint::ComponentHandle;
+    use std::rc::Rc;
+
+    struct Headless(Rc<MinimalSoftwareWindow>);
+
+    impl Platform for Headless {
+        fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn resize_and_render(ui: &AppWindow, window: &MinimalSoftwareWindow, width: u32) {
+        window.set_size(slint::PhysicalSize::new(width, 720));
+        slint::platform::update_timers_and_animations();
+        ui.window().request_redraw();
+        let mut pixels = vec![slint::Rgb8Pixel::default(); width as usize * 720];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width as usize);
+        }));
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn responsive_toolbar_breakpoint_tracks_width_and_icon_label_preference() {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let mut settings = ui.get_settings_vm();
+        settings.icon_only = false;
+        ui.set_settings_vm(settings);
+        ui.show().unwrap();
+
+        resize_and_render(&ui, &window, 1600);
+        assert!(
+            !ui.get_toolbar_compact(),
+            "wide labeled toolbar stays expanded at {}px (icon_only={})",
+            ui.window().size().width,
+            ui.get_settings_vm().icon_only
+        );
+        resize_and_render(&ui, &window, 1300);
+        assert!(ui.get_toolbar_compact(), "narrow labeled toolbar uses More");
+
+        let mut settings = ui.get_settings_vm();
+        settings.icon_only = true;
+        ui.set_settings_vm(settings);
+        resize_and_render(&ui, &window, 1100);
+        assert!(
+            !ui.get_toolbar_compact(),
+            "icon-only toolbar uses its smaller breakpoint"
+        );
+        resize_and_render(&ui, &window, 1000);
+        assert!(
+            ui.get_toolbar_compact(),
+            "very narrow icon-only toolbar uses More"
+        );
+
+        ui.hide().unwrap();
+    }
 }

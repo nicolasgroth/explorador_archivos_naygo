@@ -12,6 +12,9 @@ import { Theme } from "theme.slint";
 component MenuRow inherits Rectangle {
     in property <string> label;
     callback clicked();
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 26px;
     background: t.has-hover ? Theme.hover-bg : transparent;
     border-radius: Theme.radius-sm;

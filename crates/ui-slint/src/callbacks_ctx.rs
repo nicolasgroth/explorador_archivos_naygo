@@ -289,13 +289,17 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
     }
     {
         // Elegir una sugerencia completa el último segmento y agrega «\\», listo para seguir
-        // bajando. El `read_dir` puntual ocurre tras un clic, nunca por cada pulsación.
+        // bajando. También al elegir una sugerencia el I/O permanece fuera de la UI.
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
+        let start_timer = start_timer.clone();
         ui.on_search_root_complete(move |buffer, name| {
             let (parent, _) = naygo_core::path_segments::split_edit_buffer(buffer.as_str());
             let completed = format!("{parent}{name}\\");
-            let suggestions = ctrl.borrow().path_autocomplete(&completed);
+            ctrl.borrow_mut()
+                .request_search_path_autocomplete(completed.clone(), std::time::Instant::now());
+            let suggestions: Vec<String> = Vec::new();
+            start_timer();
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_search_root_buffer(completed.clone().into());
                 ui.set_search_root_suggestions(ModelRc::from(Rc::new(VecModel::from(

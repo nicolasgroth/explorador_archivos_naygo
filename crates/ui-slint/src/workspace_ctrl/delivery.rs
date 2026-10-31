@@ -290,10 +290,10 @@ impl WorkspaceCtrl {
             .job
             .sources
             .iter()
-            .map(|p| p.to_string_lossy().replace('/', "\\").to_lowercase())
+            .map(|p| naygo_core::path_identity::key(p))
             .collect();
         for (i, path) in self.basket.items().iter().enumerate() {
-            if keys.contains(&path.to_string_lossy().replace('/', "\\").to_lowercase()) {
+            if keys.contains(&naygo_core::path_identity::key(path)) {
                 self.basket_selection
                     .select(self.basket.items(), i, true, false);
             }

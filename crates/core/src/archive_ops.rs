@@ -88,7 +88,8 @@ pub fn default_zip_name(sources: &[PathBuf]) -> String {
 
 /// Recorre `sources` (archivos y/o carpetas, recursivo) y los empaqueta en `dest_zip`.
 /// Progreso por BYTES. Cancelar → aborta y borra el `.zip` parcial. Un source ilegible se
-/// registra Failed y la op continúa.
+/// registra Failed y la op continúa. Un nombre interno no representable como UTF-8 falla durante
+/// el inventario, antes de crear/truncar el destino; en POSIX, `\\` se conserva como carácter.
 pub fn compress_zip(
     sources: &[PathBuf],
     dest_zip: &Path,
@@ -98,7 +99,7 @@ pub fn compress_zip(
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
     for src in sources {
         let base = src.parent().unwrap_or(Path::new(""));
-        collect_entries(src, base, &mut entries);
+        collect_entries(src, base, &mut entries)?;
     }
     compress_zip_entries(&entries, dest_zip, on_progress, token)
 }
@@ -215,31 +216,49 @@ pub fn compress_zip_entries(
 }
 
 /// Expande `path` a entradas (disk, internal). `base` es la carpeta padre del source de nivel
-/// superior; la ruta interna en el zip es `path` relativa a `base` (con `/` como separador).
-fn collect_entries(path: &Path, base: &Path, out: &mut Vec<(PathBuf, String)>) {
+/// superior; la ruta interna en el zip es `path` relativa a `base`, con `/` entre componentes.
+/// No aplica conversión lossy: ZIP requiere nombres UTF-8 en esta API y cualquier ruta distinta
+/// se rechaza antes de abrir el destino.
+fn collect_entries(
+    path: &Path,
+    base: &Path,
+    out: &mut Vec<(PathBuf, String)>,
+) -> Result<(), ArchiveError> {
     // Ruta interna en el zip = `path` relativa a `base`. Si `strip_prefix` falla (p. ej. un
     // source que es la raíz de un disco "C:\", sin parent → base ""), usamos el nombre del
     // archivo: nunca dejamos una ruta ABSOLUTA dentro del zip (quedaría malformado).
-    let internal = path
-        .strip_prefix(base)
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| {
-            path.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        });
+    let relative = path.strip_prefix(base).unwrap_or_else(|_| {
+        // Fallback para sources que no tienen un padre útil, como la raíz de un volumen.
+        path.file_name().map(Path::new).unwrap_or(Path::new(""))
+    });
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(ArchiveError::Zip(
+                "source path cannot be represented as a relative ZIP entry".into(),
+            ));
+        };
+        let Some(name) = name.to_str() else {
+            return Err(ArchiveError::Zip(
+                "ZIP entry names must be valid UTF-8; output was not created".into(),
+            ));
+        };
+        parts.push(name);
+    }
+    let internal = parts.join("/");
     if path.is_dir() {
         out.push((path.to_path_buf(), internal));
         if let Ok(rd) = std::fs::read_dir(path) {
             let mut children: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
             children.sort();
             for c in children {
-                collect_entries(&c, base, out);
+                collect_entries(&c, base, out)?;
             }
         }
     } else {
         out.push((path.to_path_buf(), internal));
     }
+    Ok(())
 }
 
 /// Extrae `zip` dentro de `dest_dir`. Zip-slip: entradas con `..`/absolutas o que escapen de
@@ -551,6 +570,46 @@ mod tests {
         let f = std::fs::File::open(&zip_path).unwrap();
         let mut z = zip::ZipArchive::new(f).unwrap();
         assert!(z.by_name("hola.txt").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compress_preserva_backslash_literal_en_nombre_posix() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("literal\\nombre.txt");
+        std::fs::write(&src, b"contenido").unwrap();
+        let zip_path = dir.path().join("backslash.zip");
+        let token = CancellationToken::new();
+
+        compress_zip(&[src], &zip_path, &mut noop_progress(), &token).unwrap();
+
+        let f = std::fs::File::open(&zip_path).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        assert!(z.by_name("literal\\nombre.txt").is_ok());
+        assert!(z.by_name("literal/nombre.txt").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compress_rechaza_nombre_no_utf8_antes_de_tocar_el_zip_destino() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b"archivo-\xff.txt".to_vec()));
+        std::fs::write(&src, b"contenido").unwrap();
+        let zip_path = dir.path().join("existente.zip");
+        std::fs::write(&zip_path, b"zip original").unwrap();
+        let token = CancellationToken::new();
+
+        let result = compress_zip(&[src], &zip_path, &mut noop_progress(), &token);
+
+        assert!(matches!(
+            result,
+            Err(ArchiveError::Zip(message)) if message.contains("UTF-8")
+        ));
+        assert_eq!(std::fs::read(zip_path).unwrap(), b"zip original");
     }
 
     #[test]

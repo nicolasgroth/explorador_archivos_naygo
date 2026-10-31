@@ -62,6 +62,9 @@ pub fn cell_value(
     use naygo_core::columns::ColumnKind::*;
     match kind {
         Name => e.name.clone(),
+        // La etiqueta localizada "Carpeta" se agrega en Slint según `is_dir`; su celda
+        // subyacente no debe reutilizar el sufijo del nombre como si fuera una extensión.
+        Extension if e.is_dir() => String::new(),
         Extension => e
             .path
             .extension()
@@ -99,16 +102,46 @@ pub fn rows_from_view(
     tz_offset_secs: i64,
     filter_needle: Option<&str>,
 ) -> Vec<PlainRow> {
+    let len = f.view_indices_shared().len();
+    rows_from_view_positions(
+        f,
+        0..len,
+        is_cut,
+        is_fresh,
+        icon_of,
+        size_format,
+        date_format,
+        tz_offset_secs,
+        filter_needle,
+    )
+}
+
+/// Construye solo posiciones seleccionadas de la vista actual, manteniendo exactamente la misma
+/// semántica que `rows_from_view`. Se usa para refrescar filas cuyo contenido cambió cuando el
+/// contexto global de presentación y el orden de la vista permanecen estables.
+#[allow(clippy::too_many_arguments)]
+pub fn rows_from_view_positions(
+    f: &FilePaneState,
+    positions: impl IntoIterator<Item = usize>,
+    is_cut: &dyn Fn(&std::path::Path) -> bool,
+    is_fresh: &dyn Fn(&std::path::Path) -> bool,
+    icon_of: &mut dyn FnMut(&naygo_core::fs_model::Entry) -> slint::Image,
+    size_format: naygo_core::format::SizeFormat,
+    date_format: naygo_core::format::DateFormat,
+    tz_offset_secs: i64,
+    filter_needle: Option<&str>,
+) -> Vec<PlainRow> {
     // Columnas visibles en orden (incluida Name): paralelas a `columns_info`. Común a las filas.
     let cell_kinds: Vec<naygo_core::columns::ColumnKind> =
         f.table.visible_columns().map(|c| c.kind).collect();
     // Conjunto de posiciones seleccionadas: O(1) por fila en vez de `Vec::contains` O(n). Sin
     // esto, "Seleccionar todo" en una carpeta grande hacía la construcción de filas cuadrática.
     let selected: std::collections::HashSet<usize> = f.selected.iter().copied().collect();
-    let view = f.view_indices();
-    view.iter()
-        .enumerate()
-        .filter_map(|(pos, &real)| {
+    let view = f.view_indices_shared();
+    positions
+        .into_iter()
+        .filter_map(|pos| {
+            let real = *view.get(pos)?;
             let e = f.entries.get(real)?;
             let cells = cell_kinds
                 .iter()
@@ -758,6 +791,21 @@ mod tests {
     }
 
     #[test]
+    fn extension_cell_does_not_treat_dotted_folder_as_file_type() {
+        let folder = mk("1.The Buddha", true, None);
+        assert_eq!(
+            cell_value(
+                &folder,
+                naygo_core::columns::ColumnKind::Extension,
+                naygo_core::format::SizeFormat::Auto,
+                naygo_core::format::DateFormat::IsoMinute,
+                0,
+            ),
+            ""
+        );
+    }
+
+    #[test]
     fn rows_reflejan_vista_seleccion_y_foco() {
         let mut f = FilePaneState::new(PathBuf::from("C:/x"));
         f.entries = vec![mk("a.txt", false, Some(1024)), mk("dir", true, None)];
@@ -782,6 +830,45 @@ mod tests {
         assert_eq!(rows.iter().filter(|r| r.selected).count(), 1);
         assert_eq!(rows.iter().filter(|r| r.focused).count(), 1);
         assert!(rows.iter().all(|r| !r.cut), "sin corte por defecto");
+    }
+
+    #[test]
+    fn filas_por_posicion_conservan_semantica_de_seleccion_y_celdas() {
+        let mut f = FilePaneState::new(PathBuf::from("C:/x"));
+        f.entries = vec![
+            mk("a.txt", false, Some(1)),
+            mk("b.txt", false, Some(2)),
+            mk("c.txt", false, Some(3)),
+        ];
+        f.select_single(1);
+        let full = rows_from_view(
+            &f,
+            &|path| path.ends_with("b.txt"),
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            None,
+        );
+        let selected = rows_from_view_positions(
+            &f,
+            [1],
+            &|path| path.ends_with("b.txt"),
+            &|_| false,
+            &mut |_| slint::Image::default(),
+            naygo_core::format::SizeFormat::Auto,
+            naygo_core::format::DateFormat::IsoMinute,
+            0,
+            None,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, full[1].name);
+        assert_eq!(selected[0].cells, full[1].cells);
+        assert_eq!(selected[0].selected, full[1].selected);
+        assert_eq!(selected[0].focused, full[1].focused);
+        assert_eq!(selected[0].cut, full[1].cut);
     }
 
     #[test]
@@ -954,6 +1041,7 @@ mod tests {
             .any(|r| r.name == "uno" && !r.is_group && r.depth == 0));
         let grp = rows.iter().find(|r| r.name == "Trabajo").unwrap();
         assert!(grp.is_group && grp.has_children && !grp.expanded);
+        assert!(grp.path_hint.is_empty(), "los grupos no muestran ruta");
         assert_eq!(grp.group_id, "1"); // segundo nodo raíz
 
         // Grupo EXPANDIDO: la hoja interna aparece con sangría (depth 1).
@@ -963,6 +1051,10 @@ mod tests {
         let dos = rows.iter().find(|r| r.name == "dos").unwrap();
         assert_eq!(dos.depth, 1);
         assert!(!dos.is_group);
+        assert!(
+            !dos.path_hint.is_empty(),
+            "el favorito expone su ruta abreviada"
+        );
     }
 
     #[test]

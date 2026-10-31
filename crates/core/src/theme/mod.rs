@@ -5,14 +5,16 @@
 //! Un `Theme` es una paleta de colores con nombre + base claro/oscuro. Los temas se
 //! cargan de JSON embebidos y de archivos sueltos (patrón i18n), son tolerantes a
 //! campos faltantes, y se aplican en caliente. Puro y testeable; la traducción a
-//! `egui::Visuals` vive en la capa `ui`.
+//! Slint vive en `ui-slint/src/theme_apply.rs`.
 
 pub mod pack;
+#[cfg(test)]
+mod rp3_tests;
 
 use serde::{Deserialize, Serialize};
 
 /// Base visual de la que se derivan los neutros (la capa ui parte de
-/// `Visuals::light()`/`dark()` según esto).
+/// los tokens de superficies de Slint según esto).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeBase {
@@ -36,7 +38,7 @@ impl ThemeColor {
     /// Parsea "#rrggbb" o "rrggbb" (case-insensitive). `None` si es inválido.
     pub fn from_hex(s: &str) -> Option<ThemeColor> {
         let h = s.strip_prefix('#').unwrap_or(s);
-        if h.len() != 6 {
+        if h.len() != 6 || !h.is_ascii() {
             return None;
         }
         let r = u8::from_str_radix(&h[0..2], 16).ok()?;
@@ -107,6 +109,9 @@ pub struct Theme {
     pub error: ThemeColor,
     /// Color de resaltado para archivos recién aparecidos (vigilancia de carpeta).
     pub highlight: ThemeColor,
+    /// Énfasis de íconos/texto, independiente del fondo de novedades. Temas antiguos
+    /// heredan `highlight` para conservar su aspecto; las paletas nuevas lo explicitan.
+    pub icon_accent: ThemeColor,
     pub border: ThemeColor,
     /// Cuando es `true`, las filas de un panel NO activo se pintan TODAS del mismo color (sin la
     /// alternancia cebra), de modo que el panel inactivo se ve "plano". Por defecto `false`.
@@ -118,7 +123,7 @@ pub struct Theme {
 impl Serialize for Theme {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Theme", 19)?;
+        let mut st = s.serialize_struct("Theme", 20)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("base", &self.base)?;
         st.serialize_field("accent", &self.accent)?;
@@ -135,6 +140,7 @@ impl Serialize for Theme {
         st.serialize_field("active_bar", &self.active_bar)?;
         st.serialize_field("error", &self.error)?;
         st.serialize_field("highlight", &self.highlight)?;
+        st.serialize_field("icon_accent", &self.icon_accent)?;
         st.serialize_field("border", &self.border)?;
         st.serialize_field("flat_inactive_panels", &self.flat_inactive_panels)?;
         st.serialize_field("use_inactive_row_color", &self.use_inactive_row_color)?;
@@ -161,6 +167,7 @@ struct ThemeRaw {
     active_bar: Option<ThemeColor>,
     error: Option<ThemeColor>,
     highlight: Option<ThemeColor>,
+    icon_accent: Option<ThemeColor>,
     border: Option<ThemeColor>,
     flat_inactive_panels: Option<bool>,
     use_inactive_row_color: Option<bool>,
@@ -193,6 +200,9 @@ impl<'de> Deserialize<'de> for Theme {
             active_bar: raw.active_bar.unwrap_or(def.active_bar),
             error: raw.error.unwrap_or(def.error),
             highlight: raw.highlight.unwrap_or(def.highlight),
+            icon_accent: raw
+                .icon_accent
+                .unwrap_or(raw.highlight.unwrap_or(def.highlight)),
             border: raw.border.unwrap_or(def.border),
             // Default false: comportamiento actual (cebra en todos los paneles).
             flat_inactive_panels: raw.flat_inactive_panels.unwrap_or(false),
@@ -230,6 +240,7 @@ impl Theme {
                 active_bar: c(0x2f, 0x81, 0xf7),
                 error: c(0xe0, 0x6c, 0x5b),
                 highlight: c(0x2e, 0x7d, 0x32),
+                icon_accent: c(0x2e, 0x7d, 0x32),
                 border: c(0x3a, 0x3a, 0x3a),
                 flat_inactive_panels: false,
                 use_inactive_row_color: true,
@@ -257,6 +268,7 @@ impl Theme {
                 active_bar: c(0x17, 0x69, 0xe0),
                 error: c(0xc0, 0x39, 0x2b),
                 highlight: c(0xc8, 0xe6, 0xc9),
+                icon_accent: c(0xc8, 0xe6, 0xc9),
                 border: c(0xdd, 0xdd, 0xdd),
                 flat_inactive_panels: false,
                 use_inactive_row_color: true,
@@ -265,7 +277,7 @@ impl Theme {
     }
 }
 
-/// Los ids de los 9 temas de fábrica (embebidos), que NO se editan/borran (solo se duplican).
+/// IDs de fábrica (embebidos), que NO se editan/borran (solo se duplican).
 pub const BUILTIN_THEME_IDS: &[&str] = &[
     "dark-blue",
     "commander",
@@ -276,6 +288,12 @@ pub const BUILTIN_THEME_IDS: &[&str] = &[
     "green-on-blue",
     "high-contrast",
     "neon-retro",
+    "isgroth-nieve",
+    "isgroth-perla",
+    "isgroth-arena",
+    "isgroth-salvia",
+    "isgroth-bruma",
+    "isgroth-grafito-claro",
 ];
 
 /// ¿Es un tema de fábrica? (no editable/borrable).
@@ -330,22 +348,8 @@ impl ThemeCatalog {
     /// Carga embebidos + sueltos de `<dir>/themes/*.json`. `active` se acepta por
     /// simetría con i18n (el llamador resuelve con `get`).
     pub fn load(dir: &Path, _active: &ThemeId) -> ThemeCatalog {
-        let mut themes: HashMap<String, Theme> = HashMap::new();
-        for (id, json) in [
-            ("dark-blue", DARK_BLUE_JSON),
-            ("commander", COMMANDER_JSON),
-            ("solarized-dark", SOLARIZED_DARK_JSON),
-            ("paper", PAPER_JSON),
-            ("dracula", DRACULA_JSON),
-            ("winxp", WINXP_JSON),
-            ("green-on-blue", GREEN_ON_BLUE_JSON),
-            ("high-contrast", HIGH_CONTRAST_JSON),
-            ("neon-retro", NEON_RETRO_JSON),
-        ] {
-            if let Some(t) = Theme::from_json(json) {
-                themes.insert(id.to_string(), t);
-            }
-        }
+        let mut catalog = Self::embedded();
+        let themes = &mut catalog.themes;
         let theme_dir = dir.join("themes");
         if let Ok(entries) = std::fs::read_dir(&theme_dir) {
             for entry in entries.flatten() {
@@ -361,9 +365,48 @@ impl ThemeCatalog {
                 }
             }
         }
+        catalog.rebuild_available();
+        catalog
+    }
+
+    /// Construye solo los temas embebidos; no consulta el filesystem.
+    pub fn embedded() -> ThemeCatalog {
+        let mut themes: HashMap<String, Theme> = HashMap::new();
+        for (id, json) in [
+            ("dark-blue", DARK_BLUE_JSON),
+            ("commander", COMMANDER_JSON),
+            ("solarized-dark", SOLARIZED_DARK_JSON),
+            ("paper", PAPER_JSON),
+            ("dracula", DRACULA_JSON),
+            ("winxp", WINXP_JSON),
+            ("green-on-blue", GREEN_ON_BLUE_JSON),
+            ("high-contrast", HIGH_CONTRAST_JSON),
+            ("neon-retro", NEON_RETRO_JSON),
+            ("isgroth-nieve", include_str!("builtin/isgroth-nieve.json")),
+            ("isgroth-perla", include_str!("builtin/isgroth-perla.json")),
+            ("isgroth-arena", include_str!("builtin/isgroth-arena.json")),
+            (
+                "isgroth-salvia",
+                include_str!("builtin/isgroth-salvia.json"),
+            ),
+            ("isgroth-bruma", include_str!("builtin/isgroth-bruma.json")),
+            (
+                "isgroth-grafito-claro",
+                include_str!("builtin/isgroth-grafito-claro.json"),
+            ),
+        ] {
+            if let Some(t) = Theme::from_json(json) {
+                themes.insert(id.to_string(), t);
+            }
+        }
         let mut available: Vec<ThemeId> = themes.keys().map(|k| ThemeId::new(k)).collect();
         available.sort_by(|a, b| a.0.cmp(&b.0));
         ThemeCatalog { themes, available }
+    }
+
+    fn rebuild_available(&mut self) {
+        self.available = self.themes.keys().map(|k| ThemeId::new(k)).collect();
+        self.available.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
     /// Ids disponibles (ordenados).
@@ -475,6 +518,7 @@ mod tests {
             active_bar: ThemeColor::new(22, 23, 24),
             error: ThemeColor::new(25, 26, 27),
             highlight: ThemeColor::new(31, 32, 33),
+            icon_accent: ThemeColor::new(20, 30, 40),
             border: ThemeColor::new(28, 29, 30),
             flat_inactive_panels: true,
             use_inactive_row_color: true,
@@ -568,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_tiene_los_cinco_embebidos() {
+    fn catalog_contains_all_fifteen_factory_themes() {
         let cat = ThemeCatalog::load(
             std::path::Path::new("Z:/no/existe"),
             &ThemeCatalog::default_id(),
@@ -587,7 +631,7 @@ mod tests {
         ] {
             assert!(ids.contains(&id), "falta el tema embebido {id}");
         }
-        assert_eq!(ids.len(), 9, "el catálogo de fábrica debe tener 9 temas");
+        assert_eq!(ids.len(), 15, "el catálogo de fábrica debe tener 15 temas");
     }
 
     #[test]

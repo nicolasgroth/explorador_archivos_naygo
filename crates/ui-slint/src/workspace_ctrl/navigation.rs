@@ -5,6 +5,11 @@
 use super::*;
 
 impl WorkspaceCtrl {
+    /// Resuelve Home desde la preferencia del usuario y el entorno de la plataforma.
+    pub(super) fn configured_home_dir(&self) -> PathBuf {
+        naygo_core::config::resolve_home_dir(&self.config.settings.home_dir)
+    }
+
     // --- Gestos sobre el panel ACTIVO (reusan la logica de F1) ---
 
     /// Clic en una fila. Selecciona (respetando Ctrl/Shift) y DETECTA el doble-clic en Rust:
@@ -23,6 +28,11 @@ impl WorkspaceCtrl {
         shift: bool,
         now: std::time::Instant,
     ) -> bool {
+        // El PointerEvent tiene el estado actual de las teclas. Sincronizarlo antes de resolver
+        // un doble clic evita que Ctrl pegado tras un modal convierta un clic normal en
+        // "abrir en otro panel". También permite que Ctrl+doble clic siga funcionando.
+        self.ctrl_down = ctrl;
+        self.shift_down = shift;
         // Ventana amplia (700 ms): bajo render por software en una VM, el segundo `clicked`
         // puede llegar al hilo de UI con latencia; un umbral chico se pierde el doble-clic.
         const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(700);
@@ -79,14 +89,25 @@ impl WorkspaceCtrl {
 
     /// Doble clic NATIVO de Slint (camino primario, cronometrado por el SO). Si el detector
     /// por tiempo de Rust no se adelantó en este mismo gesto, navega y estampa.
-    pub fn on_row_double_clicked_native(&mut self, id: PaneId, pos: usize) -> bool {
+    pub fn on_row_double_clicked_native(
+        &mut self,
+        id: PaneId,
+        pos: usize,
+        ctrl: bool,
+        shift: bool,
+    ) -> bool {
+        // Este callback nativo llega después del mouse-up y no entrega el PointerEvent. La UI
+        // conserva sus modificadores para el gesto y los pasa explícitamente; no confiar en
+        // `ctrl_down`/`shift_down`, que pueden quedar obsoletos si un modal perdió key-release.
+        self.ctrl_down = ctrl;
+        self.shift_down = shift;
         let now = std::time::Instant::now();
         if self.opened_recently(now) {
             return false; // ya navegó el detector por tiempo en este gesto
         }
         self.last_open = Some(now);
         self.last_click = None;
-        self.on_row_double_clicked_with_shift(id, pos, self.shift_down)
+        self.on_row_double_clicked_with_shift(id, pos, shift)
     }
 
     /// Doble clic en el panel `id`, posición `pos`. Navega (y arranca listado) o abre. Con
@@ -281,7 +302,7 @@ impl WorkspaceCtrl {
     /// Navega el panel Files activo a la carpeta Home configurada (vacío = perfil del usuario).
     /// Registra en el historial igual que cualquier navegación normal. Devuelve true si navegó.
     pub fn on_go_home(&mut self) -> bool {
-        let home = naygo_core::config::resolve_home_dir(&self.config.settings.home_dir);
+        let home = self.configured_home_dir();
         crate::logging::breadcrumb(&format!("home → {}", home.display()));
         self.navigate_active_to(home)
     }

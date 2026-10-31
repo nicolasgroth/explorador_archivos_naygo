@@ -338,6 +338,7 @@ mod windows_impl {
 mod tests {
     use super::*;
     use std::sync::mpsc::channel;
+    #[cfg(windows)]
     use std::time::Duration;
 
     /// Smoke de ciclo de vida: arrancar el watcher, dejarlo correr un instante y

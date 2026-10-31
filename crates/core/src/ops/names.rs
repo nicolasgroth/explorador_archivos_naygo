@@ -5,13 +5,16 @@
 //! Funciones puras sobre nombres: validar caracteres prohibidos en Windows y generar
 //! el siguiente nombre libre ante un conflicto (`archivo (2).ext`).
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Caracteres prohibidos en nombres de archivo de Windows.
+#[cfg(windows)]
 const FORBIDDEN: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 
 /// `true` si `name` es un nombre de archivo/carpeta válido (no vacío, sin caracteres
 /// prohibidos en Windows, sin ser solo espacios/puntos).
+#[cfg(windows)]
 pub fn is_valid_name(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -31,18 +34,31 @@ pub fn is_valid_name(name: &str) -> bool {
         .any(|c| FORBIDDEN.contains(&c) || (c as u32) < 0x20)
 }
 
-/// Separa una ruta relativa en sus componentes, aceptando `\` y `/` como divisores.
+/// En POSIX sólo la barra y NUL están prohibidos en el nombre. Espacios, puntos finales,
+/// barras invertidas, comillas y controles distintos de NUL son válidos.
+#[cfg(not(windows))]
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.chars().any(|c| c == '/' || c == '\0')
+}
+
+/// Separa una ruta relativa por ambos separadores de Windows.
 /// No interpreta unidades ni rutas absolutas: cada trozo se valida después.
+#[cfg(windows)]
 fn split_relative(rel: &str) -> Vec<&str> {
     rel.split(['\\', '/']).collect()
 }
 
+/// En POSIX la barra invertida es parte del nombre y nunca divide una ruta.
+#[cfg(not(windows))]
+fn split_relative(rel: &str) -> Vec<&str> {
+    rel.split('/').collect()
+}
+
 /// `true` si `rel` es una ruta RELATIVA segura para crear una jerarquía dentro de un
-/// directorio destino (p. ej. `a\b\c` o `a/b/c`). Reglas:
-/// - Cada componente (separado por `\` o `/`) debe pasar [`is_valid_name`].
+/// directorio destino (p. ej. `a/b/c`, o `a\b\c` en Windows). Reglas:
+/// - Cada componente, separado por la sintaxis nativa de ruta, debe pasar [`is_valid_name`].
 /// - Ningún componente puede ser `.` ni `..` (no se permite escapar del destino).
-/// - Ningún componente puede ser vacío (rechaza `a\\b`, rutas que empiezan o terminan
-///   en separador, y por tanto rutas absolutas tipo `\abs`).
+/// - Ningún componente puede ser vacío (rechaza separadores dobles y rutas absolutas).
 ///
 /// Es la validación por-componente que usa el plan de `CreateDir`/`CreateFile`, en vez de
 /// rechazar el string completo con [`is_valid_name`] (que prohíbe los separadores a propósito).
@@ -58,8 +74,7 @@ pub fn is_valid_relative_path(rel: &str) -> bool {
 }
 
 /// Descompone `rel` en sus componentes validados como ruta relativa segura. Devuelve `None`
-/// si la ruta no es válida (ver [`is_valid_relative_path`]). Los componentes se recortan de
-/// espacios igual que [`is_valid_name`] los acepta, pero NO se altera su contenido.
+/// si la ruta no es válida (ver [`is_valid_relative_path`]). No altera el contenido de nombres.
 pub fn relative_components(rel: &str) -> Option<Vec<String>> {
     if !is_valid_relative_path(rel) {
         return None;
@@ -78,21 +93,18 @@ pub fn dedup_name(candidate: &Path, exists: &dyn Fn(&Path) -> bool) -> PathBuf {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    let stem = candidate
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-    let ext = candidate
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string());
+    // Componer con OsStr conserva bytes Unix no UTF-8 y nombres Windows almacenados como UTF-16.
+    let file_name = candidate.file_name().unwrap_or_else(|| OsStr::new(""));
+    let stem = candidate.file_stem().unwrap_or(file_name);
+    let ext = candidate.extension();
     let mut n = 2u32;
     loop {
-        let name = match &ext {
-            Some(e) => format!("{stem} ({n}).{e}"),
-            None => format!("{stem} ({n})"),
-        };
+        let mut name = OsString::from(stem);
+        name.push(format!(" ({n})"));
+        if let Some(ext) = ext {
+            name.push(".");
+            name.push(ext);
+        }
         let cand = dir.join(name);
         if !exists(&cand) {
             return cand;
@@ -114,6 +126,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn nombre_invalido_caracteres_prohibidos() {
         for bad in [
             "a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b",
@@ -124,6 +137,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn nombre_invalido_espacio_o_punto_final() {
         // Windows recorta el espacio/punto final → el nombre real diferiría del mostrado.
         assert!(!is_valid_name("informe "), "espacio final inválido");
@@ -138,6 +152,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn ruta_relativa_valida_acepta_anidadas() {
         // Una sola componente, y anidadas con ambos separadores.
         assert!(is_valid_relative_path("uno"));
@@ -148,6 +163,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn ruta_relativa_rechaza_traversal_y_absoluta() {
         // `.` y `..` en cualquier posición no se permiten (no escapar del destino).
         assert!(!is_valid_relative_path("a\\..\\b"), ".. prohibido");
@@ -159,6 +175,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn ruta_relativa_rechaza_componente_vacio_y_chars() {
         // Doble separador → componente vacío.
         assert!(!is_valid_relative_path("a\\\\b"), "doble sep prohibido");
@@ -178,6 +195,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn relative_components_descompone_y_rechaza() {
         assert_eq!(
             relative_components("a\\b\\c"),
@@ -228,5 +246,44 @@ mod tests {
         let exists = |p: &std::path::Path| taken.contains(p);
         let out = dedup_name(&PathBuf::from("C:/x/LEEME"), &exists);
         assert_eq!(out, PathBuf::from("C:/x/LEEME (2)"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn posix_permite_caracteres_validos_y_rechaza_separadores_especiales() {
+        for name in [
+            "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", " ", "a.",
+        ] {
+            assert!(is_valid_name(name), "POSIX permite {name:?}");
+        }
+        for name in ["", ".", "..", "a/b", "a\0b"] {
+            assert!(!is_valid_name(name), "POSIX debe rechazar {name:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn posix_ruta_relativa_conserva_backslash_como_parte_del_nombre() {
+        assert_eq!(
+            relative_components("a\\b/c"),
+            Some(vec!["a\\b".to_string(), "c".to_string()])
+        );
+        assert!(is_valid_relative_path("solo\\nombre"));
+        assert!(!is_valid_relative_path("a/../b"));
+        assert!(!is_valid_relative_path("a//b"));
+        assert!(!is_valid_relative_path("/abs"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dedup_preserva_bytes_no_utf8_del_nombre() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let candidate = PathBuf::from(OsString::from_vec(vec![b'a', 0xff, b'.', b't', b'x', b't']));
+        let out = dedup_name(&candidate, &|path| path == candidate);
+        assert_eq!(
+            out.file_name().unwrap().as_bytes(),
+            &[b'a', 0xff, b' ', b'(', b'2', b')', b'.', b't', b'x', b't']
+        );
     }
 }

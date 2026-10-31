@@ -18,6 +18,13 @@ export component NewFolder inherits Rectangle {
     callback close();
 
     visible: root.vm.active;
+    // TextEdit rompe el binding al editar: restaurar explícitamente al abrir/cerrar.
+    private property <bool> active: root.vm.active;
+    changed active => {
+        editor.text = root.vm.text;
+        root.enter-armed = false;
+        if (root.active) { editor.focus(); }
+    }
     // El primer Enter conserva el salto de línea del editor. Durante una ventana breve, un
     // segundo Enter confirma la creación; el temporizador desarma la espera sin I/O ni timers
     // del backend.
@@ -72,6 +79,7 @@ export component NewFolder inherits Rectangle {
                 editor := TextEdit {
                     width: 100%;
                     height: 100%;
+                    accessible-label: Tr.newfolder-title;
                     text: root.vm.text;
                     wrap: no-wrap;
                     edited(t) => { root.set-text(t); }

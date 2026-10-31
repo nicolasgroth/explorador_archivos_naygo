@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use naygo_core::CancellationToken;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,11 @@ pub struct AutocompleteState {
     requested: Option<(String, Instant)>,
     /// Buffer para el que YA se lanzó worker (no relanzar por la misma petición).
     launched: Option<String>,
+    revision: u64,
+    launched_revision: u64,
+    source: Option<String>,
+    began: Option<Instant>,
+    cancel: Option<CancellationToken>,
     /// Worker en vuelo (envía una vez y termina): (buffer, sugerencias).
     rx: Option<Receiver<(String, Vec<String>)>>,
 }
@@ -34,6 +40,11 @@ impl AutocompleteState {
     /// Registra el buffer tecleado y reinicia el debounce. NO lanza nada (eso es
     /// trabajo de `drive`, llamado por el tick de la UI).
     pub fn request(&mut self, buffer: String, now: Instant) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.source = Some(buffer.clone());
         self.requested = Some((buffer, now));
     }
 
@@ -42,9 +53,21 @@ impl AutocompleteState {
     /// sin vencer o worker en vuelo) para que el timer de la UI siga vivo.
     pub fn drive(&mut self, now: Instant) -> bool {
         let Some((buffer, since)) = &self.requested else {
-            return self.rx.is_some();
+            return false;
         };
-        if self.launched.as_deref() == Some(buffer.as_str()) {
+        if self.rx.is_some()
+            && self
+                .began
+                .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(5))
+        {
+            if let Some(cancel) = &self.cancel {
+                cancel.cancel();
+            }
+            return false; // Timeout lógico; conservar receptor impide abandonar/crear hilos ilimitados.
+        }
+        if self.launched.as_deref() == Some(buffer.as_str())
+            && self.launched_revision == self.revision
+        {
             // Ya se lanzó para este buffer: solo resta esperar/drenar el resultado.
             return self.rx.is_some();
         }
@@ -59,13 +82,22 @@ impl AutocompleteState {
         let buffer = buffer.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker_buffer = buffer.clone();
-        std::thread::spawn(move || {
-            let sugg = complete_path(&worker_buffer);
-            let _ = tx.send((worker_buffer, sugg));
-        });
+        let source = self.source.clone().unwrap_or_else(|| buffer.clone());
+        let cancel = CancellationToken::new();
+        let worker_cancel = cancel.clone();
+        let spawned = std::thread::Builder::new()
+            .name("path-autocomplete".into())
+            .spawn(move || {
+                let sugg = complete_path_with_cancel(&source, &worker_cancel);
+                let _ = tx.send((worker_buffer, sugg));
+            })
+            .is_ok();
         self.launched = Some(buffer);
-        self.rx = Some(rx);
-        true
+        self.launched_revision = self.revision;
+        self.began = Some(now);
+        self.rx = spawned.then_some(rx);
+        self.cancel = spawned.then_some(cancel);
+        spawned
     }
 
     /// Drena el worker (sin bloquear). Si el resultado corresponde al ÚLTIMO buffer
@@ -76,7 +108,12 @@ impl AutocompleteState {
         match rx.try_recv() {
             Ok((buffer, sugg)) => {
                 self.rx = None;
-                if self.requested.as_ref().map(|(b, _)| b) == Some(&buffer) {
+                if self.launched_revision == self.revision
+                    && self
+                        .began
+                        .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+                    && self.requested.as_ref().map(|(b, _)| b) == Some(&buffer)
+                {
                     Some((buffer, sugg))
                 } else {
                     None
@@ -91,19 +128,37 @@ impl AutocompleteState {
     }
 
     /// Cancela todo: al cerrar el editor (Enter/Esc) nada de lo pendiente aplica.
-    /// El worker en vuelo (si lo hay) termina solo; su envío cae en canal cerrado.
+    /// El receptor sigue retenido hasta drenar: cancelar y reabrir no crea workers ilimitados.
     pub fn cancel(&mut self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
         self.requested = None;
         self.launched = None;
-        self.rx = None;
+        self.source = None;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
-/// Lógica PURA de completado, compartida por el path síncrono (`path_autocomplete`)
+impl Drop for AutocompleteState {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Lectura de completado (I/O), compartida por el helper de tests (`path_autocomplete`)
 /// y el worker async (`AutocompleteState::drive`): dado el `buffer` tecleado, lista
 /// las subcarpetas de la carpeta padre que matchean el último segmento
 /// (case-insensitive). Lista superficial, acotada a 50.
+#[cfg(test)]
 fn complete_path(buffer: &str) -> Vec<String> {
+    complete_path_with_cancel(buffer, &CancellationToken::new())
+}
+
+fn complete_path_with_cancel(buffer: &str, cancel: &CancellationToken) -> Vec<String> {
+    if cancel.is_cancelled() {
+        return Vec::new();
+    }
     let (parent, prefix) = naygo_core::path_segments::split_edit_buffer(buffer);
     if parent.is_empty() {
         return Vec::new();
@@ -111,6 +166,9 @@ fn complete_path(buffer: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&parent) {
         for entry in rd.flatten() {
+            if cancel.is_cancelled() {
+                return Vec::new();
+            }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 names.push(entry.file_name().to_string_lossy().into_owned());
                 if names.len() >= 200 {
@@ -149,13 +207,8 @@ impl WorkspaceCtrl {
             .collect()
     }
 
-    /// Autocompletado del editor de ruta: dado el `buffer` tecleado, lista las subcarpetas de la
-    /// carpeta padre que matchean el último segmento (case-insensitive). Lista superficial,
-    /// acotada a 50, en el hilo de UI (un read_dir somero es barato).
-    ///
-    /// Versión SÍNCRONA, solo para llamados puntuales (abrir el editor, clic en sugerencia):
-    /// la vía por-tecla es ASYNC (`request_path_autocomplete` + tick), para no bloquear la UI
-    /// contra un share de red caído. Ambas comparten `complete_path`.
+    /// Helper síncrono sólo para pruebas. La UI debe solicitar un worker en todas las vías.
+    #[cfg(test)]
     pub fn path_autocomplete(&self, buffer: &str) -> Vec<String> {
         complete_path(buffer)
     }
@@ -165,6 +218,12 @@ impl WorkspaceCtrl {
     /// resultado con `poll_autocomplete`.
     pub fn request_path_autocomplete(&mut self, buffer: String, now: Instant) {
         self.autocomplete.request(buffer, now);
+    }
+
+    /// Ruta física separada del borrador para completar rutas relativas al panel.
+    pub fn request_path_autocomplete_at(&mut self, buffer: String, source: String, now: Instant) {
+        self.autocomplete.request(buffer, now);
+        self.autocomplete.source = Some(source);
     }
 
     /// Vencido el debounce, lanza el worker de autocompletado para el último buffer pedido.
@@ -442,12 +501,18 @@ impl WorkspaceCtrl {
                     return true;
                 }
                 Action::Paste => {
-                    if let naygo_core::clipboard::ClipboardContent::Files { paths, .. } =
-                        naygo_platform::clipboard::read()
-                    {
-                        return self.basket.add(paths) > 0;
+                    if self.basket_clipboard_rx.is_some() {
+                        return true;
                     }
-                    return false;
+                    let result = self
+                        .ops
+                        .clipboard_io_handle()
+                        .and_then(|clipboard| clipboard.read_async());
+                    match result {
+                        Ok(rx) => self.basket_clipboard_rx = Some(rx),
+                        Err(error) => self.ops.report_clipboard_error(error),
+                    }
+                    return true;
                 }
                 Action::FocusHome => return self.basket_select(0),
                 Action::FocusEnd => return self.basket_select(self.basket.len().saturating_sub(1)),
@@ -721,6 +786,32 @@ impl WorkspaceCtrl {
             _ => {}
         }
         false
+    }
+
+    /// Completa el pegado asíncrono a Cesta sin hacer una lectura del sistema en el callback.
+    /// Devuelve `false` mientras la solicitud siga pendiente para mantener activo el tick.
+    pub fn pump_basket_clipboard(&mut self) -> bool {
+        let Some(rx) = self.basket_clipboard_rx.as_ref() else {
+            return true;
+        };
+        match rx.try_recv() {
+            Ok(naygo_core::clipboard::ClipboardContent::Files { paths, .. }) => {
+                self.basket_clipboard_rx = None;
+                self.basket.add(paths);
+                true
+            }
+            Ok(_) => {
+                self.basket_clipboard_rx = None;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.basket_clipboard_rx = None;
+                self.ops
+                    .report_clipboard_error("worker del portapapeles desconectado".to_string());
+                true
+            }
+        }
     }
 
     /// Avanza por TODOS los paneles del layout, no solo por los de archivos. Se usa con
@@ -1303,6 +1394,53 @@ impl WorkspaceCtrl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_completion_does_not_enumerate_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("Alpha")).unwrap();
+        let buffer = format!("{}\\a", temp.path().display());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(complete_path_with_cancel(&buffer, &cancel).is_empty());
+    }
+
+    #[test]
+    fn same_buffer_after_another_request_does_not_accept_old_generation() {
+        let mut state = AutocompleteState::new();
+        let now = Instant::now();
+        state.request("A".into(), now);
+        state.launched_revision = state.revision;
+        state.began = Some(now);
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.rx = Some(rx);
+        state.request("B".into(), now);
+        state.request("A".into(), now);
+        tx.send(("A".into(), vec!["stale".into()])).unwrap();
+        assert!(state.poll().is_none());
+    }
+
+    #[test]
+    fn cancel_and_timeout_keep_worker_slot_without_spinning_the_timer() {
+        let mut state = AutocompleteState::new();
+        let now = Instant::now();
+        state.request("A".into(), now);
+        state.began = Some(now);
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.rx = Some(rx);
+        state.cancel();
+        assert!(!state.drive(now));
+        assert!(state.rx.is_some());
+        state.request("B".into(), now);
+        assert!(!state.drive(now + Duration::from_secs(6)));
+        assert!(
+            state.rx.is_some(),
+            "timeout never releases a live worker slot"
+        );
+        drop(tx);
+        assert!(state.poll().is_none());
+        assert!(state.rx.is_none());
+    }
 
     /// Espera (acotada) a que el worker en vuelo drene, llamando `poll` hasta que el
     /// canal quede consumido. Devuelve el resultado entregado, si hubo uno válido.

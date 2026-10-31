@@ -122,8 +122,9 @@ pub fn visit(
                     stack.push(path.clone());
                 }
             }
+            let visible_name = crate::path_display::display_os_str(&item.file_name());
             if !matches_query(
-                &item.file_name().to_string_lossy(),
+                &visible_name,
                 &query.options.name_query,
                 query.options.ignore_case,
                 query.options.use_wildcards,

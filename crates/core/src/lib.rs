@@ -40,13 +40,21 @@ pub mod listing;
 pub mod listing_cache;
 pub mod listing_changes;
 pub mod listing_export;
+pub mod listing_snapshot;
 pub mod mesh_preview;
 pub mod metadata;
 pub mod naygolist;
 pub mod ops;
 pub mod palette;
+pub mod path_display;
+pub mod path_identity;
+pub mod path_input;
 pub mod path_segments;
+pub mod path_wire;
 pub mod preview;
+pub mod preview_animation_wire;
+pub mod preview_policy;
+pub mod preview_wire;
 pub mod recent_dirs;
 pub mod recipe;
 pub mod rename;
@@ -71,7 +79,10 @@ pub use filter::{matches, ColumnFilter, VisibilityFlags};
 pub use fs_model::{Entry, EntryKind, PaneState, SortKey, SortSpec, ViewMode};
 pub use i18n::{pick_default_language, I18n, LangId};
 pub use icon_kind::{category_for_extension, icon_key_for, DriveKind, FileCategory, IconKey};
-pub use listing::{spawn_listing, spawn_listing_filtered, ListingFilter, ListingMsg};
+pub use listing::{
+    spawn_listing, spawn_listing_filtered, ListingFailure, ListingFilter, ListingMsg,
+    ListingOutcome,
+};
 pub use ops::{
     ConflictAction, ConflictDecision, ConflictPolicy, OpKind, OpMsg, OpOutcome, OpPlan, OpProgress,
     OpRequest, OpStep, OpSummary,

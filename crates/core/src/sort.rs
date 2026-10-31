@@ -52,7 +52,8 @@ fn cmp_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
 }
 
-/// Comparación por extensión del path, case-insensitive. Sin extensión = vacío.
+/// Comparación por tipo mostrado en la columna Extensión, case-insensitive. Los directorios usan
+/// la clave reservada compartida con el filtro/conteo, sin consultar el sufijo de su nombre.
 /// Usa folding ASCII a propósito: las extensiones reales son ASCII y así se evita
 /// el costo Unicode de `to_lowercase` (a diferencia de `cmp_name`, que sí maneja
 /// nombres Unicode). Compara byte a byte sin alocar Strings intermedios: la
@@ -61,6 +62,9 @@ fn cmp_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
 /// entry, lo que en carpetas grandes domina el ordenamiento).
 fn cmp_extension(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     fn ext(e: &Entry) -> &str {
+        if e.is_dir() {
+            return crate::filter::DIRECTORY_TYPE_FILTER_KEY;
+        }
         e.path.extension().and_then(|s| s.to_str()).unwrap_or("")
     }
     cmp_ascii_ci(ext(a), ext(b))
@@ -193,6 +197,46 @@ mod tests {
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["b.TXT", "a.zip"]); // txt < zip regardless of case
+    }
+
+    #[test]
+    fn por_extension_agrupa_carpetas_con_punto_como_tipo_y_revierte_el_orden() {
+        let mut ascending = vec![
+            entry("z.txt", EntryKind::File, 1),
+            entry("2.3DBenchy", EntryKind::Directory, 0),
+            entry("LEEME", EntryKind::File, 1),
+            entry("1.The Buddha", EntryKind::Directory, 0),
+            entry("a.pdf", EntryKind::File, 1),
+        ];
+        let spec = SortSpec {
+            key: SortKey::Extension,
+            ascending: true,
+            dirs_first: false,
+        };
+        sort_entries(&mut ascending, &spec);
+        let names: Vec<&str> = ascending.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["LEEME", "2.3DBenchy", "1.The Buddha", "a.pdf", "z.txt"]
+        );
+
+        let mut descending = vec![
+            entry("z.txt", EntryKind::File, 1),
+            entry("2.3DBenchy", EntryKind::Directory, 0),
+            entry("LEEME", EntryKind::File, 1),
+            entry("1.The Buddha", EntryKind::Directory, 0),
+            entry("a.pdf", EntryKind::File, 1),
+        ];
+        let spec = SortSpec {
+            ascending: false,
+            ..spec
+        };
+        sort_entries(&mut descending, &spec);
+        let names: Vec<&str> = descending.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["z.txt", "a.pdf", "2.3DBenchy", "1.The Buddha", "LEEME"]
+        );
     }
 
     #[test]

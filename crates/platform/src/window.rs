@@ -13,6 +13,21 @@
 //! exterior de la ventana (lo que devuelve `window().position()`) es incorrecto porque ese
 //! origen incluye el borde/título nativos.
 
+/// Consulta de estado de ventana, sin filesystem: una ventana minimizada conserva
+/// WS_VISIBLE, por lo que hay que comprobar también IsIconic. No exige foreground.
+#[cfg(windows)]
+pub fn content_visible(hwnd: isize) -> bool {
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{IsIconic, IsWindowVisible},
+    };
+    if hwnd == 0 {
+        return false;
+    }
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
+}
+
 /// Convierte el punto de PANTALLA `(screen_x, screen_y)` (píxeles físicos) a coordenadas de
 /// CLIENTE (píxeles físicos) de la ventana `hwnd` mediante `ScreenToClient`. El origen del
 /// área de cliente queda bajo el marco y la barra de título nativos del SO, así que el

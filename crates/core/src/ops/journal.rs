@@ -183,18 +183,31 @@ pub struct ResumePlan {
     pub skipped_changed: Vec<PathBuf>,
 }
 
-/// Construye el plan a ejecutar al retomar `journal`: toma los pasos con índice
-/// `>= done_through` (pendientes); revalida la huella de cada origen contra la del
-/// journal. Coincide → el paso entra; difiere o el origen desapareció → va a
-/// `skipped_changed`. Los pasos sin `from` (crear) siempre entran. Recalcula totales.
+/// Construye el plan a ejecutar al retomar `journal`: normalmente toma los pasos con índice
+/// `>= done_through`; los reemplazos de árbol interrumpidos antes de publicar reinician desde la
+/// raíz y conservan su destino transaccional. Revalida cada origen contra su huella. Coincide →
+/// el paso entra; difiere o el origen desapareció → va a `skipped_changed`. Los pasos sin `from`
+/// (crear) siempre entran. Recalcula totales.
 pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
     let mut steps: Vec<OpStep> = Vec::new();
     let mut skipped_changed: Vec<PathBuf> = Vec::new();
     let mut total_bytes = 0u64;
     let mut total_files = 0usize;
 
+    // Un reemplazo transaccional no registra pasos individuales mientras escribe el staging.
+    // Si se interrumpió antes de publicar, se reconstruye el árbol completo desde los orígenes y
+    // se conserva `pre_delete` para volver a staging. Una vez publicado, el writer avanza todos
+    // los pasos antes de retirar fuentes Move, así el retomar no vuelve a reemplazar el destino.
+    let restart_replacement =
+        !journal.plan.pre_delete.is_empty() && journal.done_through < journal.plan.steps.len();
+    let resume_from = if restart_replacement {
+        0
+    } else {
+        journal.done_through
+    };
+
     for (idx, step) in journal.plan.steps.iter().enumerate() {
-        if idx < journal.done_through {
+        if idx < resume_from {
             continue;
         }
         match &step.from {
@@ -225,10 +238,11 @@ pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
             steps,
             total_bytes,
             total_files,
-            // Al retomar NO se re-borra el destino: un Replace ya ocurrió (o no) en la corrida
-            // original; lo parcial que haya quedado se conserva (se sobrescribe archivo a
-            // archivo). Re-ejecutar `remove_dir_all` aquí borraría lo ya copiado.
-            pre_delete: Vec::new(),
+            pre_delete: if restart_replacement {
+                journal.plan.pre_delete.clone()
+            } else {
+                Vec::new()
+            },
         },
         skipped_changed,
     }
@@ -421,6 +435,58 @@ mod tests {
         assert_eq!(r.plan.total_bytes, 7);
         assert_eq!(r.plan.total_files, 2);
         assert!(r.skipped_changed.is_empty());
+    }
+
+    #[test]
+    fn resume_plan_reinicia_reemplazo_de_arbol_hasta_publicar() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let source_file = source.join("a.txt");
+        fs::write(&source_file, b"payload").unwrap();
+        let destination = dir.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        let destination_root = destination.join("source");
+        let plan = OpPlan {
+            steps: vec![
+                OpStep {
+                    from: Some(source.clone()),
+                    to: destination_root.clone(),
+                    bytes: 0,
+                    is_dir: true,
+                },
+                OpStep {
+                    from: Some(source_file),
+                    to: destination_root.join("a.txt"),
+                    bytes: 7,
+                    is_dir: false,
+                },
+            ],
+            total_bytes: 7,
+            total_files: 1,
+            pre_delete: vec![destination_root.clone()],
+        };
+        let mut journal = OpJournal::new(
+            "replace-tree".into(),
+            OpKind::Copy,
+            ConflictPolicy::Overwrite,
+            plan,
+        );
+        journal.done_through = 1; // old journals may have persisted an intermediate cursor
+
+        let resumed = resume_plan(&journal);
+        assert_eq!(
+            resumed.plan.steps.len(),
+            2,
+            "staging has to start from the root"
+        );
+        assert_eq!(resumed.plan.pre_delete, vec![destination_root.clone()]);
+        assert_eq!(resumed.plan.total_bytes, 7);
+
+        journal.done_through = journal.plan.steps.len(); // publication was journaled
+        let completed = resume_plan(&journal);
+        assert!(completed.plan.steps.is_empty());
+        assert!(completed.plan.pre_delete.is_empty());
     }
 
     #[test]

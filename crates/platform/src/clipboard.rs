@@ -546,7 +546,9 @@ pub(crate) mod windows_impl {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use super::*;
+    #[cfg(windows)]
     use naygo_core::clipboard::ClipboardContent;
 
     // Roundtrip de archivos por el portapapeles del SO. El portapapeles es un recurso

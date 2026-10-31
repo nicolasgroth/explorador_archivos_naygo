@@ -7,6 +7,7 @@
 //! esa es la carpeta inicial; en cualquier otro caso (ausente, archivo, inexistente,
 //! vacío) no hay override y la app arranca en su carpeta por defecto.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// El primer argumento posicional, si lo hay (sin tocar disco). `args` son los
@@ -40,7 +41,7 @@ pub struct CliArgs {
     /// Carpeta posicional, SOLO si es un directorio existente (según `is_dir`).
     pub dir: Option<PathBuf>,
     /// El token posicional tal cual, aunque no sea un dir válido (para avisar "no es carpeta").
-    pub dir_arg_raw: Option<String>,
+    pub dir_arg_raw: Option<OsString>,
     pub theme: Option<String>,
     pub layout: Option<String>,
     pub help: bool,
@@ -58,31 +59,39 @@ pub struct CliArgs {
 /// token que no sea flag ni valor-de-flag es la carpeta posicional. Flags desconocidos se
 /// ignoran. Nunca panic.
 pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
+    let args_os = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&args_os, is_dir)
+}
+
+/// Parsea argumentos nativos sin exigir UTF-8 para rutas POSIX. Los nombres de flags y los
+/// valores de `--theme`/`--layout` siguen siendo texto UTF-8; un valor no representable se
+/// consume y se ignora. Las rutas posicionales se conservan como `OsString`/`PathBuf`.
+pub fn parse_args_os(args: &[OsString], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
     let mut out = CliArgs::default();
     let mut i = 0;
     while i < args.len() {
-        let arg = args[i].as_str();
+        let arg = args[i].to_str();
         match arg {
-            "--help" | "-h" => out.help = true,
-            "--version" | "-v" => out.version = true,
-            "--tray" => out.tray = true,
-            "--shutdown" => out.shutdown = true,
-            "--theme" => {
+            Some("--help" | "-h") => out.help = true,
+            Some("--version" | "-v") => out.version = true,
+            Some("--tray") => out.tray = true,
+            Some("--shutdown") => out.shutdown = true,
+            Some("--theme") => {
                 if let Some(v) = args.get(i + 1) {
-                    out.theme = Some(v.clone());
+                    out.theme = v.to_str().map(str::to_owned);
                     i += 1;
                 }
             }
-            "--layout" => {
+            Some("--layout") => {
                 if let Some(v) = args.get(i + 1) {
-                    out.layout = Some(v.clone());
+                    out.layout = v.to_str().map(str::to_owned);
                     i += 1;
                 }
             }
-            _ if arg.starts_with("--") => {}
-            _ if !arg.is_empty() && out.dir_arg_raw.is_none() => {
-                out.dir_arg_raw = Some(arg.to_string());
-                let path = PathBuf::from(arg);
+            Some(value) if value.starts_with("--") => {}
+            _ if !args[i].is_empty() && out.dir_arg_raw.is_none() => {
+                let path = PathBuf::from(&args[i]);
+                out.dir_arg_raw = Some(args[i].clone());
                 if is_dir(&path) {
                     out.dir = Some(path);
                 }
@@ -92,6 +101,25 @@ pub fn parse_args(args: &[String], is_dir: impl Fn(&Path) -> bool) -> CliArgs {
         i += 1;
     }
     out
+}
+
+/// Representación escapada y segura para avisos. Conserva legible el texto UTF-8 y escapa
+/// bytes/código units no representables; nunca sustituye una ruta inválida por U+FFFD.
+pub fn display_os_argument(value: &OsStr) -> String {
+    if let Some(text) = value.to_str() {
+        return text.to_owned();
+    }
+    let debug = format!("{value:?}");
+    debug
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(&debug)
+        .to_owned()
+}
+
+/// Atajo de producción para argumentos nativos: usa `Path::is_dir`.
+pub fn parse_args_os_real(args: &[OsString]) -> CliArgs {
+    parse_args_os(args, |p| p.is_dir())
 }
 
 /// Atajo de producción: usa `Path::is_dir`.
@@ -170,7 +198,7 @@ mod tests {
     fn parse_solo_carpeta_valida() {
         let a = parse_args(&[s("D:\\dir")], |_| true);
         assert_eq!(a.dir, Some(PathBuf::from("D:\\dir")));
-        assert_eq!(a.dir_arg_raw.as_deref(), Some("D:\\dir"));
+        assert_eq!(a.dir_arg_raw.as_deref(), Some(OsStr::new("D:\\dir")));
         assert!(a.theme.is_none() && a.layout.is_none() && !a.help && !a.version);
     }
 
@@ -178,7 +206,7 @@ mod tests {
     fn parse_carpeta_invalida_dir_none_pero_raw_some() {
         let a = parse_args(&[s("D:\\no-existe")], |_| false);
         assert_eq!(a.dir, None);
-        assert_eq!(a.dir_arg_raw.as_deref(), Some("D:\\no-existe"));
+        assert_eq!(a.dir_arg_raw.as_deref(), Some(OsStr::new("D:\\no-existe")));
     }
 
     #[test]
@@ -243,5 +271,49 @@ mod tests {
         assert_eq!(a.theme.as_deref(), Some("D:\\dir"));
         assert_eq!(a.dir, None);
         assert_eq!(a.dir_arg_raw, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_args_os_preserva_ruta_posix_no_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let name = OsString::from_vec(vec![b'd', b'i', b'r', b'-', 0xff]);
+        let path = temp.path().join(&name);
+        std::fs::create_dir(&path).unwrap();
+        let args = vec![path.as_os_str().to_os_string()];
+
+        let parsed = parse_args_os(&args, |candidate| candidate.is_dir());
+
+        assert_eq!(parsed.dir.as_deref(), Some(path.as_path()));
+        assert_eq!(parsed.dir_arg_raw.as_deref(), Some(path.as_os_str()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn display_os_argument_escapa_bytes_no_utf8_solo_al_mostrar() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert_eq!(
+            display_os_argument(OsStr::new("C:\\carpeta")),
+            "C:\\carpeta"
+        );
+        let path = OsString::from_vec(b"/tmp/directorio-\xff".to_vec());
+        let displayed = display_os_argument(&path);
+        assert!(displayed.starts_with("/tmp/directorio-\\x"));
+        assert!(!displayed.contains('\u{fffd}'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_args_os_no_confunde_ruta_no_utf8_con_flag() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let arg = OsString::from_vec(b"/tmp/--ruta-\xff".to_vec());
+        let parsed = parse_args_os(std::slice::from_ref(&arg), |_| true);
+
+        assert_eq!(parsed.dir, Some(PathBuf::from(&arg)));
+        assert!(!parsed.help);
     }
 }

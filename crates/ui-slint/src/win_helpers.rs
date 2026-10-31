@@ -7,9 +7,12 @@
 // la bandeja, el hotkey global o la instancia única. Extraídos de `main.rs` sin cambio de
 // comportamiento (refactor por tamaño de archivo).
 
+#[cfg(windows)]
 use crate::workspace_ctrl::WorkspaceCtrl;
 use crate::*;
+#[cfg(windows)]
 use std::cell::RefCell;
+#[cfg(windows)]
 use std::rc::Rc;
 
 /// El HWND de la ventana de Naygo (backend winit), para el menú contextual del Shell.
@@ -41,7 +44,7 @@ pub(crate) fn try_restore_saved_geometry(
     ctrl: &Rc<RefCell<WorkspaceCtrl>>,
     done: &std::cell::Cell<bool>,
 ) {
-    if done.get() || !ui.window().is_visible() {
+    if done.get() || !ui.window().is_visible() || ctrl.borrow().startup_loading() {
         return;
     }
     done.set(true);
@@ -132,8 +135,4 @@ pub(crate) fn restore_window(ui: &AppWindow) {
 #[cfg(windows)]
 pub(crate) fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
     restore_window(ui);
-}
-#[cfg(not(windows))]
-pub(crate) fn toggle_window_visibility(ui: &AppWindow, _tray_active: bool) {
-    let _ = ui.show();
 }

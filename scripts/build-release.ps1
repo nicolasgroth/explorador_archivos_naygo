@@ -6,6 +6,8 @@
 # Uso:  powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 #       powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 `
 #         -SignToolPath 'C:\...\signtool.exe' -CertificateThumbprint '<SHA1>'
+#       powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -ExecutableOnly
+#       powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -SkipBuild
 # Prerequisitos: Rust (toolchain MSVC). Inno Setup (ISCC.exe) opcional: si falta,
 # se genera solo el ZIP portable y se avisa.
 
@@ -14,12 +16,23 @@ param(
     # Omitir ambos mantiene el build sin firmar (comportamiento apto para desarrollo).
     [string]$SignToolPath = $env:NAYGO_SIGNTOOL,
     [string]$CertificateThumbprint = $env:NAYGO_SIGN_CERT_SHA1,
-    [string]$TimestampUrl = $env:NAYGO_SIGN_TIMESTAMP_URL
+    [string]$TimestampUrl = $env:NAYGO_SIGN_TIMESTAMP_URL,
+    # Separa la compilación del empaquetado para que un servicio remoto pueda firmar naygo.exe
+    # antes de que el mismo binario entre al ZIP portable y al instalador.
+    [switch]$ExecutableOnly,
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
+if (-not (Get-Module -Name Microsoft.PowerShell.Security)) {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+}
+if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) {
+    throw 'No se pudo cargar Get-AuthenticodeSignature desde Microsoft.PowerShell.Security.'
+}
 $repo = Split-Path -Parent $PSScriptRoot           # raiz del repo (scripts/ esta un nivel abajo)
 $dist = Join-Path $repo "dist"
+Import-Module (Join-Path $PSScriptRoot 'NaygoSigning.psm1') -Force
 
 if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {
     $TimestampUrl = 'http://timestamp.digicert.com'
@@ -45,26 +58,60 @@ function Get-Sha256Hex([string]$path) {
     }
 }
 
-function Invoke-SignedInstaller([string]$path) {
+function Invoke-SignedArtifact([string]$path) {
+    Assert-NaygoSignPathProductMetadata `
+        -Path $path `
+        -ExpectedProductName 'Naygo' `
+        -ExpectedProductVersion $version
+
     $hasTool = -not [string]::IsNullOrWhiteSpace($SignToolPath)
     $hasCert = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint)
-    if (-not $hasTool -and -not $hasCert) {
-        Write-Warning 'Instalador sin firma: no se configuró signtool ni certificado.'
-        return
-    }
     if (-not $hasTool -or -not $hasCert) {
+        if (-not $hasTool -and -not $hasCert) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            switch ($signature.Status) {
+                ([System.Management.Automation.SignatureStatus]::Valid) {
+                    Write-Host "Authenticode ya verificado: $path"
+                    return
+                }
+                ([System.Management.Automation.SignatureStatus]::NotSigned) {
+                    Write-Warning "Artefacto sin firma Authenticode: $path"
+                    return
+                }
+                default {
+                    throw "La firma Authenticode existente no es válida ($($signature.Status)): $path"
+                }
+            }
+        }
         throw 'Para firmar, entrega SignToolPath y CertificateThumbprint (o NAYGO_SIGNTOOL y NAYGO_SIGN_CERT_SHA1).'
     }
     if (-not (Test-Path -LiteralPath $SignToolPath)) {
         throw "No existe signtool.exe: $SignToolPath"
     }
 
-    Write-Host "Firmando instalador con SHA-256..."
+    $signature = Get-AuthenticodeSignature -LiteralPath $path
+    if ($signature.Status -notin @(
+        [System.Management.Automation.SignatureStatus]::NotSigned,
+        [System.Management.Automation.SignatureStatus]::Valid
+    )) {
+        throw "La firma Authenticode existente no es válida ($($signature.Status)): $path"
+    }
+    if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+        $signature.SignerCertificate.Thumbprint -eq $CertificateThumbprint) {
+        Write-Host "Authenticode ya verificado con el certificado configurado: $path"
+        return
+    }
+
+    Write-Host "Firmando artefacto con SHA-256: $path"
     & $SignToolPath sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $path
     if ($LASTEXITCODE -ne 0) { throw "signtool sign falló para $path." }
     & $SignToolPath verify /pa /all /v $path
     if ($LASTEXITCODE -ne 0) { throw "signtool verify falló para $path." }
     Write-Host 'Firma Authenticode verificada.'
+}
+
+if ($ExecutableOnly -and $SkipBuild) {
+    throw 'ExecutableOnly y SkipBuild son opciones excluyentes.'
 }
 
 # --- 1. Version: fuente unica = workspace.package.version del Cargo.toml raiz ---
@@ -75,13 +122,51 @@ if ($cargoToml -notmatch '(?m)^\s*version\s*=\s*"([^"]+)"') {
 $version = $Matches[1]
 Write-Host "Naygo version $version"
 
+# Resolver antes de modificar dist/: un setup anterior de la misma versión no debe quedar junto
+# a un portable nuevo como si ambos fueran de esta ejecución. ExecutableOnly no empaqueta.
+$isccPath = $null
+if (-not $ExecutableOnly) {
+    $fromPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($null -ne $fromPath) {
+        $isccPath = $fromPath.Source
+    } else {
+        foreach ($cand in @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+        )) {
+            if (Test-Path -LiteralPath $cand) { $isccPath = $cand; break }
+        }
+    }
+    $existingSetup = Join-Path $dist "Naygo-$version-setup.exe"
+    if ($null -eq $isccPath -and (Test-Path -LiteralPath $existingSetup)) {
+        throw "No se encontró ISCC y existe un setup previo en $existingSetup. Se conserva dist intacto; instala Inno Setup o mueve el setup previo antes de generar solo el portable."
+    }
+}
+
 # --- 2. Compilar release (solo el binario del producto, no todo el workspace) ---
-Write-Host "Compilando release..."
-$env:NAYGO_BUILD_NONCE = [guid]::NewGuid().ToString()
-& cargo build --release -p naygo-ui-slint
-if ($LASTEXITCODE -ne 0) { throw "cargo build --release fallo." }
 $exe = Join-Path $repo "target\release\naygo.exe"
-if (-not (Test-Path $exe)) { throw "No se encontro $exe tras compilar." }
+if ($SkipBuild) {
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw "-SkipBuild requiere un ejecutable previamente compilado en $exe."
+    }
+    Write-Host "Reutilizando ejecutable existente: $exe"
+} else {
+    Write-Host "Compilando release..."
+    $env:NAYGO_BUILD_NONCE = [guid]::NewGuid().ToString()
+    # Un único trabajo también al invocar directamente este script; el supervisor añade
+    # límites de memoria/prioridad. --locked evita cambiar dependencias al empaquetar.
+    & cargo build --release --locked --jobs 1 -p naygo-ui-slint
+    if ($LASTEXITCODE -ne 0) { throw "cargo build --release fallo." }
+    if (-not (Test-Path -LiteralPath $exe)) { throw "No se encontro $exe tras compilar." }
+}
+
+if ($ExecutableOnly) {
+    Write-Host "Ejecutable listo para firma externa: $exe"
+    return
+}
+
+# Firma antes de copiar el binario: la misma firma queda dentro del ZIP portable y del setup.
+Invoke-SignedArtifact $exe
 
 # --- 3. Preparar dist/ ---
 if (-not (Test-Path $dist)) { New-Item -ItemType Directory -Path $dist | Out-Null }
@@ -133,21 +218,8 @@ Convert-LogoToBmp $wizLarge 164 314
 Convert-LogoToBmp $wizSmall 55 58
 Write-Host "Imagenes del asistente generadas."
 
-# --- 6. Instalador Inno (opcional): usa ISCC.exe del PATH o de la ruta estandar ---
-# Busca ISCC.exe primero en el PATH; si no, en las ubicaciones tipicas de Inno Setup 6
-# (instalacion por defecto, 64 y 32 bits). Asi no hace falta tenerlo en el PATH.
-$isccPath = $null
-$fromPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-if ($null -ne $fromPath) {
-    $isccPath = $fromPath.Source
-} else {
-    foreach ($cand in @(
-        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-        "C:\Program Files\Inno Setup 6\ISCC.exe"
-    )) {
-        if (Test-Path $cand) { $isccPath = $cand; break }
-    }
-}
+# --- 6. Instalador Inno (opcional): la búsqueda y el control de setup previo ya se hicieron. ---
+$generatedSetup = $null
 if ($null -eq $isccPath) {
     Write-Warning "Inno Setup (ISCC.exe) no encontrado (ni en PATH ni en las rutas estandar)."
     Write-Warning "Se genero solo el ZIP portable. Para el instalador, instala Inno Setup:"
@@ -158,15 +230,15 @@ if ($null -eq $isccPath) {
     & $isccPath "/DMyAppVersion=$version" (Join-Path $repo "installer\naygo.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC fallo al compilar el instalador." }
     $setup = Join-Path $dist "Naygo-$version-setup.exe"
-    Invoke-SignedInstaller $setup
+    Invoke-SignedArtifact $setup
+    $generatedSetup = $setup
     Write-Host "Instalador: $setup"
 }
 
 # Checksums reproducibles también en builds LOCALES (CI ya hacía esto por separado).
 # Así el contenido de dist/ queda completo y verificable sin depender del workflow remoto.
 $artifacts = @($zip)
-$setup = Join-Path $dist "Naygo-$version-setup.exe"
-if (Test-Path -LiteralPath $setup) { $artifacts += $setup }
+if ($null -ne $generatedSetup) { $artifacts += $generatedSetup }
 $checksumPath = Join-Path $dist "SHA256SUMS.txt"
 $checksumLines = foreach ($artifact in $artifacts) {
     $hash = Get-Sha256Hex $artifact

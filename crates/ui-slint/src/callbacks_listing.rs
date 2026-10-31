@@ -71,6 +71,7 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
         let start_timer = start_timer.clone();
         let sync_layout = sync_layout.clone();
         ui.on_row_clicked(move |id, pos, ctrl_mod, shift_mod| {
+            let _metric = crate::metrics::span("ui.input.file_row_click_callback");
             // El doble-clic se detecta en Rust (no en Slint): on_row_clicked devuelve true
             // si este clic completó un doble-clic, en cuyo caso navegó/abrió. Los modificadores
             // (ctrl_mod/shift_mod) vienen del PROPIO evento de clic, no del estado sticky del
@@ -110,11 +111,14 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
-        ui.on_row_double_clicked(move |id, pos| {
-            if ctrl
-                .borrow_mut()
-                .on_row_double_clicked_native(PaneId(id as u64), pos as usize)
-            {
+        ui.on_row_double_clicked(move |id, pos, ctrl_mod, shift_mod| {
+            let _metric = crate::metrics::span("ui.input.file_row_double_click_callback");
+            if ctrl.borrow_mut().on_row_double_clicked_native(
+                PaneId(id as u64),
+                pos as usize,
+                ctrl_mod,
+                shift_mod,
+            ) {
                 start_timer();
             }
             sync_layout();
@@ -127,6 +131,7 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_row_middle_clicked(move |id, pos| {
+            let _metric = crate::metrics::span("ui.input.file_row_middle_click_callback");
             if ctrl
                 .borrow_mut()
                 .on_row_middle_clicked(PaneId(id as u64), pos as usize)
@@ -223,6 +228,7 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         ui.on_sort_by(move |id, col| {
+            let _metric = crate::metrics::span("ui.input.column_sort_callback");
             ctrl.borrow_mut()
                 .on_sort_by(PaneId(id as u64), col.as_str());
             sync_rows();
@@ -233,6 +239,7 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         ui.on_sort_by_kind(move |id, kind| {
+            let _metric = crate::metrics::span("ui.input.column_sort_kind_callback");
             ctrl.borrow_mut().sort_by_kind(PaneId(id as u64), kind);
             sync_rows();
         });

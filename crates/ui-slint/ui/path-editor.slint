@@ -1,0 +1,80 @@
+// Naygo — shared native path editor for panels and toolbar.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+export component PathEditor inherits Rectangle {
+    in-out property <string> text;
+    in property <int> session;
+    in property <int> caret: -1;
+    in property <int> caret-revision;
+    in property <int> suggestion-index: -1;
+    in property <string> error;
+    out property <bool> has-focus: input.has-focus;
+    callback focus-changed(bool);
+    callback edited(string);
+    callback commit(string);
+    callback cancel();
+    callback move-suggestion(int);
+    callback accept-suggestion();
+    callback hover-tip(string, length, length);
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    border-width: root.error != "" ? 1px : 0px;
+    border-color: Theme.error;
+    accessible-role: groupbox;
+    accessible-description: root.error;
+    Timer {
+        interval: 0ms; property <int> applied: -1; running: self.applied != root.session;
+        triggered => { self.applied = root.session; input.focus(); input.select-all(); }
+    }
+    caret-timer := Timer {
+        interval: 0ms;
+        property <int> applied: -1;
+        running: root.caret >= 0 && self.applied != root.caret-revision;
+        triggered => {
+            self.applied = root.caret-revision;
+            input.focus(); input.set-selection-offsets(root.caret, root.caret);
+        }
+    }
+    HorizontalLayout {
+        padding: 1px; spacing: 2px;
+        input := LineEdit {
+            min-width: 0px; horizontal-stretch: 1;
+            accessible-label: Tr.edit-path-tip;
+            text <=> root.text;
+            placeholder-text: "C:\\…";
+            changed has-focus => { root.focus-changed(self.has-focus); }
+            edited(value) => { root.edited(value); }
+            accepted(value) => { root.commit(value); }
+            // Keep native cursor, selection, scrolling, paste and undo. Never append keys
+            // to the buffer or cancel on transient focus changes during layout/suggestions.
+            key-pressed(ev) => {
+                if ev.text == Key.Escape { root.cancel(); return accept; }
+                if ev.text == Key.DownArrow { root.move-suggestion(1); return accept; }
+                if ev.text == Key.UpArrow { root.move-suggestion(-1); return accept; }
+                if ev.text == Key.Return && root.suggestion-index >= 0 { root.accept-suggestion(); return accept; }
+                return reject;
+            }
+        }
+        Rectangle {
+            width: 26px;
+            background: cancel-touch.has-hover ? Theme.hover-bg : transparent;
+            accessible-role: button;
+            accessible-label: Tr.dlg-cancel + " (Esc)";
+            accessible-action-default => { root.cancel(); }
+            // El LineEdit ya trae × para vaciar: Esc distingue descartar del borrado del texto.
+            Text { text: "Esc"; font-size: 10px; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+            cancel-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.cancel(); }
+                changed has-hover => {
+                    root.hover-tip(self.has-hover ? Tr.dlg-cancel + " (Esc)" : "",
+                        self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height);
+                }
+            }
+        }
+    }
+}

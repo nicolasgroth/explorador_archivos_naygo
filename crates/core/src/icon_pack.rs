@@ -4,7 +4,7 @@
 
 //! Un `.naygoset` es un zip con `manifest.json` + `icons/` (los PNG que el set
 //! aporta). Export toma el set efectivo (base + overrides) y lo empaqueta autocontenido;
-//! import lo valida y lo copia a `<config_dir>/icons/<nombre>/`. Tolerante a archivos
+//! import lo valida y lo copia a `<data_dir>/icons/<nombre>/`. Tolerante a archivos
 //! corruptos: una entrada inválida no aborta la importación.
 
 use crate::icon_source::IconSource;
@@ -49,6 +49,27 @@ pub fn export_pack(
     overrides: &BTreeMap<String, IconSource>,
     config_dir: &Path,
 ) -> PackResult<()> {
+    export_pack_with_legacy(
+        out,
+        name,
+        author,
+        base_set_id,
+        overrides,
+        config_dir,
+        config_dir,
+    )
+}
+
+/// Exporta user PNG desde XDG data y conserva compatibilidad con overrides guardados bajo config.
+pub fn export_pack_with_legacy(
+    out: &Path,
+    name: &str,
+    author: &str,
+    base_set_id: &str,
+    overrides: &BTreeMap<String, IconSource>,
+    data_dir: &Path,
+    legacy_config_dir: &Path,
+) -> PackResult<()> {
     let manifest = PackManifest {
         schema: 1,
         name: name.to_string(),
@@ -74,8 +95,10 @@ pub fn export_pack(
 
     for src in overrides.values() {
         if let IconSource::UserPng { rel_path } = src {
-            let p = config_dir.join("icons").join("_user").join(rel_path);
-            if let Ok(bytes) = std::fs::read(&p) {
+            let relative = Path::new("icons").join("_user").join(rel_path);
+            let bytes = std::fs::read(data_dir.join(&relative))
+                .or_else(|_| std::fs::read(legacy_config_dir.join(relative)));
+            if let Ok(bytes) = bytes {
                 zip.start_file(format!("icons/_user/{rel_path}"), opts)
                     .map_err(|e| e.to_string())?;
                 zip.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -86,11 +109,11 @@ pub fn export_pack(
     Ok(())
 }
 
-/// Importa un `.naygoset` a `<config_dir>/icons/<nombre>/`. Devuelve el manifest.
+/// Importa un `.naygoset` a `<data_dir>/icons/<nombre>/`. Devuelve el manifest.
 ///
 /// Tolerante: una entrada PNG corrupta no aborta la importación. Solo el zip
 /// inválido o el manifest ilegible son errores fatales.
-pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
+pub fn import_pack(path: &Path, data_dir: &Path) -> PackResult<PackManifest> {
     let file = std::fs::File::open(path).map_err(|e| format!("abrir {}: {e}", path.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip inválido: {e}"))?;
 
@@ -124,7 +147,7 @@ pub fn import_pack(path: &Path, config_dir: &Path) -> PackResult<PackManifest> {
     if safe_name.is_empty() || safe_name == "." || safe_name.contains("..") {
         return Err(format!("nombre de pack inválido: {:?}", manifest.name));
     }
-    let dest = config_dir.join("icons").join(&safe_name);
+    let dest = data_dir.join("icons").join(&safe_name);
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let entry = match archive.by_index(i) {

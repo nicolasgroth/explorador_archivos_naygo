@@ -80,6 +80,9 @@ export component InspectorPanel inherits Rectangle {
                 if root.info.size-calc == "": Rectangle {
                     width: 90px;
                     height: 24px;
+                    accessible-role: button;
+                    accessible-label: Tr.inspector-calc-size;
+                    accessible-action-default => { root.calc-size(); }
                     border-radius: Theme.radius-md;
                     background: calc-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                     border-width: 1px;
@@ -111,6 +114,9 @@ export component InspectorPanel inherits Rectangle {
                 spacing: 6px;
                 Rectangle {
                     width: 74px; height: 24px; border-radius: Theme.radius-md;
+                    accessible-role: button;
+                    accessible-label: Tr.ctx-copy;
+                    accessible-action-default => { root.copy-provenance(); }
                     background: copy-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                     border-width: 1px; border-color: Theme.divider;
                     Text { text: Tr.ctx-copy; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
@@ -118,6 +124,9 @@ export component InspectorPanel inherits Rectangle {
                 }
                 Rectangle {
                     width: 30px; height: 24px; border-radius: Theme.radius-md;
+                    accessible-role: button;
+                    accessible-label: Tr.inspector-unblock;
+                    accessible-action-default => { root.unblock-provenance(); }
                     background: unblock-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
                     border-width: 1px; border-color: Theme.divider;
                     Text { text: "✓"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }

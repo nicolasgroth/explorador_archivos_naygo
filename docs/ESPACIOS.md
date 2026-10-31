@@ -2,7 +2,7 @@
 
 Naygo 0.5.0 · Nicolás Groth / ISGroth · MIT
 
-Abre **Disposiciones → Espacios por tarea**, o busca ese comando con **Ctrl+P**.
+Abre el botón **Espacios** de la barra, o busca ese comando con **Ctrl+P**.
 
 ## Guardar y recuperar una tarea
 
@@ -15,11 +15,23 @@ Abre **Disposiciones → Espacios por tarea**, o busca ese comando con **Ctrl+P*
    Elige **Guardar actual y abrir** o **Descartar estado actual y abrir**. Si la sesión actual
    nunca se guardó, usa primero Guardar como. Cerrar/Esc descarta la revisión, no tu sesión.
 
-El nombre activo también aparece en el menú y tooltip de Disposiciones. La comprobación de cambios
-se hace al abrir el gestor y al terminar una acción, no serializando la bandeja en cada frame.
-Para alternar tareas, selecciona sus archivos con el diálogo nativo; no hay un catálogo automático
-ni exploración de proyectos al arrancar. Tras reiniciar, abre explícitamente el espacio guardado:
-la restauración automática de sesión existente sigue siendo independiente y no incluye la bandeja.
+Al usar **Guardar como / exportar…**, elige si el espacio nuevo comparte Favoritos globales o
+guarda una lista propia. La lista propia parte como copia de los Favoritos globales actuales para
+que puedas ajustarla sin alterar el árbol común. Al anclar, quitar o editar Favoritos propios, el
+gestor marca el espacio con cambios pendientes; usa **Actualizar espacio** o **Guardar actual y
+abrir** para publicarlos. Descartar el estado sin guardar también descarta sus cambios de Favoritos.
+Los Favoritos globales conservan su guardado automático habitual.
+
+El nombre activo aparece en el botón y selector de Espacios. El selector muestra cinco recientes;
+cada fila incluye el nombre del espacio y la carpeta donde está guardado. Naygo conserva hasta diez
+referencias MRU en `settings.json` y solo las lee con la carga
+inicial asíncrona: no inspecciona los `.naygospace` ni explora carpetas de proyectos. Al elegir uno,
+Naygo lo aplica directamente si el estado actual está limpio.
+Si hay cambios pendientes, abre el gestor para que elijas guardar, descartar o cancelar. La comprobación
+de cambios se hace al abrir el gestor y al terminar una acción, no serializando la bandeja en cada frame.
+Para otro espacio, selecciónalo con el diálogo nativo. **Limpiar recientes** quita las referencias
+guardadas, no borra los archivos `.naygospace`. Tras reiniciar, las referencias reaparecen; la
+restauración automática de sesión existente sigue siendo independiente y no incluye la bandeja.
 
 Una disposición antigua puede convertirse sin alterar su plantilla: aplícala, completa sus rutas
 y bandeja, y usa Guardar como. No es necesario editar JSON ni volver a organizar los paneles.
@@ -29,8 +41,10 @@ y bandeja, y usa Guardar como. No es necesario editar JSON ni volver a organizar
 - Disposición y proporciones, pestañas, tipos de panel, panel activo y enlaces árbol → archivos.
 - Rutas, columnas, orden, filtros de tabla y filtro por tipeo (incluido mostrar solo coincidencias).
 - Referencias de la bandeja, en orden. No duplica ni empaqueta los archivos.
+- La elección entre Favoritos globales compartidos y una lista privada dentro del espacio.
 - Hasta 64 referencias a consultas .naygosearch para cargar desde Ctrl+P, sin ejecutarlas.
-  Una raíz portable reubica esas referencias, no las raíces internas del documento de consulta.
+  Una raíz portable reubica las rutas del espacio, incluidos Favoritos privados, pero no las raíces
+  internas del documento de consulta.
 
 No conserva listados, selección/scroll de archivos, bytes de preview, resultados de búsqueda,
 comparaciones efímeras ni cola/historial de operaciones. Las operaciones ya iniciadas siguen
@@ -45,7 +59,8 @@ el archivo. Vacío conserva la raíz original. Actualizar mantiene la raíz usad
 Los espacios guardados con rutas absolutas no admiten sustitución de raíz: guárdalos primero como
 otro espacio relativo. No se buscan automáticamente carpetas equivalentes.
 
-El documento contiene nombres y rutas, incluida la raíz original incluso en modo relativo.
+El documento y la configuración local de recientes contienen nombres y rutas, incluida la raíz
+original incluso en modo relativo.
 Revísalo antes de compartirlo; **no es un formato anonimizado ni cifrado**. Nunca incluye contraseñas
 de servicios, contenido de archivos ni scripts ejecutables como parte del modelo de espacios.
 
@@ -61,7 +76,8 @@ duplicados. Pulsar uno vuelve a leer el archivo en un worker y abre la revisión
 el espacio actual hasta confirmar. «Limpiar» sólo quita referencias del historial, no archivos.
 El historial reciente es efímero: no se escriben rutas adicionales en disco ni se indexan carpetas.
 
-JSON versionado, máximo 4 MB, 64 paneles y 10.000 referencias. Guardar como nunca sustituye un
+JSON v2 (lee v1 como Favoritos globales), máximo 4 MB, 64 paneles, 10.000 referencias y 10.000
+Favoritos privados. Guardar como nunca sustituye un
 archivo existente: usa otro nombre o Actualizar sobre el abierto. Actualizar vuelve a leer y validar
 el documento y compara su SHA-256 con la revisión conocida; archivos corruptos, de versión no
 compatible o cambiados externamente no se sobrescriben. Puedes abrir la nueva versión o exportar

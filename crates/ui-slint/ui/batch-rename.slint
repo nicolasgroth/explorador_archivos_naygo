@@ -91,6 +91,7 @@ export component BatchRename inherits Rectangle {
             BrField {
                 label: Tr.batch-template;
                 LineEdit {
+                    accessible-label: Tr.batch-template;
                     text: root.vm.template;
                     placeholder-text: "{nombre}_{n:3}";
                     horizontal-stretch: 1;
@@ -100,11 +101,13 @@ export component BatchRename inherits Rectangle {
             BrField {
                 label: Tr.batch-find;
                 LineEdit {
+                    accessible-label: Tr.batch-find;
                     text: root.vm.find;
                     horizontal-stretch: 1;
                     edited(t) => { root.set-find(t); }
                 }
                 LineEdit {
+                    accessible-label: Tr.batch-replace;
                     text: root.vm.replace;
                     placeholder-text: Tr.batch-replace;
                     horizontal-stretch: 1;
@@ -142,12 +145,14 @@ export component BatchRename inherits Rectangle {
             BrField {
                 label: Tr.batch-counter;
                 LineEdit {
+                    accessible-label: Tr.batch-counter-start;
                     text: root.vm.counter-start;
                     placeholder-text: Tr.batch-counter-start;
                     width: 90px;
                     edited(t) => { root.set-counter-start(t); }
                 }
                 LineEdit {
+                    accessible-label: Tr.batch-counter-step;
                     text: root.vm.counter-step;
                     placeholder-text: Tr.batch-counter-step;
                     width: 90px;
@@ -188,8 +193,9 @@ export component BatchRename inherits Rectangle {
                                 // Color por estado: Ok=acento, SinCambio=atenuado, Inválido/Colisión=error.
                                 Text {
                                     text: r.status == 3 ? Tr.batch-collision
-                                        : (r.status == 2 ? Tr.batch-invalid : r.new-name);
-                                    color: r.status == 0 ? Theme.highlight
+                                        : (r.status == 4 ? Tr.batch-non-utf8
+                                            : (r.status == 2 ? Tr.batch-invalid : r.new-name));
+                                    color: r.status == 0 ? Theme.icon-accent
                                         : (r.status == 1 ? Theme.text-dim : Theme.error);
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;

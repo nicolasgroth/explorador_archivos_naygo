@@ -51,6 +51,9 @@ pub fn start_drag(_paths: &[std::path::PathBuf]) -> Result<DragOutcome, DndError
 #[cfg(windows)]
 pub use windows_impl::start_drag;
 
+#[cfg(all(windows, test))]
+pub(crate) use windows_impl::test_file_data_object;
+
 #[cfg(windows)]
 mod windows_impl {
     use super::{DndError, DragOutcome};
@@ -129,6 +132,11 @@ mod windows_impl {
     #[implement(IDataObject)]
     struct FilesDataObject {
         paths: Vec<PathBuf>,
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_file_data_object(paths: Vec<PathBuf>) -> IDataObject {
+        FilesDataObject { paths }.into()
     }
 
     impl IDataObject_Impl for FilesDataObject_Impl {

@@ -14,7 +14,9 @@
 //! CALIENTE (fuera del loop de UI), marca un flag atómico y despierta la UI con el `waker` —
 //! el mismo patrón que el tray (`ui-slint/src/tray.rs`). El tick solo consulta el flag.
 
-use naygo_core::keymap::{Chord, KeyCode};
+use naygo_core::keymap::Chord;
+#[cfg(windows)]
+use naygo_core::keymap::KeyCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Flag de "hubo una pulsación pendiente". Lo ESCRIBE el handler global (hilo del hook de

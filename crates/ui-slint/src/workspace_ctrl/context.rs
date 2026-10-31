@@ -104,6 +104,9 @@ impl WorkspaceCtrl {
     /// Desde el menú contextual de carpeta: abrir el modal "nueva(s) carpeta(s)" en la carpeta
     /// objetivo. Cierra el menú.
     pub fn ctx_new_folder(&mut self) {
+        // El editor modal toma el foco y puede tragarse el key-release que debería limpiar Ctrl.
+        // El siguiente doble clic debe decidirse por el modificador de su propio gesto.
+        self.clear_modifiers();
         if let Some(dir) = self.terminal_dir() {
             self.new_folder = Some(NewFolderState {
                 dir,
@@ -117,6 +120,8 @@ impl WorkspaceCtrl {
 
     /// Abre el modal de nuevas carpetas en la carpeta del panel activo (p. ej. desde la toolbar).
     pub fn new_folder_open_active(&mut self) {
+        // Igual que los demás overlays, no heredar un Ctrl/Shift cuyo release pudo perderse.
+        self.clear_modifiers();
         if let Some(dir) = self
             .ws
             .active_files()
@@ -132,6 +137,7 @@ impl WorkspaceCtrl {
 
     /// Cierra el modal de nuevas carpetas sin crear nada.
     pub fn new_folder_close(&mut self) {
+        self.clear_modifiers();
         self.new_folder = None;
     }
 
@@ -192,26 +198,25 @@ impl WorkspaceCtrl {
 
     /// Crea las carpetas válidas dentro de la carpeta destino (las inválidas se ignoran, ya
     /// avisadas en el estado). Cada línea válida es una `OpRequest` de `CreateDir` (el motor usa
-    /// `create_dir_all`, así que las anidadas se crean enteras). Cierra el modal y refresca.
+    /// `create_dir_all`, así que las anidadas se crean enteras). Cierra el modal;
+    /// la notificación terminal confirma el resultado y pide selección/refresco.
     pub fn new_folder_apply(&mut self) {
         let (dir, text) = match self.new_folder.as_ref() {
             Some(s) => (s.dir.clone(), s.text.clone()),
             None => return,
         };
+        // Ctrl+Enter cierra el modal antes de que el panel reciba key-release.
+        self.clear_modifiers();
         let specs = naygo_core::ops::parse_new_folders(&text);
         let label = self.config.t("op.new_folder");
-        let mut created_any = false;
         for spec in specs {
             if let naygo_core::ops::FolderSpec::Valid(rel) = spec {
                 let req = naygo_core::ops::create(dir.clone(), rel, true);
                 self.ops.start_op(req, label.clone(), true);
-                created_any = true;
             }
         }
         self.new_folder = None;
-        if created_any {
-            self.refresh_active();
-        }
+        // El resultado terminal pide el listado; refrescar aquí corría antes de crear.
     }
 
     /// Cierra el menú contextual.
@@ -316,7 +321,7 @@ impl WorkspaceCtrl {
             .map(|p| p.display().to_string())
             .collect();
         if !lines.is_empty() {
-            let _ = naygo_platform::clipboard::write_text(&lines.join("\r\n"));
+            let _ = self.ops.write_clipboard_text(&lines.join("\r\n"));
         }
         self.close_context_menu();
     }
@@ -334,7 +339,7 @@ impl WorkspaceCtrl {
             })
             .collect();
         if !lines.is_empty() {
-            let _ = naygo_platform::clipboard::write_text(&lines.join("\r\n"));
+            let _ = self.ops.write_clipboard_text(&lines.join("\r\n"));
         }
         self.close_context_menu();
     }
@@ -376,6 +381,11 @@ impl WorkspaceCtrl {
                 let mut row: Vec<String> = columns
                     .iter()
                     .map(|kind| {
+                        if *kind == naygo_core::columns::ColumnKind::Extension
+                            && entry.kind == naygo_core::fs_model::EntryKind::Directory
+                        {
+                            return self.config.t("icons.obj.folder");
+                        }
                         crate::bridge::cell_value(
                             entry,
                             *kind,
@@ -396,14 +406,14 @@ impl WorkspaceCtrl {
 
     pub fn ctx_export_listing_clipboard(&mut self) {
         if let Some(csv) = self.export_listing_csv(';') {
-            let _ = naygo_platform::clipboard::write_text(&csv);
+            let _ = self.ops.write_clipboard_text(&csv);
         }
         self.close_context_menu();
     }
 
     pub fn ctx_export_listing_clipboard_comma(&mut self) {
         if let Some(csv) = self.export_listing_csv(',') {
-            let _ = naygo_platform::clipboard::write_text(&csv);
+            let _ = self.ops.write_clipboard_text(&csv);
         }
         self.close_context_menu();
     }

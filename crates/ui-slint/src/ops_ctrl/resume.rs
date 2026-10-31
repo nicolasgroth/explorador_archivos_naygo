@@ -54,13 +54,14 @@ impl OpsCtrl {
             ),
         );
         let size_map = size_map_of(&resume.plan);
-        let (rx, _h) = engine::spawn(
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
             resume.plan,
             journal.kind.clone(),
             journal.conflict,
             token.clone(),
             conflict_rx,
             Some(writer),
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
         );
         let op_id = self.alloc_op_id();
         self.active_ops.push(ActiveOp {

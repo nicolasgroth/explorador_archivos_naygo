@@ -1,0 +1,111 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: libayatana-appindicator-glib
+Upstream-Contact: Robert Tari <robert@tari.in>
+Source: https://github.com/AyatanaIndicators/libayatana-appindicator-glib/
+
+Files: .build.yml
+ .travis.yml
+ AUTHORS
+ CMakeLists.txt
+ ChangeLog
+ INSTALL.md
+ NEWS
+ README.md
+ bindings/CMakeLists.txt
+ bindings/vala/AyatanaAppIndicatorGlib-2.0.metadata
+ bindings/vala/CMakeLists.txt
+ bindings/vala/ayatana-appindicator-glib.deps
+ doc/CMakeLists.txt
+ examples/CMakeLists.txt
+ examples/simple-client-test-icon.png
+ src/CMakeLists.txt
+ src/ayatana-appindicator-glib.pc.in
+ src/ayatana-appindicator.symbols
+ src/notification-item.xml
+ src/notification-watcher.xml
+ tests/CMakeLists.txt
+ tests/run-xvfb.sh
+Copyright: 2009, Ted Gould <ted@canonical.com>
+  2011, Marco Trevisan <mail@3v1n0.net>
+  2022-2025, Robert Tari <robert@tari.in>
+License: GPL-3
+Comment:
+ Files listed above come without license headers. Assuming
+ copyright holder and license from the rest of the code files.
+
+Files: examples/simple-client.c
+ src/application-service-marshal.list
+ src/ayatana-appindicator-enum-types.c.in
+ src/ayatana-appindicator-enum-types.h.in
+ src/dbus-shared.h
+ tests/test-defines.h
+ tests/test-libappindicator-dbus-client.c
+ tests/test-libappindicator-dbus-server.c
+ tests/test-libappindicator-status-client.c
+ tests/test-libappindicator-status-server.c
+ tests/test-libappindicator.c
+ tests/test-simple-app.c
+Copyright: 2009, Ted Gould <ted@canonical.com>
+  2022-2024, Robert Tari <robert@tari.in>
+  2023-2024, Robert Tari <robert@tari.in>
+  2024, Robert Tari <robert@tari.in>
+License: GPL-3
+
+Files: src/ayatana-appindicator.c
+ src/ayatana-appindicator.h
+Copyright: 2009, Cody Russell <cody.russell@canonical.com>
+  2009, Ted Gould <ted@canonical.com>
+  2009-2010, Ted Gould <ted@canonical.com>
+  2022-2024, Robert Tari <robert@tari.in>
+  2024, Robert Tari <robert@tari.in>
+License: GPL-3
+
+Files: doc/AyatanaAppIndicatorGlib-2.0.toml.in
+Copyright: 2024, Robert Tari <robert@tari.in>
+License: CC0-1.0
+
+Files: examples/simple-client-vala.vala
+Copyright: 2011, Marco Trevisan <mail@3v1n0.net>
+  2022-2024, Robert Tari <robert@tari.in>
+License: GPL-3
+
+Files: bindings/vala/ayatana-appindicator-custom.vala
+Copyright: 2011, Michal Hruby <michal.hruby@canonical.com>
+  2022-2024, Robert Tari <robert@tari.in>
+License: GPL-3
+
+Files: examples/simple-client-python.py
+Copyright: 2024, Robert Tari <robert@tari.in>
+License: GPL-3
+
+Files: debian/*
+Copyright: 2025, Mike Gabriel <mike.gabriel@das-netzwerkteam.de>
+License: GPL-3
+
+License: GPL-3
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation; version 3 of the License.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ more details.
+ .
+ You should have received a copy of the GNU General Public License along with
+ this program; if not, write to the Free Software Foundation, Inc., 51
+ Franklin Street, # 960789, Boston, MA 02196 USA.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in `/usr/share/common-licenses/GPL-3'.
+
+License: CC0-1.0
+ To the extent possible under law, the author(s) have dedicated all copyright
+ and related and neighboring rights to this software to the public domain
+ worldwide. This software is distributed without any warranty.
+ .
+ You should have received a copy of the CC0 Public Domain Dedication along with
+ this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
+ .
+ On Debian systems, the full text of the CC0 1.0 Universal license can be found
+ in the file `/usr/share/common-licenses/CC0-1.0'.

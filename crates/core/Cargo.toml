@@ -13,6 +13,10 @@ required-features = ["gen-icons"]
 name = "large_directory"
 harness = false
 
+[[bench]]
+name = "mesh_preview"
+harness = false
+
 [features]
 gen-icons = ["dep:resvg", "dep:usvg", "dep:tiny-skia"]
 
@@ -43,10 +47,13 @@ lopdf.workspace = true
 # Fold Unicode para el filtro por tipeo (NFD + marcas combinantes). Pura-Rust, MIT/Apache;
 # ya venía transitivamente en el lock, se usa directo en `text_match`.
 unicode-normalization = "0.1"
+# Copias transaccionales: prepara el archivo junto al destino y publica con replace/no-clobber.
+tempfile.workspace = true
 # Deps del generador de íconos (solo bajo feature gen-icons, no se incluyen en la app).
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }
 tiny-skia = { version = "0.12", optional = true }
 
-[dev-dependencies]
-tempfile.workspace = true
+[target.'cfg(target_os = "linux")'.dependencies]
+# renameat2(RENAME_NOREPLACE) evita pisar destinos creados en una carrera durante Move.
+rustix = { version = "1.1", default-features = false, features = ["fs"] }

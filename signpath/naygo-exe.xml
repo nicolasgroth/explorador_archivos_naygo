@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Naygo — SignPath artifact configuration for the portable executable upload.
+     Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+     SPDX-License-Identifier: MIT -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="naygo.exe" product-name="Naygo" product-version="${version}">
+      <authenticode-sign />
+      <authenticode-verify />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -8,14 +8,12 @@ impl WorkspaceCtrl {
     // --- Plantillas de disposición de paneles (Fase 4) ---
 
     /// Carpeta «home» para las plantillas (`TemplateDir::Home`): la carpeta del Files activo si la
-    /// hay; si no, %USERPROFILE%; si no, la raíz del disco del sistema.
+    /// hay; si no, la carpeta Home configurada para el usuario.
     pub(super) fn template_home(&self) -> PathBuf {
         if let Some(f) = self.ws.active_files() {
             return f.current_dir.clone();
         }
-        std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("C:\\"))
+        self.configured_home_dir()
     }
 
     /// Lista de plantillas para el menú: (nombre, es_builtin), built-ins primero y luego las del
@@ -52,8 +50,10 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.listings.clear();
+        self.pending_file_listings.clear();
         self.trees.clear();
         self.tree_listings.clear();
+        self.pending_tree_listings.clear();
         self.reveal_targets.clear();
         // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
         if let Some(d) = self.deep_job.take() {
@@ -62,7 +62,7 @@ impl WorkspaceCtrl {
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
         self.relaunch_all_panes();
         self.templates.record_use(name, now_secs);
-        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+        self.persist_templates();
         self.maybe_persist_session();
     }
 
@@ -83,8 +83,10 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.listings.clear();
+        self.pending_file_listings.clear();
         self.trees.clear();
         self.tree_listings.clear();
+        self.pending_tree_listings.clear();
         self.reveal_targets.clear();
         // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
         if let Some(d) = self.deep_job.take() {
@@ -97,20 +99,42 @@ impl WorkspaceCtrl {
 
     /// Guarda la disposición ACTUAL como plantilla de usuario con `name` (reemplaza si ya existe).
     /// Persiste. Nombre vacío = no hace nada.
-    pub fn save_current_template(&mut self, name: &str) {
+    pub fn save_current_template(
+        &mut self,
+        name: &str,
+    ) -> Result<(), naygo_core::workspace::template::TemplateCaptureError> {
         let name = name.trim();
         if name.is_empty() {
-            return;
+            return Ok(());
         }
-        let tpl = self.ws.to_template(name);
+        let tpl = self.ws.to_template(name)?;
         self.templates.add_user(tpl);
-        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+        self.persist_templates();
+        Ok(())
     }
 
     /// Borra una plantilla de USUARIO por nombre (los built-in no se borran). Persiste.
     pub fn delete_template(&mut self, name: &str) {
         self.templates.remove_user(name);
-        naygo_core::config::save_templates(&self.config.config_dir, &self.templates);
+        self.persist_templates();
+    }
+
+    pub(super) fn persist_templates(&mut self) {
+        self.startup_templates_dirty.set(true);
+        if self.startup_async_enabled || self.startup_load_failed {
+            return;
+        }
+        match naygo_core::config::save_templates_async(&self.config.config_dir, &self.templates) {
+            Ok(ticket) => {
+                *self
+                    .last_templates_save
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(ticket);
+            }
+            Err(error) => crate::logging::log_line(&format!(
+                "no se pudo encolar el guardado de plantillas: {error}"
+            )),
+        }
     }
 
     /// Relanza el contenido de TODOS los paneles del workspace actual (tras reemplazarlo por una
@@ -142,7 +166,7 @@ impl WorkspaceCtrl {
                     }
                 }
                 PanePurpose::Tree => {
-                    let mut t = build_tree();
+                    let mut t = self.build_tree();
                     let target = self.ws.linked_files(id).or(self.last_active_files);
                     if let Some(cur) = target
                         .and_then(|files| self.ws.pane(files))
@@ -158,6 +182,7 @@ impl WorkspaceCtrl {
             }
         }
         self.pump_reveal();
+        self.refresh_missing_cache();
     }
 
     // --- Renombrado por lotes (Fase 5) ---

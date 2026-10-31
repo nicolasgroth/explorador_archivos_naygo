@@ -46,7 +46,20 @@ pub(crate) fn wire_task_spaces(ui: &AppWindow, ctx: &WireCtx) {
                             name.push(".naygospace");
                             path = name.into();
                         }
-                        ctrl.borrow_mut().spaces_save(Some(path), root, false);
+                        let scope = if weak
+                            .upgrade()
+                            .is_some_and(|ui| ui.get_spaces_own_favorites())
+                        {
+                            naygo_core::task_space::FavoriteScope::PerSpace
+                        } else {
+                            naygo_core::task_space::FavoriteScope::Global
+                        };
+                        ctrl.borrow_mut().spaces_save_with_scope(
+                            Some(path),
+                            root,
+                            false,
+                            Some(scope),
+                        );
                     } else {
                         ctrl.borrow_mut().spaces_read(path, root);
                     }
@@ -55,10 +68,13 @@ pub(crate) fn wire_task_spaces(ui: &AppWindow, ctx: &WireCtx) {
             3 => ctrl.borrow_mut().spaces_save(None, None, false),
             4 => ctrl.borrow_mut().spaces_apply_pending(),
             5 => ctrl.borrow_mut().spaces_save(None, None, true),
-            7 => ctrl.borrow_mut().task_spaces.recents.clear(),
+            7 => ctrl.borrow_mut().spaces_clear_recents(),
             10..=19 => ctrl
                 .borrow_mut()
                 .spaces_read_recent((action - 10) as usize, root),
+            20..=24 => ctrl
+                .borrow_mut()
+                .spaces_quick_select_recent((action - 20) as usize),
             _ => ctrl.borrow_mut().spaces_close(),
         }
         if action == 0 {

@@ -569,6 +569,12 @@ export component OpDialogs inherits Rectangle {
                     name-input := TextInput {
                         x: 8px;
                         width: parent.width - 16px;
+                        // El título visible no crea una relación programática con el campo en
+                        // UI Automation. Repetir su propósito como nombre accesible evita que
+                        // Narrador anuncie este TextInput genérico sólo como «Edit».
+                        accessible-label: root.vm.name-conflict-for != ""
+                            ? Tr.dlg-rename-to-pre + root.vm.name-conflict-for + Tr.dlg-rename-to-suf
+                            : (root.vm.name-is-compress ? Tr.zipname-title : root.vm.name-title);
                         color: white;
                         vertical-alignment: center;
                         text: root.vm.name-value;

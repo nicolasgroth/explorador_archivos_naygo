@@ -24,11 +24,19 @@ enum Completed {
 }
 #[derive(Default)]
 pub struct TaskSpacesState {
-    // MRU acotado de esta sesión: no persiste rutas privadas ni explora el disco.
+    // MRU acotado: guarda referencias explícitas en settings.json; nunca explora carpetas.
     pub recents: Vec<PathBuf>,
     pub open: bool,
     pub report: String,
     pub dirty: bool,
+    /// Un acceso desde la lista rápida aplica al terminar la lectura solo si el espacio actual
+    /// sigue limpio. Si hay cambios, el documento queda en revisión dentro del gestor.
+    quick_apply_if_clean: bool,
+    recents_cleared: bool,
+    /// Copia en memoria del árbol global para alternar a espacios que traen Favoritos propios.
+    pub global_favorites: naygo_core::favorites::Favorites,
+    /// Preferencia temporal del control «Guardar como»; no se persiste hasta crear el espacio.
+    pub create_private_favorites: bool,
     active: Option<SavedSpace>,
     pending: Option<SavedSpace>,
     rx: Option<Receiver<Result<Completed, SpaceError>>>,
@@ -44,9 +52,36 @@ impl Drop for TaskSpacesState {
 }
 impl TaskSpacesState {
     fn remember(&mut self, path: PathBuf) {
+        if !valid_recent_path(&path) {
+            return;
+        }
         self.recents.retain(|p| p != &path);
         self.recents.insert(0, path);
         self.recents.truncate(10);
+        self.recents_cleared = false;
+    }
+    pub fn merge_persisted_recents(&mut self, persisted: Vec<PathBuf>) {
+        let local = self.recents.clone();
+        let mut merged = Vec::with_capacity(10);
+        let candidates = if self.recents_cleared {
+            local
+        } else {
+            local.into_iter().chain(persisted).collect()
+        };
+        for path in candidates {
+            if valid_recent_path(&path) && !merged.contains(&path) {
+                merged.push(path);
+                if merged.len() == 10 {
+                    break;
+                }
+            }
+        }
+        self.recents = merged;
+        self.recents_cleared = false;
+    }
+    pub fn clear_recents(&mut self) {
+        self.recents.clear();
+        self.recents_cleared = true;
     }
     pub fn busy(&self) -> bool {
         self.rx.is_some()
@@ -60,9 +95,39 @@ impl TaskSpacesState {
     pub fn name(&self) -> &str {
         self.active.as_ref().map_or("", |s| s.stored.name.as_str())
     }
+    pub fn active_favorite_scope(&self) -> task_space::FavoriteScope {
+        self.active
+            .as_ref()
+            .map_or(task_space::FavoriteScope::Global, |space| {
+                space.resolved.favorite_scope
+            })
+    }
+}
+
+fn valid_recent_path(path: &std::path::Path) -> bool {
+    path.is_absolute()
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("naygospace"))
+        && path.as_os_str().len() <= 32_768
 }
 
 impl WorkspaceCtrl {
+    fn remember_task_space(&mut self, path: PathBuf) {
+        self.task_spaces.remember(path);
+        self.persist_task_space_recents();
+    }
+
+    pub fn spaces_clear_recents(&mut self) {
+        self.task_spaces.clear_recents();
+        self.persist_task_space_recents();
+    }
+
+    pub(super) fn persist_task_space_recents(&mut self) {
+        self.config.settings.task_space_recents = self.task_spaces.recents.clone();
+        self.config.save();
+    }
+
     pub fn spaces_read_recent(&mut self, index: usize, root: Option<PathBuf>) {
         if !self.task_spaces.open || self.task_spaces.busy() {
             return;
@@ -71,7 +136,26 @@ impl WorkspaceCtrl {
             self.spaces_read(path, root);
         }
     }
+
+    /// Selección rápida desde Disposiciones: abre directamente si el estado actual está limpio;
+    /// cuando hay cambios pendientes conserva el flujo explícito guardar/descartar/cancelar.
+    pub fn spaces_quick_select_recent(&mut self, index: usize) {
+        if !self.spaces_open() {
+            return;
+        }
+        self.task_spaces.quick_apply_if_clean = true;
+        self.spaces_read_recent(index, None);
+    }
     pub(super) fn space_snapshot(&self, name: &str) -> Result<TaskSpace, SpaceError> {
+        self.space_snapshot_with_scope(name, self.task_spaces.active_favorite_scope(), None)
+    }
+
+    fn space_snapshot_with_scope(
+        &self,
+        name: &str,
+        favorite_scope: task_space::FavoriteScope,
+        favorites: Option<naygo_core::favorites::Favorites>,
+    ) -> Result<TaskSpace, SpaceError> {
         let mut space = task_space::from_workspace(name.to_owned(), self.session_persist())?;
         space.workspace.tree_links.sort_unstable();
         space.basket = self.basket.items().to_vec();
@@ -79,6 +163,13 @@ impl WorkspaceCtrl {
         space.saved_recipes = self.recipes.references.clone();
         space.typeahead = self.typeahead.clone();
         space.filter_hide_nonmatches = self.filter_hide_nonmatches;
+        space.favorite_scope = favorite_scope;
+        space.favorites = match favorite_scope {
+            task_space::FavoriteScope::Global => None,
+            task_space::FavoriteScope::PerSpace => {
+                Some(favorites.unwrap_or_else(|| self.favorites.clone()))
+            }
+        };
         space.visual_filters = self
             .ws
             .panes()
@@ -107,7 +198,7 @@ impl WorkspaceCtrl {
     }
 
     // Solo al abrir el gestor o terminar una acción, nunca por fila/tick de render.
-    fn refresh_space_report(&mut self) {
+    pub(super) fn refresh_space_report(&mut self) {
         self.task_spaces.dirty = self.task_spaces.active.as_ref().is_none_or(|active| {
             self.space_snapshot(&active.resolved.name)
                 .and_then(|s| s.signature())
@@ -147,6 +238,10 @@ impl WorkspaceCtrl {
         if self.any_modal_open() || self.pending_drop.is_some() {
             return false;
         }
+        self.task_spaces.create_private_favorites = matches!(
+            self.task_spaces.active_favorite_scope(),
+            task_space::FavoriteScope::PerSpace
+        );
         self.task_spaces.open = true;
         self.refresh_space_report();
         true
@@ -218,6 +313,17 @@ impl WorkspaceCtrl {
         root: Option<PathBuf>,
         then_open: bool,
     ) {
+        self.spaces_save_with_scope(new_path, root, then_open, None);
+    }
+
+    pub fn spaces_save_with_scope(
+        &mut self,
+        new_path: Option<PathBuf>,
+        root: Option<PathBuf>,
+        then_open: bool,
+        new_favorite_scope: Option<task_space::FavoriteScope>,
+    ) {
+        let creating_new_space = new_path.is_some();
         if self.task_spaces.busy() {
             return;
         }
@@ -225,23 +331,35 @@ impl WorkspaceCtrl {
             self.task_spaces.report = self.config.t("spaces.staging");
             return;
         }
-        let (path, expected, name, root) = if let Some(path) = new_path {
+        let (path, expected, name, root, favorite_scope) = if let Some(path) = new_path {
             let Some(name) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
                 self.space_error(SpaceError::Invalid);
                 return;
             };
-            (path, None, name, root)
+            (
+                path,
+                None,
+                name,
+                root,
+                new_favorite_scope.unwrap_or_default(),
+            )
         } else if let Some(active) = &self.task_spaces.active {
             (
                 active.path.clone(),
                 Some(active.revision.clone()),
                 active.stored.name.clone(),
                 active.stored.base_root.clone(),
+                active.resolved.favorite_scope,
             )
         } else {
             return;
         };
-        let snapshot = self.space_snapshot(&name);
+        let snapshot = self.space_snapshot_with_scope(
+            &name,
+            favorite_scope,
+            (creating_new_space && matches!(favorite_scope, task_space::FavoriteScope::PerSpace))
+                .then(|| self.task_spaces.global_favorites.clone()),
+        );
         let (resolved, stored) = match snapshot.and_then(|resolved| {
             let stored = match root {
                 Some(root) => resolved.with_relative_paths(&root)?,
@@ -297,11 +415,23 @@ impl WorkspaceCtrl {
             Ok(Completed::Read(space)) => {
                 if self.task_spaces.open && self.task_spaces.accept_read {
                     self.task_spaces.pending = Some(*space);
+                    if self.task_spaces.quick_apply_if_clean && !self.task_spaces.dirty {
+                        self.task_spaces.quick_apply_if_clean = false;
+                        self.spaces_apply_pending();
+                        return true;
+                    }
                 }
+                self.task_spaces.quick_apply_if_clean = false;
                 self.refresh_space_report();
             }
             Ok(Completed::Written(space, then_open)) => {
-                self.task_spaces.remember(space.path.clone());
+                self.favorites = match space.resolved.favorite_scope {
+                    task_space::FavoriteScope::Global => self.task_spaces.global_favorites.clone(),
+                    task_space::FavoriteScope::PerSpace => {
+                        space.resolved.favorites.clone().unwrap_or_default()
+                    }
+                };
+                self.remember_task_space(space.path.clone());
                 if self
                     .task_spaces
                     .pending
@@ -336,11 +466,19 @@ impl WorkspaceCtrl {
         let Some(workspace) = Workspace::from_persist(&space.resolved.workspace) else {
             return;
         };
+        self.favorites = match space.resolved.favorite_scope {
+            task_space::FavoriteScope::Global => self.task_spaces.global_favorites.clone(),
+            task_space::FavoriteScope::PerSpace => {
+                space.resolved.favorites.clone().unwrap_or_default()
+            }
+        };
         for listing in self.listings.values().chain(self.tree_listings.values()) {
             listing.cancel();
         }
         self.listings.clear();
+        self.pending_file_listings.clear();
         self.tree_listings.clear();
+        self.pending_tree_listings.clear();
         self.trees.clear();
         self.tree_cursor.clear();
         self.reveal_targets.clear();
@@ -402,7 +540,7 @@ impl WorkspaceCtrl {
             }
         }
         // Cola/historial de operaciones y guards de entregas siguen vivos y globales.
-        self.task_spaces.remember(space.path.clone());
+        self.remember_task_space(space.path.clone());
         self.task_spaces.active = Some(space);
         self.task_spaces.open = false;
         self.refresh_space_report();

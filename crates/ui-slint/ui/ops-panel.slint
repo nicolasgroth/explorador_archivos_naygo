@@ -288,6 +288,19 @@ export component OpButton inherits Rectangle {
     in property <bool> show-skip: false;
     in property <bool> show-cancel: false;
 
+    // Los chips dibujados a mano deben conservar semántica de botón, nombre y activación
+    // por UI Automation/teclado. Los controles sólo con icono usan la etiqueta localizada.
+    accessible-role: button;
+    accessible-label: root.label != "" ? root.label
+        : root.show-cancel ? Tr.ops-cancel
+        : root.show-play ? Tr.ops-resume
+        : root.show-pause ? Tr.ops-pause
+        : root.show-skip ? Tr.ops-skip
+        : "";
+    accessible-enabled: true;
+    accessible-action-default => { root.pressed(); }
+    forward-focus: button-focus;
+
     height: 30px;
     border-radius: 8px;
     // El botón se ajusta a su CONTENIDO (ícono + texto), no se estira: dentro de un
@@ -318,9 +331,15 @@ export component OpButton inherits Rectangle {
             vertical-alignment: center;
         }
     }
+    button-focus := FocusScope {
+        key-pressed(ev) => {
+            if ev.text == Key.Return || ev.text == " " { root.pressed(); return accept; }
+            reject
+        }
+    }
     btn-touch := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.pressed(); }
+        clicked => { button-focus.focus(); root.pressed(); }
     }
 }
 
@@ -489,7 +508,7 @@ component OpCard inherits Rectangle {
         // animaciones (brillo continuo — Task 7) y la op no está pausada.
         ProgressBar {
             percent: root.op.percent;
-            fill: root.op.paused ? Theme.highlight : Theme.accent;
+            fill: root.op.paused ? Theme.icon-accent : Theme.accent;
             glow: root.animations-enabled && !root.op.paused;
         }
 

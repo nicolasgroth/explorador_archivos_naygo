@@ -56,6 +56,7 @@ export component CommandPalette inherits Rectangle {
             // Esc cierra; Enter ejecuta la selección actual. Las letras caen al LineEdit (reject).
             search := LineEdit {
                 placeholder-text: Tr.palette-placeholder;
+                accessible-label: Tr.palette-placeholder;
                 text <=> root.query;
                 edited => { root.query-changed(self.text); }
                 accepted => { root.run(root.selected); }
@@ -86,6 +87,9 @@ export component CommandPalette inherits Rectangle {
                     padding: 4px;
                     for item[i] in root.results: Rectangle {
                         height: 30px;
+                        accessible-role: button;
+                        accessible-label: item.label + (item.shortcut != "" ? ", " + item.shortcut : "");
+                        accessible-action-default => { root.run(i); }
                         border-radius: 4px;
                         background: i == root.selected ? Theme.selection-bg
                             : (row-touch.has-hover ? Theme.row-alt-bg : transparent);

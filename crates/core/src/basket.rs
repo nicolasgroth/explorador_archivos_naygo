@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelectionBasket {
     items: Vec<PathBuf>,
-    keys: HashSet<String>,
+    keys: HashSet<crate::path_identity::PathIdentityKey>,
 }
 
 impl SelectionBasket {
@@ -88,13 +88,8 @@ impl SelectionBasket {
     }
 }
 
-fn path_key(path: &Path) -> String {
-    let key = path.to_string_lossy().replace('/', "\\");
-    if cfg!(windows) {
-        key.to_lowercase()
-    } else {
-        key
-    }
+fn path_key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    crate::path_identity::key(path)
 }
 
 /// Selección por identidad, independiente de índices que cambian al quitar referencias.
@@ -232,5 +227,25 @@ mod tests {
         assert_eq!(basket.remove_indices(&[0, 2]), 2);
         assert_eq!(basket.items(), &[PathBuf::from("b")]);
         assert_eq!(basket.add([PathBuf::from("a")]), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deduplica_rutas_posix_por_bytes_y_case_exacto() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut basket = SelectionBasket::new();
+        let lower = PathBuf::from("/tmp/a");
+        let upper = PathBuf::from("/tmp/A");
+        let invalid_utf8 = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/x-\xff"));
+        assert_eq!(
+            basket.add([lower.clone(), upper.clone(), invalid_utf8.clone()]),
+            3
+        );
+        assert_eq!(basket.add([upper]), 0);
+        assert_eq!(
+            basket.items(),
+            &[lower, PathBuf::from("/tmp/A"), invalid_utf8]
+        );
     }
 }

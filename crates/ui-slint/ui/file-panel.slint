@@ -6,10 +6,12 @@
 // binding. Cada panel emite sus callbacks con su `pane-id` para que el controller sepa
 // sobre cuál actuar; el panel activo lleva borde de acento.
 import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
+import { PathEditor } from "path-editor.slint";
 import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { BreadcrumbBar } from "breadcrumb-bar.slint";
+import { MatchedName } from "matched-name.slint";
 
 // Íconos dibujados con Path (no glifos de fuente): bajo render por software los emoji/★/✓
 // salían invisibles. `fill`/`stroke` los pinta el llamador según estado.
@@ -17,7 +19,7 @@ import { BreadcrumbBar } from "breadcrumb-bar.slint";
 // Estrella de 5 puntas. `filled` la rellena (favorito activo) o solo la contornea.
 component StarIcon inherits Rectangle {
     in property <bool> filled: false;
-    in property <color> tint: Theme.highlight;
+    in property <color> tint: Theme.icon-accent;
     in property <length> size: 15px;
     Path {
         width: root.size;
@@ -74,7 +76,7 @@ component ClipboardIcon inherits Rectangle {
 
 // Tilde (✓) para el feedback "copiado".
 component CheckIcon inherits Rectangle {
-    in property <color> tint: Theme.highlight;
+    in property <color> tint: Theme.icon-accent;
     in property <length> size: 14px;
     Path {
         width: root.size;
@@ -185,6 +187,10 @@ component PanelNavButton inherits Rectangle {
     callback clicked();
     callback history-menu(length);
     callback hover-tip(string, length, length);
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
     width: 20px;
     height: 22px;
     border-radius: Theme.radius-sm;
@@ -248,6 +254,10 @@ component MissingOpButton inherits Rectangle {
     callback clicked();
     height: 32px;
     border-radius: Theme.radius-md;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: button-focus;
     border-width: 1px;
     border-color: opt-touch.has-hover ? Theme.active-pane-border : Theme.divider;
     background: opt-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
@@ -259,7 +269,13 @@ component MissingOpButton inherits Rectangle {
     }
     opt-touch := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => { button-focus.focus(); root.clicked(); }
+    }
+    button-focus := FocusScope {
+        key-pressed(ev) => {
+            if ev.text == Key.Return || ev.text == " " { root.clicked(); return accept; }
+            reject
+        }
     }
 }
 
@@ -404,6 +420,15 @@ export component FilePanel inherits FocusScope {
     // aún puede reemplazar el buffer al aceptar una sugerencia. Un binding de una sola vía
     // reescribía el texto tras cada `edited`, dejando el cursor a mitad de la ruta.
     in-out property <string> edit-text;
+    in property <int> edit-session;
+    in property <string> edit-error;
+    in property <bool> edit-validating;
+    callback path-focus-changed(bool);
+    in property <int> path-refocus-revision;
+    in property <bool> toolbar-path-editing;
+    changed path-refocus-revision => {
+        if root.active && !root.editing { refocus-after-rename.running = true; }
+    }
     in property <[string]> suggestions;      // autocompletado del editor
     // Offset UTF-8 a restaurar tras completar una sugerencia. -1 = no forzar el caret.
     in property <int> edit-caret: -1;
@@ -461,7 +486,7 @@ export component FilePanel inherits FocusScope {
     callback path-edit-cancel(int);          // (pane-id) Esc → salir de edición
     callback suggestion-clicked(int, string);// (pane-id, nombre) elegir un candidato
     callback row-clicked(int, int, bool, bool);  // (pane-id, pos, ctrl, shift) — modificadores del clic
-    callback row-double-clicked(int, int);
+    callback row-double-clicked(int, int, bool, bool); // (pane-id, pos, ctrl, shift) del gesto actual
     callback row-middle-clicked(int, int);   // (pane-id, pos) — clic-medio: abrir carpeta en panel nuevo
     callback row-drag-out(int);              // (pane-id) inicia el arrastre OLE de lo selecto
     callback scroll-position-changed(int, int); // (pane-id, primera fila visible)
@@ -580,8 +605,12 @@ export component FilePanel inherits FocusScope {
         running: false;
         triggered => {
             self.running = false;
-            root.focus();
+            if root.active && !root.editing && !root.toolbar-path-editing { root.focus(); }
         }
+    }
+
+    changed editing => {
+        if !root.editing && root.active { refocus-after-rename.running = true; }
     }
 
     // Mismo motivo que arriba para el arrastre OLE: mientras dura el drag el `body-touch` está
@@ -594,7 +623,7 @@ export component FilePanel inherits FocusScope {
     // Cuando este panel pasa a ser el activo, tomar el foco de teclado para que las teclas
     // lleguen sin necesidad de un clic previo (p. ej. tras Tab o al arrancar).
     changed active => {
-        if (root.active) {
+        if (root.active && !root.editing) {
             root.focus();
         }
     }
@@ -678,6 +707,12 @@ export component FilePanel inherits FocusScope {
                         hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                     }
                     PanelNavButton {
+                        glyph: "✎";
+                        tip: Tr.edit-path-tip;
+                        clicked => { root.activate(root.pane-id); root.path-edit-start(root.pane-id); }
+                        hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
+                    }
+                    PanelNavButton {
                         glyph: "⟳";
                         tip: Tr.refresh-panel;
                         clicked => { root.refresh-panel(root.pane-id); }
@@ -692,7 +727,7 @@ export component FilePanel inherits FocusScope {
                             width: 100%;
                             height: 100%;
                             filled: root.is-favorite;
-                            tint: root.is-favorite ? Theme.highlight : Theme.text-dim;
+                            tint: root.is-favorite ? Theme.icon-accent : Theme.text-dim;
                         }
                         fav-touch := TouchArea {
                             pointer-event(ev) => {
@@ -715,7 +750,7 @@ export component FilePanel inherits FocusScope {
                         border-radius: Theme.radius-sm;
                         property <bool> flashed: false;
                         // ✓ al copiar, si no el portapapeles. Ambos dibujados con Path.
-                        if copy-box.flashed: CheckIcon { width: 100%; height: 100%; tint: Theme.highlight; }
+                        if copy-box.flashed: CheckIcon { width: 100%; height: 100%; tint: Theme.icon-accent; }
                         if !copy-box.flashed: ClipboardIcon { width: 100%; height: 100%; tint: Theme.text; }
                         // Apaga el ✓ tras ~1s.
                         flash-timer := Timer {
@@ -826,94 +861,28 @@ export component FilePanel inherits FocusScope {
                             }
                         }
                     }
-                // Modo EDICIÓN: LineEdit con la ruta; Enter navega, Esc cancela, perder foco
-                // (clic afuera) vuelve a los breadcrumbs.
-                // Envuelto en HorizontalLayout (mismo patrón que los breadcrumbs de arriba) para
-                // que el texto quede alineado a la izquierda; el estilo fluent centra el texto
-                // de un LineEdit suelto sin layout.
-                if root.editing: HorizontalLayout {
-                    padding-left: 4px;
-                    // Tomar el foco al abrir el editor (si no, el clic que lo abrió no enfoca
-                    // el LineEdit y el "perder foco" nunca tendría foco que perder). Además
-                    // selecciona todo el texto para que escribir reemplace la ruta completa.
-                    // Se difiere con un Timer de 0 ms: en `init` el editor aún se está montando
-                    // dentro de la evaluación de layout y `focus()` paniquea con "Recursion
-                    // detected" (mismo bug que el crash de F2 del editor de rename). Un Timer
-                    // no es ítem visual: no afecta el layout.
-                    Timer {
-                        interval: 0ms;
-                        running: true;
-                        triggered => {
-                            self.running = false;
-                            path-edit.focus();
-                            path-edit.select-all();
-                        }
-                    }
-                    // Completar una sugerencia cambia el texto DESDE el callback Rust. El
-                    // toolkit conserva a veces el offset anterior (que cae dentro del nombre
-                    // recién insertado); diferimos un tick y lo dejamos inequívocamente al final.
-                    // El Timer no corre durante la escritura normal: solo cambia la revisión al
-                    // aceptar una sugerencia, por lo que Home/End/flechas siguen editando libremente.
-                    caret-timer := Timer {
-                        interval: 0ms;
-                        property <int> applied: -1;
-                        running: root.edit-caret >= 0 && self.applied != root.edit-caret-revision;
-                        triggered => {
-                            self.running = false;
-                            self.applied = root.edit-caret-revision;
-                            path-edit.focus();
-                            path-edit.set-selection-offsets(root.edit-caret, root.edit-caret);
-                        }
-                    }
-                    path-edit := LineEdit {
-                        horizontal-stretch: 1;
-                        text <=> root.edit-text;
-                        placeholder-text: "C:\\…";
-                        edited(t) => {
-                            root.suggestion-index = -1;
-                            root.path-edit-changed(root.pane-id, t);
-                        }
-                        accepted(t) => { root.path-edit-commit(root.pane-id, t); }
-                        // Al perder el foco (clic afuera) salir de edición → vuelve a breadcrumbs.
-                        changed has-focus => {
-                            if (!self.has-focus) {
-                                root.path-edit-cancel(root.pane-id);
-                            }
-                        }
-                        key-pressed(ev) => {
-                            if (ev.text == Key.Escape) {
-                                root.path-edit-cancel(root.pane-id);
-                                return accept;
-                            }
-                            if (ev.text == Key.DownArrow) {
-                                root.move-suggestion(1);
-                                return accept;
-                            }
-                            if (ev.text == Key.UpArrow) {
-                                root.move-suggestion(-1);
-                                return accept;
-                            }
-                            if (ev.text == Key.Return && root.suggestion-index >= 0) {
-                                root.accept-suggestion();
-                                return accept;
-                            }
-                            // En algunos teclados Windows «\\» llega como AltGr (Ctrl+Alt).
-                            // El TextInput de Slint trata esa combinación como atajo y no la
-                            // inserta. La incorporamos explícitamente y la enviamos al mismo
-                            // flujo async de autocompletado. Es el único carácter interceptado.
-                            if (ev.text == "\\") {
-                                root.suggestion-index = -1;
-                                // Actualizar el buffer LOCAL primero: el siguiente carácter se
-                                // inserta sobre la ruta ya extendida, aun si el callback Rust aún
-                                // está preparando las sugerencias en su worker.
-                                self.text = self.text + "\\";
-                                root.path-edit-changed(root.pane-id, self.text);
-                                return accept;
-                            }
-                            return reject;
-                        }
-                    }
+                // Editor compartido; no se cierra al perder foco transitoriamente.
+                if root.editing: PathEditor {
+                    width: parent.width;
+                    height: parent.height;
+                    text <=> root.edit-text;
+                    session: root.edit-session;
+                    caret: root.edit-caret;
+                    caret-revision: root.edit-caret-revision;
+                    suggestion-index: root.suggestion-index;
+                    error: root.edit-validating ? "" : root.edit-error;
+                    focus-changed(focused) => { root.path-focus-changed(focused); }
+                    edited(value) => { root.suggestion-index = -1; root.path-edit-changed(root.pane-id, value); }
+                    commit(value) => { root.path-edit-commit(root.pane-id, value); }
+                    cancel() => { root.path-edit-cancel(root.pane-id); }
+                    move-suggestion(delta) => { root.move-suggestion(delta); }
+                    accept-suggestion() => { root.accept-suggestion(); }
+                    hover-tip(t, x, y) => { root.hover-tip(t, x, y); }
                 }
+            }
+            if root.editing && root.edit-error != "": Text {
+                text: root.edit-error; height: 20px; color: root.edit-validating ? Theme.text-dim : Theme.error;
+                overflow: elide; vertical-alignment: center;
             }
             // Autocompletado: lista flotante de candidatos bajo el editor (solo en edición).
             if root.editing && root.suggestions.length > 0: Rectangle {
@@ -1001,6 +970,10 @@ export component FilePanel inherits FocusScope {
                     }
                 }
                 list := ListView {
+                accessible-role: AccessibleRole.list;
+                accessible-label: Tr.add-files;
+                accessible-item-count: root.rows.length;
+                accessible-delegate-focus: root.focused-row;
                 // El ListView (std-widgets) NO expone `interactive`; su Flickable interno ya viene
                 // con `interactive: false` en el estilo fluent, pero igual interceptaba el `move`
                 // del TouchArea hijo. La solución es el `body-touch` exterior (abajo): al estar por
@@ -1008,6 +981,21 @@ export component FilePanel inherits FocusScope {
                 // eventos. El scroll lo maneja `body-touch` por la rueda; `viewport-y` lee
                 for row[i] in root.rows: Rectangle {
                     height: root.row-h;
+                    // Una fila es un elemento seleccionable de la lista. El nombre no revela la
+                    // ruta completa; el lector anuncia solo el nombre y el tipo, y la acción
+                    // predeterminada reusa el mismo flujo de activación que el doble clic.
+                    accessible-role: AccessibleRole.list_item;
+                    accessible-label: row.name == ".."
+                        ? Tr.toolbar-up-tip
+                        : row.name + ", " + (row.is-dir ? Tr.dlg-kind-folder : Tr.dlg-kind-file);
+                    accessible-enabled: root.rename-pos != i;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: row.selected;
+                    accessible-item-index: i;
+                    accessible-item-count: root.rows.length;
+                    accessible-action-default => {
+                        if (root.rename-pos != i) { root.row-double-clicked(root.pane-id, i, false, false); }
+                    }
                     // Fondo de la cebra para un panel NO activo. Tres casos:
                     //  - flat-inactive-panels ON  → TODAS las filas con row-inactive-bg (panel plano,
                     //    sin "líneas"), para que se distinga aún más del panel activo.
@@ -1121,6 +1109,7 @@ export component FilePanel inherits FocusScope {
                                     }
                                 }
                                 rename-edit := LineEdit {
+                                accessible-label: Tr.dlg-rename;
                                 width: 100%;
                                 height: 100%;
                                 // `text` NO es un binding: se fija UNA vez al montar (Timer,
@@ -1175,41 +1164,18 @@ export component FilePanel inherits FocusScope {
                             }
                             // Celda Name CON match del filtro: el tramo que coincide se pinta
                             // en acento + negrita (pre/match/post), el resto con su color normal.
-                            // spacing/padding en 0 y stretch 0 en los Text: cada tramo mide
-                            // EXACTAMENTE su texto, así el resaltado no mueve ni un píxel el
-                            // layout del nombre (con stretch 1 cada caja tomaba un tercio del
-                            // ancho y quedaban "espacios" alrededor del match).
-                            if col.kind == 0 && row.filter-match && root.rename-pos != i: HorizontalLayout {
+                            // El sobrante va después del nombre, nunca entre sus fragmentos.
+                            if col.kind == 0 && row.filter-match && root.rename-pos != i: MatchedName {
                                 horizontal-stretch: 1;
-                                spacing: 0;
-                                padding: 0;
-                                Text {
-                                    text: row.match-pre;
-                                    font-family: Theme.listings-font;
-                                    color: row.is-dir ? Theme.folder-text : Theme.text;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 0;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: row.match-mid;
-                                    font-family: Theme.listings-font;
-                                    color: Theme.accent;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 0;
-                                }
-                                Text {
-                                    text: row.match-post;
-                                    font-family: Theme.listings-font;
-                                    color: row.is-dir ? Theme.folder-text : Theme.text;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 0;
-                                    overflow: elide;
-                                }
+                                prefix: row.match-pre;
+                                matched: row.match-mid;
+                                suffix: row.match-post;
+                                text-color: row.is-dir ? Theme.folder-text : Theme.text;
                             }
                             if !(col.kind == 0 && root.rename-pos == i) && !(col.kind == 0 && row.filter-match): Text {
-                                text: row.cells[ci];
+                                text: row.is-dir && col.kind == 1
+                                    ? Tr.dlg-kind-folder
+                                    : row.cells[ci];
                                 font-family: Theme.listings-font;
                                 color: col.kind == 0
                                     ? (row.is-dir ? Theme.folder-text : Theme.text)
@@ -1240,6 +1206,11 @@ export component FilePanel inherits FocusScope {
                     property <length> press-x;
                     property <length> press-y;
                     property <int> start-row: -1;
+                    // El callback nativo de doble clic no expone PointerEvent. Guardamos los
+                    // modificadores del último mouse-up para que el controlador no consulte un
+                    // estado de teclado viejo si un modal/drag perdió el key-release.
+                    property <bool> last-click-control: false;
+                    property <bool> last-click-shift: false;
                     // Fila ABSOLUTA bajo el cursor. `viewport-y` es 0 arriba y NEGATIVO al bajar, así
                     // que `mouse-y - viewport-y` = posición absoluta en el contenido. Puede caer
                     // fuera de rango (zona vacía): el llamador valida contra `rows.length`.
@@ -1307,6 +1278,8 @@ export component FilePanel inherits FocusScope {
                         // lleguen al panel. En zona vacía: solo activar (ya se hizo en el down).
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left && self.pressed-here) {
                             self.pressed-here = false;
+                            self.last-click-control = ev.modifiers.control;
+                            self.last-click-shift = ev.modifiers.shift;
                             if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
                                 // Modificadores REALES del clic (del propio evento, no del estado
                                 // sticky del controlador, que podía quedar pegado tras un modal/drag).
@@ -1358,7 +1331,8 @@ export component FilePanel inherits FocusScope {
                     // de respaldo (evita la doble navegación, ver on_row_double_clicked).
                     double-clicked => {
                         if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
-                            root.row-double-clicked(root.pane-id, self.cur-row);
+                            root.row-double-clicked(root.pane-id, self.cur-row,
+                                self.last-click-control, self.last-click-shift);
                         }
                     }
                     // Scroll por rueda: el ListView ya no lo hace (interactive:false). Movemos
@@ -1477,6 +1451,7 @@ export component FilePanel inherits FocusScope {
             if root.footer-text != "": Rectangle {
                 height: 22px;
                 background: Theme.header-bg;
+                Rectangle { width: parent.width; height: parent.height; background: Theme.footer-tint; }
                 // Borde superior fino que separa el footer del contenido.
                 Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.divider; }
                 Text {
@@ -1485,7 +1460,7 @@ export component FilePanel inherits FocusScope {
                     height: parent.height;
                     vertical-alignment: center;
                     text: root.footer-text;
-                    color: Theme.text-dim;
+                    color: Theme.text;
                     font-size: Theme.font-md;
                     overflow: elide;
                 }
@@ -1498,7 +1473,7 @@ export component FilePanel inherits FocusScope {
                     vertical-alignment: center;
                     horizontal-alignment: right;
                     text: root.footer-disk-text;
-                    color: Theme.text-dim;
+                    color: Theme.text;
                     font-size: Theme.font-md;
                     overflow: elide;
                 }
@@ -1527,7 +1502,7 @@ export component FilePanel inherits FocusScope {
                         spacing: 6px;
                         Text {
                             text: item.visible ? "✓" : "  ";
-                            color: Theme.highlight;
+                            color: Theme.icon-accent;
                             width: 14px;
                             vertical-alignment: center;
                         }
@@ -1589,7 +1564,7 @@ export component FilePanel inherits FocusScope {
                     border-color: Theme.border;
                     lost-txt := Text {
                         text: root.missing-path;
-                        color: Theme.highlight;
+                        color: Theme.icon-accent;
                         font-size: 12px;
                         x: 8px;
                         width: max(0px, parent.width - 16px);

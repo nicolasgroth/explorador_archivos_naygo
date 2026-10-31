@@ -22,7 +22,12 @@ pub enum UndoAction {
     /// Mandar a la papelera algo que la op creó (inverso de copiar/crear).
     TrashCreated { path: PathBuf },
     /// Restaurar desde Papelera a la ruta original.
-    RestoreTrash { original: PathBuf },
+    RestoreTrash {
+        original: PathBuf,
+        /// Ubicación interna de Papelera para restaurar sin ambigüedad en Linux.
+        #[serde(default)]
+        trashed_path: Option<PathBuf>,
+    },
 }
 
 /// Una operación deshecha-ble del historial.
@@ -134,8 +139,8 @@ pub fn build_undo(req: &OpRequest, summary: &OpSummary) -> Option<Vec<UndoAction
 /// Es consciente de la SECUENCIA: un destino ocupado se acepta si una acción
 /// anterior de la misma lista lo libera (deshacer un shift de batch-rename).
 pub fn validate(actions: &[UndoAction]) -> Result<(), String> {
-    let key = |p: &PathBuf| p.to_string_lossy().to_lowercase();
-    let mut freed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let key = |p: &PathBuf| crate::path_identity::key(p);
+    let mut freed = std::collections::HashSet::new();
     for a in actions {
         match a {
             UndoAction::MoveBack { now, back_to } => {
@@ -518,11 +523,37 @@ mod tests {
         let original = dir.path().join("restaurar.txt");
         let action = UndoAction::RestoreTrash {
             original: original.clone(),
+            trashed_path: None,
         };
         assert!(validate(std::slice::from_ref(&action)).is_ok());
         assert!(to_requests(std::slice::from_ref(&action)).is_empty());
         std::fs::write(&original, b"ocupado").unwrap();
         assert!(validate(&[action]).is_err());
+    }
+
+    #[test]
+    fn recibos_de_papelera_nuevos_se_persisten_y_el_historial_antiguo_sigue_leyendose() {
+        let legacy = r#"{"RestoreTrash":{"original":"C:\\old\\item.txt"}}"#;
+        let old_action: UndoAction =
+            serde_json::from_str(legacy).expect("historial anterior válido");
+        assert_eq!(
+            old_action,
+            UndoAction::RestoreTrash {
+                original: PathBuf::from(r"C:\old\item.txt"),
+                trashed_path: None,
+            }
+        );
+
+        let action = UndoAction::RestoreTrash {
+            original: PathBuf::from(r"C:\old\item.txt"),
+            trashed_path: Some(PathBuf::from(
+                r"/home/test/.local/share/Trash/files/item.txt",
+            )),
+        };
+        let encoded = serde_json::to_string(&action).expect("serializa recibo");
+        let decoded: UndoAction =
+            serde_json::from_str(&encoded).expect("recibo serializado válido");
+        assert_eq!(decoded, action);
     }
 
     #[test]

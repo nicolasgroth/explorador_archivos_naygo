@@ -8,7 +8,7 @@
 
 use crate::workspace_ctrl::WorkspaceCtrl;
 use crate::*;
-use slint::{ModelRc, SharedPixelBuffer, SharedString, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -51,6 +51,7 @@ pub(crate) fn preview_msgs_from_config(
     cfg: &crate::config_ctrl::ConfigCtrl,
 ) -> crate::preview::PreviewMessages {
     crate::preview::PreviewMessages {
+        reader_stopped: cfg.t("preview.err.reader_stopped"),
         not_previewable: cfg.t("preview.err.not_previewable"),
         archive_bad: cfg.t("preview.err.archive_bad"),
         read: cfg.t("preview.err.read"),
@@ -81,48 +82,6 @@ pub(crate) fn int_to_purpose(p: i32) -> PanePurpose {
     }
 }
 
-/// Copia un PNG de usuario al directorio `<config_dir>/icons/_user/` con un nombre único
-/// (basado en el stem del archivo original más un contador de reintento para evitar colisiones).
-/// Devuelve el nombre relativo del archivo copiado, o `None` si la copia falla.
-pub(crate) fn copy_user_png(config_dir: &std::path::Path, src: &std::path::Path) -> Option<String> {
-    let dest_dir = config_dir.join("icons").join("_user");
-    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-        eprintln!("[naygo] copy_user_png: no se pudo crear el directorio: {e}");
-        return None;
-    }
-    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("icon");
-    // Sanear: solo alfanuméricos, guiones y guiones bajos.
-    let stem: String = stem
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(32)
-        .collect();
-    // Evitar colisiones con un contador de reintento.
-    let mut rel = format!("{stem}.png");
-    for i in 1u32.. {
-        let candidate = dest_dir.join(&rel);
-        if !candidate.exists() {
-            break;
-        }
-        rel = format!("{stem}_{i}.png");
-        if i > 9999 {
-            // Defensa: no puede haber más de 9999 PNGs con el mismo stem.
-            return None;
-        }
-    }
-    if let Err(e) = std::fs::copy(src, dest_dir.join(&rel)) {
-        eprintln!("[naygo] copy_user_png: error al copiar: {e}");
-        return None;
-    }
-    Some(rel)
-}
-
 /// Muestra un modal de error (temático) si el resultado de un import/export falló;
 /// silencioso si OK.
 pub(crate) fn report<T>(ui: &slint::Weak<AppWindow>, r: Result<T, String>) {
@@ -147,47 +106,102 @@ pub(crate) fn report<T>(ui: &slint::Weak<AppWindow>, r: Result<T, String>) {
 /// Lógica común a los tres handlers de import por tópico: el filtro de extensión solo guía el
 /// selector; `packs::import_zip` es la autoridad sobre qué se importó realmente.
 pub(crate) fn import_topic(
+    pack_io: &Rc<RefCell<packs::PackIo>>,
+    ctrl: &Rc<RefCell<WorkspaceCtrl>>,
+    ui_weak: &slint::Weak<AppWindow>,
+    path: &std::path::Path,
+) {
+    let (config_dir, data_dir, active_language) = {
+        let c = ctrl.borrow();
+        (
+            c.config.config_dir.clone(),
+            c.config.icon_data_dir.clone(),
+            c.config.settings.language.as_str().to_string(),
+        )
+    };
+    if let Err(error) = pack_io.borrow().submit(packs::PackJob::ImportTopic {
+        config_dir,
+        data_dir,
+        input: path.to_path_buf(),
+        active_language,
+    }) {
+        report(ui_weak, Err::<(), String>(error));
+    }
+}
+
+/// Aplica un import ya completado por PackIo en el hilo de UI.
+pub(crate) fn apply_topic_import(
     ctrl: &Rc<RefCell<WorkspaceCtrl>>,
     ui_weak: &slint::Weak<AppWindow>,
     cfg_weak: &slint::Weak<ConfigWindow>,
     refresh: &Rc<dyn Fn()>,
-    path: &std::path::Path,
+    imported: packs::ImportedTopic,
 ) {
-    let config_dir = ctrl.borrow().config.config_dir.clone();
-    match packs::import_zip(&config_dir, path) {
-        Ok(kind) => {
-            {
-                let mut cb = ctrl.borrow_mut();
-                let lang = cb.config.settings.language.clone();
-                let theme = cb.config.settings.theme.clone();
-                match kind {
-                    packs::ImportKind::Lang(_) => {
-                        cb.config.i18n = naygo_core::i18n::I18n::load(&config_dir, &lang);
-                    }
-                    packs::ImportKind::Theme(_) => {
-                        cb.config.themes =
-                            naygo_core::theme::ThemeCatalog::load(&config_dir, &theme);
-                    }
-                    packs::ImportKind::Config => {
-                        let fresh = config_ctrl::ConfigCtrl::new(config_dir.clone());
-                        cb.config = fresh;
-                    }
-                }
+    let skipped_platform_settings = imported.skipped_platform_settings;
+    {
+        let mut cb = ctrl.borrow_mut();
+        match imported.data {
+            packs::ImportedTopicData::Language(catalog) => cb.config.i18n = catalog,
+            packs::ImportedTopicData::Theme(catalog, icon_sets) => {
+                cb.config.themes = catalog;
+                cb.config.icon_sets = icon_sets;
             }
-            // Reaplicar textos y colores en AMBAS ventanas por si cambió el catálogo.
-            let c = ctrl.borrow();
-            if let Some(ui) = ui_weak.upgrade() {
-                i18n_keys::apply(&ui, &c.config);
-                theme_apply::apply(&ui, c.config.active_theme());
-            }
-            if let Some(cfg) = cfg_weak.upgrade() {
-                i18n_keys::apply(&cfg, &c.config);
-                theme_apply::apply(&cfg, c.config.active_theme());
-            }
-            drop(c);
-            refresh();
+            packs::ImportedTopicData::Config(fresh) => cb.config = *fresh,
         }
-        Err(e) => report(ui_weak, Err::<(), String>(e)),
+    }
+    // Reaplicar textos y colores en AMBAS ventanas por si cambió el catálogo.
+    let c = ctrl.borrow();
+    if let Some(ui) = ui_weak.upgrade() {
+        i18n_keys::apply(&ui, &c.config);
+        theme_apply::apply(&ui, c.config.active_theme());
+    }
+    if let Some(cfg) = cfg_weak.upgrade() {
+        i18n_keys::apply(&cfg, &c.config);
+        theme_apply::apply(&cfg, c.config.active_theme());
+    }
+    drop(c);
+    refresh();
+
+    if !skipped_platform_settings.is_empty() {
+        let config = ctrl.borrow();
+        let labels = skipped_platform_settings
+            .iter()
+            .map(|setting| {
+                let key = match setting {
+                    packs::SkippedPlatformSetting::HomePath => "slint.cfg.import_skipped_home_path",
+                    packs::SkippedPlatformSetting::RecentPaths => {
+                        "slint.cfg.import_skipped_recent_paths"
+                    }
+                    packs::SkippedPlatformSetting::Autostart => {
+                        "slint.cfg.import_skipped_autostart"
+                    }
+                    packs::SkippedPlatformSetting::GlobalHotkey => {
+                        "slint.cfg.import_skipped_global_hotkey"
+                    }
+                };
+                config.config.t(key).to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let title = config.config.t("slint.cfg.import_platform_title");
+        let body = config
+            .config
+            .t("slint.cfg.import_platform_body")
+            .replace("{settings}", &labels);
+        drop(config);
+
+        if let Some(ui) = ui_weak.upgrade() {
+            let tr = ui.global::<Tr>();
+            ui.set_message(MessageVm {
+                kind: 2,
+                level: 1,
+                title: title.into(),
+                body: body.into(),
+                confirm_label: tr.get_dlg_accept(),
+                cancel_label: Default::default(),
+                danger: false,
+            });
+        }
     }
 }
 
@@ -230,7 +244,8 @@ pub(crate) fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         .iter()
         .map(|t| SharedString::from(t.as_str()))
         .collect();
-    let icon_sets: Vec<SharedString> = naygo_core::icon_set::IconSetCatalog::load(&c.config_dir)
+    let icon_sets: Vec<SharedString> = c
+        .icon_sets
         .available()
         .iter()
         .map(|s| SharedString::from(s.id.as_str()))
@@ -308,6 +323,8 @@ pub(crate) fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         language_index: active_idx,
         theme: s.theme.as_str().into(),
         icon_set: s.icon_set.as_str().into(),
+        use_system_file_icons: s.use_system_file_icons,
+        system_file_icons_supported: cfg!(windows),
         languages: ModelRc::from(Rc::new(VecModel::from(languages))),
         language_codes: ModelRc::from(Rc::new(VecModel::from(lang_codes))),
         themes: ModelRc::from(Rc::new(VecModel::from(themes))),
@@ -366,14 +383,28 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
     let meta_loading = c.meta_loading();
     let mesh_interactive = c.preview.mesh_interactive();
     let mesh_busy = c.preview.busy() && mesh_interactive;
+    let (mesh_color, mesh_surface) = c.preview.mesh_appearance_indices();
     let loading = c.preview.loading();
     let can_cancel = c.preview.can_cancel(std::time::Instant::now());
+    let can_retry = c.preview.can_retry();
+    let animation_state = c.preview.animation_state();
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
             truncated,
+            bytes_read,
             highlighted,
+            ..
         }) => {
+            let text_info = if let Some(bytes_read) = bytes_read {
+                c.config
+                    .t("slint.preview.text_info")
+                    .replace("{bytes}", &bytes_read.to_string())
+                    .replace("{chars}", &text.chars().count().to_string())
+                    .replace("{lines}", &text.lines().count().to_string())
+            } else {
+                String::new()
+            };
             // Si el worker resaltó el texto, mapeamos cada línea/segmento al modelo de la UI; el
             // color (u8,u8,u8) de core se vuelve `slint::Color::from_rgb_u8`.
             let (is_hl, hl_lines): (bool, Vec<HlLineVm>) = match highlighted {
@@ -404,6 +435,7 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 mode: 1,
                 text: SharedString::from(text.as_str()),
                 truncated: *truncated,
+                text_info: SharedString::from(text_info.as_str()),
                 image: slint::Image::default(),
                 message: SharedString::new(),
                 highlighted: is_hl,
@@ -413,37 +445,40 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 meta_loading,
                 mesh_interactive,
                 mesh_busy,
+                mesh_color,
+                mesh_surface,
                 loading,
                 can_cancel,
+                can_retry,
+                animation_state,
             }
         }
-        Some(preview::ViewCache::Image {
-            rgba,
-            width,
-            height,
-        }) => {
-            let buf = SharedPixelBuffer::clone_from_slice(rgba, *width, *height);
-            PreviewVm {
-                mode: 2,
-                text: SharedString::new(),
-                truncated: false,
-                image: slint::Image::from_rgba8(buf),
-                message: SharedString::new(),
-                highlighted: false,
-                hl_lines: ModelRc::default(),
-                path,
-                meta,
-                meta_loading,
-                mesh_interactive,
-                mesh_busy,
-                loading,
-                can_cancel,
-            }
-        }
+        Some(preview::ViewCache::Image { image, .. }) => PreviewVm {
+            mode: 2,
+            text: SharedString::new(),
+            truncated: false,
+            text_info: SharedString::new(),
+            image: image.clone(),
+            message: SharedString::new(),
+            highlighted: false,
+            hl_lines: ModelRc::default(),
+            path,
+            meta,
+            meta_loading,
+            mesh_interactive,
+            mesh_busy,
+            mesh_color,
+            mesh_surface,
+            loading,
+            can_cancel,
+            can_retry,
+            animation_state,
+        },
         Some(preview::ViewCache::Message(m)) => PreviewVm {
             mode: 3,
             text: SharedString::new(),
             truncated: false,
+            text_info: SharedString::new(),
             image: slint::Image::default(),
             message: SharedString::from(m.as_str()),
             highlighted: false,
@@ -453,24 +488,33 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
             meta_loading,
             mesh_interactive,
             mesh_busy,
+            mesh_color,
+            mesh_surface,
             loading,
             can_cancel,
+            can_retry,
+            animation_state,
         },
         None => PreviewVm {
             mode: 0,
             text: SharedString::new(),
             truncated: false,
+            text_info: SharedString::new(),
             image: slint::Image::default(),
             message: SharedString::new(),
             highlighted: false,
             hl_lines: ModelRc::default(),
-            path: SharedString::new(),
+            path,
             meta,
             meta_loading,
             mesh_interactive: false,
             mesh_busy: false,
+            mesh_color,
+            mesh_surface,
             loading,
             can_cancel,
+            can_retry,
+            animation_state,
         },
     }
 }
@@ -662,6 +706,7 @@ pub(crate) fn palette_items_from_matches(
             });
         }
         items.push(PaletteItemVm {
+            label: SharedString::from(cmd.label.as_str()),
             spans: ModelRc::from(Rc::new(VecModel::from(spans))),
             category: palette_category_to_int(cmd.category),
             shortcut: SharedString::from(cmd.shortcut.as_str()),
@@ -772,4 +817,32 @@ pub(crate) fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use naygo_core::palette::{Command, CommandCategory, CommandMatch, CommandPayload};
+    use std::path::PathBuf;
+
+    #[test]
+    fn palette_accessible_label_reuses_visible_text_without_exposing_payload_path() {
+        let commands = [Command {
+            label: "Informe.pdf".to_string(),
+            category: CommandCategory::Recent,
+            shortcut: String::new(),
+            payload: CommandPayload::Navigate(PathBuf::from("C:/datos/privado/Informe.pdf")),
+        }];
+        let matches = [CommandMatch {
+            index: 0,
+            score: 1,
+            hit_positions: vec![0, 1],
+        }];
+
+        let (rows, indices) = palette_items_from_matches(&commands, &matches);
+
+        assert_eq!(indices, vec![0]);
+        assert_eq!(rows[0].label.as_str(), "Informe.pdf");
+        assert_eq!(rows[0].shortcut.as_str(), "");
+    }
 }

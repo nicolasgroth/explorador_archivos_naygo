@@ -204,4 +204,10 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), folders.len());
     }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn stub_no_windows_no_finge_carpetas_del_shell() {
+        assert!(known_folders().is_empty());
+    }
 }

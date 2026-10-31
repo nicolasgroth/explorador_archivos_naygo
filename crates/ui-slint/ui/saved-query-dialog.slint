@@ -34,26 +34,26 @@ export component SavedQueryDialog inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
                         Text { text: Tr.queries-help; color: Theme.text-dim; wrap: word-wrap; }
-                        LineEdit { text <=> root.draft.name; placeholder-text: Tr.queries-name; enabled: !root.busy; }
+                        LineEdit { text <=> root.draft.name; placeholder-text: Tr.queries-name; accessible-label: Tr.queries-name; enabled: !root.busy; }
                         Text { text: Tr.queries-roots-help; color: Theme.text-dim; wrap: word-wrap; }
-                        TextEdit { text <=> root.draft.roots; read-only: root.busy; min-height: 75px; preferred-height: 95px; }
-                        LineEdit { text <=> root.draft.name-query; placeholder-text: Tr.search-placeholder; enabled: !root.busy; }
-                        LineEdit { text <=> root.draft.content-query; placeholder-text: Tr.search-content-placeholder; enabled: !root.busy; }
+                        TextEdit { text <=> root.draft.roots; accessible-label: Tr.queries-roots-help; read-only: root.busy; min-height: 75px; preferred-height: 95px; }
+                        LineEdit { text <=> root.draft.name-query; placeholder-text: Tr.search-placeholder; accessible-label: Tr.search-placeholder; enabled: !root.busy; }
+                        LineEdit { text <=> root.draft.content-query; placeholder-text: Tr.search-content-placeholder; accessible-label: Tr.search-content; enabled: !root.busy; }
                         HorizontalLayout {
                             CheckBox { text: Tr.search-ignore-case; checked <=> root.draft.ignore-case; enabled: !root.busy; }
                             CheckBox { text: Tr.search-wildcards; checked <=> root.draft.use-wildcards; enabled: !root.busy; }
                             CheckBox { text: Tr.search-recursive; checked <=> root.draft.recursive; enabled: !root.busy; }
                         }
                         HorizontalLayout {
-                            LineEdit { text <=> root.draft.min-bytes; placeholder-text: Tr.queries-min; enabled: !root.busy; }
-                            LineEdit { text <=> root.draft.max-bytes; placeholder-text: Tr.queries-max; enabled: !root.busy; }
+                            LineEdit { text <=> root.draft.min-bytes; placeholder-text: Tr.queries-min; accessible-label: Tr.queries-min; enabled: !root.busy; }
+                            LineEdit { text <=> root.draft.max-bytes; placeholder-text: Tr.queries-max; accessible-label: Tr.queries-max; enabled: !root.busy; }
                         }
                         Text { text: Tr.queries-date; color: Theme.text-dim; }
                         ComboBox {
                             model: [Tr.queries-any, Tr.queries-today, Tr.queries-week, Tr.queries-days7, Tr.queries-days30, Tr.queries-month];
                             current-index <=> root.draft.modified; enabled: !root.busy;
                         }
-                        TextEdit { text: root.report; read-only: true; min-height: 55px; preferred-height: 65px; }
+                        TextEdit { text: root.report; accessible-label: Tr.queries-title; read-only: true; min-height: 55px; preferred-height: 65px; }
                         if root.busy: Text { text: Tr.spaces-working; color: Theme.text-dim; }
                         HorizontalLayout {
                             Button { text: Tr.queries-load; enabled: !root.busy; clicked => { root.action(1, root.draft); } }

@@ -4,6 +4,76 @@
 
 use super::*;
 
+/// Decide un pegado fuera de UI. Conserva el error real de `try_exists`: un destino inaccesible
+/// nunca se interpreta como libre para crear un archivo con otro nombre.
+fn decide_paste_worker(
+    content: &naygo_core::clipboard::ClipboardContent,
+    dir: &Path,
+    settings: &naygo_core::config::Settings,
+    now_secs: u64,
+) -> Result<naygo_core::clipboard::PastePlan, String> {
+    let probe_error = std::cell::RefCell::new(None);
+    let plan =
+        naygo_core::clipboard::decide_paste(content, dir, settings, now_secs, &|candidate| {
+            match candidate.try_exists() {
+                Ok(exists) => exists,
+                Err(error) => {
+                    let mut stored_error = probe_error.borrow_mut();
+                    if stored_error.is_none() {
+                        *stored_error = Some(format!("{}: {error}", candidate.display()));
+                    }
+                    false
+                }
+            }
+        });
+    probe_error.into_inner().map_or(Ok(plan), Err)
+}
+
+/// Lee el portapapeles y decide el pegado en un único worker; el propietario externo del clipboard
+/// puede tardar al materializar formatos diferidos, así que ninguna llamada del SO corre en UI.
+fn spawn_paste_target_probe<F>(
+    dir: PathBuf,
+    settings: naygo_core::config::Settings,
+    now_secs: u64,
+    read_clipboard: F,
+) -> std::io::Result<std::sync::mpsc::Receiver<Result<naygo_core::clipboard::PastePlan, String>>>
+where
+    F: FnOnce() -> naygo_core::clipboard::ClipboardContent + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("paste-target-probe".into())
+        .spawn(move || {
+            let content = read_clipboard();
+            let result = decide_paste_worker(&content, &dir, &settings, now_secs);
+            let _ = tx.send(result);
+        })?;
+    Ok(rx)
+}
+
+/// Consulta colisiones en worker y conserva errores de acceso como fallo, nunca como destino libre.
+fn first_collision_worker(
+    paths: &[PathBuf],
+    dest: &Path,
+    cancel: &naygo_core::CancellationToken,
+) -> Result<bool, String> {
+    for source in paths {
+        if cancel.is_cancelled() {
+            return Err("consulta cancelada".to_string());
+        }
+        let Some(name) = source.file_name() else {
+            continue;
+        };
+        let candidate = dest.join(name);
+        match candidate.try_exists() {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => return Err(format!("{}: {error}", candidate.display())),
+        }
+    }
+    Ok(false)
+}
+
 impl WorkspaceCtrl {
     /// El id del panel Files activo (o el primer Files), para dirigir navegaciones desde
     /// paneles auxiliares (un Tree/Favoritos activo no es un Files).
@@ -117,19 +187,69 @@ impl WorkspaceCtrl {
         let Some(dir) = self.active_dir() else {
             return false;
         };
-        let content = naygo_platform::clipboard::read();
+        if self.paste_probe.is_some() {
+            crate::logging::breadcrumb(
+                "op_paste: consulta de destino ocupada; nuevo pegado descartado",
+            );
+            self.pending_paste_probe_error = Some("consulta de destino ocupada".to_string());
+            return true;
+        }
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let exists = |p: &std::path::Path| p.exists();
-        let plan = naygo_core::clipboard::decide_paste(
-            &content,
-            &dir,
-            &self.config.settings,
-            now_secs,
-            &exists,
-        );
+        let settings = self.config.settings.clone();
+        let worker_dir = dir.clone();
+        let clipboard_io = match self.ops.clipboard_io_handle() {
+            Ok(clipboard_io) => clipboard_io,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error);
+                return true;
+            }
+        };
+        let rx = match spawn_paste_target_probe(worker_dir, settings, now_secs, move || {
+            clipboard_io.read()
+        }) {
+            Ok(rx) => rx,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error.to_string());
+                return true;
+            }
+        };
+        self.paste_probe = Some((dir, rx));
+        true
+    }
+
+    /// Drena la decisión asíncrona del pegado y arranca la acción con el destino capturado al
+    /// invocarla. Devuelve `false` mientras el worker siga pendiente para mantener vivo el tick.
+    pub fn pump_paste_probe(&mut self) -> bool {
+        let Some((_, rx)) = self.paste_probe.as_ref() else {
+            return true;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("worker de consulta desconectado".to_string())
+            }
+        };
+        let (dir, _) = self.paste_probe.take().expect("probe existente");
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error);
+                return true;
+            }
+        };
+        self.apply_paste_plan(dir, plan);
+        true
+    }
+
+    pub fn take_paste_probe_error(&mut self) -> Option<String> {
+        self.pending_paste_probe_error.take()
+    }
+
+    fn apply_paste_plan(&mut self, dir: PathBuf, plan: naygo_core::clipboard::PastePlan) -> bool {
         use naygo_core::clipboard::PastePlan;
         match plan {
             PastePlan::Transfer { paths, cut } => {
@@ -438,10 +558,15 @@ impl WorkspaceCtrl {
         } else {
             self.config.t("ops.file_kind_copy")
         };
-        // CONFIRMAR AL SOLTAR (decisión de Nicolás): NO ejecutamos la op aquí. Guardamos el drop ya
-        // validado en `pending_drop` y devolvemos true; la UI abre un modal "¿Copiar/Mover N a
-        // «destino»?" y, al confirmar, llama a `confirm_pending_drop` que arranca la op de verdad.
-        // Así un arrastre accidental entre paneles no copia/mueve archivos sin que el usuario lo vea.
+        if self.drop_collision_rx.is_some() {
+            self.pending_listing_error = Some(self.config.t("drop.check_busy"));
+            crate::logging::breadcrumb(
+                "drop_at: probe de conflicto ocupado; nuevo drop descartado",
+            );
+            return true;
+        }
+        // No ejecutar todavía: el probe worker decide si hace falta el diálogo específico de
+        // conflicto o el modal genérico de confirmar. Así se conserva la regla de un solo diálogo.
         let count = paths.len();
         crate::logging::breadcrumb(&format!(
             "drop_at: {} {} ítem(s) → {} (pendiente de confirmar)",
@@ -457,40 +582,99 @@ impl WorkspaceCtrl {
             count,
             staging,
         });
-        // UN SOLO POPUP COHERENTE (decisión de Nicolás): si el drop CHOCA con archivos que ya
-        // existen en el destino, NO mostramos primero "¿Copiar/Mover…?" y luego el conflicto —
-        // serían dos popups en cadena. En ese caso vamos DIRECTO a la op: el motor abre el diálogo
-        // de CONFLICTO (comparación lado a lado), que YA es la confirmación (Saltar/Sobrescribir/
-        // Mantener ambos/Cancelar). La confirmación "¿Copiar?" solo aporta cuando NO hay choque.
-        let hay_conflicto = {
-            let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
-            self.ops.first_collision(&req)
-        };
-        // Confirmación opcional (decisión de Nicolás): el modal "¿Copiar/Mover…?" se muestra SOLO
-        // cuando (a) el ajuste está encendido Y (b) NO hay conflicto. Si hay conflicto, o el ajuste
-        // está apagado, ejecutamos directo reusando `confirm_pending_drop` (arranca la op y CONSUME
-        // `pending_drop`); el modal de CONFLICTO, si aplica, lo dispara `pump_ops` aparte.
-        //
-        // Devolvemos `true` en AMBOS casos (el drop fue ENRUTADO y manejado por este panel, así la
-        // UI no cae al fallback `drop_external`). Quién decide abrir el modal de confirmación es el
-        // llamador, que lee `pending_drop` DESPUÉS: queda `Some` → abre el modal; `None` (ya
-        // ejecutado directo) → no abre nada (pero el conflicto puede aparecer luego).
-        let confirmar = self.config.settings.confirm_drop_between_panes && !hay_conflicto;
-        if !confirmar {
-            let motivo = if hay_conflicto {
-                "hay conflicto → directo al diálogo de conflicto (sin doble popup)"
-            } else {
-                "confirmación de drop desactivada → ejecutar directo"
-            };
-            crate::logging::breadcrumb(&format!("drop_at: {motivo}"));
-            self.confirm_pending_drop();
+        self.pending_drop_confirmation = false;
+        // El probe de conflicto se hace en worker antes de elegir entre confirmación genérica y
+        // diálogo lado a lado. Mantener una sola plaza evita acumular threads cuando un destino
+        // de red no responde; el drop entrante se consume y se notifica mientras esté ocupada.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let probe_cancel = naygo_core::CancellationToken::new();
+        let worker_cancel = probe_cancel.clone();
+        let probe_dest = dest_dir.clone();
+        let probe_paths = paths.clone();
+        let spawned = std::thread::Builder::new()
+            .name("drop-conflict-probe".into())
+            .spawn(move || {
+                let result = first_collision_worker(&probe_paths, &probe_dest, &worker_cancel);
+                let _ = tx.send(result);
+            });
+        if let Err(error) = spawned {
+            self.pending_drop = None;
+            self.pending_drop_confirmation = false;
+            self.pending_listing_error =
+                Some(format!("{}: {error}", self.config.t("drop.check_failed")));
+            return true;
         }
+        self.drop_collision_rx = Some(rx);
+        self.drop_collision_cancel = Some(probe_cancel);
         true
+    }
+
+    /// Drena la preconsulta de colisiones del drop y decide qué diálogo abrir. Devuelve true
+    /// mientras el worker siga vivo para mantener activo el timer de UI.
+    pub fn pump_drop_collision_probe(&mut self) -> DropProbeEvent {
+        let Some(rx) = self.drop_collision_rx.as_ref() else {
+            return DropProbeEvent::Idle;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => return DropProbeEvent::Waiting,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Some(Err("worker desconectado".to_string()))
+            }
+        };
+        self.drop_collision_rx = None;
+        self.drop_collision_cancel = None;
+        if self.pending_drop.is_none() {
+            return DropProbeEvent::Idle;
+        }
+        let occupied = match result.expect("se recibió resultado terminal") {
+            Ok(occupied) => occupied,
+            Err(error) => {
+                crate::logging::log_line(&format!("preconsulta de drop falló: {error}"));
+                self.pending_drop = None;
+                self.pending_listing_error =
+                    Some(format!("{}: {error}", self.config.t("drop.check_failed")));
+                return DropProbeEvent::Failed;
+            }
+        };
+        if !occupied && self.config.settings.confirm_drop_between_panes {
+            self.pending_drop_confirmation = true;
+            return DropProbeEvent::Confirmation;
+        }
+        let reason = if occupied {
+            "hay conflicto → directo al diálogo de conflicto (sin doble popup)"
+        } else {
+            "confirmación de drop desactivada → ejecutar directo"
+        };
+        crate::logging::breadcrumb(&format!("drop_at: {reason}"));
+        self.confirm_pending_drop();
+        DropProbeEvent::Started
+    }
+
+    /// Consume la señal de que el probe terminó libre y la confirmación genérica puede abrirse.
+    pub fn take_pending_drop_confirmation(&mut self) -> Option<PendingDrop> {
+        if !std::mem::take(&mut self.pending_drop_confirmation) {
+            return None;
+        }
+        self.pending_drop.clone()
+    }
+
+    #[cfg(test)]
+    pub fn wait_drop_collision_probe_for_test(&mut self) -> DropProbeEvent {
+        for _ in 0..5_000 {
+            let event = self.pump_drop_collision_probe();
+            if event != DropProbeEvent::Waiting {
+                return event;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("preconsulta de conflicto no terminó en 5 s");
     }
 
     /// El usuario CONFIRMÓ el drop pendiente (botón Copiar/Mover del modal): arranca la op real.
     /// Devuelve true si había un drop pendiente y se lanzó. No-op (false) si no había ninguno.
     pub fn confirm_pending_drop(&mut self) -> bool {
+        self.pending_drop_confirmation = false;
         let Some(pd) = self.pending_drop.take() else {
             return false;
         };
@@ -523,6 +707,10 @@ impl WorkspaceCtrl {
     /// El usuario CANCELÓ el drop pendiente (botón Cancelar / Esc / clic fuera): lo descarta sin
     /// copiar ni mover nada.
     pub fn cancel_pending_drop(&mut self) {
+        if let Some(cancel) = &self.drop_collision_cancel {
+            cancel.cancel();
+        }
+        self.pending_drop_confirmation = false;
         if self.pending_drop.take().is_some() {
             crate::logging::breadcrumb("cancel_pending_drop: drop descartado por el usuario");
         }
@@ -939,12 +1127,57 @@ fn trash_restore_receipts(
     actions
         .iter()
         .filter_map(|action| match action {
-            naygo_core::ops::undo::UndoAction::RestoreTrash { original } => {
-                Some(naygo_platform::trash::TrashReceipt {
-                    original: original.clone(),
-                })
-            }
+            naygo_core::ops::undo::UndoAction::RestoreTrash {
+                original,
+                trashed_path,
+            } => Some(naygo_platform::trash::TrashReceipt {
+                original: original.clone(),
+                trashed_path: trashed_path.clone(),
+            }),
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod paste_probe_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn probe_paste_elige_nombre_libre_fuera_del_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = naygo_core::config::Settings::default();
+        let content = naygo_core::clipboard::ClipboardContent::Text("contenido".into());
+        let first = dir.path().join("pegado 1970-01-01 00.00.00.txt");
+        std::fs::write(&first, "ocupado").unwrap();
+
+        let plan = decide_paste_worker(&content, dir.path(), &settings, 0).unwrap();
+        let naygo_core::clipboard::PastePlan::CreateText { path, body } = plan else {
+            panic!("se esperaba un plan de creación de texto");
+        };
+        assert_eq!(body, "contenido");
+        assert_eq!(path, dir.path().join("pegado 1970-01-01 00.00.00 (2).txt"));
+    }
+
+    #[test]
+    fn lectura_de_portapapeles_y_plan_se_ejecutan_fuera_del_hilo_llamador() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = naygo_core::config::Settings::default();
+        let caller = std::thread::current().id();
+        let read_thread = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&read_thread);
+        let rx = spawn_paste_target_probe(dir.path().to_path_buf(), settings, 0, move || {
+            *observed.lock().unwrap() = Some(std::thread::current().id());
+            naygo_core::clipboard::ClipboardContent::Empty
+        })
+        .unwrap();
+
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("el worker debe entregar una respuesta")
+            .expect("clipboard vacío produce un plan válido");
+        assert!(matches!(result, naygo_core::clipboard::PastePlan::Nothing));
+        assert_ne!(*read_thread.lock().unwrap(), Some(caller));
+    }
 }

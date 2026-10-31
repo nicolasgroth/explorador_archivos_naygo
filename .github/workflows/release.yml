@@ -8,25 +8,35 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
+  actions: read
   contents: write
 
 env:
-  CARGO_BUILD_JOBS: "2"
+  CARGO_BUILD_JOBS: "1"
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+
+      - name: Verificar Windows Server 2025
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "$($os.Caption) version $($os.Version) build $($os.BuildNumber)"
+          if ($os.Caption -notmatch 'Windows Server 2025') {
+            throw "Se esperaba Windows Server 2025, pero el runner reportó '$($os.Caption)'."
+          }
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3fc1e40d4c4ce3007de028907c886bc3996ce2ea # 1.96.0, verificado por GitHub API el 2026-10-15
         with:
           components: clippy
 
       - name: Cache de dependencias
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, verificado por GitHub API el 2026-10-15
 
       # La versión es fuente única en Cargo.toml. El tag debe coincidir (vX.Y.Z == X.Y.Z),
       # si no, abortamos antes de compilar para no publicar un release inconsistente.
@@ -49,17 +59,196 @@ jobs:
           Write-Host "Version validada: $cargoVer"
 
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy (warnings = error)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Instalar Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Empaquetar (portable + instalador)
+      - name: Validar configuración de firma OSS
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_EXE_ARTIFACT_CONFIGURATION: ${{ vars.SIGNPATH_EXE_ARTIFACT_CONFIGURATION }}
+          SIGNPATH_SETUP_ARTIFACT_CONFIGURATION: ${{ vars.SIGNPATH_SETUP_ARTIFACT_CONFIGURATION }}
+        run: |
+          $required = @(
+            'SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG',
+            'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_EXE_ARTIFACT_CONFIGURATION',
+            'SIGNPATH_SETUP_ARTIFACT_CONFIGURATION'
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Falta configurar $name para habilitar la firma OSS."
+            }
+          }
+
+      - name: Compilar ejecutable para firma
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -ExecutableOnly
+
+      - name: Preparar versión de producto para SignPath
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          "NAYGO_SIGN_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Validar metadatos de naygo.exe antes de solicitar firma
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts\NaygoSigning.psm1') -Force
+          Assert-NaygoSignPathProductMetadata `
+            -Path (Join-Path $env:GITHUB_WORKSPACE 'target\release\naygo.exe') `
+            -ExpectedProductName 'Naygo' `
+            -ExpectedProductVersion $env:NAYGO_SIGN_VERSION
+
+      # SignPath exige el artefacto alojado en GitHub antes de recibir la solicitud.
+      - name: Subir naygo.exe sin firmar
+        id: upload-unsigned-exe
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        with:
+          name: naygo-unsigned-exe-${{ github.run_id }}
+          path: target/release/naygo.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Firmar naygo.exe con SignPath Foundation
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_EXE_ARTIFACT_CONFIGURATION }}
+          github-artifact-id: ${{ steps.upload-unsigned-exe.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          parameters: |
+            version: "${{ env.NAYGO_SIGN_VERSION }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}\naygo-signed-exe
+
+      - name: Reemplazar ejecutable por versión firmada
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $signedDir = Join-Path $env:RUNNER_TEMP 'naygo-signed-exe'
+          $files = @(Get-ChildItem -LiteralPath $signedDir -Filter 'naygo.exe' -File -Recurse)
+          if ($files.Count -ne 1) { throw "Se esperaba un naygo.exe firmado en $signedDir; hallados: $($files.Count)." }
+          $target = Join-Path $env:GITHUB_WORKSPACE 'target\release\naygo.exe'
+          Copy-Item -LiteralPath $files[0].FullName -Destination $target -Force
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts\NaygoSigning.psm1') -Force
+          Assert-NaygoSignPathSignature -Path $target
+          Assert-NaygoSignPathProductMetadata `
+            -Path $target `
+            -ExpectedProductName 'Naygo' `
+            -ExpectedProductVersion $env:NAYGO_SIGN_VERSION
+
+      - name: Empaquetar portable e instalador desde el ejecutable final
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -SkipBuild
+
+      - name: Smoke portable
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem "dist\Naygo-*-portable.zip" | Select-Object -First 1
+          if ($null -eq $zip) { throw "No se generó el ZIP portable." }
+          $smoke = Join-Path $env:RUNNER_TEMP "naygo-portable-smoke"
+          New-Item -ItemType Directory -Path $smoke | Out-Null
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $smoke -Force
+          # The GitHub runner is ephemeral. --shutdown exits before creating the UI when no
+          # instance exists; --version is a GUI dialog and is not suitable for a headless smoke.
+          $process = Start-Process -FilePath (Join-Path $smoke "naygo.exe") `
+            -ArgumentList @("--shutdown") -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "El EXE portable no pasó el smoke headless --shutdown." }
+
+      - name: Preparar setup.exe para firma
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $setup = "dist\Naygo-$ver-setup.exe"
+          if (-not (Test-Path -LiteralPath $setup)) { throw "No se generó $setup." }
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts\NaygoSigning.psm1') -Force
+          Assert-NaygoSignPathProductMetadata `
+            -Path $setup `
+            -ExpectedProductName 'Naygo' `
+            -ExpectedProductVersion $ver
+          $stage = Join-Path $env:RUNNER_TEMP 'naygo-signpath-setup-input'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $setup -Destination (Join-Path $stage 'setup.exe') -Force
+
+      - name: Subir setup.exe sin firmar
+        id: upload-unsigned-setup
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        with:
+          name: naygo-unsigned-setup-${{ github.run_id }}
+          path: ${{ runner.temp }}\naygo-signpath-setup-input\setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Firmar setup.exe con SignPath Foundation
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_SETUP_ARTIFACT_CONFIGURATION }}
+          github-artifact-id: ${{ steps.upload-unsigned-setup.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          parameters: |
+            version: "${{ env.NAYGO_SIGN_VERSION }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}\naygo-signed-setup
+
+      - name: Reemplazar setup.exe por versión firmada
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $signedDir = Join-Path $env:RUNNER_TEMP 'naygo-signed-setup'
+          $files = @(Get-ChildItem -LiteralPath $signedDir -Filter 'setup.exe' -File -Recurse)
+          if ($files.Count -ne 1) { throw "Se esperaba un setup.exe firmado en $signedDir; hallados: $($files.Count)." }
+          $ver = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $target = "dist\Naygo-$ver-setup.exe"
+          Copy-Item -LiteralPath $files[0].FullName -Destination $target -Force
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts\NaygoSigning.psm1') -Force
+          Assert-NaygoSignPathSignature -Path $target
+          Assert-NaygoSignPathProductMetadata `
+            -Path $target `
+            -ExpectedProductName 'Naygo' `
+            -ExpectedProductVersion $ver
+
+      - name: Verificar ejecutable portable e instalador firmados
+        if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $zip = "dist\Naygo-$ver-portable.zip"
+          $setup = "dist\Naygo-$ver-setup.exe"
+          $stage = Join-Path $env:RUNNER_TEMP 'naygo-signed-portable-check'
+          Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts\NaygoSigning.psm1') -Force
+          foreach ($path in @((Join-Path $stage 'naygo.exe'), $setup)) {
+            Assert-NaygoSignPathSignature -Path $path
+            Assert-NaygoSignPathProductMetadata `
+              -Path $path `
+              -ExpectedProductName 'Naygo' `
+              -ExpectedProductVersion $ver
+          }
 
       # build-release.ps1 genera nombres versionados; el link estable necesita un nombre
       # fijo, así que subimos también una copia sin versión.
@@ -89,7 +278,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $notes = "Build automático de Naygo $env:VER.`n`nDescarga el ZIP portable (o el instalador), descomprime y ejecuta naygo.exe. Si ya tienes Naygo instalado, el instalador actualiza sin perder tu configuración.`n`nEn la primera ejecución, Windows SmartScreen puede advertir ""editor desconocido"" (el ejecutable no está firmado): haz clic en ""Más información"" y luego ""Ejecutar de todos modos"".`n`nVerifica tu descarga con SHA256SUMS.txt: ejecuta 'Get-FileHash .\Naygo-portable.zip' y compara el hash."
+          if ('${{ vars.NAYGO_SIGNPATH_ENABLED }}' -eq 'true') {
+            $trust = 'Los ejecutables están firmados por SignPath Foundation. SmartScreen puede mostrar una advertencia inicial hasta que se acumule reputación.'
+          } else {
+            $trust = 'Los ejecutables no están firmados y Windows SmartScreen puede advertir ""editor desconocido""; ejecútalos solo si verificaste el origen y SHA256SUMS.txt.'
+          }
+          $policy = 'https://github.com/nicolasgroth/explorador_archivos_naygo/blob/main/docs/POLITICA-DE-FIRMA.md'
+          $notes = "Build automático de Naygo $env:VER.`n`nDescarga el ZIP portable (o el instalador), descomprime y ejecuta naygo.exe. Si ya tienes Naygo instalado, el instalador actualiza sin perder tu configuración.`n`n$trust`n`nCode signing policy: $policy`n`nVerifica tu descarga con SHA256SUMS.txt: ejecuta 'Get-FileHash .\Naygo-portable.zip' y compara el hash."
           gh release create "${{ github.ref_name }}" `
             "dist\Naygo-$env:VER-portable.zip" `
             "dist\Naygo-$env:VER-setup.exe" `

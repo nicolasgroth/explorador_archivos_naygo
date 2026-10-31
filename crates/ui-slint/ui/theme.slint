@@ -25,6 +25,8 @@ export global Theme {
     in property <color> active-bar: #4f8ae0;
     in property <color> error: #d4574e;
     in property <color> highlight: #ffd479;
+    // Foreground separado del fondo temporal de filas; fallback del core conserva temas viejos.
+    in property <color> icon-accent: #ffd479;
     in property <color> border: #2a3a52;
 
     // Tokens semánticos derivados. Mantienen todos los componentes coherentes sin ampliar el
@@ -34,6 +36,9 @@ export global Theme {
     in property <color> surface-raised: row-bg.brighter(5%);
     in property <color> surface-floating: row-bg.brighter(9%);
     in property <color> header-bg: row-bg.darker(6%);
+    // Tinte sutil calculado desde el texto del tema: separa el pie del título también en
+    // paletas blancas/negras y temas antiguos, sin añadir un campo obligatorio al JSON.
+    in property <color> footer-tint: text.with-alpha(0.10);
     in property <color> hover-bg: selection-bg.with-alpha(0.58);
     in property <color> pressed-bg: selection-bg.with-alpha(0.82);
     in property <color> selection-inactive-bg: selection-bg.with-alpha(0.48);

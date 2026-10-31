@@ -26,6 +26,21 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         ..
     } = ctx;
     {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_toggle_animation(move || {
+            if ctrl
+                .borrow_mut()
+                .preview
+                .toggle_animation(std::time::Instant::now())
+            {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
         // Botón "abrir con el programa del sistema" del panel de vista previa: ShellExecute
         // sobre la ruta del archivo previsualizado (la app no edita; abre con el editor del SO).
         ui.on_preview_open(move |path| {
@@ -59,6 +74,28 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_cycle_color(move || {
+            if ctrl.borrow_mut().preview.cycle_mesh_color() {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_cycle_surface(move || {
+            if ctrl.borrow_mut().preview.cycle_mesh_surface() {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         ui.on_preview_cancel(move || {
             if ctrl.borrow_mut().cancel_preview() {
                 sync_rows();
@@ -68,7 +105,18 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         ui.on_preview_copy_text(move |text| {
-            ctrl.borrow().copy_preview_text(text.as_str());
+            ctrl.borrow_mut().copy_preview_text(text.as_str());
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_retry(move || {
+            if ctrl.borrow_mut().preview.retry(std::time::Instant::now()) {
+                start_timer();
+                sync_rows();
+            }
         });
     }
     {
@@ -153,7 +201,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         ui.on_copy_provenance(move || {
-            let _ = ctrl.borrow().copy_provenance();
+            let _ = ctrl.borrow_mut().copy_provenance();
         });
     }
     {

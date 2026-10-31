@@ -27,6 +27,7 @@ export component FontChoice inherits VerticalLayout {
         field := LineEdit {
             text: root.family;
             placeholder-text: root.default-label;
+            accessible-label: root.label;
             accepted(text) => { root.apply(text); }
         }
         Button { text: Tr.dlg-accept; clicked => { root.apply(field.text); } }

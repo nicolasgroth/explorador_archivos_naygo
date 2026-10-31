@@ -213,7 +213,25 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            assert_eq!(std::fs::read(destination).unwrap(), b"retry");
+            assert_eq!(
+                c.ops.active_ops[0].summary.as_ref().unwrap().count_failed(),
+                0,
+                "retry de {kind:?} debe completar sin errores: {:?}",
+                c.ops.active_ops[0].summary
+            );
+            let actual = std::fs::read(&destination).unwrap_or_else(|error| {
+                let siblings: Vec<_> = std::fs::read_dir(destination.parent().unwrap())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .collect();
+                panic!(
+                    "destino {destination:?} ausente tras retry de {kind:?}: {error}; siblings={siblings:?}; summary={:?}",
+                    c.ops.active_ops[0].summary,
+                )
+            });
+            assert_eq!(actual, b"retry");
             assert_eq!(std::fs::read(untouched).unwrap(), b"keep");
             assert_eq!(source.exists(), kind == OpKind::Copy);
         }

@@ -38,7 +38,7 @@ pub struct MetaJob {
 impl WorkspaceCtrl {
     /// Copia al portapapeles los campos de procedencia ya resueltos. No relee ADS ni toca disco:
     /// si todavía no existe un resultado, el botón simplemente no hace nada.
-    pub fn copy_provenance(&self) -> bool {
+    pub fn copy_provenance(&mut self) -> bool {
         let Some(job) = self.meta_job.as_ref() else {
             return false;
         };
@@ -57,7 +57,7 @@ impl WorkspaceCtrl {
         if text.is_empty() {
             return false;
         }
-        naygo_platform::clipboard::write_text(&text).is_ok()
+        self.ops.write_clipboard_text(&text)
     }
 
     /// Inicia la eliminación explícita de la marca de procedencia. El caller ya mostró la

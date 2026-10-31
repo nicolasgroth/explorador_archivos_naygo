@@ -17,7 +17,12 @@ use slint::{ModelRc, VecModel};
 use std::rc::Rc;
 
 /// Registra los callbacks de árbol/historial/menús/discos y el dispatcher del MessageModal.
-pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dyn Fn()>) {
+pub(crate) fn wire_history(
+    ui: &AppWindow,
+    ctx: &WireCtx,
+    refresh_drives: &Rc<dyn Fn()>,
+    waker: naygo_platform::dir_watch::Waker,
+) {
     let WireCtx {
         ctrl,
         sync_rows,
@@ -371,6 +376,7 @@ pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dy
         let sync_layout = sync_layout.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
+        let waker = waker.clone();
         ui.on_message_confirm(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
@@ -421,42 +427,29 @@ pub(crate) fn wire_history(ui: &AppWindow, ctx: &WireCtx, refresh_drives: &Rc<dy
                 // Soltar los watchers de los paneles que tienen el disco abierto, ANTES de
                 // expulsar, para que el "en uso" no lo cause la propia app. Tras expulsar, esos
                 // paneles mostrarán el aviso in-place "elegir carpeta" (pane_dir_missing lo detecta).
-                let panes = std::mem::take(&mut *pending_eject_panes.borrow_mut());
+                let panes: Vec<PaneId> = std::mem::take(&mut *pending_eject_panes.borrow_mut())
+                    .into_iter()
+                    .map(PaneId)
+                    .collect();
                 if !panes.is_empty() {
                     let mut c = ctrl.borrow_mut();
                     for pid in &panes {
-                        c.release_pane_watcher(PaneId(*pid));
+                        c.release_pane_watcher(*pid);
                     }
                 }
                 if let Some(path) = pending_eject.borrow_mut().take() {
-                    let outcome = ctrl
-                        .borrow()
-                        .eject_drive(std::path::PathBuf::from(path.as_str()));
-                    let tr = ui.global::<Tr>();
-                    let msg = match outcome {
-                        workspace_ctrl::EjectOutcome::Ok => {
-                            // Marcar los paneles como "soltados por expulsión" SOLO si se expulsó
-                            // de verdad (si falla, el disco sigue montado y no corresponde el texto).
-                            {
-                                let mut c = ctrl.borrow_mut();
-                                for pid in &panes {
-                                    c.mark_pane_ejected(PaneId(*pid));
-                                }
-                                // El disco ya no está: recalcular el caché para que esos paneles
-                                // muestren el aviso "carpeta no encontrada" de inmediato.
-                                c.refresh_missing_cache();
-                            }
-                            refresh_drives();
-                            sync_layout();
-                            tr.get_drive_eject_ok()
-                        }
-                        workspace_ctrl::EjectOutcome::InUse
-                        | workspace_ctrl::EjectOutcome::Failed(_) => {
-                            refresh_drives();
-                            tr.get_drive_eject_in_use_external()
-                        }
-                    };
-                    ui.invoke_show_toast(msg);
+                    crate::logging::breadcrumb(&format!("expulsar USB {path}"));
+                    let started = ctrl.borrow_mut().start_eject_drive(
+                        std::path::PathBuf::from(path.as_str()),
+                        panes,
+                        waker.clone(),
+                    );
+                    if started {
+                        start_timer();
+                    } else {
+                        refresh_drives();
+                        ui.invoke_show_toast(ui.global::<Tr>().get_drive_eject_failed());
+                    }
                 }
             }
         });

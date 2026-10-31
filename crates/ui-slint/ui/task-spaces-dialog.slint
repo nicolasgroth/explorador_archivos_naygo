@@ -12,6 +12,7 @@ export component TaskSpacesDialog inherits Rectangle {
     in property <bool> pending;
     in property <[string]> recents;
     in-out property <string> base-root;
+    in-out property <bool> own-favorites;
     callback action(int, string);
     background: #00000080;
     TouchArea {}
@@ -36,8 +37,20 @@ export component TaskSpacesDialog inherits Rectangle {
                         spacing: 8px;
                         Text { text: Tr.spaces-help; color: Theme.text-dim; wrap: word-wrap; }
                         Text { text: Tr.spaces-root-help; color: Theme.text-dim; wrap: word-wrap; }
-                        LineEdit { text <=> root.base-root; placeholder-text: Tr.spaces-root; enabled: !root.busy && !root.pending; }
-                        TextEdit { text: root.report; read-only: true; min-height: 130px; preferred-height: 190px; }
+                        Text { text: Tr.spaces-favorites-scope; color: Theme.text-dim; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button {
+                                text: (root.own-favorites ? "✓ " : "") + Tr.spaces-favorites-global;
+                                clicked => { root.own-favorites = false; }
+                            }
+                            Button {
+                                text: (root.own-favorites ? "✓ " : "") + Tr.spaces-favorites-private;
+                                clicked => { root.own-favorites = true; }
+                            }
+                        }
+                        LineEdit { text <=> root.base-root; placeholder-text: Tr.spaces-root; accessible-label: Tr.spaces-root; enabled: !root.busy && !root.pending; }
+                        TextEdit { text: root.report; accessible-label: Tr.spaces-title; read-only: true; min-height: 130px; preferred-height: 190px; }
                         if root.busy: Text { text: Tr.spaces-working; color: Theme.text-dim; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 6px;

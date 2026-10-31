@@ -84,7 +84,7 @@ export struct LayoutRow {
 }
 
 // Una fila del preview de batch-rename (F5): nombre antes→después + estado.
-// status: 0=Ok 1=SinCambio 2=Inválido 3=Colisión.
+// status: 0=Ok 1=SinCambio 2=Inválido 3=Colisión 4=Nombre no representable.
 export struct BatchRowVm {
     old-name: string,
     new-name: string,
@@ -461,6 +461,7 @@ export struct PreviewVm {
     mode: int,
     text: string,
     truncated: bool,
+    text-info: string,
     image: image,
     message: string,
     // Resaltado de código: si `highlighted`, se pintan `hl-lines` (un Text por segmento) en vez
@@ -476,10 +477,15 @@ export struct PreviewVm {
     // STL/3MF: la imagen puede girarse con arrastre y acercarse con rueda/touchpad.
     mesh-interactive: bool,
     mesh-busy: bool,
+    mesh-color: int,
+    mesh-surface: int,
     // Mientras el worker todavía no entrega contenido para el archivo enfocado, la UI muestra
-    // una señal discreta. `can-cancel` recién se activa tras cinco segundos.
+    // una señal discreta. Cancelar incluye debounce/espera/3D; reintentar es explícito.
     loading: bool,
     can-cancel: bool,
+    can-retry: bool,
+    // 0 static/loading/error, 1 playing, 2 paused, 3 finished (Repeat).
+    animation-state: int,
 }
 
 // Una ruta reunida en la bandeja temporal.
@@ -607,6 +613,8 @@ export struct SettingsVm {
     language-index: int,      // índice del idioma activo dentro de languages/language-codes
     theme: string,            // id del tema activo
     icon-set: string,         // id del set de íconos activo
+    use-system-file-icons: bool,
+    system-file-icons-supported: bool,
     languages: [string],      // nombres nativos disponibles (para mostrar en el combo)
     language-codes: [string], // códigos correspondientes a languages (mismo orden)
     themes: [string],         // ids disponibles
@@ -733,6 +741,7 @@ export struct PaneVm {
     basket-rows: [BasketRowVm], // Basket
     // Si este panel es la pestaña ACTIVA de un grupo, `tabs` lista las pestañas del grupo
     // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
+    active-tab-index: int,
     tabs: [TabVm],
 }
 
@@ -750,6 +759,7 @@ export struct PaletteSpanVm {
 
 // Un resultado de la paleta de comandos (Ctrl+P).
 export struct PaletteItemVm {
+    label: string,            // texto legible de la misma etiqueta visible, separado del payload
     spans: [PaletteSpanVm],   // el label partido en segmentos resaltados/normales
     category: int,            // 0=Acción 1=Archivo 2=Reciente 3=Favorito 4=Tema 5=Config
     shortcut: string,         // "Ctrl+C" o ""

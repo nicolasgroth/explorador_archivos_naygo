@@ -6,8 +6,10 @@
 //! normaliza a `ClipboardContent`; aquí `decide_paste` decide la acción (`PastePlan`)
 //! y `encode_image` codifica una imagen del portapapeles a PNG/JPG. Sin Windows ni egui.
 
+pub mod desktop_formats;
 pub mod encode;
 pub mod naming;
+pub mod uri_list;
 
 use crate::clipboard::naming::expand_name_template;
 use crate::config::Settings;
@@ -190,7 +192,7 @@ mod tests {
         match plan {
             PastePlan::CreateText { path, body } => {
                 assert_eq!(body, "hola");
-                assert_eq!(path, Path::new("D:/dst/pegado 1970-01-01 00-00.txt"));
+                assert_eq!(path, Path::new("D:/dst/pegado 1970-01-01 00.00.00.txt"));
             }
             other => panic!("esperaba CreateText, vino {other:?}"),
         }
@@ -198,7 +200,7 @@ mod tests {
 
     #[test]
     fn text_dedup_si_existe() {
-        let taken: HashSet<PathBuf> = [PathBuf::from("D:/dst/pegado 1970-01-01 00-00.txt")]
+        let taken: HashSet<PathBuf> = [PathBuf::from("D:/dst/pegado 1970-01-01 00.00.00.txt")]
             .into_iter()
             .collect();
         let exists = |p: &Path| taken.contains(p);
@@ -206,7 +208,7 @@ mod tests {
         let plan = decide_paste(&c, Path::new("D:/dst"), &settings(), 0, &exists);
         match plan {
             PastePlan::CreateText { path, .. } => {
-                assert_eq!(path, Path::new("D:/dst/pegado 1970-01-01 00-00 (2).txt"));
+                assert_eq!(path, Path::new("D:/dst/pegado 1970-01-01 00.00.00 (2).txt"));
             }
             other => panic!("esperaba CreateText dedup, vino {other:?}"),
         }
@@ -229,7 +231,7 @@ mod tests {
             } => {
                 assert_eq!(fmt, ImageFmt::Png);
                 assert_eq!(got, img);
-                assert_eq!(path, Path::new("D:/dst/captura 1970-01-01 00-00.png"));
+                assert_eq!(path, Path::new("D:/dst/captura 1970-01-01 00.00.00.png"));
             }
             other => panic!("esperaba CreateImage, vino {other:?}"),
         }

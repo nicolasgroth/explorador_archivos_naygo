@@ -104,6 +104,7 @@ pub(crate) fn wire_nav_keys(ui: &AppWindow, ctx: &WireCtx) {
         let palette_cmds = palette_cmds.clone();
         let palette_cmd_indices = palette_cmd_indices.clone();
         ui.on_key(move |text, c, s, a| {
+            let _metric = crate::metrics::span("ui.input.keyboard_callback");
             // Con la paleta de comandos abierta, su propio overlay (FocusScope del LineEdit) maneja
             // el teclado. Suspendemos el on_key global del panel para que las teclas (Enter/letras/
             // flechas) no disparen acciones por debajo. Mismo criterio que con un modal abierto.
@@ -137,13 +138,7 @@ pub(crate) fn wire_nav_keys(ui: &AppWindow, ctx: &WireCtx) {
             let edit_path_request = ctrl.borrow_mut().take_edit_path_request();
             if let Some(pane) = edit_path_request {
                 if let Some(ui) = ui_weak.upgrade() {
-                    let path = ctrl.borrow().path_of(pane);
-                    let sugg = ctrl.borrow().path_autocomplete(&path);
-                    ui.set_edit_pane(pane.0 as i32);
-                    ui.set_edit_text(path.into());
-                    ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
-                        sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-                    ))));
+                    ui.invoke_path_edit_start(pane.0 as i32);
                 }
             }
             // Rename inline (F2): abrir el editor en la celda Name de la fila pedida.

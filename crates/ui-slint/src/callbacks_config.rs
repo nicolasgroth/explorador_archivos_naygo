@@ -18,18 +18,204 @@ use std::rc::Rc;
 
 /// Registra todos los callbacks de la ventana de Configuración y el `on_open_config` de la
 /// AppWindow (el engranaje de la toolbar que la muestra).
+pub(crate) struct ConfigRefreshCallbacks<'a> {
+    pub refresh_config_vm: &'a Rc<dyn Fn()>,
+    pub refresh_toolbar_icons: &'a Rc<dyn Fn()>,
+    pub refresh_drives: &'a Rc<dyn Fn()>,
+    pub rearm_hotkey: &'a Rc<dyn Fn() -> Result<(), String>>,
+}
+
 pub(crate) fn wire_config(
     ui: &AppWindow,
     cfg_win: &Rc<ConfigWindow>,
     ctx: &WireCtx,
-    refresh_config_vm: &Rc<dyn Fn()>,
-    refresh_toolbar_icons: &Rc<dyn Fn()>,
-    refresh_drives: &Rc<dyn Fn()>,
-    rearm_hotkey: &Rc<dyn Fn() -> Result<(), String>>,
+    refresh: ConfigRefreshCallbacks<'_>,
+    pack_io: &Rc<RefCell<crate::packs::PackIo>>,
+    pack_result: &crate::packs::PackOutcomeCallback,
 ) {
+    let ConfigRefreshCallbacks {
+        refresh_config_vm,
+        refresh_toolbar_icons,
+        refresh_drives,
+        rearm_hotkey,
+    } = refresh;
     let crate::wire::WireCtx {
         ctrl, sync_layout, ..
     } = ctx;
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let cfg_weak = cfg_win.as_weak();
+        let refresh = refresh_config_vm.clone();
+        let refresh_icons = refresh_toolbar_icons.clone();
+        let refresh_drives = refresh_drives.clone();
+        *pack_result.borrow_mut() = Some(Rc::new(move |outcome| match outcome {
+            crate::packs::PackOutcome::CatalogsLoaded {
+                result: Ok((themes, icon_sets)),
+            } => {
+                {
+                    let mut c = ctrl.borrow_mut();
+                    c.config.themes = themes;
+                    c.config.icon_sets = icon_sets;
+                    if let Some(theme) = c.take_startup_pending_theme() {
+                        if !c
+                            .config
+                            .set_theme_ephemeral(naygo_core::theme::ThemeId::new(&theme))
+                        {
+                            let message =
+                                format!("El tema \"{theme}\" no existe; se usó el predeterminado.");
+                            crate::logging::log_line(&format!("CLI: {message}"));
+                            rfd::MessageDialog::new()
+                                .set_level(rfd::MessageLevel::Warning)
+                                .set_title("Naygo — argumentos")
+                                .set_description(message)
+                                .set_buttons(rfd::MessageButtons::Ok)
+                                .show();
+                        }
+                    }
+                    let resolved = c.config.icon_sets.resolve(&c.config.settings.icon_set);
+                    c.config.settings.icon_set = resolved.clone();
+                    c.icons.set_active(resolved.clone());
+                    let tintable = c.config.icon_sets.is_tintable(&resolved);
+                    let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
+                    c.icons.set_tint(tintable, rgb);
+                }
+                let c = ctrl.borrow();
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, c.config.active_theme());
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, c.config.active_theme());
+                }
+                drop(c);
+                refresh_icons();
+                refresh_drives();
+                refresh();
+            }
+            crate::packs::PackOutcome::CatalogsLoaded { result: Err(error) } => {
+                crate::logging::log_line(&format!(
+                    "no se pudieron cargar los catálogos de usuario: {error}"
+                ));
+            }
+            crate::packs::PackOutcome::ImportTopic(Ok(imported)) => {
+                apply_topic_import(&ctrl, &ui_weak, &cfg_weak, &refresh, imported);
+            }
+            crate::packs::PackOutcome::ImportTopic(Err(error))
+            | crate::packs::PackOutcome::ExportTopic(Err(error)) => {
+                report(&ui_weak, Err::<(), String>(error));
+            }
+            crate::packs::PackOutcome::ExportTopic(Ok(())) => {}
+            crate::packs::PackOutcome::SaveTheme(Ok((id, catalog))) => {
+                {
+                    ctrl.borrow_mut().config.finish_theme_save(id, catalog);
+                }
+                let c = ctrl.borrow();
+                if let Some(ui) = ui_weak.upgrade() {
+                    theme_apply::apply(&ui, c.config.active_theme());
+                }
+                if let Some(cfg) = cfg_weak.upgrade() {
+                    theme_apply::apply(&cfg, c.config.active_theme());
+                }
+                drop(c);
+                refresh();
+            }
+            crate::packs::PackOutcome::SaveTheme(Err(error)) => {
+                report(&ui_weak, Err::<(), String>(error));
+            }
+            crate::packs::PackOutcome::DeleteTheme { id, result } => match result {
+                Ok((removed, catalog)) => {
+                    {
+                        let mut c = ctrl.borrow_mut();
+                        c.config.themes = catalog;
+                        if removed && c.config.settings.theme.as_str() == id {
+                            c.config.settings.theme = naygo_core::theme::ThemeCatalog::default_id();
+                            c.config.save();
+                        }
+                    }
+                    let c = ctrl.borrow();
+                    if let Some(ui) = ui_weak.upgrade() {
+                        theme_apply::apply(&ui, c.config.active_theme());
+                    }
+                    if let Some(cfg) = cfg_weak.upgrade() {
+                        theme_apply::apply(&cfg, c.config.active_theme());
+                    }
+                    drop(c);
+                    refresh();
+                }
+                Err(error) => report(&ui_weak, Err::<(), String>(error)),
+            },
+            crate::packs::PackOutcome::ImportIcon(Ok((manifest, icon_sets))) => {
+                let mut c = ctrl.borrow_mut();
+                // El nombre del manifest ya fue saneado por import_pack. Para los sets sueltos,
+                // el contrato por defecto es no tintable y no requiere volver a explorar icons/.
+                let set_id = manifest.name.clone();
+                c.config.settings.icon_set = set_id.clone();
+                c.config.icon_sets = icon_sets;
+                c.config.settings.icon_overrides.clear();
+                for entry in &manifest.overrides {
+                    c.config
+                        .settings
+                        .icon_overrides
+                        .insert(entry.key.clone(), entry.source.clone());
+                }
+                c.config.save();
+                c.icons.set_active(set_id);
+                let overrides = c.config.settings.icon_overrides.clone();
+                let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
+                c.icons.set_overrides(overrides);
+                c.icons.set_tint(false, rgb);
+                drop(c);
+                refresh_icons();
+                refresh_drives();
+                refresh();
+                if let Some(ui) = ui_weak.upgrade() {
+                    let msg = ctrl.borrow().config.t("settings.icons.import_ok");
+                    ui.invoke_show_toast(msg.into());
+                }
+            }
+            crate::packs::PackOutcome::ImportIcon(Err(error)) => {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let base = ctrl.borrow().config.t("settings.icons.import_err");
+                    ui.invoke_show_toast(format!("{base}: {error}").into());
+                }
+            }
+            crate::packs::PackOutcome::ExportIcon(Ok(())) => {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let msg = ctrl.borrow().config.t("settings.icons.export_ok");
+                    ui.invoke_show_toast(msg.into());
+                }
+            }
+            crate::packs::PackOutcome::ExportIcon(Err(error)) => {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let base = ctrl.borrow().config.t("settings.icons.export_err");
+                    ui.invoke_show_toast(format!("{base}: {error}").into());
+                }
+            }
+            crate::packs::PackOutcome::CopyUserPng { icon_key, result } => match result {
+                Ok(rel_path) => {
+                    {
+                        let mut c = ctrl.borrow_mut();
+                        c.config.settings.icon_overrides.insert(
+                            icon_key,
+                            naygo_core::icon_source::IconSource::UserPng { rel_path },
+                        );
+                        c.config.save();
+                        let overrides = c.config.settings.icon_overrides.clone();
+                        c.icons.set_overrides(overrides);
+                    }
+                    refresh_icons();
+                    refresh_drives();
+                    refresh();
+                }
+                Err(error) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let base = ctrl.borrow().config.t("settings.icons.png_copy_err");
+                        ui.invoke_show_toast(format!("{base}: {error}").into());
+                    }
+                }
+            },
+        }));
+    }
     // Acción cuyo atajo se está capturando (la setea cfg-shortcut-capture; la lee cfg-capture-key).
     let capturing_action: Rc<RefCell<Option<naygo_core::keymap::Action>>> =
         Rc::new(RefCell::new(None));
@@ -118,6 +304,20 @@ pub(crate) fn wire_config(
     cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
     cfg_setter!(on_set_show_parent, bool, set_show_parent);
     cfg_setter!(on_set_icon_only, bool, set_icon_only);
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let sync_rows = ctx.sync_rows.clone();
+        cfg_win.on_set_system_file_icons(move |enabled| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_use_system_file_icons(enabled);
+                c.icons.set_system_file_icons(enabled);
+            }
+            sync_rows();
+            refresh();
+        });
+    }
     cfg_setter!(on_set_bar_position, i32, set_bar_position);
     cfg_setter!(on_set_size_no_subdirs, bool, set_size_no_subdirs);
     cfg_setter!(on_set_autostart, bool, set_autostart);
@@ -201,6 +401,41 @@ pub(crate) fn wire_config(
         cfg_win.on_recent_limit_changed(move |v| {
             ctrl.borrow_mut().set_recent_limit(v as usize);
             refresh();
+        });
+    }
+    // Calidad: recarga el preview actual sin tocar selección, reglas ni preferencias de zoom.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let sync = sync_layout.clone();
+        let start = ctx.start_timer.clone();
+        cfg_win.on_set_preview_economical(move |v| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_preview_economical(v);
+                c.preview.set_economical(v, std::time::Instant::now());
+            }
+            refresh();
+            sync();
+            start();
+        });
+    }
+    // Límite de lectura de texto: se guarda en Settings y reanuda el worker actual si es texto.
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let sync = sync_layout.clone();
+        let start = ctx.start_timer.clone();
+        cfg_win.on_set_preview_text_limit(move |index| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_preview_text_limit_index(index);
+                let bytes = c.config.settings.preview_text_max_bytes;
+                c.preview.set_text_max_bytes(bytes);
+            }
+            refresh();
+            sync();
+            start();
         });
     }
     // Auto-resaltado de código (Previsualización): persiste el toggle.
@@ -327,8 +562,7 @@ pub(crate) fn wire_config(
                 let mut c = ctrl.borrow_mut();
                 // Re-tinto íconos tintables con el color de texto del nuevo tema.
                 let active = c.config.settings.icon_set.clone();
-                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
-                    .is_tintable(&active);
+                let tintable = c.config.icon_sets.is_tintable(&active);
                 let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                 c.icons.set_tint(tintable, rgb);
             }
@@ -391,20 +625,19 @@ pub(crate) fn wire_config(
     // default. Re-aplica el tema activo resultante a ambas ventanas.
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
-        let cfg_weak = cfg_win.as_weak();
         cfg_win.on_theme_delete(move |id| {
-            ctrl.borrow_mut().config.delete_user_theme(&id);
-            let c = ctrl.borrow();
-            if let Some(ui) = ui_weak.upgrade() {
-                theme_apply::apply(&ui, c.config.active_theme());
+            if naygo_core::theme::is_builtin_id(&id) {
+                return;
             }
-            if let Some(cfg) = cfg_weak.upgrade() {
-                theme_apply::apply(&cfg, c.config.active_theme());
+            let config_dir = ctrl.borrow().config.config_dir.clone();
+            if let Err(error) = pack_io.borrow().submit(packs::PackJob::DeleteTheme {
+                config_dir,
+                id: id.to_string(),
+            }) {
+                report(&ui_weak, Err::<(), String>(error));
             }
-            drop(c);
-            refresh();
         });
     }
     // Nombre del tema en edición (no re-aplica preview: el nombre no es un color).
@@ -469,20 +702,26 @@ pub(crate) fn wire_config(
     // Guardar el tema en edición: escribe el .json, lo deja activo y re-aplica el tema activo.
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
-        let cfg_weak = cfg_win.as_weak();
         cfg_win.on_theme_save(move || {
-            ctrl.borrow_mut().config.save_editing_theme();
-            let c = ctrl.borrow();
-            if let Some(ui) = ui_weak.upgrade() {
-                theme_apply::apply(&ui, c.config.active_theme());
+            let prepared = match ctrl.borrow().config.prepare_theme_save() {
+                Ok(Some(prepared)) => prepared,
+                Ok(None) => return,
+                Err(error) => {
+                    report(&ui_weak, Err::<(), String>(error));
+                    return;
+                }
+            };
+            let config_dir = ctrl.borrow().config.config_dir.clone();
+            if let Err(error) = pack_io.borrow().submit(packs::PackJob::SaveTheme {
+                config_dir,
+                id: prepared.id,
+                old_id: prepared.old_id,
+                json: prepared.json,
+            }) {
+                report(&ui_weak, Err::<(), String>(error));
             }
-            if let Some(cfg) = cfg_weak.upgrade() {
-                theme_apply::apply(&cfg, c.config.active_theme());
-            }
-            drop(c);
-            refresh();
         });
     }
     // Restaurar de fábrica: resetea los 12 tokens del tema en edición al builtin del que se
@@ -547,8 +786,7 @@ pub(crate) fn wire_config(
                 let active = c.config.settings.icon_set.clone();
                 c.icons.set_active(active.clone());
                 // Re-aplicar overrides y tinte para el set nuevo.
-                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
-                    .is_tintable(&active);
+                let tintable = c.config.icon_sets.is_tintable(&active);
                 let overrides = c.config.settings.icon_overrides.clone();
                 let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                 c.icons.set_overrides(overrides);
@@ -574,8 +812,7 @@ pub(crate) fn wire_config(
                 c.config.set_icon_set(id.to_string());
                 let active = c.config.settings.icon_set.clone();
                 c.icons.set_active(active.clone());
-                let tintable = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir)
-                    .is_tintable(&active);
+                let tintable = c.config.icon_sets.is_tintable(&active);
                 let overrides = c.config.settings.icon_overrides.clone();
                 let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
                 c.icons.set_overrides(overrides);
@@ -603,21 +840,17 @@ pub(crate) fn wire_config(
             };
             // Construir las opciones con borrow_mut (icons.get necesita &mut).
             let choices: Vec<IconChoiceVm> = {
-                let c = ctrl.borrow();
+                let mut c = ctrl.borrow_mut();
                 let Some(icon_key) = naygo_core::icon_source::key_from_string(key.as_str()) else {
                     return;
                 };
-                let config_dir = c.config.config_dir.clone();
                 let tint = theme_text_rgb(&c.config.settings, &c.config.themes);
-                let catalog = naygo_core::icon_set::IconSetCatalog::load(&config_dir);
-                drop(c);
-                catalog
-                    .available()
+                let icon_infos = c.config.icon_sets.available().to_vec();
+                icon_infos
                     .iter()
                     .map(|info| {
                         let tintable = info.tintable;
-                        let icon_img =
-                            icons::render_for_set(icon_key, &info.id, tintable, tint, &config_dir);
+                        let icon_img = c.icons.get_for_set(icon_key, &info.id, tintable, tint);
                         IconChoiceVm {
                             set_id: info.id.as_str().into(),
                             set_label: info.label.as_str().into(),
@@ -676,9 +909,7 @@ pub(crate) fn wire_config(
     // y registra el override de tipo UserPng.
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
-        let refresh_icons = refresh_toolbar_icons.clone();
-        let refresh_drives = refresh_drives.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
         cfg_win.on_set_icon_override_png(move |key| {
             let Some(src_path) = rfd::FileDialog::new()
@@ -687,28 +918,21 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            let config_dir = ctrl.borrow().config.config_dir.clone();
-            let Some(rel_path) = copy_user_png(&config_dir, &src_path) else {
-                // La copia falló: avisar con un toast (eprintln solo no se ve en GUI).
-                if let Some(ui) = ui_weak.upgrade() {
-                    let msg = ctrl.borrow().config.t("settings.icons.png_copy_err");
-                    ui.invoke_show_toast(msg.into());
-                }
-                return;
+            let (data_dir, legacy_config_dir) = {
+                let c = ctrl.borrow();
+                (c.config.icon_data_dir.clone(), c.config.config_dir.clone())
             };
-            {
-                let mut c = ctrl.borrow_mut();
-                c.config.settings.icon_overrides.insert(
-                    key.to_string(),
-                    naygo_core::icon_source::IconSource::UserPng { rel_path },
-                );
-                c.config.save();
-                let overrides = c.config.settings.icon_overrides.clone();
-                c.icons.set_overrides(overrides);
+            if let Err(error) = pack_io.borrow().submit(packs::PackJob::CopyUserPng {
+                data_dir,
+                legacy_config_dir,
+                source: src_path,
+                icon_key: key.to_string(),
+            }) {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let base = ctrl.borrow().config.t("settings.icons.png_copy_err");
+                    ui.invoke_show_toast(format!("{base}: {error}").into());
+                }
             }
-            refresh_icons();
-            refresh_drives();
-            refresh();
         });
     }
     // Quitar el override de un ícono concreto: vuelve al set base.
@@ -751,9 +975,7 @@ pub(crate) fn wire_config(
     // Importar un .naygoset: activa el set importado y aplica sus overrides.
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
-        let refresh_icons = refresh_toolbar_icons.clone();
-        let refresh_drives = refresh_drives.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
         cfg_win.on_import_icon_set(move || {
             let Some(path) = rfd::FileDialog::new()
@@ -762,44 +984,18 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            let config_dir = ctrl.borrow().config.config_dir.clone();
-            match naygo_core::icon_pack::import_pack(&path, &config_dir) {
-                Ok(manifest) => {
-                    {
-                        let mut c = ctrl.borrow_mut();
-                        // Activar el set recién importado y aplicar sus overrides.
-                        let set_id = manifest.name.clone();
-                        c.config.set_icon_set(set_id.clone());
-                        let active = c.config.settings.icon_set.clone();
-                        c.config.settings.icon_overrides.clear();
-                        for entry in &manifest.overrides {
-                            c.config
-                                .settings
-                                .icon_overrides
-                                .insert(entry.key.clone(), entry.source.clone());
-                        }
-                        c.config.save();
-                        c.icons.set_active(active.clone());
-                        let catalog = naygo_core::icon_set::IconSetCatalog::load(&config_dir);
-                        let tintable = catalog.is_tintable(&active);
-                        let overrides = c.config.settings.icon_overrides.clone();
-                        let rgb = theme_text_rgb(&c.config.settings, &c.config.themes);
-                        c.icons.set_overrides(overrides);
-                        c.icons.set_tint(tintable, rgb);
-                    }
-                    refresh_icons();
-                    refresh_drives();
-                    refresh();
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let msg = ctrl.borrow().config.t("settings.icons.import_ok").into();
-                        ui.invoke_show_toast(msg);
-                    }
-                }
-                Err(e) => {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let base = ctrl.borrow().config.t("settings.icons.import_err");
-                        ui.invoke_show_toast(format!("{base}: {e}").into());
-                    }
+            let (data_dir, legacy_config_dir) = {
+                let c = ctrl.borrow();
+                (c.config.icon_data_dir.clone(), c.config.config_dir.clone())
+            };
+            if let Err(error) = pack_io.borrow().submit(crate::packs::PackJob::ImportIcon {
+                data_dir,
+                legacy_config_dir,
+                input: path,
+            }) {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let base = ctrl.borrow().config.t("settings.icons.import_err");
+                    ui.invoke_show_toast(format!("{base}: {error}").into());
                 }
             }
         });
@@ -808,12 +1004,14 @@ pub(crate) fn wire_config(
     {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
+        let pack_io = pack_io.clone();
         cfg_win.on_export_icon_set(move || {
-            let (set_id, overrides, config_dir) = {
+            let (set_id, overrides, data_dir, legacy_config_dir) = {
                 let c = ctrl.borrow();
                 (
                     c.config.settings.icon_set.clone(),
                     c.config.settings.icon_overrides.clone(),
+                    c.config.icon_data_dir.clone(),
                     c.config.config_dir.clone(),
                 )
             };
@@ -824,26 +1022,18 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            match naygo_core::icon_pack::export_pack(
-                &path,
-                &set_id,
-                "",
-                &set_id,
-                &overrides,
-                &config_dir,
-            ) {
-                Ok(()) => {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let msg = ctrl.borrow().config.t("settings.icons.export_ok").into();
-                        ui.invoke_show_toast(msg);
-                    }
-                }
-                Err(e) => {
-                    // Mismo patrón que import: toast (no modal) para ok y err.
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let base = ctrl.borrow().config.t("settings.icons.export_err");
-                        ui.invoke_show_toast(format!("{base}: {e}").into());
-                    }
+            if let Err(error) = pack_io.borrow().submit(crate::packs::PackJob::ExportIcon {
+                output: path,
+                name: set_id.clone(),
+                author: String::new(),
+                base_set_id: set_id,
+                overrides,
+                data_dir,
+                legacy_config_dir,
+            }) {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let base = ctrl.borrow().config.t("settings.icons.export_err");
+                    ui.invoke_show_toast(format!("{base}: {error}").into());
                 }
             }
         });
@@ -948,54 +1138,80 @@ pub(crate) fn wire_config(
     // se informa con un MessageDialog (errores) sin bloquear el resto de la UI.
     {
         let ctrl = ctrl.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
         cfg_win.on_export_language(move || {
-            let c = ctrl.borrow();
-            let code = c.config.settings.language.as_str().to_string();
+            let (code, config_dir) = {
+                let c = ctrl.borrow();
+                (
+                    c.config.settings.language.as_str().to_string(),
+                    c.config.config_dir.clone(),
+                )
+            };
             // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygolang.
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Idioma Naygo", &["naygolang"])
                 .set_file_name(format!("{code}.naygolang"))
                 .save_file()
             {
-                report(
-                    &ui_weak,
-                    packs::export_lang(&c.config.config_dir, &code, &path),
-                );
+                if let Err(error) = pack_io.borrow().submit(packs::PackJob::ExportLang {
+                    config_dir,
+                    code,
+                    output: path,
+                }) {
+                    report(&ui_weak, Err::<(), String>(error));
+                }
             }
         });
     }
     {
         let ctrl = ctrl.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
         cfg_win.on_export_theme(move || {
-            let c = ctrl.borrow();
-            let id = c.config.settings.theme.as_str().to_string();
+            let (id, config_dir, data_dir) = {
+                let c = ctrl.borrow();
+                (
+                    c.config.settings.theme.as_str().to_string(),
+                    c.config.config_dir.clone(),
+                    c.config.icon_data_dir.clone(),
+                )
+            };
             // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygotheme.
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Tema Naygo", &["naygotheme"])
                 .set_file_name(format!("{id}.naygotheme"))
                 .save_file()
             {
-                report(
-                    &ui_weak,
-                    packs::export_theme(&c.config.config_dir, &id, &path),
-                );
+                if let Err(error) = pack_io.borrow().submit(packs::PackJob::ExportTheme {
+                    config_dir,
+                    data_dir,
+                    id,
+                    output: path,
+                }) {
+                    report(&ui_weak, Err::<(), String>(error));
+                }
             }
         });
     }
     {
         let ctrl = ctrl.clone();
+        let pack_io = pack_io.clone();
         let ui_weak = ui.as_weak();
         cfg_win.on_export_config(move || {
-            let c = ctrl.borrow();
+            let config_dir = ctrl.borrow().config.config_dir.clone();
             // El archivo es un .zip por dentro; solo cambia la extensión visible a .naygoconf.
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Configuración Naygo", &["naygoconf"])
                 .set_file_name("config.naygoconf")
                 .save_file()
             {
-                report(&ui_weak, packs::export_config(&c.config.config_dir, &path));
+                if let Err(error) = pack_io.borrow().submit(packs::PackJob::ExportConfig {
+                    config_dir,
+                    output: path,
+                }) {
+                    report(&ui_weak, Err::<(), String>(error));
+                }
             }
         });
     }
@@ -1005,9 +1221,8 @@ pub(crate) fn wire_config(
     // recarga del catálogo se hace según el `ImportKind` que devuelve, igual para los tres.
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        let cfg_weak = cfg_win.as_weak();
+        let pack_io = pack_io.clone();
         cfg_win.on_import_language(move || {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("Idioma Naygo", &["naygolang"])
@@ -1015,14 +1230,13 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
+            import_topic(&pack_io, &ctrl, &ui_weak, &path);
         });
     }
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        let cfg_weak = cfg_win.as_weak();
+        let pack_io = pack_io.clone();
         cfg_win.on_import_theme(move || {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("Tema Naygo", &["naygotheme"])
@@ -1030,14 +1244,13 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
+            import_topic(&pack_io, &ctrl, &ui_weak, &path);
         });
     }
     {
         let ctrl = ctrl.clone();
-        let refresh = refresh_config_vm.clone();
         let ui_weak = ui.as_weak();
-        let cfg_weak = cfg_win.as_weak();
+        let pack_io = pack_io.clone();
         cfg_win.on_import_config(move || {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("Configuración Naygo", &["naygoconf"])
@@ -1045,7 +1258,7 @@ pub(crate) fn wire_config(
             else {
                 return;
             };
-            import_topic(&ctrl, &ui_weak, &cfg_weak, &refresh, &path);
+            import_topic(&pack_io, &ctrl, &ui_weak, &path);
         });
     }
     // Avanzado: factory reset. Restablece TODOS los ajustes y reaplica idioma/tema (cambian).

@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 
 pub mod fonts;
 mod settings_writer;
+pub mod user_dirs;
+pub use settings_writer::SaveTicket;
 
 /// Versión del formato de los archivos de config; permite migrar/descartar. Público para que
 /// quien escribe un `WorkspacePersist` (la capa UI) estampe la MISMA versión que el loader
 /// exige (`load_workspace_flagged` descarta un workspace.json con versión distinta). Antes la
 /// UI hardcodeaba `version: 1` y, al subir esta constante, la sesión dejaba de restaurarse.
-pub const CONFIG_VERSION: u32 = 4;
+pub const CONFIG_VERSION: u32 = 6;
 
 /// Dónde se ancla la barra de íconos.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +178,10 @@ pub struct Settings {
     /// este campo) conserva el resto y solo este cae al default (honra CONFIG_VERSION).
     #[serde(default = "default_icon_set")]
     pub icon_set: String,
+    /// Preferir los iconos asociados por Windows Shell para archivos, consultados por extensión
+    /// en segundo plano. Desactivado por defecto para conservar el aspecto y costo actuales.
+    #[serde(default)]
+    pub use_system_file_icons: bool,
     /// Overrides por objeto sobre el set base: clave estable (`"action_back"`,
     /// `"file_image"`, …) → fuente del ícono. Vacío = solo el set base.
     #[serde(default)]
@@ -307,6 +313,14 @@ pub struct Settings {
     /// Cuántas carpetas mostrar en el ranking de las más usadas (1–50).
     #[serde(default = "default_frequent_dirs_limit")]
     pub frequent_dirs_limit: usize,
+    /// Rutas de los diez últimos espacios `.naygospace` usados. Solo guarda referencias, nunca
+    /// indexa sus carpetas ni lee su contenido al iniciar. `#[serde(default)]` migra settings previos.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::path_wire::vec"
+    )]
+    pub task_space_recents: Vec<PathBuf>,
     /// Mostrar el footer (barra inferior) en cada panel de archivos. `#[serde(default)]`
     /// retro-compat (settings viejo → true).
     #[serde(default = "default_footer_enabled")]
@@ -321,6 +335,12 @@ pub struct Settings {
     /// `#[serde(default)]` retro-compat (settings viejo → true).
     #[serde(default = "default_auto_highlight_code")]
     pub auto_highlight_code: bool,
+    /// Menor resolución y frecuencia del preview. Aditivo en esquema 4: ausente = false.
+    #[serde(default)]
+    pub preview_economical: bool,
+    /// Máximo de bytes leídos para el texto del preview; se restringe a opciones acotadas.
+    #[serde(default = "default_preview_text_max_bytes")]
+    pub preview_text_max_bytes: u32,
     /// Activa animaciones adicionales de mayor costo (p. ej. el brillo continuo de la barra del
     /// panel de operaciones). Flag GLOBAL: pensado para gobernar cualquier animación costosa
     /// futura de la app. Las transiciones baratas (interpolar un valor que cambió) NO dependen de
@@ -361,11 +381,24 @@ pub struct Settings {
 }
 
 /// Resuelve la carpeta Home: si `home_dir` está vacío, usa la carpeta personal del usuario
-/// (`%USERPROFILE%`); si tiene una ruta, usa esa. Pura, testeable.
+/// (`HOME` en Linux, `USERPROFILE` en Windows); si tiene una ruta, usa esa. Pura, testeable.
 pub fn resolve_home_dir(home_dir: &str) -> PathBuf {
     if !home_dir.trim().is_empty() {
         return PathBuf::from(home_dir);
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        // El arranque valida HOME mediante UserDirs antes de crear la UI. La raíz es un
+        // fallback absoluto conservador para callers aislados que invoquen este helper sin
+        // pasar por ese arranque; nunca se interpreta el cwd como carpeta personal.
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    #[cfg(not(target_os = "linux"))]
     // Carpeta personal del usuario vía USERPROFILE; último recurso: la raíz C:\
     // (nunca vacío, nunca panic). `naygo-core` NO tiene la crate `dirs`.
     std::env::var_os("USERPROFILE")
@@ -396,6 +429,10 @@ fn default_footer_enabled() -> bool {
 /// Default de `auto_highlight_code`: true (resaltar código en Auto).
 fn default_auto_highlight_code() -> bool {
     true
+}
+
+fn default_preview_text_max_bytes() -> u32 {
+    crate::preview::DEFAULT_TEXT_MAX_BYTES
 }
 
 /// Default de `animations_enabled`: false (las animaciones costosas vienen apagadas por consumo).
@@ -570,6 +607,7 @@ impl Default for Settings {
             icon_only: true,
             fonts: Default::default(),
             icon_set: "lucide".into(),
+            use_system_file_icons: false,
             icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Glyphs,
             toolbar_glyph_color: None,
@@ -605,10 +643,13 @@ impl Default for Settings {
             low_power_mode: LowPowerMode::Auto,
             recent_limit: 200,
             frequent_dirs_limit: 10,
+            task_space_recents: Vec::new(),
             footer_enabled: true,
             footer_preset: crate::footer::FooterPreset::Compact,
             footer_custom_template: String::new(),
             auto_highlight_code: true,
+            preview_economical: false,
+            preview_text_max_bytes: default_preview_text_max_bytes(),
             animations_enabled: false,
             home_dir: String::new(),
             show_hidden: true,
@@ -706,6 +747,27 @@ pub fn load_settings(dir: &Path) -> Settings {
 /// Como `load_settings`, pero informa si hubo RECUPERACIÓN (archivo corrupto
 /// respaldado como .bad y defaults aplicados) para que la UI avise al usuario.
 pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
+    load_settings_flagged_with_data_dir(dir, dir)
+}
+
+/// Resuelve `icon_set` contra packs del directorio XDG data y conserva lectura de la ubicación
+/// histórica bajo config. La versión anterior sigue disponible para callers portables.
+pub fn load_settings_flagged_with_data_dir(config_dir: &Path, data_dir: &Path) -> (Settings, bool) {
+    load_settings_flagged_with_catalog_resolution(config_dir, true, Some(data_dir))
+}
+
+/// Carga settings para un arranque que descubrirá los sets de íconos en segundo plano.
+/// Normaliza aliases históricos, pero conserva un id personalizado hasta que el catálogo
+/// externo esté disponible. Así no explora `icons/` en el hilo de UI ni descarta la selección.
+pub fn load_settings_flagged_deferred_icon_set(dir: &Path) -> (Settings, bool) {
+    load_settings_flagged_with_catalog_resolution(dir, false, None)
+}
+
+fn load_settings_flagged_with_catalog_resolution(
+    dir: &Path,
+    resolve_icon_set: bool,
+    data_dir: Option<&Path>,
+) -> (Settings, bool) {
     let (read, recovered) = read_json_recovering::<Settings>(&dir.join("settings.json"));
     let settings = match read {
         // Un settings de versión menor o igual se acepta y se migra por etapas (v1→v2→v3…);
@@ -730,7 +792,15 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
             // (carpeta borrada) cae a "lucide" en vez de quedar como selección colgada con la
             // toolbar rota.
             let normalized = normalize_icon_set_id(&s.icon_set);
-            s.icon_set = crate::icon_set::IconSetCatalog::load(dir).resolve(&normalized);
+            s.icon_set = if resolve_icon_set {
+                crate::icon_set::IconSetCatalog::load_with_legacy(
+                    data_dir.unwrap_or(dir),
+                    Some(dir),
+                )
+                .resolve(&normalized)
+            } else {
+                normalized
+            };
             // Migrar el CSV de preview (lote 2) a reglas, si venía el campo viejo y no
             // hay reglas explícitas (settings anterior al lote 3). Si tras eso siguen
             // vacías (settings raro), caer a las reglas por defecto.
@@ -739,10 +809,10 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
             }
             if s.preview_rules.is_empty() {
                 s.preview_rules = crate::preview::default_preview_rules();
-            } else if loaded_version < 4 {
+            } else if loaded_version < CONFIG_VERSION {
                 // Las reglas se persisten completas. Por eso una instalación actualizada desde
                 // una versión anterior no recibe automáticamente extensiones incorporadas más
-                // tarde (por ejemplo STL/3MF): no hay campo ausente para que actúe serde(default).
+                // tarde (por ejemplo STL/3MF o SIF): no hay campo ausente para que actúe serde(default).
                 // Agregar solo las reglas NUEVAS que falten conserva cualquier habilitación,
                 // deshabilitación o modo que el usuario ya haya elegido.
                 for default_rule in crate::preview::default_preview_rules() {
@@ -755,6 +825,8 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
                     }
                 }
             }
+            s.preview_text_max_bytes =
+                crate::preview::normalize_text_max_bytes(s.preview_text_max_bytes);
             s.preview_text_exts_legacy.clear();
             s
         }
@@ -769,14 +841,36 @@ pub fn load_settings_flagged(dir: &Path) -> (Settings, bool) {
 
 /// Guarda settings.
 pub fn save_settings(dir: &Path, s: &Settings) {
-    settings_writer::PendingSettings::prepare(dir, s).write();
+    if let Err(e) = settings_writer::save_sync(&dir.join("settings.json"), s) {
+        tracing::warn!("no se pudo guardar settings.json: {e}");
+    }
 }
 
-/// Reserva el orden sin I/O y guarda en worker. Un guardado posterior (incluido el de
-/// cierre) invalida snapshots antiguos para que cambios rápidos no pierdan preferencias.
-pub fn save_settings_async(dir: &Path, s: &Settings) -> std::thread::JoinHandle<()> {
-    let pending = settings_writer::PendingSettings::prepare(dir, s);
-    std::thread::spawn(move || pending.write())
+/// Guarda settings en el worker único y coalesce cambios rápidos por archivo. La serialización
+/// ocurre antes de encolar; filesystem y escritura atómica quedan fuera del hilo llamador.
+pub fn save_settings_async(dir: &Path, s: &Settings) -> Result<SaveTicket, String> {
+    settings_writer::save_async(&dir.join("settings.json"), s)
+}
+
+/// Espera un ticket fuera del hilo de UI, por ejemplo desde la coordinación de cierre.
+pub fn wait_settings_saved(
+    ticket: &SaveTicket,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    settings_writer::wait(ticket, timeout)
+}
+
+/// Encola la persistencia de la sesión de workspace en el worker JSON compartido.
+pub fn save_workspace_async(
+    dir: &Path,
+    workspace: &WorkspacePersist,
+) -> Result<SaveTicket, String> {
+    settings_writer::save_async(&dir.join("workspace.json"), workspace)
+}
+
+/// Encola la persistencia de los atajos en el worker JSON compartido.
+pub fn save_keymap_async(dir: &Path, keymap: &crate::keymap::KeyMap) -> Result<SaveTicket, String> {
+    settings_writer::save_async(&dir.join("keybindings.json"), keymap)
 }
 
 /// Carga el store de plantillas; si falta/corrupto → vacío.
@@ -787,6 +881,19 @@ pub fn load_templates(dir: &Path) -> TemplateStore {
 /// Guarda el store de plantillas.
 pub fn save_templates(dir: &Path, store: &TemplateStore) {
     write_json(&dir.join("templates.json"), store);
+}
+
+/// Guarda plantillas desde UI mediante el worker compartido de JSON.
+pub fn save_templates_async(dir: &Path, store: &TemplateStore) -> Result<SaveTicket, String> {
+    settings_writer::save_async(&dir.join("templates.json"), store)
+}
+
+/// Guarda favoritos desde UI mediante el worker compartido de JSON.
+pub fn save_favorites_async(
+    dir: &Path,
+    favorites: &crate::favorites::Favorites,
+) -> Result<SaveTicket, String> {
+    settings_writer::save_async(&crate::favorites::favorites_path(dir), favorites)
 }
 
 /// Carga el workspace persistido; `None` si falta/corrupto/versión incompatible
@@ -851,6 +958,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn economical_preview_is_additive_and_preserves_existing_settings() {
+        let settings = Settings {
+            preview_economical: true,
+            ..Settings::default()
+        };
+        let mut value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Settings>(value.clone()).unwrap(),
+            settings
+        );
+        value.as_object_mut().unwrap().remove("preview_economical");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("preview_text_max_bytes");
+        let legacy: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert!(!legacy.preview_economical);
+        assert_eq!(legacy.version, settings.version);
+        assert_eq!(legacy.preview_rules, settings.preview_rules);
+        assert_eq!(legacy.fonts, settings.fonts);
+        assert_eq!(
+            legacy.preview_text_max_bytes,
+            crate::preview::DEFAULT_TEXT_MAX_BYTES
+        );
+        // Unknown future fields are ignored by old settings readers; no schema bump/reset.
+        value["unknown_preview_setting"] = serde_json::json!(true);
+        assert_eq!(serde_json::from_value::<Settings>(value).unwrap(), legacy);
+    }
+
+    #[test]
     fn settings_corrupto_se_respalda_y_cae_a_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -874,6 +1011,53 @@ mod tests {
     }
 
     #[test]
+    fn settings_diferidos_conservan_el_set_personalizado_hasta_cargar_catalogo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("icons/custom-set")).unwrap();
+        let settings = Settings {
+            icon_set: "custom-set".into(),
+            ..Settings::default()
+        };
+        write_json(&dir.path().join("settings.json"), &settings);
+
+        let (deferred, recovered) = load_settings_flagged_deferred_icon_set(dir.path());
+        assert!(!recovered);
+        assert_eq!(deferred.icon_set, "custom-set");
+
+        let (resolved, _) = load_settings_flagged(dir.path());
+        assert_eq!(resolved.icon_set, "custom-set");
+    }
+
+    #[test]
+    fn settings_resuelven_icon_set_desde_data_y_config_legacy() {
+        let config = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(data.path().join("icons/custom-data")).unwrap();
+        std::fs::create_dir_all(config.path().join("icons/custom-legacy")).unwrap();
+        write_json(
+            &config.path().join("settings.json"),
+            &Settings {
+                icon_set: "custom-data".into(),
+                ..Settings::default()
+            },
+        );
+        let (resolved, recovered) = load_settings_flagged_with_data_dir(config.path(), data.path());
+        assert!(!recovered);
+        assert_eq!(resolved.icon_set, "custom-data");
+
+        write_json(
+            &config.path().join("settings.json"),
+            &Settings {
+                icon_set: "custom-legacy".into(),
+                ..Settings::default()
+            },
+        );
+        let (legacy, recovered) = load_settings_flagged_with_data_dir(config.path(), data.path());
+        assert!(!recovered);
+        assert_eq!(legacy.icon_set, "custom-legacy");
+    }
+
+    #[test]
     fn workspace_corrupto_se_respalda() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workspace.json");
@@ -893,6 +1077,7 @@ mod tests {
             icon_only: false,
             fonts: Default::default(),
             icon_set: "mono".to_string(),
+            use_system_file_icons: false,
             icon_overrides: std::collections::BTreeMap::new(),
             toolbar_icon_style: ToolbarIconStyle::Pack,
             toolbar_glyph_color: Some(crate::theme::ThemeColor::new(0x10, 0x20, 0x30)),
@@ -944,10 +1129,13 @@ mod tests {
             low_power_mode: LowPowerMode::Always,
             recent_limit: 25,
             frequent_dirs_limit: 7,
+            task_space_recents: Vec::new(),
             footer_enabled: false,
             footer_preset: crate::footer::FooterPreset::Full,
             footer_custom_template: "{sel}/{total}".into(),
             auto_highlight_code: false,
+            preview_economical: true,
+            preview_text_max_bytes: 512 * 1024,
             animations_enabled: true,
             home_dir: "D:\\Trabajo".into(),
             show_hidden: false,
@@ -995,6 +1183,65 @@ mod tests {
             .preview_rules
             .iter()
             .any(|rule| rule.ext == "3mf" && rule.enabled));
+    }
+
+    #[test]
+    fn settings_v4_recibe_regla_sif_y_preserva_modo_de_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            version: 4,
+            preview_rules: vec![crate::preview::PreviewRule {
+                ext: "sh".into(),
+                enabled: true,
+                view: crate::preview::ViewMode::Text,
+            }],
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &settings);
+
+        let loaded = load_settings(dir.path());
+
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert!(loaded.preview_rules.iter().any(|rule| {
+            rule.ext == "sif" && rule.enabled && rule.view == crate::preview::ViewMode::Auto
+        }));
+        assert!(loaded.preview_rules.iter().any(|rule| {
+            rule.ext == "sh" && rule.enabled && rule.view == crate::preview::ViewMode::Text
+        }));
+    }
+
+    #[test]
+    fn settings_v5_sin_limite_textual_adopta_default_y_normaliza_limite_invalido() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            version: 5,
+            preview_text_max_bytes: 0,
+            ..Settings::default()
+        };
+        let mut json = serde_json::to_value(&settings).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("preview_text_max_bytes");
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert_eq!(
+            loaded.preview_text_max_bytes,
+            crate::preview::DEFAULT_TEXT_MAX_BYTES
+        );
+
+        let mut invalid = loaded;
+        invalid.preview_text_max_bytes = u32::MAX;
+        save_settings(dir.path(), &invalid);
+        assert_eq!(
+            load_settings(dir.path()).preview_text_max_bytes,
+            1024 * 1024
+        );
     }
 
     #[test]
@@ -1078,6 +1325,19 @@ mod tests {
         .unwrap();
         let s = load_settings(dir.path());
         assert_eq!(s.language, crate::i18n::LangId::new("en"));
+        assert!(s.task_space_recents.is_empty());
+    }
+
+    #[test]
+    fn task_space_recents_round_trip_and_old_settings_default_empty() {
+        let path = std::env::temp_dir().join("Trabajo.naygospace");
+        let settings = Settings {
+            task_space_recents: vec![path.clone()],
+            ..Settings::default()
+        };
+        let json = serde_json::to_vec(&settings).unwrap();
+        let loaded: Settings = serde_json::from_slice(&json).unwrap();
+        assert_eq!(loaded.task_space_recents, vec![path]);
     }
 
     #[test]
@@ -1548,6 +1808,15 @@ mod tests {
         let json = r#"{"version":1,"bar_position":"Top","icon_only":true,"icon_set":"flat"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(s.window.is_none());
+        assert!(!s.use_system_file_icons);
+    }
+
+    #[test]
+    fn system_file_icons_are_disabled_by_default_and_old_settings_remain_compatible() {
+        assert!(!Settings::default().use_system_file_icons);
+        let old: Settings =
+            serde_json::from_str(r#"{"version":4,"bar_position":"Top","icon_only":true}"#).unwrap();
+        assert!(!old.use_system_file_icons);
     }
 
     #[test]

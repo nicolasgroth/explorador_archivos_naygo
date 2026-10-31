@@ -225,4 +225,34 @@ mod tests {
         std::fs::write(&destination, b"changed target contents").unwrap();
         assert_ne!(appeared, review(files, &token).unwrap());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn retargeting_destination_symlink_invalidates_review() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let first_parent = dir.path().join("first");
+        let second_parent = dir.path().join("second");
+        let parent_link = dir.path().join("destination-parent");
+        std::fs::create_dir(&first_parent).unwrap();
+        std::fs::create_dir(&second_parent).unwrap();
+        symlink(&first_parent, &parent_link).unwrap();
+
+        let source = dir.path().join("source");
+        std::fs::write(&source, b"source").unwrap();
+        let files = vec![RetryFile {
+            source,
+            destination: parent_link.join("destination"),
+        }];
+        let token = CancellationToken::new();
+        let reviewed = review(files.clone(), &token).unwrap();
+
+        std::fs::remove_file(&parent_link).unwrap();
+        symlink(&second_parent, &parent_link).unwrap();
+
+        let retargeted = review(files, &token).unwrap();
+        assert_ne!(reviewed, retargeted);
+        assert_ne!(reviewed.destination_parents, retargeted.destination_parents);
+    }
 }

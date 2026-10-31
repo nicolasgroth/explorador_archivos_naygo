@@ -89,6 +89,7 @@ where
         }
     };
     // Barra de herramientas.
+    tr.set_edit_path_tip(tip("action.edit_path", Action::EditPath));
     tr.set_toolbar_up(c.t("slint.toolbar.up").into());
     tr.set_toolbar_up_tip(tip("toolbar.up", Action::GoUp));
     tr.set_nav_back_tip(tip("slint.toolbar.back_tip", Action::GoBack));
@@ -130,6 +131,7 @@ where
     tr.set_layout_save_current(c.t("slint.layout.save_current").into());
     tr.set_layout_save_title(c.t("slint.layout.save_title").into());
     tr.set_layout_save_placeholder(c.t("slint.layout.save_placeholder").into());
+    tr.set_layout_save_non_utf8_path(c.t("slint.layout.save_non_utf8_path").into());
     // Menú desplegable "agregar panel".
     tr.set_add_files(c.t("slint.add.files").into());
     tr.set_add_tree(c.t("pane.tree.title").into());
@@ -198,6 +200,9 @@ where
     tr.set_queries_basket(c.t("queries.basket").into());
     tr.set_spaces_help(c.t("spaces.help").into());
     tr.set_spaces_root_help(c.t("spaces.root_help").into());
+    tr.set_spaces_favorites_scope(c.t("spaces.favorites_scope").into());
+    tr.set_spaces_favorites_global(c.t("spaces.favorites_global").into());
+    tr.set_spaces_favorites_private(c.t("spaces.favorites_private").into());
     tr.set_spaces_root(c.t("spaces.root").into());
     tr.set_spaces_working(c.t("spaces.working").into());
     tr.set_spaces_save_as(c.t("spaces.save_as").into());
@@ -453,6 +458,7 @@ where
     tr.set_batch_col_after(c.t("slint.batch.col_after").into());
     tr.set_batch_collision(c.t("slint.batch.collision").into());
     tr.set_batch_invalid(c.t("slint.batch.invalid").into());
+    tr.set_batch_non_utf8(c.t("slint.batch.non_utf8").into());
     tr.set_batch_items(c.t("slint.batch.items").into());
     tr.set_batch_apply(c.t("slint.batch.apply").into());
     // Menú/editor de columna (F2).
@@ -482,6 +488,7 @@ where
     tr.set_inspector_kind(c.t("slint.inspector.kind").into());
     tr.set_inspector_size(c.t("slint.inspector.size").into());
     tr.set_inspector_calc_size(c.t("slint.inspector.calc_size").into());
+    tr.set_inspector_unblock(c.t("provenance.unblock_title").into());
     tr.set_inspector_modified(c.t("slint.inspector.modified").into());
     tr.set_inspector_created(c.t("slint.inspector.created").into());
     tr.set_inspector_path(c.t("slint.inspector.path").into());
@@ -508,6 +515,7 @@ where
     tr.set_preview_title(c.t("pane.preview.title").into());
     tr.set_preview_select(c.t("slint.preview.select").into());
     tr.set_preview_truncated(c.t("slint.preview.truncated").into());
+    tr.set_preview_text_info(c.t("slint.preview.text_info").into());
     // Menú de dirección del botón "+".
     tr.set_split_right(c.t("slint.split.right").into());
     tr.set_split_down(c.t("slint.split.down").into());
@@ -540,6 +548,7 @@ where
     tr.set_cfg_preview_as_ph(c.t("slint.cfg.preview_as_ph").into());
     tr.set_preview_view_auto(c.t("slint.preview.view_auto").into());
     tr.set_preview_view_text(c.t("slint.preview.view_text").into());
+    tr.set_preview_content(c.t("slint.preview.content").into());
     tr.set_preview_view_image(c.t("slint.preview.view_image").into());
     tr.set_preview_view_code(c.t("slint.preview.view_code").into());
     tr.set_preview_lang(c.t("slint.preview.lang").into());
@@ -549,10 +558,23 @@ where
     tr.set_preview_cancel_tip(c.t("slint.preview.cancel_tip").into());
     tr.set_preview_copy_tip(c.t("slint.preview.copy_tip").into());
     tr.set_preview_image_fit_tip(c.t("slint.preview.image_fit_tip").into());
+    tr.set_preview_animation_pause(c.t("slint.preview.animation_pause").into());
+    tr.set_preview_animation_resume(c.t("slint.preview.animation_resume").into());
+    tr.set_preview_animation_repeat(c.t("slint.preview.animation_repeat").into());
     tr.set_preview_image_natural_tip(c.t("slint.preview.image_natural_tip").into());
     tr.set_preview_wrap_on_tip(c.t("slint.preview.wrap_on_tip").into());
     tr.set_preview_wrap_off_tip(c.t("slint.preview.wrap_off_tip").into());
     tr.set_preview_reset_view_tip(c.t("slint.preview.reset_view_tip").into());
+    tr.set_preview_mesh_color(c.t("slint.preview.mesh_color").into());
+    tr.set_preview_mesh_source(c.t("slint.preview.mesh_source").into());
+    tr.set_preview_mesh_blue(c.t("slint.preview.mesh_blue").into());
+    tr.set_preview_mesh_white(c.t("slint.preview.mesh_white").into());
+    tr.set_preview_mesh_warm(c.t("slint.preview.mesh_warm").into());
+    tr.set_preview_mesh_surface(c.t("slint.preview.mesh_surface").into());
+    tr.set_preview_mesh_solid(c.t("slint.preview.mesh_solid").into());
+    tr.set_preview_mesh_edges(c.t("slint.preview.mesh_edges").into());
+    tr.set_preview_mesh_wire(c.t("slint.preview.mesh_wire").into());
+    tr.set_preview_mesh_controls_tip(c.t("slint.preview.mesh_controls_tip").into());
     tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
@@ -574,6 +596,10 @@ where
     tr.set_cfg_factory_reset_confirm(c.t("slint.cfg.factory_reset_confirm").into());
     // Auto-resaltado (Previsualización) + pie de panel + Home (Avanzado).
     tr.set_cfg_auto_highlight(c.t("slint.cfg.auto_highlight").into());
+    tr.set_cfg_preview_economical(c.t("slint.cfg.preview_economical").into());
+    tr.set_cfg_tip_preview_economical(c.t("slint.cfg.tip_preview_economical").into());
+    tr.set_cfg_preview_text_limit(c.t("slint.cfg.preview_text_limit").into());
+    tr.set_cfg_tip_preview_text_limit(c.t("slint.cfg.tip_preview_text_limit").into());
     tr.set_cfg_footer_section(c.t("slint.cfg.footer_section").into());
     tr.set_cfg_footer_enabled(c.t("slint.cfg.footer_enabled").into());
     tr.set_cfg_footer_template(c.t("slint.cfg.footer_template").into());
@@ -668,6 +694,8 @@ where
     tr.set_theme_tok_active_bar(c.t("slint.theme.tok.active_bar").into());
     tr.set_theme_tok_error(c.t("slint.theme.tok.error").into());
     tr.set_theme_tok_highlight(c.t("slint.theme.tok.highlight").into());
+    tr.set_theme_tok_icon_accent(c.t("slint.theme.tok.icon_accent").into());
+    tr.set_icons_open_settings(c.t("slint.icons.open_settings").into());
     tr.set_theme_tok_border(c.t("slint.theme.tok.border").into());
     tr.set_theme_tok_row_inactive_bg(c.t("slint.theme.tok.row_inactive_bg").into());
     tr.set_theme_tok_active_panel_bg(c.t("slint.theme.tok.active_panel_bg").into());
@@ -682,6 +710,7 @@ where
     tr.set_theme_use_inactive_row_color(c.t("slint.theme.use_inactive_row_color").into());
     tr.set_cfg_language(c.t("slint.cfg.language").into());
     tr.set_cfg_icon_set(c.t("slint.cfg.icon_set").into());
+    tr.set_cfg_system_file_icons(c.t("slint.cfg.system_file_icons").into());
     tr.set_cfg_shortcuts_hint(c.t("slint.cfg.shortcuts_hint").into());
     tr.set_cfg_capturing(c.t("settings.shortcuts.capturing").into());
     tr.set_cfg_press(c.t("slint.cfg.press").into());
@@ -740,6 +769,7 @@ where
     tr.set_cfg_tip_paste_ext(c.t("slint.cfg.tip.paste_ext").into());
     tr.set_cfg_tip_theme(c.t("slint.cfg.tip.theme").into());
     tr.set_cfg_tip_icon_set(c.t("slint.cfg.tip.icon_set").into());
+    tr.set_cfg_tip_system_file_icons(c.t("slint.cfg.tip.system_file_icons").into());
     tr.set_cfg_tip_animations(c.t("slint.cfg.tip.animations").into());
     tr.set_cfg_tip_date_format(c.t("slint.cfg.tip.date_format").into());
     tr.set_cfg_tip_size_format(c.t("slint.cfg.tip.size_format").into());

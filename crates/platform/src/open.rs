@@ -1,8 +1,8 @@
-// Naygo — abrir archivos con su programa por defecto (Win32 ShellExecuteW), aislado.
+// Naygo — abrir archivos con su programa por defecto, aislado por plataforma.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 
-//! `open_default` abre un archivo con la app asociada (verbo "open"); `open_with_dialog`
+//! `open_default` abre un archivo con la app asociada del escritorio; `open_with_dialog`
 //! lanza el diálogo "Abrir con…" de Windows (verbo "openas"). Tolerante: devuelve un
 //! `Result` tipado, nunca tumba el proceso. La política de Naygo es abrir con el SO,
 //! no reproducir/editar.
@@ -43,6 +43,7 @@ pub enum Terminal {
 
 impl Terminal {
     /// El ejecutable que lanza esta terminal.
+    #[cfg(windows)]
     fn exe(self) -> &'static str {
         match self {
             Terminal::PowerShell => "powershell.exe",
@@ -53,7 +54,12 @@ impl Terminal {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn open_default(path: &Path) -> Result<(), ShellError> {
+    linux_impl::open_default(path)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn open_default(_path: &Path) -> Result<(), ShellError> {
     Err(ShellError::NotSupported)
 }
@@ -83,6 +89,109 @@ pub fn wsl_available() -> bool {
     false
 }
 
+#[cfg(any(target_os = "linux", test))]
+mod linux_impl {
+    #[cfg(target_os = "linux")]
+    use super::ShellError;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    /// Construye argv para `xdg-open` sin shell. Hacer absoluta una ruta relativa impide que
+    /// nombres que empiezan por `-` se interpreten como opciones y conserva los bytes del path.
+    /// No canonicaliza: symlinks y componentes `..` siguen siendo responsabilidad del escritorio.
+    fn command(path: &Path, current_dir: &Path) -> Command {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            current_dir.join(path)
+        };
+        let mut command = Command::new("xdg-open");
+        command
+            .arg(absolute)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn open_default(path: &Path) -> Result<(), ShellError> {
+        let current_dir = std::env::current_dir().map_err(|error| {
+            ShellError::Failed(format!("No se pudo leer la carpeta actual: {error}"))
+        })?;
+        command(path, &current_dir)
+            .spawn()
+            .map(|_child| ())
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    ShellError::NotSupported
+                } else {
+                    ShellError::Failed(format!("No se pudo iniciar xdg-open: {error}"))
+                }
+            })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::command;
+        use std::ffi::OsStr;
+        use std::path::{Path, PathBuf};
+
+        fn absolute_test_dir() -> PathBuf {
+            #[cfg(windows)]
+            {
+                PathBuf::from(r"C:\naygo\pruebas")
+            }
+            #[cfg(not(windows))]
+            {
+                PathBuf::from("/home/naygo/pruebas")
+            }
+        }
+
+        #[test]
+        fn xdg_open_recibe_una_ruta_relativa_como_un_argumento_absoluto() {
+            let current_dir = absolute_test_dir();
+            let relative = Path::new("- archivo 'con' % y ñ\n.txt");
+            let command = command(relative, &current_dir);
+            let args: Vec<_> = command.get_args().collect();
+            let expected = current_dir.join(relative);
+
+            assert_eq!(command.get_program(), OsStr::new("xdg-open"));
+            assert_eq!(args, [expected.as_os_str()]);
+        }
+
+        #[test]
+        fn xdg_open_no_canonicaliza_rutas_absolutas() {
+            let absolute = absolute_test_dir()
+                .join("link")
+                .join("..")
+                .join("- file.txt");
+            let command = command(&absolute, &absolute_test_dir());
+
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [absolute.as_os_str()]
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn xdg_open_conserva_bytes_no_utf8_de_la_ruta() {
+            use std::os::unix::ffi::OsStrExt;
+
+            let current_dir = Path::new("/tmp");
+            let relative = Path::new(OsStr::from_bytes(b"-bad-\xff-name"));
+            let command = command(relative, current_dir);
+            let expected = current_dir.join(relative);
+
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [expected.as_os_str()]
+            );
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn open_default(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "open")
@@ -100,12 +209,19 @@ pub fn run_as_administrator(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "runas")
 }
 
-/// Indica si una ruta representa un ejecutable que Naygo puede ofrecer para elevación.
-/// Es una comprobación puramente léxica (sin I/O), segura incluso sobre shares lentos.
+/// Indica si una ruta representa un ejecutable que Naygo puede ofrecer para elevación en Windows.
+/// Es una comprobación puramente léxica (sin I/O), segura incluso sobre shares lentos. En otras
+/// plataformas la acción no está soportada y debe permanecer oculta en la interfaz.
+#[cfg(windows)]
 pub fn can_run_as_administrator(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("com"))
+}
+
+#[cfg(not(windows))]
+pub fn can_run_as_administrator(_path: &Path) -> bool {
+    false
 }
 
 /// Abre `term` con la carpeta de trabajo en `dir`. Para Windows Terminal se pasa `-d <dir>`
@@ -235,12 +351,20 @@ mod windows_impl {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn elevacion_solo_para_ejecutables_windows() {
         assert!(can_run_as_administrator(Path::new("C:/Apps/tool.exe")));
         assert!(can_run_as_administrator(Path::new("C:/Apps/TOOL.COM")));
         assert!(!can_run_as_administrator(Path::new("C:/Apps/tool.msi")));
         assert!(!can_run_as_administrator(Path::new("C:/Apps/readme.txt")));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn no_ofrece_elevacion_windows_en_otras_plataformas() {
+        assert!(!can_run_as_administrator(Path::new("/tmp/tool.exe")));
+        assert!(!can_run_as_administrator(Path::new("/tmp/tool.com")));
     }
 
     #[cfg(windows)]
