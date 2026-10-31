@@ -130,7 +130,9 @@ impl DropTargetGuard {
     pub fn is_registered(&self) -> bool {
         #[cfg(windows)]
         {
-            self.inner.is_some()
+            self.inner
+                .as_ref()
+                .is_some_and(|registration| registration.is_active())
         }
         #[cfg(not(windows))]
         {
@@ -180,11 +182,8 @@ mod windows_impl {
     use std::collections::HashSet;
     use std::io::Write;
     use std::path::{Component, Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-    use std::sync::{
-        mpsc::{sync_channel, Sender},
-        Arc,
-    };
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+    use std::sync::{mpsc::Sender, Arc};
     use windows::core::{implement, Interface, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
     use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
@@ -519,11 +518,13 @@ mod windows_impl {
 
     /// Archivo de 7-Zip ya abierto mientras el `Drop` OLE todavía está activo. El handle mantiene
     /// legible el contenido aunque 7-Zip retire su nombre temporal inmediatamente después.
+    #[cfg(test)]
     struct OpenedHdropFile {
         source: PathBuf,
         file: std::fs::File,
     }
 
+    #[cfg(test)]
     fn open_ephemeral_hdrop_files(paths: &[PathBuf]) -> Result<Vec<OpenedHdropFile>, String> {
         let mut opened = Vec::with_capacity(paths.len());
         let mut names = HashSet::with_capacity(paths.len());
@@ -564,6 +565,7 @@ mod windows_impl {
         Ok(opened)
     }
 
+    #[cfg(test)]
     fn stage_opened_hdrop_files(
         files: Vec<OpenedHdropFile>,
     ) -> Result<(Vec<PathBuf>, Arc<StagedDropGuard>), String> {
@@ -596,54 +598,6 @@ mod windows_impl {
             paths.push(destination);
         }
         Ok((paths, guard))
-    }
-
-    /// Inicia el snapshot de una ruta temporal de 7-Zip en un worker. La espera de dos segundos
-    /// es SOLO hasta que el worker abrió los handles (no hasta copiar bytes); sin ese acuse, el
-    /// proveedor puede borrar el temporal antes de que el worker alcance a abrirlo. La copia de
-    /// verdad, potencialmente grande, sigue fuera del callback OLE y del hilo de UI.
-    fn spawn_ephemeral_hdrop_staging(
-        paths: Vec<PathBuf>,
-        screen_x: i32,
-        screen_y: i32,
-        tx: Sender<DropPayload>,
-        waker: Waker,
-    ) {
-        let (ready_tx, ready_rx) = sync_channel::<()>(1);
-        std::thread::spawn(move || {
-            let opened = open_ephemeral_hdrop_files(&paths);
-            // Aunque el receptor ya haya agotado el timeout, enviar no bloquea y el worker aún
-            // puede informar el error concreto a la UI.
-            let _ = ready_tx.send(());
-            let payload = match opened.and_then(stage_opened_hdrop_files) {
-                Ok((paths, staging)) => DropPayload {
-                    paths,
-                    move_: false,
-                    copy_forced: true,
-                    screen_x,
-                    screen_y,
-                    staging: Some(staging),
-                    error: None,
-                },
-                Err(error) => DropPayload {
-                    paths: Vec::new(),
-                    move_: false,
-                    copy_forced: true,
-                    screen_x,
-                    screen_y,
-                    staging: None,
-                    error: Some(error),
-                },
-            };
-            let _ = tx.send(payload);
-            (waker)();
-        });
-        if ready_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .is_err()
-        {
-            tracing::warn!("el worker no alcanzó a abrir el temporal de 7-Zip durante Drop");
-        }
     }
 
     fn create_staging_dir() -> Result<PathBuf, String> {
@@ -776,7 +730,7 @@ mod windows_impl {
     /// `IDropTarget` que reenvía las rutas soltadas por un canal y despierta la UI.
     /// `#[implement(IDropTarget)]` genera vtable/refcount/QueryInterface; solo escribimos
     /// los cuatro métodos del trait.
-    #[implement(IDropTarget)]
+    #[implement(IDropTarget, Agile = false)]
     struct NaygoDropTarget {
         tx: Sender<DropPayload>,
         /// Canal hermano para los eventos de HOVER (resaltar el panel bajo el cursor). Separado de
@@ -901,13 +855,51 @@ mod windows_impl {
                         };
                         if !paths.is_empty() {
                             if needs_ephemeral_hdrop_staging(&paths) {
-                                spawn_ephemeral_hdrop_staging(
-                                    paths,
-                                    screen_x,
-                                    screen_y,
-                                    self.tx.clone(),
-                                    self.waker.clone(),
-                                );
+                                let token = naygo_core::cancel::CancellationToken::new();
+                                match super::hdrop_tree::capture(&paths, &token) {
+                                    Ok(mut captured) => {
+                                        captured.release_directories();
+                                        let tx = self.tx.clone();
+                                        let waker = self.waker.clone();
+                                        std::thread::spawn(move || {
+                                            let result = create_staging_dir().and_then(|root| {
+                                                let guard =
+                                                    Arc::new(StagedDropGuard::new(root.clone()));
+                                                captured
+                                                    .materialize(&root, &token)
+                                                    .map(|paths| (paths, guard))
+                                                    .map_err(|error| error.to_string())
+                                            });
+                                            let payload = match result {
+                                                Ok((paths, staging)) => DropPayload {
+                                                    paths,
+                                                    move_: false,
+                                                    copy_forced: true,
+                                                    screen_x,
+                                                    screen_y,
+                                                    staging: Some(staging),
+                                                    error: None,
+                                                },
+                                                Err(error) => DropPayload {
+                                                    paths: Vec::new(),
+                                                    move_: false,
+                                                    copy_forced: true,
+                                                    screen_x,
+                                                    screen_y,
+                                                    staging: None,
+                                                    error: Some(error),
+                                                },
+                                            };
+                                            let _ = tx.send(payload);
+                                            (waker)();
+                                        });
+                                    }
+                                    Err(error) => self.send_virtual_error(
+                                        screen_x,
+                                        screen_y,
+                                        error.to_string(),
+                                    ),
+                                }
                             } else {
                                 self.send_payload(DropPayload {
                                     paths,
@@ -1027,19 +1019,31 @@ mod windows_impl {
 
     /// Mantiene vivo el registro de drop. Su `Drop` revoca con `RevokeDragDrop`.
     pub struct Registration {
-        hwnd: HWND,
-        // Mantiene viva la interfaz mientras dure el registro (RevokeDragDrop la libera, pero
-        // conservar la referencia es explícito y evita sorpresas de ciclo de vida).
-        _target: IDropTarget,
+        state: Arc<RegistrationState>,
+    }
+
+    struct RegistrationState {
+        failed: AtomicBool,
+        stopped: AtomicBool,
+        thread_id: AtomicU32,
+    }
+
+    impl Registration {
+        pub fn is_active(&self) -> bool {
+            !self.state.failed.load(Ordering::Acquire)
+        }
     }
 
     impl Drop for Registration {
         fn drop(&mut self) {
-            // SAFETY: `hwnd` fue registrado con RegisterDragDrop en este mismo hilo; revocar
-            // es la operación inversa y es segura aunque el registro ya no estuviera (devuelve
-            // error, que ignoramos).
-            unsafe {
-                let _ = RevokeDragDrop(self.hwnd);
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            self.state.stopped.store(true, Ordering::Release);
+            let thread_id = self.state.thread_id.load(Ordering::Acquire);
+            if thread_id != 0 {
+                unsafe {
+                    let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+                }
             }
         }
     }
@@ -1057,22 +1061,6 @@ mod windows_impl {
             return None;
         }
 
-        // OleInitialize debe llamarse una vez por hilo antes de RegisterDragDrop. Si el hilo
-        // ya está OLE-inicializado (p. ej. por winit), devuelve S_FALSE o RPC_E_CHANGED_MODE;
-        // ambos son tolerables (no llamamos OleUninitialize: no fuimos quienes inicializamos).
-        // SAFETY: llamada estándar de inicialización OLE en el hilo de UI (STA).
-        unsafe {
-            let _ = OleInitialize(None);
-        }
-
-        let target: IDropTarget = NaygoDropTarget {
-            tx,
-            drag_tx,
-            waker,
-            accepted_kind: AtomicU8::new(ACCEPT_NONE),
-        }
-        .into();
-
         // winit (sobre el que corre Slint) ya registró SU PROPIO IDropTarget al crear la
         // ventana: tiene drag&drop ON por defecto y Slint 1.16 no lo desactiva. Una ventana
         // Win32 admite UN SOLO drop target, así que sin esto nuestro RegisterDragDrop falla
@@ -1085,18 +1073,60 @@ mod windows_impl {
             let _ = RevokeDragDrop(hwnd);
         }
 
-        // SAFETY: hwnd no es nulo y `target` es una interfaz IDropTarget válida; el SO toma
-        // su propia referencia. Cualquier error (p. ej. DRAGDROP_E_ALREADYREGISTERED) → None.
-        let result = unsafe { RegisterDragDrop(hwnd, &target) };
-        if result.is_err() {
-            tracing::warn!(?result, "RegisterDragDrop falló");
-            return None;
-        }
-
-        Some(Registration {
-            hwnd,
-            _target: target,
-        })
+        let state = Arc::new(RegistrationState {
+            failed: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+            thread_id: AtomicU32::new(0),
+        });
+        let worker_state = state.clone();
+        let raw_hwnd = hwnd.0 as isize;
+        std::thread::spawn(move || {
+            use windows::Win32::System::Ole::OleUninitialize;
+            use windows::Win32::System::Threading::GetCurrentThreadId;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, GetMessageW, PeekMessageW, MSG, PM_NOREMOVE,
+            };
+            if unsafe { OleInitialize(None) }.is_err() {
+                worker_state.failed.store(true, Ordering::Release);
+                (waker)();
+                return;
+            }
+            let mut message = MSG::default();
+            unsafe {
+                let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+            }
+            worker_state
+                .thread_id
+                .store(unsafe { GetCurrentThreadId() }, Ordering::Release);
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx,
+                waker: waker.clone(),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+            }
+            .into();
+            let hwnd = hwnd_from_isize(raw_hwnd);
+            if unsafe { RegisterDragDrop(hwnd, &target) }.is_err() {
+                worker_state.failed.store(true, Ordering::Release);
+                (waker)();
+            } else {
+                if !worker_state.stopped.load(Ordering::Acquire) {
+                    while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
+                        unsafe {
+                            DispatchMessageW(&message);
+                        }
+                    }
+                }
+                unsafe {
+                    let _ = RevokeDragDrop(hwnd);
+                }
+            }
+            drop(target);
+            unsafe {
+                OleUninitialize();
+            }
+        });
+        Some(Registration { state })
     }
 
     #[cfg(test)]
@@ -1325,10 +1355,11 @@ mod windows_impl {
 
         #[test]
         fn hdrop_temporal_de_archivo_funciona_por_interfaz_ole() {
-            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
-            let parent = temp.path().join("7zE1234567");
-            std::fs::create_dir(&parent).unwrap();
-            let source = parent.join("file.txt");
+            let temp = tempfile::Builder::new()
+                .prefix("7zE")
+                .tempdir_in(std::env::temp_dir())
+                .unwrap();
+            let source = temp.path().join("file.txt");
             std::fs::write(&source, b"contenido").unwrap();
             let object = crate::dnd::test_file_data_object(vec![source]);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1360,10 +1391,12 @@ mod windows_impl {
         // Caso de aceptación pendiente: el proveedor sintético entrega CF_HDROP como un
         // archivador, pero no reproduce extracción ni ciclo de vida COM de 7-Zip.
         #[test]
-        #[ignore = "pendiente soporte de carpetas temporales y validación OLE real"]
         fn hdrop_temporal_de_carpeta_preserva_arbol_y_vacios() {
-            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
-            let source = temp.path().join("7zE8765432").join("carpeta");
+            let temp = tempfile::Builder::new()
+                .prefix("7zE")
+                .tempdir_in(std::env::temp_dir())
+                .unwrap();
+            let source = temp.path().join("carpeta");
             std::fs::create_dir_all(source.join("nested/empty")).unwrap();
             std::fs::write(source.join("nested/file.txt"), b"contenido").unwrap();
             let object = crate::dnd::test_file_data_object(vec![source]);
