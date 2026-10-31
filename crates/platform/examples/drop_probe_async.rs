@@ -53,6 +53,8 @@ mod win {
     const READ_ATTR: u32 = 0x80;
     const LIST_DIR: u32 = 0x1;
     const SHARE_READ_WRITE: u32 = 3;
+    const SHARE_READ_DELETE: u32 = 5;
+    #[cfg(test)]
     const SHARE_ALL: u32 = 7;
     const MAX_FILES: usize = 5_000;
 
@@ -93,7 +95,8 @@ mod win {
                 .share_mode(SHARE_READ_WRITE)
                 .custom_flags(OPEN_REPARSE | BACKUP);
         } else {
-            options.share_mode(SHARE_ALL);
+            // El proveedor puede retirar el nombre, pero no modificar el contenido retenido.
+            options.share_mode(SHARE_READ_DELETE);
         }
         let file = options.open(path)?;
         let metadata = file.metadata()?;
@@ -774,6 +777,119 @@ mod win {
             };
             let result = materialize_fixture(snapshot, temp.path());
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        }
+
+        #[test]
+        fn enlace_fisico_sintetico_sobrevive_limpieza_del_origen() {
+            let temp = tempfile::tempdir().unwrap();
+            let source_dir = temp.path().join("source");
+            let staging_dir = temp.path().join("staging");
+            fs::create_dir(&source_dir).unwrap();
+            fs::create_dir(&staging_dir).unwrap();
+            let source = source_dir.join("archivo.txt");
+            let staged = staging_dir.join("archivo.txt");
+            fs::write(&source, b"contenido retenido").unwrap();
+            // Retener el último componente sin compartir borrado evita sustituirlo entre la
+            // inspección y la creación del vínculo. Solo se usa con datos sintéticos del test.
+            let guard = OpenOptions::new()
+                .read(true)
+                .share_mode(SHARE_READ_WRITE)
+                .custom_flags(OPEN_REPARSE)
+                .open(&source)
+                .unwrap();
+            assert_eq!(guard.metadata().unwrap().file_attributes() & REPARSE, 0);
+            fs::hard_link(&source, &staged).unwrap();
+            drop(guard);
+            fs::remove_file(&source).unwrap();
+            assert_eq!(fs::read(&staged).unwrap(), b"contenido retenido");
+        }
+
+        #[test]
+        fn enlace_fisico_comparte_cambios_y_no_es_copia_inmutable() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            let staged = temp.path().join("staged.txt");
+            fs::write(&source, b"original").unwrap();
+            fs::hard_link(&source, &staged).unwrap();
+            fs::write(&source, b"modificado").unwrap();
+            assert_eq!(fs::read(&staged).unwrap(), b"modificado");
+        }
+
+        #[test]
+        fn handle_que_permite_borrado_y_bloquea_escritura_retiene_contenido() {
+            use std::io::Read;
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            fs::write(&source, b"contenido retenido").unwrap();
+            let writer = OpenOptions::new()
+                .write(true)
+                .share_mode(SHARE_ALL)
+                .open(&source)
+                .unwrap();
+            let in_use = OpenOptions::new()
+                .read(true)
+                .share_mode(SHARE_READ_DELETE)
+                .custom_flags(OPEN_REPARSE)
+                .open(&source)
+                .unwrap_err();
+            assert_eq!(in_use.raw_os_error(), Some(32));
+            drop(writer);
+            // READ | DELETE permite la limpieza de 7-Zip, pero no concede compartir escritura.
+            let mut guard = OpenOptions::new()
+                .read(true)
+                .share_mode(SHARE_READ_DELETE)
+                .custom_flags(OPEN_REPARSE)
+                .open(&source)
+                .unwrap();
+            assert_eq!(guard.metadata().unwrap().file_attributes() & REPARSE, 0);
+            let error = OpenOptions::new().write(true).open(&source).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(32), "{error}");
+            fs::remove_file(&source).unwrap();
+            let mut retained = Vec::new();
+            guard.read_to_end(&mut retained).unwrap();
+            assert_eq!(retained, b"contenido retenido");
+        }
+
+        #[test]
+        #[ignore = "medición sintética de filesystem; ejecutar explícitamente"]
+        fn medir_enlaces_fisicos_sinteticos() {
+            for count in [1_000, 10_000] {
+                let temp = tempfile::tempdir().unwrap();
+                let source = temp.path().join("source");
+                let stage = temp.path().join("stage");
+                fs::create_dir(&source).unwrap();
+                fs::create_dir(&stage).unwrap();
+                for index in 0..count {
+                    fs::write(source.join(format!("{index:05}.txt")), b"fixture").unwrap();
+                }
+                let started = Instant::now();
+                for index in 0..count {
+                    let name = format!("{index:05}.txt");
+                    let from = source.join(&name);
+                    let guard = OpenOptions::new()
+                        .read(true)
+                        .share_mode(SHARE_READ_WRITE)
+                        .custom_flags(OPEN_REPARSE)
+                        .open(&from)
+                        .unwrap();
+                    assert_eq!(guard.metadata().unwrap().file_attributes() & REPARSE, 0);
+                    fs::hard_link(&from, stage.join(&name)).unwrap();
+                }
+                let elapsed = started.elapsed();
+                let resolved_source = fs::canonicalize(&source).unwrap();
+                assert_eq!(
+                    resolved_source.parent(),
+                    Some(fs::canonicalize(temp.path()).unwrap().as_path())
+                );
+                assert_eq!(resolved_source.file_name().unwrap(), "source");
+                fs::remove_dir_all(&resolved_source).unwrap();
+                assert_eq!(fs::read_dir(&stage).unwrap().count(), count);
+                assert_eq!(fs::read(stage.join("00000.txt")).unwrap(), b"fixture");
+                println!(
+                    "hardlink files={count} elapsed_ms={:.3}",
+                    elapsed.as_secs_f64() * 1000.0
+                );
+            }
         }
 
         #[test]

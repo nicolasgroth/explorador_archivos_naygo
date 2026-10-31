@@ -28,6 +28,11 @@ use crate::dir_watch::Waker;
 use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Arc};
 
+// Captura de árboles efímeros; todavía no se conecta al receptor OLE de producción.
+#[cfg(windows)]
+#[allow(dead_code)]
+mod hdrop_tree;
+
 /// Mantiene vivo el staging de un drop de archivos virtuales. La última referencia programa su
 /// eliminación en un worker: ni cancelar el modal ni terminar una copia hace I/O en el hilo UI.
 #[derive(Debug)]
