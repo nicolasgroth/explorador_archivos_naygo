@@ -41,6 +41,9 @@
 >   Ajuste posterior: se consulta el nombre largo antes del borrado y se conserva en el recibo;
 >   si Windows no permite consultarlo, se detiene la operación. Las 18 pruebas locales de
 >   Papelera y Clippy de plataforma pasan; el alias 8.3 distinto necesita validación del runner.
+>   Runner [41217139110](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41217139110):
+>   pasan Papelera, alias 8.3 y los dos casos originales. El gate falla después en dos tests de
+>   interfaz que esperan español con entorno inglés; corregirlos y repetir CI. Clippy omitido.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.

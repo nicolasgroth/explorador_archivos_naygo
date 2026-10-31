@@ -42,6 +42,10 @@ El ajuste posterior consulta el nombre largo antes de reciclar y lo conserva en 
 puede obtenerlo, aborta. Las 18 pruebas locales y Clippy de plataforma pasan, aunque el volumen
 local no ofreció un alias 8.3 distinto. Falta repetir el runner y generar la distribución: se
 interrumpió el build anterior antes de empaquetar al detectarse el fallo adicional.
+La corrida [41217139110](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41217139110)
+pasó las pruebas de Papelera, incluida la de alias 8.3 y los dos casos originales. El gate Windows
+falló después en dos tests de interfaz que esperan texto español, mientras el runner usa inglés;
+Clippy remoto quedó omitido. El benchmark pasó; Linux mantiene sus fallos. Build en curso.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
