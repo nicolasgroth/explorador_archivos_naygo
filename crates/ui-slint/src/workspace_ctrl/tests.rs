@@ -493,6 +493,7 @@ fn exportacion_csv_muestra_tipo_carpeta_aunque_el_nombre_tenga_puntos() {
     std::fs::write(work.path().join("pieza.stl"), b"stl").unwrap();
 
     let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    c.config.set_language(naygo_core::i18n::LangId::new("es"));
     assert!(drain(&mut c));
     let csv = c.export_listing_csv(';').expect("panel activo");
 
@@ -4002,6 +4003,7 @@ fn filtro_por_tipeo_marca_salta_persiste_y_se_limpia() {
     std::fs::write(dir.path().join("mi beta final.txt"), b"x").unwrap();
     std::fs::create_dir(dir.path().join("betacam")).unwrap();
     let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    c.config.set_language(naygo_core::i18n::LangId::new("es"));
     assert!(drain(&mut c));
     let id = c.ws.active_id().unwrap();
 

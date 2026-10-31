@@ -45,7 +45,14 @@ interrumpió el build anterior antes de empaquetar al detectarse el fallo adicio
 La corrida [41217139110](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41217139110)
 pasó las pruebas de Papelera, incluida la de alias 8.3 y los dos casos originales. El gate Windows
 falló después en dos tests de interfaz que esperan texto español, mientras el runner usa inglés;
-Clippy remoto quedó omitido. El benchmark pasó; Linux mantiene sus fallos. Build en curso.
+Clippy remoto quedó omitido. El benchmark pasó; Linux mantiene sus fallos. El build supervisado
+terminó (release 74m31s, pico 10,72 GiB), generó setup y ZIP sin firma y verificó que el EXE del
+ZIP coincide con release y no incluye PDB. SHA-256 ZIP
+`a975a4e1d54e4cd4907655a6808724f3f04e5d39a5754e7025aa50e8c4ad4e99`, setup
+`a1847f9bf8705ca3ee3743d801f0d008a8102bd84a7abc814543661896866cd0`.
+El paquete aún no incorpora la integración de carpetas 7-Zip y no se instaló.
+Las dos pruebas de interfaz ahora seleccionan español explícitamente y pasan localmente; queda
+repetir CI para comprobar el gate con el entorno remoto.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
