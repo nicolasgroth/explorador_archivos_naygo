@@ -24,6 +24,15 @@ diagnosticar y corregir sin afirmar éxito ni restaurabilidad sin pruebas.
 Se añadió diagnóstico solo en pruebas, sin rutas ni nombres personales, para distinguir callbacks,
 identidad, resultado HRESULT y uso del fallback. Las 11 pruebas de Papelera y Clippy de platform
 pasaron localmente; falta ejecutar el diagnóstico en el runner.
+La corrida diagnóstica [41208415922](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41208415922)
+confirmó objeto nuevo y nombre de parsing en ambos casos, sin fallback; falló la asociación con la
+ruta original. La corrección local asocia el nombre Shell leído antes de borrar, preserva UTF-16 y
+libera buffers COM. También deja de usar el fallback clásico y evita confirmar automáticamente una
+posible eliminación permanente; un origen ausente sin identidad confirmada se comunica como fallo.
+Faltan validación del runner, comportamiento de advertencia del Shell y build actualizado; no se
+afirma que esta configuración impida el borrado permanente en todos los proveedores.
+Validación local posterior: 1.533 pruebas aprobadas, nueve ignoradas y Clippy sin avisos; el
+supervisor registró un pico de 8,77 GiB. La validación remota y el empaquetado siguen pendientes.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
@@ -177,6 +186,15 @@ archivos al receptor experimental con STA separado. Se capturaron cinco director
 la ventana Win32 procesó seis temporizadores. Tras la limpieza del temporal, los 259 contenidos
 (3.229 bytes) y la carpeta vacía coincidieron con la fixture. Es una sola prueba local; no valida
 Slint/Winit, selección mixta, árboles grandes, errores, cancelación ni la integración en Naygo.
+Una medición exploratoria de enlaces físicos sintéticos dio 1.918,591 ms para 1.000 y 19.513,499 ms
+para 10.000 archivos (una ejecución, sin creación ni limpieza). Un test demostró que comparten los
+cambios del origen, así que no ofrecen un snapshot inmutable. Una alternativa de handle permite
+compartir lectura y borrado, rechaza escritores existentes o nuevos y conserva el contenido tras
+eliminar el nombre; pasa en una fixture local. El prototipo se cambió para usarla; 11 pruebas y
+Clippy pasan. Una segunda prueba real con esa variante capturó 259 archivos y cinco directorios
+en 598 ms, atendió seis temporizadores y conservó los contenidos y la carpeta vacía tras la
+limpieza de 7-Zip. El módulo reutilizable tiene siete pruebas focalizadas y todavía no está
+conectado al receptor de producción.
 Se preparó el ejemplo `crates/platform/examples/drop_probe.rs`: ventana aislada con el receptor OLE
 actual, sin copiar a un destino ni modificar la configuración; check y Clippy focalizados pasan.
 La ventana y la fixture ZIP se abrieron. UI Automation detectó la carpeta y 259 archivos, pero la

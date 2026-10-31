@@ -448,6 +448,7 @@
   "ops.verb_copy": "Copie en cours",
   "ops.verb_move": "Déplacement en cours",
   "ops.verb_delete": "Suppression en cours",
+  "ops.trash_unconfirmed": "La source a disparu et son identité dans la Corbeille n’a pas pu être confirmée. Vérifiez la Corbeille avant toute action.",
   "ops.verb_compress": "Compression en cours",
   "ops.verb_extract": "Extraction en cours",
   "ops.verb_other": "Traitement en cours",

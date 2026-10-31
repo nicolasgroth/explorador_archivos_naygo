@@ -448,6 +448,7 @@
   "ops.verb_copy": "Copiando",
   "ops.verb_move": "Movendo",
   "ops.verb_delete": "Excluindo",
+  "ops.trash_unconfirmed": "A origem não está mais presente e sua identidade na Lixeira não pôde ser confirmada. Verifique a Lixeira antes de agir.",
   "ops.verb_compress": "Compactando",
   "ops.verb_extract": "Extraindo",
   "ops.verb_other": "Processando",

@@ -448,6 +448,7 @@
   "ops.verb_copy": "Copiando",
   "ops.verb_move": "Moviendo",
   "ops.verb_delete": "Eliminando",
+  "ops.trash_unconfirmed": "El origen ya no está y no se pudo confirmar su identidad en la Papelera. Revisa la Papelera antes de actuar.",
   "ops.verb_compress": "Comprimiendo",
   "ops.verb_extract": "Extrayendo",
   "ops.verb_other": "Procesando",

@@ -448,6 +448,7 @@
   "ops.verb_copy": "Copying",
   "ops.verb_move": "Moving",
   "ops.verb_delete": "Deleting",
+  "ops.trash_unconfirmed": "The source is no longer present and its Recycle Bin identity could not be confirmed. Check the Recycle Bin before acting.",
   "ops.verb_compress": "Compressing",
   "ops.verb_extract": "Extracting",
   "ops.verb_other": "Processing",

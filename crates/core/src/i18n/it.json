@@ -448,6 +448,7 @@
   "ops.verb_copy": "Copia in corso",
   "ops.verb_move": "Spostamento in corso",
   "ops.verb_delete": "Eliminazione in corso",
+  "ops.trash_unconfirmed": "L’origine non è più presente e la sua identità nel Cestino non è stata confermata. Controlla il Cestino prima di agire.",
   "ops.verb_compress": "Compressione in corso",
   "ops.verb_extract": "Estrazione in corso",
   "ops.verb_other": "Elaborazione in corso",

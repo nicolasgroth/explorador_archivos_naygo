@@ -25,6 +25,15 @@
 >   indica si hubo callback, objeto nuevo, nombre de parsing, HRESULT, fallback y origen presente.
 >   Las 11 pruebas locales de Papelera y Clippy de platform pasan; falta ejecutar ese diagnóstico
 >   en el runner para identificar la causa antes de cambiar el comportamiento de producción.
+>   Diagnóstico posterior en [41208415922](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41208415922):
+>   ambos callbacks traían objeto nuevo y nombre de parsing, pero la ruta reportada no coincidía
+>   con la original; no se ejecutó el fallback. Corrección local en desarrollo: asociar el nombre
+>   Shell obtenido antes de borrar al origen, preservar UTF-16, liberar cadenas COM y no tratar
+>   ausencia sin identidad como éxito. Se retiró el fallback clásico y la confirmación automática;
+>   el Shell puede mostrar una advertencia cuando ofrece borrado permanente. Falta validar en runner,
+>   el comportamiento de esa advertencia y regenerar dist; no se afirma protección universal.
+>   La suite local completa pasó con 1.533 pruebas, nueve ignoradas y Clippy sin avisos bajo el
+>   supervisor de memoria; aún faltan la validación remota y el build de distribución.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.
@@ -144,6 +153,16 @@
 >   seis temporizadores. Tras eliminar 7-Zip su temporal se comprobaron 3.229 bytes, los 259
 >   contenidos y una carpeta vacía. Es evidencia de una fixture local, no del receptor Slint/Winit
 >   ni de cancelación, errores, árboles grandes, selecciones mixtas o implementación de producción.
+>   Se evaluaron enlaces físicos como alternativa para reducir handles: en una ejecución sintética
+>   crearlos tomó 1.918,591 ms para 1.000 archivos y 19.513,499 ms para 10.000, sin incluir creación
+>   ni limpieza. Comparten modificaciones con el origen, por lo que no son un snapshot inmutable;
+>   el resultado no es una comparación controlada con las mediciones anteriores por handles.
+>   Otra prueba abrió un archivo con compartir lectura/borrado, pero no escritura: rechazó escritores
+>   existentes y nuevos, permitió eliminar el nombre y conservó el contenido. El prototipo usa ahora
+>   esa configuración; 11 pruebas y Clippy pasan. En una segunda prueba real con 7-Zip se
+>   capturaron 259 archivos y cinco directorios en 598 ms, con seis temporizadores atendidos;
+>   tras la limpieza del temporal coincidieron los contenidos y la carpeta vacía. El módulo
+>   reutilizable de captura tiene siete pruebas focalizadas, pero aún no está conectado a Naygo.
 >   La sesión volvió a bloquearse antes de la prueba real; se solicitó desbloqueo cuando sea posible.
 >   Consulta WTS posterior reportó sesión 1 bloqueada (`SessionFlags=0`); el estado anterior es
 >   desconocido. La siguiente prueba interactiva requiere escritorio desbloqueado.

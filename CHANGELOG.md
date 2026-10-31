@@ -22,6 +22,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   100.000 elementos y 64 KiB por ruta.
 
 ### Plataforma Windows
+- Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para
+  conservar recibos con rutas cortas y largas sin seguir junctions. Libera nombres COM y conserva
+  UTF-16 no válido. Ya no usa el fallback clásico que solo intentaba reciclar si era posible ni
+  confirma automáticamente una eliminación permanente; si no puede confirmar la identidad del
+  elemento reciclado, lo informa en el historial. Validación remota y build pendientes.
 - El visor agrega la opción de usar `displaycolor` de materiales básicos 3MF por objeto y cara;
   conserva los tonos uniformes y usa azul para propiedades no compatibles. La transparencia se
   aproxima sobre el fondo; texturas, extensiones de materiales y colores propietarios siguen pendientes.

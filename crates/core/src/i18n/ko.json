@@ -448,6 +448,7 @@
   "ops.verb_copy": "복사 중",
   "ops.verb_move": "이동 중",
   "ops.verb_delete": "삭제 중",
+  "ops.trash_unconfirmed": "원본이 더 이상 없으며 휴지통 항목을 확인하지 못했습니다. 작업하기 전에 휴지통을 확인하세요.",
   "ops.verb_compress": "압축 중",
   "ops.verb_extract": "압축 풀기 중",
   "ops.verb_other": "처리 중",

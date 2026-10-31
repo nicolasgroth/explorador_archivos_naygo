@@ -448,6 +448,7 @@
   "ops.verb_copy": "コピー中",
   "ops.verb_move": "移動中",
   "ops.verb_delete": "削除中",
+  "ops.trash_unconfirmed": "元の場所にファイルがなく、ごみ箱内の項目を確認できませんでした。操作する前にごみ箱を確認してください。",
   "ops.verb_compress": "圧縮中",
   "ops.verb_extract": "展開中",
   "ops.verb_other": "処理中",

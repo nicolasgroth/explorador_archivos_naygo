@@ -34,17 +34,17 @@ const RECYCLE_ITEM_NAME_CAPACITY: usize = 1024;
 #[cfg(windows)]
 #[derive(Default)]
 struct RecycleItemNames {
-    by_original: HashMap<PathBuf, String>,
+    by_original: HashMap<PathBuf, std::ffi::OsString>,
     insertion_order: VecDeque<PathBuf>,
 }
 
 #[cfg(windows)]
 impl RecycleItemNames {
-    fn get(&self, original: &PathBuf) -> Option<&String> {
+    fn get(&self, original: &PathBuf) -> Option<&std::ffi::OsString> {
         self.by_original.get(original)
     }
 
-    fn insert(&mut self, original: PathBuf, parsing_name: String) {
+    fn insert(&mut self, original: PathBuf, parsing_name: std::ffi::OsString) {
         if self
             .by_original
             .insert(original.clone(), parsing_name)
@@ -83,6 +83,10 @@ pub struct TrashProgress {
 
 pub type CancelProbe = std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// Código estable para un origen ausente cuya identidad de Papelera no pudo confirmarse.
+/// La UI lo traduce; no es una instrucción para reintentar ni una garantía de recuperación.
+pub const TRASH_UNCONFIRMED_IDENTITY: &str = "naygo:trash-unconfirmed-identity";
+
 /// Error al enviar a papelera.
 #[derive(Debug)]
 pub enum TrashError {
@@ -98,7 +102,7 @@ pub enum TrashError {
     },
 }
 
-/// Fallo de Papelera asociado al origen concreto que quedó en su ubicación.
+/// Fallo asociado a un origen: puede seguir presente o haber salido sin identidad confirmada.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrashItemFailure {
     /// Posición del origen en el slice que recibió `move_to_trash_with_progress`.
@@ -114,6 +118,14 @@ pub fn move_to_trash(paths: &[PathBuf]) -> Result<Vec<TrashReceipt>, TrashError>
 }
 
 #[cfg(windows)]
+fn recycle_operation_flags() -> windows::Win32::UI::Shell::FILEOPERATION_FLAGS {
+    use windows::Win32::UI::Shell::{
+        FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING,
+    };
+    FOF_ALLOWUNDO | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING | FOFX_RECYCLEONDELETE
+}
+
+#[cfg(windows)]
 pub fn move_to_trash_with_progress(
     paths: &[PathBuf],
     progress: std::sync::mpsc::Sender<TrashProgress>,
@@ -126,8 +138,7 @@ pub fn move_to_trash_with_progress(
     };
     use windows::Win32::UI::Shell::{
         FileOperation, IFileOperation, IFileOperationProgressSink, IShellItem,
-        SHCreateItemFromParsingName, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
-        FOF_NOERRORUI, FOF_SILENT,
+        SHCreateItemFromParsingName,
     };
 
     if paths.is_empty() {
@@ -157,22 +168,18 @@ pub fn move_to_trash_with_progress(
             let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
                 .map_err(|e| TrashError::Failed(e.to_string()))?;
 
-            // Reciclar (no borrar), sin confirmación ni UI.
-            op.SetOperationFlags(
-                FOF_ALLOWUNDO
-                    | FOF_NOCONFIRMATION
-                    | FOF_NOERRORUI
-                    | FOF_SILENT
-                    | FOFX_RECYCLEONDELETE,
-            )
-            .map_err(|e| TrashError::Failed(e.to_string()))?;
+            // Pedir reciclaje y permitir que el Shell advierta si solo puede borrar de forma
+            // permanente. No responder automáticamente «sí» a una eventual confirmación.
+            op.SetOperationFlags(recycle_operation_flags())
+                .map_err(|e| TrashError::Failed(e.to_string()))?;
 
             let recycled_items = Arc::new(Mutex::new(Vec::new()));
-            let cancel_probe = cancelled.clone();
+            let source_aliases = Arc::new(Mutex::new(HashMap::new()));
             let sink: IFileOperationProgressSink = ProgressSink {
                 progress,
                 cancelled,
                 recycled_items: recycled_items.clone(),
+                source_aliases: source_aliases.clone(),
             }
             .into();
             let cookie = op
@@ -187,6 +194,28 @@ pub fn move_to_trash_with_progress(
                     .collect();
                 let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)
                     .map_err(|e| TrashError::Failed(e.to_string()))?;
+                // El Shell puede expandir nombres 8.3 o variar la representación. Pedimos su
+                // nombre ANTES de borrar y lo asociamos al origen exacto; no canonicalizamos ni
+                // seguimos el último componente (que puede ser un junction o symlink).
+                let shell_name =
+                    shell_display_name(&item, windows::Win32::UI::Shell::SIGDN_FILESYSPATH)
+                        .ok_or_else(|| {
+                            TrashError::Failed(
+                                "no se pudo obtener la identidad Shell del origen".to_string(),
+                            )
+                        })?;
+                let shell_path = PathBuf::from(shell_name);
+                let mut aliases = source_aliases.lock().map_err(|_| {
+                    TrashError::Failed(
+                        "no se pudo registrar la identidad Shell del origen".to_string(),
+                    )
+                })?;
+                if aliases.insert(shell_path, path.clone()).is_some() {
+                    return Err(TrashError::Failed(
+                        "la selección contiene el mismo origen más de una vez".to_string(),
+                    ));
+                }
+                drop(aliases);
                 op.DeleteItem(&item, None)
                     .map_err(|e| TrashError::Failed(e.to_string()))?;
             }
@@ -198,33 +227,7 @@ pub fn move_to_trash_with_progress(
                 .lock()
                 .map(|items| items.clone())
                 .unwrap_or_default();
-            let mut fallback_failures = HashMap::new();
-            #[cfg(test)]
-            let mut fallback_attempted = Vec::new();
-            if !cancel_probe() {
-                for path in &paths {
-                    match path_entry_exists(path) {
-                        Ok(true) => {
-                            #[cfg(test)]
-                            fallback_attempted.push(path.clone());
-                            if let Err(error) =
-                                recycle_with_legacy_shell(std::slice::from_ref(path))
-                            {
-                                fallback_failures.insert(path.clone(), error);
-                            }
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            fallback_failures.insert(
-                                path.clone(),
-                                format!(
-                                    "no se pudo comprobar el origen antes del fallback: {error}"
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
+            let mut inspection_failures = HashMap::new();
             let mut still_present = Vec::new();
             for path in &paths {
                 match path_entry_exists(path) {
@@ -232,13 +235,13 @@ pub fn move_to_trash_with_progress(
                     Ok(false) => {}
                     Err(error) => {
                         still_present.push(path.clone());
-                        fallback_failures.entry(path.clone()).or_insert_with(|| {
+                        inspection_failures.entry(path.clone()).or_insert_with(|| {
                             format!("no se pudo comprobar el resultado de Papelera: {error}")
                         });
                     }
                 }
             }
-            // Diagnóstico de fixtures en CI: distingue callback Shell, fallback clásico y
+            // Diagnóstico de fixtures en CI: distingue callback Shell y
             // desaparición de ruta. No se compila en Naygo ni registra rutas de usuarios.
             #[cfg(test)]
             {
@@ -259,14 +262,6 @@ pub fn move_to_trash_with_progress(
                         )
                     })
                     .collect();
-                let attempted: Vec<_> = paths
-                    .iter()
-                    .map(|path| {
-                        fallback_attempted
-                            .iter()
-                            .any(|item| windows_paths_equal(item, path))
-                    })
-                    .collect();
                 let remaining: Vec<_> = paths
                     .iter()
                     .map(|path| {
@@ -276,8 +271,8 @@ pub fn move_to_trash_with_progress(
                     })
                     .collect();
                 eprintln!(
-                    "trash-test callback_facts={callback_facts:?} fallback_attempted={attempted:?} fallback_failure_count={} still_present={remaining:?} performed_ok={} aborted={aborted:?}",
-                    fallback_failures.len(), performed.is_ok()
+                    "trash-test callback_facts={callback_facts:?} inspection_failure_count={} still_present={remaining:?} performed_ok={} aborted={aborted:?}",
+                    inspection_failures.len(), performed.is_ok()
                 );
             }
             let global_failure = performed.err().or_else(|| match aborted {
@@ -289,14 +284,13 @@ pub fn move_to_trash_with_progress(
                 &paths,
                 &callback_results,
                 &still_present,
-                &fallback_failures,
+                &inspection_failures,
                 global_failure.as_deref(),
             );
 
             // El nombre de parsing proviene de `psiNewlyCreated` en PostDeleteItem y puede
             // resolver el ítem aunque la enumeración de FOLDERID_RecycleBinFolder esté vacía o
-            // desactualizada. Los elementos que necesitó el fallback clásico no tienen esa
-            // identidad; para ellos se conserva la búsqueda por ubicación y nombre original.
+            // desactualizada. Solo se registran recibos cuya identidad fue confirmada.
             if let Ok(mut cache) = recycle_item_names().lock() {
                 for receipt in &receipts {
                     if let Some(item_name) = callback_results
@@ -364,7 +358,7 @@ fn path_entry_presence(metadata: Result<(), std::io::Error>) -> Result<bool, std
 #[derive(Clone, Debug)]
 struct DeleteCallbackResult {
     original: Option<PathBuf>,
-    parsing_name: Option<String>,
+    parsing_name: Option<std::ffi::OsString>,
     failure: Option<String>,
     #[cfg(test)]
     newly_created_present: bool,
@@ -379,39 +373,45 @@ fn classify_delete_results(
     paths: &[PathBuf],
     callback_results: &[DeleteCallbackResult],
     still_present: &[PathBuf],
-    fallback_failures: &HashMap<PathBuf, String>,
+    inspection_failures: &HashMap<PathBuf, String>,
     global_failure: Option<&str>,
 ) -> (Vec<TrashReceipt>, Vec<TrashItemFailure>) {
     let mut receipts = Vec::new();
     let mut failures = Vec::new();
     for (source_index, original) in paths.iter().enumerate() {
-        if !still_present
+        let callback = callback_results.iter().find(|item| {
+            item.original
+                .as_ref()
+                .is_some_and(|path| windows_paths_equal(path, original))
+        });
+        let present = still_present
             .iter()
-            .any(|path| windows_paths_equal(path, original))
-        {
+            .any(|path| windows_paths_equal(path, original));
+        let confirmed =
+            callback.is_some_and(|item| item.failure.is_none() && item.parsing_name.is_some());
+        if confirmed {
             receipts.push(TrashReceipt {
                 original: original.clone(),
                 trashed_path: None,
             });
-            continue;
+            if !present {
+                continue;
+            }
         }
-        let callback_failure = callback_results
-            .iter()
-            .find(|item| {
-                item.original
-                    .as_ref()
-                    .is_some_and(|path| windows_paths_equal(path, original))
-            })
-            .and_then(|item| item.failure.as_deref());
-        let detail = callback_failure
-            .or_else(|| {
-                fallback_failures
-                    .iter()
-                    .find(|(path, _)| windows_paths_equal(path, original))
-                    .map(|(_, error)| error.as_str())
-            })
-            .or(global_failure)
-            .unwrap_or("el elemento sigue presente después de la operación Shell");
+        let detail = if present {
+            callback
+                .and_then(|item| item.failure.as_deref())
+                .or_else(|| {
+                    inspection_failures
+                        .iter()
+                        .find(|(path, _)| windows_paths_equal(path, original))
+                        .map(|(_, error)| error.as_str())
+                })
+                .or(global_failure)
+                .unwrap_or("el elemento sigue presente después de la operación Shell")
+        } else {
+            TRASH_UNCONFIRMED_IDENTITY
+        };
         failures.push(TrashItemFailure {
             source_index,
             original: original.clone(),
@@ -453,6 +453,46 @@ fn windows_paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool 
     unsafe { CompareStringOrdinal(&left_wide, &right_wide, true) == CSTR_EQUAL }
 }
 
+/// Recupera una cadena COM del Shell sin perder unidades UTF-16 ni filtrar su asignación.
+#[cfg(windows)]
+fn shell_display_name(
+    item: &windows::Win32::UI::Shell::IShellItem,
+    kind: windows::Win32::UI::Shell::SIGDN,
+) -> Option<std::ffi::OsString> {
+    let value = unsafe { item.GetDisplayName(kind) }.ok()?;
+    take_shell_string(value)
+}
+
+/// Copia y libera un resultado LPWSTR asignado con el asignador de tareas COM.
+#[cfg(windows)]
+fn take_shell_string(value: windows::core::PWSTR) -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Com::CoTaskMemFree;
+    if value.0.is_null() {
+        return None;
+    }
+    // SAFETY: el Shell entrega una cadena UTF-16 terminada en NUL.
+    let result = std::ffi::OsString::from_wide(unsafe { value.as_wide() });
+    // SAFETY: GetDisplayName/GetString asignan el buffer con el asignador de tareas COM.
+    unsafe { CoTaskMemFree(Some(value.0.cast())) };
+    Some(result)
+}
+
+#[cfg(windows)]
+fn find_original_alias(
+    aliases: &HashMap<PathBuf, PathBuf>,
+    shell_path: &std::path::Path,
+) -> Option<PathBuf> {
+    aliases.get(shell_path).cloned().or_else(|| {
+        let mut matches = aliases
+            .iter()
+            .filter(|(alias, _)| windows_paths_equal(alias, shell_path));
+        let (_, original) = matches.next()?;
+        // Si el directorio distingue mayúsculas, una coincidencia ambigua no es identidad.
+        matches.next().is_none().then(|| original.clone())
+    })
+}
+
 /// Empareja un elemento enumerado de la Papelera con un recibo reconstruido. El Shell puede
 /// devolver la carpeta original con otra capitalización o separadores equivalentes; comparar
 /// `Path` directamente es sensible a caja y puede dejar un recibo válido sin restaurar.
@@ -474,69 +514,24 @@ fn recycle_bin_entry_matches(
 /// conserva el doble backslash de red.
 #[cfg(windows)]
 fn shell_parsing_path(path: PathBuf) -> PathBuf {
-    let rendered = path.to_string_lossy();
-    if let Some(unc) = rendered.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{unc}"))
-    } else if let Some(normal) = rendered.strip_prefix(r"\\?\") {
-        PathBuf::from(normal)
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
+    let device: Vec<u16> = r"\\?\".encode_utf16().collect();
+    if let Some(rest) = wide.strip_prefix(unc.as_slice()) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(rest);
+        PathBuf::from(std::ffi::OsString::from_wide(&normalized))
+    } else if wide.starts_with(&device)
+        && wide.len() >= 7
+        && matches!(wide[4], 65..=90 | 97..=122)
+        && wide[5] == b':' as u16
+        && wide[6] == b'\\' as u16
+    {
+        PathBuf::from(std::ffi::OsString::from_wide(&wide[4..]))
     } else {
         path
     }
-}
-
-/// Fallback para un `IFileOperation` que el Shell reportó como correcto pero dejó archivos en
-/// su lugar. La API histórica `SHFileOperationW` sigue usando la Papelera cuando se combina
-/// `FO_DELETE` con `FOF_ALLOWUNDO`; sólo se llama en ese caso excepcional.
-#[cfg(windows)]
-fn recycle_with_legacy_shell(paths: &[PathBuf]) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::{
-        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
-        SHFILEOPSTRUCTW,
-    };
-
-    let mut from: Vec<u16> = Vec::new();
-    for path in paths {
-        from.extend(path.as_os_str().encode_wide());
-        from.push(0);
-    }
-    // SHFileOperation exige una lista MULTI_SZ: cada ruta termina en NUL y la lista completa en
-    // un segundo NUL. Incluso para una sola ruta, el último `push` es obligatorio.
-    from.push(0);
-    let mut op = SHFILEOPSTRUCTW {
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(from.as_ptr()),
-        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
-        ..Default::default()
-    };
-    // SAFETY: `from` vive hasta después de la llamada y es una MULTI_SZ válida; `op` está
-    // inicializado con una estructura compatible con la ABI de Shell32.
-    let result = unsafe { SHFileOperationW(&mut op) };
-    if result != 0 {
-        return Err(format!("SHFileOperationW devolvió {result}"));
-    }
-    if op.fAnyOperationsAborted.as_bool() {
-        return Err("Windows canceló la eliminación".to_string());
-    }
-    let remaining: Vec<String> = paths
-        .iter()
-        .filter_map(|path| match path_entry_exists(path) {
-            Ok(true) => Some(Ok(path.display().to_string())),
-            Ok(false) => None,
-            Err(error) => Some(Err(format!(
-                "no se pudo comprobar {} después de SHFileOperationW: {error}",
-                path.display()
-            ))),
-        })
-        .collect::<Result<_, _>>()?;
-    if !remaining.is_empty() {
-        return Err(format!(
-            "los archivos siguen presentes: {}",
-            remaining.join(", ")
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -547,6 +542,7 @@ struct ProgressSink {
     /// Resultado por ruta que informa `PostDeleteItem`; no se presupone que los callbacks
     /// lleguen en el mismo orden en que se encolaron las operaciones.
     recycled_items: Arc<Mutex<Vec<DeleteCallbackResult>>>,
+    source_aliases: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
 }
 
 #[cfg(windows)]
@@ -636,16 +632,20 @@ impl windows::Win32::UI::Shell::IFileOperationProgressSink_Impl for ProgressSink
         hrresult: windows_core::HRESULT,
         newly_created: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
     ) -> windows_core::Result<()> {
-        let original = item.as_ref().and_then(|item| unsafe {
-            item.GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH)
-                .ok()
-                .and_then(|value| value.to_string().ok())
-                .map(PathBuf::from)
-        });
-        let parsing_name = newly_created.as_ref().and_then(|item| unsafe {
-            item.GetDisplayName(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING)
-                .ok()
-                .and_then(|value| value.to_string().ok())
+        let original = item
+            .as_ref()
+            .and_then(|item| shell_display_name(item, windows::Win32::UI::Shell::SIGDN_FILESYSPATH))
+            .and_then(|name| {
+                self.source_aliases
+                    .lock()
+                    .ok()
+                    .and_then(|aliases| find_original_alias(&aliases, &PathBuf::from(name)))
+            });
+        let parsing_name = newly_created.as_ref().and_then(|item| {
+            shell_display_name(
+                item,
+                windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING,
+            )
         });
         if let Ok(mut items) = self.recycled_items.lock() {
             items.push(DeleteCallbackResult {
@@ -778,7 +778,7 @@ fn restore_from_trash_with_enumerator(
                     .ok()
                     .and_then(|cache| cache.get(&receipt.original).cloned())
                     .and_then(|parsing_name| {
-                        let wide: Vec<u16> = parsing_name.encode_utf16().chain(Some(0)).collect();
+                        let wide: Vec<u16> = parsing_name.encode_wide().chain(Some(0)).collect();
                         SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()
                     });
                 let item = if let Some(item) = direct_item {
@@ -796,11 +796,10 @@ fn restore_from_trash_with_enumerator(
                                 .cast::<IShellItem2>()
                                 .ok()
                                 .and_then(|item2| item2.GetString(&DELETED_FROM).ok())
-                                .and_then(|value| value.to_string().ok());
-                            let name = item
-                                .GetDisplayName(SIGDN_NORMALDISPLAY)
-                                .ok()
-                                .and_then(|value| value.to_string().ok());
+                                .and_then(take_shell_string)
+                                .and_then(|value| value.into_string().ok());
+                            let name = shell_display_name(item, SIGDN_NORMALDISPLAY)
+                                .and_then(|value| value.into_string().ok());
                             recycle_bin_entry_matches(
                                 deleted_from.as_deref(),
                                 name.as_deref(),
@@ -1022,7 +1021,7 @@ mod tests {
         let failed = PathBuf::from(r"C:\temp\retenido.txt");
         let callbacks = vec![DeleteCallbackResult {
             original: Some(succeeded.clone()),
-            parsing_name: Some("recycle-bin:item-1".to_string()),
+            parsing_name: Some("recycle-bin:item-1".into()),
             failure: None,
             newly_created_present: true,
             original_present: true,
@@ -1054,6 +1053,92 @@ mod tests {
                 detail: "acceso denegado".to_string(),
             }]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn origen_ausente_sin_identidad_confirmada_no_genera_recibo() {
+        let no_callback = PathBuf::from(r"C:\temp\sin-callback.txt");
+        let no_identity = PathBuf::from(r"C:\temp\sin-identidad.txt");
+        let confirmed = PathBuf::from(r"C:\temp\confirmado.txt");
+        let callbacks = vec![
+            DeleteCallbackResult {
+                original: Some(no_identity.clone()),
+                parsing_name: None,
+                failure: None,
+                newly_created_present: false,
+                original_present: true,
+                hr_code: 0,
+            },
+            DeleteCallbackResult {
+                original: Some(confirmed.clone()),
+                parsing_name: Some("item-confirmado".into()),
+                failure: None,
+                newly_created_present: true,
+                original_present: true,
+                hr_code: 0,
+            },
+        ];
+        let (receipts, failures) = classify_delete_results(
+            &[no_callback, no_identity, confirmed.clone()],
+            &callbacks,
+            &[],
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            receipts,
+            vec![TrashReceipt {
+                original: confirmed,
+                trashed_path: None
+            }]
+        );
+        assert_eq!(failures.len(), 2);
+        assert_eq!((failures[0].source_index, failures[1].source_index), (0, 1));
+        assert!(failures
+            .iter()
+            .all(|failure| failure.detail == TRASH_UNCONFIRMED_IDENTITY));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reciclaje_no_confirma_automaticamente_una_eliminacion_permanente() {
+        use windows::Win32::UI::Shell::{
+            FOFX_RECYCLEONDELETE, FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING,
+        };
+        let flags = recycle_operation_flags();
+        assert_ne!(flags.0 & FOFX_RECYCLEONDELETE.0, 0);
+        assert_ne!(flags.0 & FOF_WANTNUKEWARNING.0, 0);
+        assert_eq!(flags.0 & FOF_NOCONFIRMATION.0, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recibo_confirmado_se_conserva_si_la_ruta_vuelve_a_ocuparse() {
+        let path = PathBuf::from(r"C:\temp\recreado.txt");
+        let callbacks = vec![DeleteCallbackResult {
+            original: Some(path.clone()),
+            parsing_name: Some("reciclado".into()),
+            failure: None,
+            newly_created_present: true,
+            original_present: true,
+            hr_code: 0,
+        }];
+        let (receipts, failures) = classify_delete_results(
+            std::slice::from_ref(&path),
+            &callbacks,
+            std::slice::from_ref(&path),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            receipts,
+            vec![TrashReceipt {
+                original: path,
+                trashed_path: None
+            }]
+        );
+        assert_eq!(failures.len(), 1);
     }
 
     #[cfg(windows)]
@@ -1221,11 +1306,103 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn shell_parsing_path_preserva_utf16_invalido_y_rutas_de_dispositivo() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        for (input, expected) in [
+            (r"\\?\C:\temp\archivo", r"C:\temp\archivo"),
+            (
+                r"\\?\UNC\servidor\share\archivo",
+                r"\\servidor\share\archivo",
+            ),
+        ] {
+            let mut original: Vec<u16> = input.encode_utf16().collect();
+            original.push(0xD800);
+            let mut wanted: Vec<u16> = expected.encode_utf16().collect();
+            wanted.push(0xD800);
+            let path = PathBuf::from(std::ffi::OsString::from_wide(&original));
+            assert_eq!(
+                shell_parsing_path(path)
+                    .as_os_str()
+                    .encode_wide()
+                    .collect::<Vec<_>>(),
+                wanted
+            );
+        }
+        let device = PathBuf::from(r"\\?\Volume{12345678-1234-1234-1234-123456789012}\file");
+        assert_eq!(shell_parsing_path(device.clone()), device);
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn comparacion_de_rutas_conserva_semantica_insensible_a_caja_y_separadores() {
         assert!(windows_paths_equal(
             std::path::Path::new(r"C:\Temp\MiArchivo.txt"),
             std::path::Path::new("c:/temp/miarchivo.txt")
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alias_shell_recupera_la_ruta_original_sin_resolver_junctions() {
+        let original = PathBuf::from(r"C:\Users\RUNNER~1\Temp\enlace");
+        let shell_name = PathBuf::from(r"C:\Users\runneradmin\Temp\enlace");
+        let mut aliases = HashMap::new();
+        aliases.insert(shell_name, original.clone());
+        assert_eq!(
+            find_original_alias(
+                &aliases,
+                std::path::Path::new("c:/USERS/RUNNERADMIN/temp/enlace")
+            ),
+            Some(original)
+        );
+        assert!(find_original_alias(
+            &aliases,
+            std::path::Path::new(r"C:\Users\runneradmin\Temp\otro")
+        )
+        .is_none());
+        aliases.insert(PathBuf::from(r"C:\case\A"), PathBuf::from("first"));
+        aliases.insert(PathBuf::from(r"c:\case\a"), PathBuf::from("second"));
+        assert!(find_original_alias(&aliases, std::path::Path::new("C:/CASE/a")).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ruta_corta_se_recicla_y_restaura_por_identidad_shell() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir
+            .path()
+            .join("Carpeta larga para prueba de nombres cortos");
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("archivo largo de papelera.txt");
+        std::fs::write(&file, b"contenido de prueba").unwrap();
+        let wide: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
+        let required = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), None) };
+        assert!(
+            required > 0,
+            "GetShortPathNameW falló para fixture existente"
+        );
+        let mut output = vec![0u16; required as usize];
+        let written = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) };
+        assert!(written > 0 && (written as usize) < output.len());
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&output[..written as usize]));
+        if windows_paths_equal(&short, &file) {
+            eprintln!("el volumen no expuso un alias 8.3 distinto; el test de mapeo sintético cubre la asociación");
+            return;
+        }
+        let receipts = move_to_trash(std::slice::from_ref(&short)).expect("reciclar alias corto");
+        assert_eq!(receipts.len(), 1);
+        assert!(recycle_item_names()
+            .lock()
+            .unwrap()
+            .by_original
+            .contains_key(&receipts[0].original));
+        restore_from_trash_with_enumerator(&receipts, || Err("no debe enumerar".to_string()))
+            .expect("restaurar usando la identidad del Shell");
+        assert_eq!(std::fs::read(&file).unwrap(), b"contenido de prueba");
     }
 
     #[cfg(windows)]
@@ -1318,19 +1495,37 @@ mod tests {
             .collect();
 
         for (index, path) in paths.iter().take(RECYCLE_ITEM_NAME_CAPACITY).enumerate() {
-            cache.insert(path.clone(), format!("parsing-{index}"));
+            cache.insert(path.clone(), format!("parsing-{index}").into());
         }
         // Reinsertar una clave la vuelve reciente antes de que se supere la capacidad.
-        cache.insert(paths[0].clone(), "parsing-0-new".to_string());
+        cache.insert(paths[0].clone(), "parsing-0-new".into());
         cache.insert(
             paths[RECYCLE_ITEM_NAME_CAPACITY].clone(),
-            format!("parsing-{}", RECYCLE_ITEM_NAME_CAPACITY),
+            format!("parsing-{}", RECYCLE_ITEM_NAME_CAPACITY).into(),
         );
 
         assert!(cache.get(&paths[0]).is_some());
         assert!(cache.get(&paths[1]).is_none());
         assert!(cache.get(&paths[RECYCLE_ITEM_NAME_CAPACITY]).is_some());
         assert_eq!(cache.by_original.len(), RECYCLE_ITEM_NAME_CAPACITY);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cache_de_identidad_shell_preserva_utf16_no_valido() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let original = PathBuf::from(r"C:\temp\original");
+        let value = std::ffi::OsString::from_wide(&[b'X' as u16, 0xD800]);
+        let mut cache = RecycleItemNames::default();
+        cache.insert(original.clone(), value);
+        assert_eq!(
+            cache
+                .get(&original)
+                .unwrap()
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            [b'X' as u16, 0xD800]
+        );
     }
 
     #[cfg(not(windows))]

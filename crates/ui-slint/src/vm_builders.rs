@@ -622,13 +622,18 @@ pub(crate) fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
     }
 }
 
-pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry) -> OpFileVm {
+pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry, trash_unconfirmed: &str) -> OpFileVm {
+    let detail = if e.detail == naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY {
+        trash_unconfirmed
+    } else {
+        e.detail.as_str()
+    };
     OpFileVm {
         name: SharedString::from(e.name.as_str()),
         rel_path: SharedString::from(e.rel_path.as_str()),
         size: SharedString::from(e.size.as_str()),
         status: e.status,
-        detail: SharedString::from(e.detail.as_str()),
+        detail: SharedString::from(detail),
     }
 }
 
@@ -824,6 +829,30 @@ mod tests {
     use super::*;
     use naygo_core::palette::{Command, CommandCategory, CommandMatch, CommandPayload};
     use std::path::PathBuf;
+
+    #[test]
+    fn unconfirmed_trash_identity_is_translated_in_operation_details() {
+        let entry = ops_ctrl::OpFileEntry {
+            name: "file".into(),
+            rel_path: "file".into(),
+            size: String::new(),
+            status: 2,
+            detail: naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY.into(),
+        };
+        let view = to_op_file_vm(entry, "Check the Recycle Bin");
+        assert_eq!(view.detail.as_str(), "Check the Recycle Bin");
+        let ordinary = ops_ctrl::OpFileEntry {
+            name: "file".into(),
+            rel_path: "file".into(),
+            size: String::new(),
+            status: 2,
+            detail: "access denied".into(),
+        };
+        assert_eq!(
+            to_op_file_vm(ordinary, "translated").detail.as_str(),
+            "access denied"
+        );
+    }
 
     #[test]
     fn palette_accessible_label_reuses_visible_text_without_exposing_payload_path() {

@@ -448,6 +448,7 @@
   "ops.verb_copy": "Kopieren",
   "ops.verb_move": "Verschieben",
   "ops.verb_delete": "Löschen",
+  "ops.trash_unconfirmed": "Die Quelle ist nicht mehr vorhanden und ihr Papierkorbeintrag konnte nicht bestätigt werden. Prüfe den Papierkorb, bevor du handelst.",
   "ops.verb_compress": "Komprimieren",
   "ops.verb_extract": "Extrahieren",
   "ops.verb_other": "Verarbeiten",

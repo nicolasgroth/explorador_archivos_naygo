@@ -448,6 +448,7 @@
   "ops.verb_copy": "正在复制",
   "ops.verb_move": "正在移动",
   "ops.verb_delete": "正在删除",
+  "ops.trash_unconfirmed": "源文件已不存在，且无法确认回收站中的对应项目。操作前请检查回收站。",
   "ops.verb_compress": "正在压缩",
   "ops.verb_extract": "正在解压",
   "ops.verb_other": "正在处理",
