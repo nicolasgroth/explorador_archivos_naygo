@@ -22,6 +22,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   100.000 elementos y 64 KiB por ruta.
 
 ### Plataforma Windows
+- Operaciones: los errores fatales del worker quedan registrados como fallidos con su detalle,
+  sin habilitar reintentos automáticos para resultados parcialmente desconocidos.
 - Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para
   conservar recibos con rutas cortas y largas sin seguir junctions. Libera nombres COM y conserva
   UTF-16 no válido. Ya no usa el fallback clásico que solo intentaba reciclar si era posible ni

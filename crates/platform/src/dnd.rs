@@ -53,6 +53,8 @@ pub use windows_impl::start_drag;
 
 #[cfg(all(windows, test))]
 pub(crate) use windows_impl::test_file_data_object;
+#[cfg(all(windows, test))]
+pub(crate) use windows_impl::test_gated_file_data_object;
 
 #[cfg(windows)]
 mod windows_impl {
@@ -132,16 +134,42 @@ mod windows_impl {
     #[implement(IDataObject)]
     struct FilesDataObject {
         paths: Vec<PathBuf>,
+        #[cfg(test)]
+        gate: Option<(
+            std::sync::mpsc::Sender<()>,
+            std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        )>,
     }
 
     #[cfg(test)]
     pub(crate) fn test_file_data_object(paths: Vec<PathBuf>) -> IDataObject {
-        FilesDataObject { paths }.into()
+        FilesDataObject { paths, gate: None }.into()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_gated_file_data_object(
+        paths: Vec<PathBuf>,
+        entered: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) -> IDataObject {
+        FilesDataObject {
+            paths,
+            gate: Some((entered, std::sync::Mutex::new(resume))),
+        }
+        .into()
     }
 
     impl IDataObject_Impl for FilesDataObject_Impl {
         /// Único método "real": ante CF_HDROP devuelve un STGMEDIUM con un HGLOBAL fresco.
         fn GetData(&self, pformatetcin: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+            #[cfg(test)]
+            if let Some((entered, resume)) = &self.gate {
+                let _ = entered.send(());
+                let _ = resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(5));
+            }
             // SAFETY: el SO entrega un puntero válido a un FORMATETC; lo leemos por copia.
             let format = unsafe {
                 match pformatetcin.as_ref() {
@@ -306,6 +334,8 @@ mod windows_impl {
             // Construir los dos objetos COM y obtener sus interfaces.
             let data_object: IDataObject = FilesDataObject {
                 paths: paths.to_vec(),
+                #[cfg(test)]
+                gate: None,
             }
             .into();
             let drop_source: IDropSource = NaygoDropSource.into();

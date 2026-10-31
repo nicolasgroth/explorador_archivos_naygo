@@ -325,11 +325,35 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         }
                     }
                 }
-                while let Ok(payload) = drop_rx.try_recv() {
+                while let Ok(mut payload) = drop_rx.try_recv() {
+                    if let Some(preparation) = payload.preparation.take() {
+                        let mut controller = ctrl.borrow_mut();
+                        let label = controller.config.t("ops.preparing_drop");
+                        controller.ops.start_drop_preparation(preparation, label);
+                        continue;
+                    }
+                    if payload
+                        .delivery_cancel
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        continue;
+                    }
                     if let Some(error) = payload.error.as_ref() {
                         let base = ctrl.borrow().config.t("drop.virtual_failed");
+                        let key = match error.as_str() {
+                            naygo_platform::drop_target::DROP_EMPTY => Some("drop.empty"),
+                            naygo_platform::drop_target::DROP_BAD_MEDIUM => Some("drop.bad_medium"),
+                            naygo_platform::drop_target::DROP_GETDATA_FAILED => {
+                                Some("drop.getdata_failed")
+                            }
+                            _ => None,
+                        };
+                        let detail = key
+                            .map(|key| ctrl.borrow().config.t(key))
+                            .unwrap_or_else(|| error.clone());
                         if let Some(ui) = ui_weak.upgrade() {
-                            ui.invoke_show_toast(format!("{base}: {error}").into());
+                            ui.invoke_show_toast(format!("{base}: {detail}").into());
                         }
                         crate::logging::log_line(&format!(
                             "drop virtual no materializado: {error}"

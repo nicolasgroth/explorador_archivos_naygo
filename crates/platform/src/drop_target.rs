@@ -28,6 +28,10 @@ use crate::dir_watch::Waker;
 use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Arc};
 
+pub const DROP_EMPTY: &str = "naygo:drop-empty";
+pub const DROP_BAD_MEDIUM: &str = "naygo:drop-bad-medium";
+pub const DROP_GETDATA_FAILED: &str = "naygo:drop-getdata-failed";
+
 // Captura de árboles efímeros; todavía no se conecta al receptor OLE de producción.
 #[cfg(windows)]
 #[allow(dead_code)]
@@ -73,6 +77,10 @@ pub type StagedDrop = Arc<StagedDropGuard>;
 /// copiar, y el PUNTO del cursor al soltar (en coordenadas de PANTALLA, píxeles físicos) para
 /// que la UI enrute el drop al panel que está bajo el cursor (no al panel activo).
 pub struct DropPayload {
+    /// Inicio de preparación cancelable; los demás campos se ignoran para este evento.
+    pub preparation: Option<DropPreparation>,
+    /// Evita entregar un resultado encolado si el usuario canceló la preparación.
+    pub delivery_cancel: Option<naygo_core::cancel::CancellationToken>,
     /// Rutas absolutas de los archivos/carpetas soltados.
     pub paths: Vec<PathBuf>,
     /// `true` si `MK_SHIFT` estaba activo al soltar (mover); `false` = copiar.
@@ -92,6 +100,12 @@ pub struct DropPayload {
     /// Detalle técnico de un fallo al materializar archivos virtuales. En ese caso `paths` está
     /// vacío y la UI muestra un toast localizado sin intentar iniciar una operación.
     pub error: Option<String>,
+}
+
+/// Canal para mostrar la preparación de un drop y solicitar cancelación desde la UI.
+pub struct DropPreparation {
+    pub token: naygo_core::cancel::CancellationToken,
+    pub receiver: std::sync::mpsc::Receiver<naygo_core::ops::OpMsg>,
 }
 
 /// Evento de HOVER durante un arrastre, para resaltar EN VIVO el panel bajo el cursor (borde +
@@ -182,7 +196,7 @@ mod windows_impl {
     use std::collections::HashSet;
     use std::io::Write;
     use std::path::{Component, Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
     use std::sync::{mpsc::Sender, Arc};
     use windows::core::{implement, Interface, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
@@ -843,9 +857,32 @@ mod windows_impl {
             // directo al planificador. 7-Zip, en cambio, entrega un `CF_HDROP` a un archivo
             // efímero en Temp: lo snapshotteamos antes de retornar de Drop.
             if accepted_kind == ACCEPT_HDROP {
+                use naygo_core::ops::{OpMsg, OpSummary};
+                let token = naygo_core::cancel::CancellationToken::new();
+                let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+                self.send_payload(DropPayload {
+                    delivery_cancel: None,
+                    preparation: Some(super::DropPreparation {
+                        token: token.clone(),
+                        receiver: progress_rx,
+                    }),
+                    paths: Vec::new(),
+                    move_: false,
+                    copy_forced: true,
+                    screen_x,
+                    screen_y,
+                    staging: None,
+                    error: None,
+                });
                 let format = hdrop_formatetc();
                 // SAFETY: `format` vive durante GetData; liberamos el medio antes de retornar.
                 if let Ok(mut medium) = unsafe { data.GetData(&format) } {
+                    if token.is_cancelled() {
+                        unsafe { ReleaseStgMedium(&mut medium) };
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                        return Ok(());
+                    }
                     if medium.tymed == TYMED_HGLOBAL.0 as u32 {
                         // SAFETY: con TYMED_HGLOBAL la unión contiene un HDROP válido mientras
                         // viva el STGMEDIUM.
@@ -855,7 +892,6 @@ mod windows_impl {
                         };
                         if !paths.is_empty() {
                             if needs_ephemeral_hdrop_staging(&paths) {
-                                let token = naygo_core::cancel::CancellationToken::new();
                                 match super::hdrop_tree::capture(&paths, &token) {
                                     Ok(mut captured) => {
                                         captured.release_directories();
@@ -872,6 +908,8 @@ mod windows_impl {
                                             });
                                             let payload = match result {
                                                 Ok((paths, staging)) => DropPayload {
+                                                    preparation: None,
+                                                    delivery_cancel: Some(token.clone()),
                                                     paths,
                                                     move_: false,
                                                     copy_forced: true,
@@ -881,6 +919,8 @@ mod windows_impl {
                                                     error: None,
                                                 },
                                                 Err(error) => DropPayload {
+                                                    preparation: None,
+                                                    delivery_cancel: None,
                                                     paths: Vec::new(),
                                                     move_: false,
                                                     copy_forced: true,
@@ -890,18 +930,47 @@ mod windows_impl {
                                                     error: Some(error),
                                                 },
                                             };
+                                            let cancelled = token.is_cancelled();
+                                            let terminal = if cancelled {
+                                                OpMsg::Cancelled(OpSummary::default())
+                                            } else if let Some(error) = &payload.error {
+                                                OpMsg::Failed(error.clone())
+                                            } else {
+                                                OpMsg::Done(OpSummary::default())
+                                            };
+                                            let _ = progress_tx.send(terminal);
+                                            if cancelled {
+                                                (waker)();
+                                                return;
+                                            }
                                             let _ = tx.send(payload);
                                             (waker)();
                                         });
                                     }
-                                    Err(error) => self.send_virtual_error(
-                                        screen_x,
-                                        screen_y,
-                                        error.to_string(),
-                                    ),
+                                    Err(error) => {
+                                        let cancelled = token.is_cancelled();
+                                        let message = if cancelled {
+                                            OpMsg::Cancelled(OpSummary::default())
+                                        } else {
+                                            OpMsg::Failed(error.to_string())
+                                        };
+                                        let _ = progress_tx.send(message);
+                                        if cancelled {
+                                            (self.waker)();
+                                        } else {
+                                            self.send_virtual_error(
+                                                screen_x,
+                                                screen_y,
+                                                error.to_string(),
+                                            );
+                                        }
+                                    }
                                 }
                             } else {
+                                let _ = progress_tx.send(OpMsg::Done(OpSummary::default()));
                                 self.send_payload(DropPayload {
+                                    preparation: None,
+                                    delivery_cancel: Some(token.clone()),
                                     paths,
                                     move_,
                                     copy_forced,
@@ -911,10 +980,27 @@ mod windows_impl {
                                     error: None,
                                 });
                             }
+                        } else {
+                            let detail = super::DROP_EMPTY.to_string();
+                            let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                            self.send_virtual_error(screen_x, screen_y, detail);
                         }
+                    } else {
+                        let detail = super::DROP_BAD_MEDIUM.to_string();
+                        let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                        self.send_virtual_error(screen_x, screen_y, detail);
                     }
                     // SAFETY: medio devuelto por GetData, aún no liberado.
                     unsafe { ReleaseStgMedium(&mut medium) };
+                } else {
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else {
+                        let detail = super::DROP_GETDATA_FAILED.to_string();
+                        let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                        self.send_virtual_error(screen_x, screen_y, detail);
+                    }
                 }
                 return Ok(());
             }
@@ -953,6 +1039,8 @@ mod windows_impl {
                 let result = materialize_virtual_drop(marshaled_raw, &descriptors);
                 let payload = match result {
                     Ok((paths, staging)) => DropPayload {
+                        preparation: None,
+                        delivery_cancel: None,
                         paths,
                         // Una entrada de archivo comprimido solo se puede copiar al filesystem.
                         move_: false,
@@ -963,6 +1051,8 @@ mod windows_impl {
                         error: None,
                     },
                     Err(error) => DropPayload {
+                        preparation: None,
+                        delivery_cancel: None,
                         paths: Vec::new(),
                         move_: false,
                         copy_forced: true,
@@ -988,6 +1078,8 @@ mod windows_impl {
 
         fn send_virtual_error(&self, screen_x: i32, screen_y: i32, error: String) {
             self.send_payload(DropPayload {
+                preparation: None,
+                delivery_cancel: None,
                 paths: Vec::new(),
                 move_: false,
                 copy_forced: true,
@@ -1024,8 +1116,17 @@ mod windows_impl {
 
     struct RegistrationState {
         failed: AtomicBool,
-        stopped: AtomicBool,
-        thread_id: AtomicU32,
+        shutdown_event: isize,
+    }
+
+    impl Drop for RegistrationState {
+        fn drop(&mut self) {
+            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            // El estado compartido vive hasta que el worker y el guard liberan su referencia.
+            unsafe {
+                let _ = CloseHandle(HANDLE(self.shutdown_event as *mut _));
+            }
+        }
     }
 
     impl Registration {
@@ -1036,14 +1137,11 @@ mod windows_impl {
 
     impl Drop for Registration {
         fn drop(&mut self) {
-            use windows::Win32::Foundation::{LPARAM, WPARAM};
-            use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
-            self.state.stopped.store(true, Ordering::Release);
-            let thread_id = self.state.thread_id.load(Ordering::Acquire);
-            if thread_id != 0 {
-                unsafe {
-                    let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-                }
+            use windows::Win32::Foundation::HANDLE;
+            use windows::Win32::System::Threading::SetEvent;
+            // Señal persistente, sin depender de IDs de hilos que Windows podría reutilizar.
+            unsafe {
+                let _ = SetEvent(HANDLE(self.state.shutdown_event as *mut _));
             }
         }
     }
@@ -1061,6 +1159,11 @@ mod windows_impl {
             return None;
         }
 
+        use windows::Win32::System::Threading::CreateEventW;
+        // Reservar la señal antes de revocar el target previo. El guard y el worker comparten
+        // su vida; cerrar la ventana nunca espera a un proveedor OLE lento en el hilo UI.
+        let shutdown_event = unsafe { CreateEventW(None, true, false, None) }.ok()?;
+
         // winit (sobre el que corre Slint) ya registró SU PROPIO IDropTarget al crear la
         // ventana: tiene drag&drop ON por defecto y Slint 1.16 no lo desactiva. Una ventana
         // Win32 admite UN SOLO drop target, así que sin esto nuestro RegisterDragDrop falla
@@ -1075,16 +1178,16 @@ mod windows_impl {
 
         let state = Arc::new(RegistrationState {
             failed: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
-            thread_id: AtomicU32::new(0),
+            shutdown_event: shutdown_event.0 as isize,
         });
         let worker_state = state.clone();
         let raw_hwnd = hwnd.0 as isize;
         std::thread::spawn(move || {
+            use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
             use windows::Win32::System::Ole::OleUninitialize;
-            use windows::Win32::System::Threading::GetCurrentThreadId;
             use windows::Win32::UI::WindowsAndMessaging::{
-                DispatchMessageW, GetMessageW, PeekMessageW, MSG, PM_NOREMOVE,
+                DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, MSG, PM_REMOVE,
+                QS_ALLINPUT, WM_QUIT,
             };
             if unsafe { OleInitialize(None) }.is_err() {
                 worker_state.failed.store(true, Ordering::Release);
@@ -1092,12 +1195,6 @@ mod windows_impl {
                 return;
             }
             let mut message = MSG::default();
-            unsafe {
-                let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
-            }
-            worker_state
-                .thread_id
-                .store(unsafe { GetCurrentThreadId() }, Ordering::Release);
             let target: IDropTarget = NaygoDropTarget {
                 tx,
                 drag_tx,
@@ -1110,8 +1207,22 @@ mod windows_impl {
                 worker_state.failed.store(true, Ordering::Release);
                 (waker)();
             } else {
-                if !worker_state.stopped.load(Ordering::Acquire) {
-                    while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
+                let shutdown = HANDLE(worker_state.shutdown_event as *mut _);
+                'messages: loop {
+                    let result = unsafe {
+                        MsgWaitForMultipleObjects(Some(&[shutdown]), false, u32::MAX, QS_ALLINPUT)
+                    };
+                    if result == WAIT_OBJECT_0 {
+                        break;
+                    }
+                    if result.0 != WAIT_OBJECT_0.0 + 1 {
+                        tracing::warn!(?result, "falló espera del receptor OLE");
+                        break;
+                    }
+                    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                        if message.message == WM_QUIT {
+                            break 'messages;
+                        }
                         unsafe {
                             DispatchMessageW(&message);
                         }
@@ -1132,6 +1243,21 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn closing_registration_signals_worker_without_reusing_thread_id() {
+            use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+            use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+            let event = unsafe { CreateEventW(None, true, false, None) }.unwrap();
+            let state = Arc::new(RegistrationState {
+                failed: AtomicBool::new(false),
+                shutdown_event: event.0 as isize,
+            });
+            let worker = state.clone();
+            drop(Registration { state });
+            let result = unsafe { WaitForSingleObject(HANDLE(worker.shutdown_event as *mut _), 0) };
+            assert_eq!(result, WAIT_OBJECT_0);
+        }
 
         #[test]
         fn sondeo_cowait_mide_despacho_de_mensaje_de_ventana() {
@@ -1381,11 +1507,124 @@ mod windows_impl {
                     .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
                     .unwrap();
             }
+            let preparation = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(preparation.preparation.is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
             assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
             assert!(payload.staging.is_some());
             assert_eq!(payload.paths.len(), 1);
             assert_eq!(std::fs::read(&payload.paths[0]).unwrap(), b"contenido");
+        }
+
+        #[test]
+        fn cancelar_antes_de_recibir_hdrop_no_entrega_rutas() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("original.txt");
+            std::fs::write(&source, b"contenido").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::sync_channel::<()>(1);
+            let resume_rx = std::sync::Mutex::new(resume_rx);
+            let wakes = AtomicUsize::new(0);
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(move || {
+                    // El primer wake limpia el hover; el segundo anuncia preparación.
+                    if wakes.fetch_add(1, Ordering::SeqCst) == 1 {
+                        resume_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                    }
+                }),
+                accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+            }
+            .into();
+            let cancel = std::thread::spawn(move || {
+                let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                let preparation = event.preparation.take().unwrap();
+                preparation.token.cancel();
+                resume_tx.send(()).unwrap();
+                let terminal = preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(matches!(terminal, naygo_core::ops::OpMsg::Cancelled(_)));
+                assert!(rx
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err());
+            });
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &object,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 10, y: 10 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            cancel.join().unwrap();
+            assert_eq!(std::fs::read(source).unwrap(), b"contenido");
+        }
+
+        #[test]
+        fn cancelar_durante_getdata_espera_y_no_entrega_rutas() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("original.txt");
+            std::fs::write(&source, b"contenido").unwrap();
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let object = crate::dnd::test_gated_file_data_object(
+                vec![source.clone()],
+                entered_tx,
+                resume_rx,
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+            }
+            .into();
+            let cancel = std::thread::spawn(move || {
+                let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                let preparation = event.preparation.take().unwrap();
+                entered_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                preparation.token.cancel();
+                resume_tx.send(()).unwrap();
+                let terminal = preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(matches!(terminal, naygo_core::ops::OpMsg::Cancelled(_)));
+                assert!(rx
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err());
+            });
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &object,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 10, y: 10 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            cancel.join().unwrap();
+            assert_eq!(std::fs::read(source).unwrap(), b"contenido");
         }
 
         // Caso de aceptación pendiente: el proveedor sintético entrega CF_HDROP como un
@@ -1419,6 +1658,8 @@ mod windows_impl {
                     .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
                     .unwrap();
             }
+            let preparation = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(preparation.preparation.is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
             assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
             assert!(payload.staging.is_some());

@@ -230,6 +230,8 @@ pub enum OpsMode {
 /// Estado completo de operaciones de archivo.
 pub struct OpsCtrl {
     pub active_ops: Vec<ActiveOp>,
+    /// Preparaciones OLE transitorias: se eliminan al terminar, sin crear historial falso.
+    drop_preparations: HashSet<u64>,
     pub pending_dialog: Option<OpDialog>,
     pub undo_history: Vec<UndoEntry>,
     pub next_undo_id: u64,
@@ -315,6 +317,7 @@ impl OpsCtrl {
     pub fn new(config_dir: PathBuf) -> OpsCtrl {
         OpsCtrl {
             active_ops: Vec::new(),
+            drop_preparations: HashSet::new(),
             pending_dialog: None,
             undo_history: Vec::new(),
             next_undo_id: 1,
@@ -1090,8 +1093,23 @@ impl OpsCtrl {
                             finished = Some(s);
                             break;
                         }
-                        OpMsg::Failed(_) => {
-                            finished = Some(OpSummary::default());
+                        OpMsg::Failed(error) => {
+                            // Error fatal del worker: conservarlo como fallo visible y no como
+                            // resumen vacío exitoso. No asignar origen: no es seguro reintentar
+                            // automáticamente una operación cuyo estado parcial se desconoce.
+                            let dest = self.active_ops[i]
+                                .request
+                                .as_ref()
+                                .and_then(|req| req.dest_dir.clone())
+                                .unwrap_or_default();
+                            finished = Some(OpSummary {
+                                items: vec![OpItem {
+                                    dest,
+                                    src: None,
+                                    outcome: OpOutcome::Failed(error),
+                                }],
+                                ..Default::default()
+                            });
                             break;
                         }
                     }
@@ -1189,6 +1207,13 @@ impl OpsCtrl {
                 self.active_ops[i].staging_guards.clear();
             }
         }
+
+        self.active_ops.retain(|op| {
+            if op.summary.is_some() && self.drop_preparations.remove(&op.id) {
+                return false;
+            }
+            true
+        });
 
         // Abrir el modal de conflicto de CARPETA (P3) si alguna op está parada esperando esa
         // decisión y no hay otro modal abierto. Se prioriza sobre el conflicto por archivo porque
@@ -3369,6 +3394,31 @@ mod tests {
             size_map: HashMap::new(),
             staging_guards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn fatal_worker_error_is_visible_and_not_automatically_retried() {
+        let mut controller = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(41);
+        let (tx, rx) = std::sync::mpsc::channel();
+        op.rx = Some(rx);
+        op.request = Some(naygo_core::ops::transfer(
+            false,
+            vec![],
+            PathBuf::from("D:/dst"),
+        ));
+        controller.active_ops.push(op);
+        tx.send(OpMsg::Failed("lectura rechazada".into())).unwrap();
+        controller.pump_ops();
+        let rows = controller.op_rows(naygo_core::format::DateFormat::default());
+        assert!(rows[0].has_errors && rows[0].has_file_list);
+        let files = controller.op_file_list(41);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].detail, "lectura rechazada");
+        assert_eq!(files[0].status, 2);
+        assert!(controller
+            .retry_files(41)
+            .is_none_or(|(_, files, _)| files.is_empty()));
     }
 
     #[test]
