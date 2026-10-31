@@ -1117,6 +1117,8 @@ mod windows_impl {
     struct RegistrationState {
         failed: AtomicBool,
         shutdown_event: isize,
+        #[cfg(test)]
+        registered: AtomicBool,
     }
 
     impl Drop for RegistrationState {
@@ -1179,6 +1181,8 @@ mod windows_impl {
         let state = Arc::new(RegistrationState {
             failed: AtomicBool::new(false),
             shutdown_event: shutdown_event.0 as isize,
+            #[cfg(test)]
+            registered: AtomicBool::new(false),
         });
         let worker_state = state.clone();
         let raw_hwnd = hwnd.0 as isize;
@@ -1208,6 +1212,8 @@ mod windows_impl {
                 worker_state.failed.store(true, Ordering::Release);
                 (waker)();
             } else {
+                #[cfg(test)]
+                worker_state.registered.store(true, Ordering::Release);
                 let shutdown = HANDLE(worker_state.shutdown_event as *mut _);
                 'messages: loop {
                     let result = unsafe {
@@ -1257,11 +1263,97 @@ mod windows_impl {
             let state = Arc::new(RegistrationState {
                 failed: AtomicBool::new(false),
                 shutdown_event: event.0 as isize,
+                registered: AtomicBool::new(false),
             });
             let worker = state.clone();
             drop(Registration { state });
             let result = unsafe { WaitForSingleObject(HANDLE(worker.shutdown_event as *mut _), 0) };
             assert_eq!(result, WAIT_OBJECT_0);
+        }
+
+        #[test]
+        fn registration_worker_installs_and_revokes_on_shutdown() {
+            use windows::core::w;
+            use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows::Win32::System::Ole::OleUninitialize;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
+                RegisterClassW, UnregisterClassW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WNDCLASSW,
+            };
+
+            unsafe extern "system" fn proc(
+                hwnd: HWND,
+                msg: u32,
+                wp: WPARAM,
+                lp: LPARAM,
+            ) -> LRESULT {
+                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+            }
+            unsafe { OleInitialize(None) }.unwrap();
+            let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }.unwrap().0);
+            let class = w!("NaygoDropRegistrationWorkerTest");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: instance,
+                lpszClassName: class,
+                ..Default::default()
+            };
+            assert_ne!(unsafe { RegisterClassW(&wc) }, 0);
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    class,
+                    w!(""),
+                    WINDOW_STYLE::default(),
+                    0,
+                    0,
+                    100,
+                    100,
+                    None,
+                    None,
+                    Some(instance),
+                    None,
+                )
+            }
+            .unwrap();
+            let (tx, _) = std::sync::mpsc::channel();
+            let (hover, _) = std::sync::mpsc::channel();
+            let registration = register(hwnd.0 as isize, tx, hover, Arc::new(|| {})).unwrap();
+            let state = registration.state.clone();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut message = MSG::default();
+            while !state.registered.load(Ordering::Acquire)
+                && !state.failed.load(Ordering::Acquire)
+                && std::time::Instant::now() < deadline
+            {
+                while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                state.registered.load(Ordering::Acquire),
+                "registro OLE no se completó"
+            );
+            drop(registration);
+            while Arc::strong_count(&state) > 1 && std::time::Instant::now() < deadline {
+                while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(Arc::strong_count(&state), 1, "el worker no terminó");
+            unsafe {
+                DestroyWindow(hwnd).unwrap();
+                UnregisterClassW(class, Some(instance)).unwrap();
+                OleUninitialize();
+            }
         }
 
         #[test]

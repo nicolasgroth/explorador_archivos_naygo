@@ -17,6 +17,8 @@ podría reutilizarse. En la pasada local anterior se aprobaron 1.538 pruebas y C
 cambio adicional pasaron 20 pruebas focalizadas del receptor y Clippy de plataforma.
 Si el worker termina sin recibir la señal de cierre, marca el guard como fallido y despierta a la
 UI para permitir registrar nuevamente el receptor; las 20 pruebas focalizadas y Clippy pasan.
+Una prueba Win32 con ventana oculta comprobó también que el worker instala el target y lo revoca
+al cerrar el guard. No simula un arrastre ni reemplaza la prueba real con Slint y 7-Zip.
 
 Pendientes obligatorios: probar detención y cierre con proveedores lentos, arrastre desde Explorer, arrastre
 interno, archivos virtuales, selecciones mixtas, colisiones y árboles grandes. Revisar el registro
