@@ -199,10 +199,14 @@ pub fn move_to_trash_with_progress(
                 .map(|items| items.clone())
                 .unwrap_or_default();
             let mut fallback_failures = HashMap::new();
+            #[cfg(test)]
+            let mut fallback_attempted = Vec::new();
             if !cancel_probe() {
                 for path in &paths {
                     match path_entry_exists(path) {
                         Ok(true) => {
+                            #[cfg(test)]
+                            fallback_attempted.push(path.clone());
                             if let Err(error) =
                                 recycle_with_legacy_shell(std::slice::from_ref(path))
                             {
@@ -233,6 +237,48 @@ pub fn move_to_trash_with_progress(
                         });
                     }
                 }
+            }
+            // Diagnóstico de fixtures en CI: distingue callback Shell, fallback clásico y
+            // desaparición de ruta. No se compila en Naygo ni registra rutas de usuarios.
+            #[cfg(test)]
+            {
+                let callback_facts: Vec<_> = callback_results
+                    .iter()
+                    .map(|item| {
+                        (
+                            item.original.as_ref().and_then(|original| {
+                                paths
+                                    .iter()
+                                    .position(|path| windows_paths_equal(path, original))
+                            }),
+                            item.original_present,
+                            item.newly_created_present,
+                            item.parsing_name.is_some(),
+                            item.hr_code,
+                            item.failure.is_some(),
+                        )
+                    })
+                    .collect();
+                let attempted: Vec<_> = paths
+                    .iter()
+                    .map(|path| {
+                        fallback_attempted
+                            .iter()
+                            .any(|item| windows_paths_equal(item, path))
+                    })
+                    .collect();
+                let remaining: Vec<_> = paths
+                    .iter()
+                    .map(|path| {
+                        still_present
+                            .iter()
+                            .any(|item| windows_paths_equal(item, path))
+                    })
+                    .collect();
+                eprintln!(
+                    "trash-test callback_facts={callback_facts:?} fallback_attempted={attempted:?} fallback_failure_count={} still_present={remaining:?} performed_ok={} aborted={aborted:?}",
+                    fallback_failures.len(), performed.is_ok()
+                );
             }
             let global_failure = performed.err().or_else(|| match aborted {
                 Ok(true) => Some("Windows canceló una o más eliminaciones".to_string()),
@@ -320,6 +366,12 @@ struct DeleteCallbackResult {
     original: Option<PathBuf>,
     parsing_name: Option<String>,
     failure: Option<String>,
+    #[cfg(test)]
+    newly_created_present: bool,
+    #[cfg(test)]
+    original_present: bool,
+    #[cfg(test)]
+    hr_code: i32,
 }
 
 #[cfg(windows)]
@@ -602,6 +654,12 @@ impl windows::Win32::UI::Shell::IFileOperationProgressSink_Impl for ProgressSink
                 failure: hrresult
                     .is_err()
                     .then(|| format!("DeleteItem falló ({hrresult})")),
+                #[cfg(test)]
+                newly_created_present: newly_created.as_ref().is_some(),
+                #[cfg(test)]
+                original_present: item.as_ref().is_some(),
+                #[cfg(test)]
+                hr_code: hrresult.0,
             });
         }
         Ok(())
@@ -966,6 +1024,9 @@ mod tests {
             original: Some(succeeded.clone()),
             parsing_name: Some("recycle-bin:item-1".to_string()),
             failure: None,
+            newly_created_present: true,
+            original_present: true,
+            hr_code: 0,
         }];
         let mut fallback_failures = HashMap::new();
         fallback_failures.insert(failed.clone(), "acceso denegado".to_string());

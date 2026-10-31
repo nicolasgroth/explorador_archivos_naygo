@@ -13,6 +13,18 @@
 >   Causa comprobada en `saved_search::tests::non_utf8_roots_round_trip_without_changing_utf8_wire_shape`:
 >   la aserción busca JSON compacto, pero `to_bytes` usa `serde_json::to_vec_pretty`; la aserción
 >   falla por espacios antes de comprobar el round-trip. No atribuir pérdida de datos a ese fallo.
+> - [ ] W-12/Papelera Windows: el gate remoto de la corrida 41204625942 falló en
+>   `enviar_un_archivo_a_papelera` y `papelera_recicla_el_junction_sin_seguir_su_destino`:
+>   no se obtuvo identidad directa para el archivo y no se localizó el junction al restaurar.
+>   El benchmark Windows pasó; Clippy no llegó a ejecutarse en el gate. En la implementación,
+>   la desaparición del origen se clasifica como éxito aunque no se haya confirmado identidad
+>   en Papelera. Según la documentación de `PostDeleteItem`, `psiNewlyCreated` nulo puede indicar
+>   eliminación completa. El log actual no permite saber si ese fue el caso o si se usó fallback;
+>   añadir diagnóstico antes de atribuir una causa y evitar anunciar restaurabilidad no verificada.
+>   Se agregó diagnóstico exclusivo de pruebas que registra índices y flags, no rutas ni nombres:
+>   indica si hubo callback, objeto nuevo, nombre de parsing, HRESULT, fallback y origen presente.
+>   Las 11 pruebas locales de Papelera y Clippy de platform pasan; falta ejecutar ese diagnóstico
+>   en el runner para identificar la causa antes de cambiar el comportamiento de producción.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.

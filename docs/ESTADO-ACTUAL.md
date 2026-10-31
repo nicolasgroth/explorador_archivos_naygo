@@ -15,6 +15,15 @@ En el test de búsquedas guardadas se comprobó una causa de prueba: busca el fr
 `"encoding":"unix-bytes-v1"`, mientras el serializador usa formato pretty con espacios; el test
 falla antes de verificar el round-trip y no demuestra por sí mismo pérdida de datos.
 Logs del job Linux: `target/agent-out/ci-linux-41204625942.log` (local, no versionado).
+El gate Windows de esa misma corrida terminó fallando en dos tests de Papelera: faltó la identidad
+directa de un archivo reciclado y no se encontró el junction para restaurarlo. El benchmark Windows
+pasó; Clippy no se ejecutó en el gate. El código actual clasifica la desaparición del origen como
+recibido aun sin identidad confirmada. La API documenta que un `psiNewlyCreated` nulo puede indicar
+eliminación completa; el log disponible no distingue ese caso del fallback u otras causas. Se debe
+diagnosticar y corregir sin afirmar éxito ni restaurabilidad sin pruebas.
+Se añadió diagnóstico solo en pruebas, sin rutas ni nombres personales, para distinguir callbacks,
+identidad, resultado HRESULT y uso del fallback. Las 11 pruebas de Papelera y Clippy de platform
+pasaron localmente; falta ejecutar el diagnóstico en el runner.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
