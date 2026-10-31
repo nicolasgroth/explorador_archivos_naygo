@@ -139,8 +139,8 @@ pub struct DropTargetGuard {
 }
 
 impl DropTargetGuard {
-    /// `true` solo cuando `RegisterDragDrop` quedó realmente instalado. Un guard
-    /// inerte permite que la UI reintente tras la creación tardía del HWND/OLE.
+    /// `true` mientras el registro está iniciándose o instalado. El arranque es asíncrono;
+    /// si falla, pasa a `false` y la UI puede reintentar sin duplicar workers.
     pub fn is_registered(&self) -> bool {
         #[cfg(windows)]
         {
@@ -169,8 +169,8 @@ pub fn register(
 /// Registra `hwnd` como destino de drop OLE. Cuando el usuario suelta archivos, envía un
 /// [`DropPayload`] por `tx`; mientras arrastra sobre la ventana, envía eventos [`DragHover`] por
 /// `drag_tx` (para resaltar el panel bajo el cursor). En ambos casos despierta la UI con `waker`.
-/// `hwnd` es el handle nativo (`isize`). Tolerante: si OLE/registro falla, devuelve un guard inerte
-/// (no crashea; simplemente no llegarán drops). Debe llamarse en el **hilo de UI** (apartamento STA).
+/// `hwnd` es el handle nativo (`isize`). El registro se inicia en un STA propio y sus fallos se
+/// reflejan en el guard para que la UI reintente. Se llama en el hilo UI para revocar a winit.
 #[cfg(windows)]
 pub fn register(
     hwnd: isize,
@@ -742,7 +742,8 @@ mod windows_impl {
     }
 
     /// `IDropTarget` que reenvía las rutas soltadas por un canal y despierta la UI.
-    /// `#[implement(IDropTarget)]` genera vtable/refcount/QueryInterface; solo escribimos
+    /// `#[implement(IDropTarget, Agile = false)]` mantiene las llamadas en el STA receptor;
+    /// el macro genera vtable/refcount/QueryInterface y solo escribimos
     /// los cuatro métodos del trait.
     #[implement(IDropTarget, Agile = false)]
     struct NaygoDropTarget {
@@ -816,9 +817,8 @@ mod windows_impl {
 
         /// El usuario suelta: priorizamos la variante virtual si está disponible; así evitamos
         /// rutas temporales efímeras de archivadores. Si la fuente solo ofrece `CF_HDROP`, usamos
-        /// sus rutas reales. La materialización posterior usa workers, pero `GetData` se invoca en
-        /// este callback y algunos proveedores pueden bloquearlo al extraer contenido; además el
-        /// snapshot de temporales espera hasta dos segundos. Esa latencia aún requiere solución.
+        /// sus rutas reales. `GetData` y la captura corren en el STA receptor, nunca en la UI.
+        /// Si el proveedor bloquea COM, cancelar queda pendiente hasta que devuelva el control.
         fn Drop(
             &self,
             pdataobj: Ref<IDataObject>,
@@ -1146,8 +1146,8 @@ mod windows_impl {
         }
     }
 
-    /// Inicializa OLE en este hilo (idempotente/tolerante) y registra el `IDropTarget`.
-    /// Devuelve `Some(Registration)` si el registro fue exitoso, o `None` si algo falló.
+    /// Revoca el target de winit en UI e inicia un STA receptor. El guard queda activo durante
+    /// el arranque; un fallo asíncrono cambia su estado para permitir el reintento de la UI.
     pub fn register(
         hwnd: isize,
         tx: Sender<DropPayload>,
@@ -1185,6 +1185,7 @@ mod windows_impl {
         std::thread::spawn(move || {
             use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
             use windows::Win32::System::Ole::OleUninitialize;
+            use windows::Win32::System::Threading::WaitForSingleObject;
             use windows::Win32::UI::WindowsAndMessaging::{
                 DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, MSG, PM_REMOVE,
                 QS_ALLINPUT, WM_QUIT,
@@ -1230,6 +1231,10 @@ mod windows_impl {
                 }
                 unsafe {
                     let _ = RevokeDragDrop(hwnd);
+                }
+                if unsafe { WaitForSingleObject(shutdown, 0) } != WAIT_OBJECT_0 {
+                    worker_state.failed.store(true, Ordering::Release);
+                    (waker)();
                 }
             }
             drop(target);
