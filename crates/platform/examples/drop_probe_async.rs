@@ -671,6 +671,111 @@ mod win {
             Ok(())
         }
 
+        // Solo para la fixture: demuestra el paso que aún falta integrar en el staging real.
+        // El destino lo crea el test; no sigue rutas absolutas ni componentes ascendentes.
+        fn materialize_fixture(snapshot: Snapshot, destination: &Path) -> io::Result<()> {
+            use std::path::Component;
+            let safe = |path: &Path| {
+                !path.as_os_str().is_empty()
+                    && path
+                        .components()
+                        .all(|part| matches!(part, Component::Normal(_)))
+            };
+            for relative in &snapshot.dir_names {
+                if !safe(relative) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "ruta inválida"));
+                }
+                fs::create_dir_all(destination.join(relative))?;
+            }
+            for (relative, mut file) in snapshot.files {
+                if !safe(&relative) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "ruta inválida"));
+                }
+                let output = destination.join(relative);
+                if let Some(parent) = output.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut output = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(output)?;
+                io::copy(&mut file, &mut output)?;
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn materializa_carpetas_archivos_y_vacios_desde_handles_retenidos() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source");
+            let destination = temp.path().join("destination");
+            fs::create_dir_all(source.join("folder/nested/empty")).unwrap();
+            fs::create_dir(&destination).unwrap();
+            fs::write(
+                source.join("folder/nested/content.txt"),
+                b"contenido anidado",
+            )
+            .unwrap();
+            fs::write(source.join("loose.txt"), b"archivo individual").unwrap();
+            let mut snapshot = Snapshot {
+                files: Vec::new(),
+                dirs: Vec::new(),
+                dir_count: 0,
+                dir_names: Vec::new(),
+                root: source.clone(),
+            };
+            let cancelled = AtomicBool::new(false);
+            collect(
+                &source.join("folder"),
+                Path::new("folder"),
+                0,
+                &mut snapshot,
+                &cancelled,
+            )
+            .unwrap();
+            collect(
+                &source.join("loose.txt"),
+                Path::new("loose.txt"),
+                0,
+                &mut snapshot,
+                &cancelled,
+            )
+            .unwrap();
+            snapshot.dirs.clear();
+            // Verificar la ruta real antes de eliminar solo el origen sintético del tempfile.
+            let resolved_source = fs::canonicalize(&source).unwrap();
+            assert_eq!(
+                resolved_source.parent(),
+                Some(fs::canonicalize(temp.path()).unwrap().as_path())
+            );
+            assert_eq!(resolved_source.file_name().unwrap(), "source");
+            fs::remove_dir_all(&resolved_source).unwrap();
+            materialize_fixture(snapshot, &destination).unwrap();
+            assert_eq!(
+                fs::read(destination.join("folder/nested/content.txt")).unwrap(),
+                b"contenido anidado"
+            );
+            assert_eq!(
+                fs::read(destination.join("loose.txt")).unwrap(),
+                b"archivo individual"
+            );
+            assert!(destination.join("folder/nested/empty").is_dir());
+        }
+
+        #[test]
+        fn materializacion_rechaza_rutas_fuera_del_destino() {
+            let temp = tempfile::tempdir().unwrap();
+            let snapshot = Snapshot {
+                files: Vec::new(),
+                dirs: Vec::new(),
+                dir_count: 1,
+                dir_names: vec![PathBuf::from("../escape")],
+                root: temp.path().to_owned(),
+            };
+            let result = materialize_fixture(snapshot, temp.path());
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        }
+
         #[test]
         fn explora_cancelacion_com_con_proveedor_sintetico_bloqueado() {
             use windows::Win32::System::Com::{

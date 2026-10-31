@@ -113,6 +113,11 @@
 >   devolvieron éxito; el worker retornó `0x80010002` mientras el proveedor aún estaba bloqueado.
 >   Seis pruebas y Clippy del ejemplo pasan. Esto no prueba 7-Zip ni la limpieza segura y no se ha
 >   conectado al prototipo operativo ni a Naygo.
+>   Prueba adicional del ejemplo aislado: después de retener handles de una selección sintética
+>   mixta (carpeta anidada, archivo independiente y subcarpeta vacía), se eliminó el origen y se
+>   reconstruyó el árbol en un destino temporal propio; contenido y carpeta vacía coinciden. Otra
+>   prueba rechaza `..` al materializar. Pasan ocho pruebas del ejemplo y Clippy. La materialización
+>   existe solo en el test, no es el staging de producción ni prueba OLE con 7-Zip real.
 >   La sesión volvió a bloquearse antes de la prueba real; se solicitó desbloqueo cuando sea posible.
 >   Consulta WTS posterior reportó sesión 1 bloqueada (`SessionFlags=0`); el estado anterior es
 >   desconocido. La siguiente prueba interactiva requiere escritorio desbloqueado.

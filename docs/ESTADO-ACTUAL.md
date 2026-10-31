@@ -146,6 +146,11 @@ la solicitud devolvió éxito y el cliente retornó `0x80010002` antes de libera
 Las seis pruebas del ejemplo y Clippy pasan. Según [Microsoft](https://learn.microsoft.com/en-us/windows/win32/com/canceling-method-calls),
 desbloquear al cliente no garantiza que el servidor deje de trabajar; falta probar 7-Zip y coordinar
 la vida del temporal. Esta vía no está conectada al receptor experimental de la app ni a producción.
+Se agregó una prueba de materialización en un destino temporal propio: retiene una carpeta con
+contenido y subcarpeta vacía junto a un archivo independiente, elimina el origen sintético y
+reconstruye ambos desde los handles. También se rechaza una ruta ascendente `..`. Pasan ocho
+pruebas del ejemplo y Clippy; el helper es de prueba y no resuelve todavía el staging de Naygo ni
+demuestra comportamiento de 7-Zip real.
 Se preparó el ejemplo `crates/platform/examples/drop_probe.rs`: ventana aislada con el receptor OLE
 actual, sin copiar a un destino ni modificar la configuración; check y Clippy focalizados pasan.
 La ventana y la fixture ZIP se abrieron. UI Automation detectó la carpeta y 259 archivos, pero la
