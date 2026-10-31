@@ -172,6 +172,11 @@ contenido y subcarpeta vacía junto a un archivo independiente, elimina el orige
 reconstruye ambos desde los handles. También se rechaza una ruta ascendente `..`. Pasan ocho
 pruebas del ejemplo y Clippy; el helper es de prueba y no resuelve todavía el staging de Naygo ni
 demuestra comportamiento de 7-Zip real.
+Prueba real posterior con Nicolás: desde 7-Zip 24.07 se arrastró la carpeta sintética de 259
+archivos al receptor experimental con STA separado. Se capturaron cinco directorios en 615 ms y
+la ventana Win32 procesó seis temporizadores. Tras la limpieza del temporal, los 259 contenidos
+(3.229 bytes) y la carpeta vacía coincidieron con la fixture. Es una sola prueba local; no valida
+Slint/Winit, selección mixta, árboles grandes, errores, cancelación ni la integración en Naygo.
 Se preparó el ejemplo `crates/platform/examples/drop_probe.rs`: ventana aislada con el receptor OLE
 actual, sin copiar a un destino ni modificar la configuración; check y Clippy focalizados pasan.
 La ventana y la fixture ZIP se abrieron. UI Automation detectó la carpeta y 259 archivos, pero la

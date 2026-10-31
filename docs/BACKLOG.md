@@ -139,6 +139,11 @@
 >   reconstruyó el árbol en un destino temporal propio; contenido y carpeta vacía coinciden. Otra
 >   prueba rechaza `..` al materializar. Pasan ocho pruebas del ejemplo y Clippy. La materialización
 >   existe solo en el test, no es el staging de producción ni prueba OLE con 7-Zip real.
+>   Prueba real posterior: Nicolás arrastró `E2 fixture` desde 7-Zip 24.07 al receptor experimental
+>   en STA separado. Capturó 259 archivos y cinco directorios en 615 ms; la ventana Win32 procesó
+>   seis temporizadores. Tras eliminar 7-Zip su temporal se comprobaron 3.229 bytes, los 259
+>   contenidos y una carpeta vacía. Es evidencia de una fixture local, no del receptor Slint/Winit
+>   ni de cancelación, errores, árboles grandes, selecciones mixtas o implementación de producción.
 >   La sesión volvió a bloquearse antes de la prueba real; se solicitó desbloqueo cuando sea posible.
 >   Consulta WTS posterior reportó sesión 1 bloqueada (`SessionFlags=0`); el estado anterior es
 >   desconocido. La siguiente prueba interactiva requiere escritorio desbloqueado.
