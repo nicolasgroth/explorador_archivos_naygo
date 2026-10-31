@@ -47,6 +47,8 @@
 >   Build posterior supervisado completado (74m31s, pico 10,72 GiB); ZIP y setup sin firma,
 >   EXE del ZIP idéntico a release y sin PDB. No incluye la integración pendiente de 7-Zip.
 >   Las dos pruebas dependientes del idioma fijan español y pasan localmente; repetir CI.
+>   [CI posterior](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41223964469):
+>   gate Windows y benchmark aprobados; Linux sigue fallando.
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.

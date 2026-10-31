@@ -53,6 +53,10 @@ ZIP coincide con release y no incluye PDB. SHA-256 ZIP
 El paquete aún no incorpora la integración de carpetas 7-Zip y no se instaló.
 Las dos pruebas de interfaz ahora seleccionan español explícitamente y pasan localmente; queda
 repetir CI para comprobar el gate con el entorno remoto.
+La corrida posterior [41223964469](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41223964469)
+terminó con el gate Windows y benchmark aprobados; `linux-native` sigue fallando. El receptor OLE
+experimental está respaldado por separado en `codex/experimento-ole-worker-20261031`; no está
+integrado en el paquete, ni validado con la interfaz o cancelación.
 
 ## Materiales 3MF — colores básicos y distribución local, 2026-10-31
 
