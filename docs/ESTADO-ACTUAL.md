@@ -6,6 +6,11 @@ SPDX-License-Identifier: MIT
 
 ## Distribución local de avance — 2026-11-01
 
+La instalación abierta en este PC declara versión 0.5.4 y su ejecutable tiene SHA-256
+`17c8c55c1e321428b8aafba33c5ffe12ad8934064342af469ce8313d29b74dd8`, coincidente con el release
+de avance anterior. No es el ejecutable recién generado indicado más abajo ni incorpora los fixes
+de recuento, efecto OLE o la rama experimental de carpetas 7-Zip.
+
 El build supervisado posterior a `26847a17` terminó con pico de 10,72 GiB y generó setup y ZIP
 0.5.4 sin firma. Incluye la presentación de errores fatales, validada localmente con 1.534 pruebas,
 nueve ignoradas, Clippy y formato. No incluye aún el arrastre experimental de carpetas de 7-Zip ni

@@ -17,6 +17,8 @@ La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hash
 [`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup
 y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 sí se hizo la prueba
 interactiva de 7-Zip descrita arriba, en un binario experimental separado.
+La instalación que se comprobó el 2026-11-01 es 0.5.4 del build anterior, no la distribución
+recién generada; ver los hashes en [estado actual](ESTADO-ACTUAL.md).
 La comparación W-07 controlada del 20 de octubre dio medianas 100k de 261,7 ms para el binario
 previo y 295,7 ms para el actual (+13,0 %), bajo el umbral orientativo de 15 %. Los dos runs tuvieron
 CPU total muestreada de 12–31 % y más de 44 GiB libres; por ser builds distintos y con actividad de
