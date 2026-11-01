@@ -4,6 +4,11 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] Arrastre OLE: evitar devolver MOVE antes de la confirmación del usuario. Corrección
+>   aislada en validación: exige que la fuente permita COPY, conserva la intención de mover
+>   para el motor de Naygo y devuelve NONE ante fallos inmediatos. Pasaron 21 pruebas focalizadas
+>   (una ignorada) y el gate completo local (1.534 aprobadas, nueve ignoradas, Clippy y formato).
+>   Faltan pruebas con fuentes reales, integración y distribución.
 > - [ ] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
