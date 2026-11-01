@@ -9,6 +9,12 @@ La captura rechaza reparse points y limita la cantidad de entradas; el staging s
 su guard al fallar o al soltar la última referencia. Las pruebas sintéticas no validan el ciclo
 de vida de Slint/Winit ni sustituyen una prueba de arrastre real con el receptor integrado.
 
+El 2026-11-01 Nicolás arrastró la carpeta sintética `E2 fixture` desde 7-Zip a la ventana
+Slint/Winit del binario experimental y confirmó la copia. El destino se comparó con el árbol
+original: 259 archivos con SHA-256 coincidente y cuatro subcarpetas, incluida una vacía; sin
+entradas faltantes ni adicionales. Esta prueba cubre un árbol local concreto, no las demás
+fuentes ni los casos de cancelación y conflictos enumerados abajo.
+
 La preparación se expone en Operaciones con un token cancelable; las pruebas sintéticas cubren
 cancelación antes y durante `GetData` y el retiro de la operación transitoria. Si el proveedor
 no retorna, la cancelación no garantiza interrumpir su llamada COM: se completa al regresar.
