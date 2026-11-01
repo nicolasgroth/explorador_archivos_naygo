@@ -413,6 +413,9 @@ Si un borrado por lote no puede enviar todos los orígenes a la Papelera, el his
 deshacer de los que sí se reciclaron e identifica por separado los que fallaron.
 Si una operación falla antes de producir su resumen, el historial muestra el error en sus detalles;
 no se ofrece un reintento automático cuando no se conoce el estado parcial.
+Al arrastrar desde otra aplicación, Naygo confirma con ella la recepción sin pedirle que borre el
+origen; si eliges mover, Naygo realiza el movimiento tras tu confirmación. Una fuente que solo
+permita mover no puede entregar sus elementos a Naygo; una que solo permita copiar se copia.
 Naygo solo registra como recuperable un elemento cuya identidad en la Papelera pudo confirmar.
 Si el origen desapareció pero esa identidad no se pudo confirmar, el historial lo indica: revisa
 la Papelera antes de actuar. Windows puede pedir confirmación si solo ofrece borrado permanente.

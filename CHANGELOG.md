@@ -22,6 +22,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   100.000 elementos y 64 KiB por ruta.
 
 ### Plataforma Windows
+- El arrastre entrante no comunica un movimiento completado al origen antes de la confirmación:
+  Naygo ejecuta el movimiento solicitado después de que el usuario lo aprueba. Las fuentes que
+  solo admiten mover se rechazan; si solo admiten copiar, se conserva el origen.
 - Los errores fatales de operaciones se muestran como fallidos con su detalle, sin ofrecer un
   reintento automático cuando el estado parcial es desconocido.
 - Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para
