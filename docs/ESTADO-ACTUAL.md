@@ -4,6 +4,16 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
+## Distribución local de avance — 2026-11-01
+
+El build supervisado posterior a `26847a17` terminó con pico de 10,72 GiB y generó setup y ZIP
+0.5.4 sin firma. Incluye la presentación de errores fatales, validada localmente con 1.534 pruebas,
+nueve ignoradas, Clippy y formato. No incluye aún el arrastre experimental de carpetas de 7-Zip ni
+el recuento diferenciado; no se ha instalado esta compilación. SHA-256:
+
+- Setup: `df8755ad2ef64b276f38c65c5470dfe2f7bf061f9488eac0478487589c307bd9`.
+- ZIP: `37527931b27c58e1aa673660ee539d86e04b818cb9b86e98b25915016864466e`.
+
 ## CI remota — primera evidencia nativa, 2026-10-31
 
 La corrida [41204625942](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41204625942)
