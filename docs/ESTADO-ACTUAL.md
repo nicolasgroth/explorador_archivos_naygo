@@ -13,6 +13,8 @@ el recuento diferenciado; no se ha instalado esta compilación. SHA-256:
 
 - Setup: `df8755ad2ef64b276f38c65c5470dfe2f7bf061f9488eac0478487589c307bd9`.
 - ZIP: `37527931b27c58e1aa673660ee539d86e04b818cb9b86e98b25915016864466e`.
+- El `naygo.exe` del ZIP coincide con `target/release/naygo.exe` (SHA-256
+  `80fdd42b686cb7f33397789fd153c6011ba73c9e2aa4fe472ffda8468fac48e0`); el ZIP no contiene PDB.
 
 ## CI remota — primera evidencia nativa, 2026-10-31
 
