@@ -77,6 +77,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
 

@@ -195,6 +195,11 @@ pub struct ActiveOp {
     /// `fs::metadata` por ítem en el hilo de UI (potencialmente miles al abrir el detalle).
     /// Vacío en ops sin plan (zip, planning sin promover aún).
     pub size_map: HashMap<PathBuf, u64>,
+    /// Orígenes de carpetas identificados durante la planificación, sin I/O de UI.
+    pub directory_sources: std::collections::HashSet<PathBuf>,
+    /// Contadores preparados en fragmentos acotados por tick para no bloquear la UI.
+    pub type_count_cursor: usize,
+    pub type_counts: (i32, i32, i32),
     /// Stagings de fuentes OLE virtuales usados por esta operación. Se vacían al terminal para
     /// que su guard RAII limpie los temporales en un worker; durante planificación/cola/conflicto
     /// mantienen los orígenes disponibles.
@@ -207,6 +212,14 @@ fn size_map_of(plan: &OpPlan) -> HashMap<PathBuf, u64> {
         .iter()
         .filter(|s| !s.is_dir)
         .filter_map(|s| s.from.clone().map(|from| (from, s.bytes)))
+        .collect()
+}
+
+fn directory_sources_of(plan: &OpPlan) -> std::collections::HashSet<PathBuf> {
+    plan.steps
+        .iter()
+        .filter(|s| s.is_dir)
+        .filter_map(|s| s.from.clone())
         .collect()
 }
 
@@ -715,6 +728,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -759,6 +775,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -802,6 +821,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -830,6 +852,7 @@ impl OpsCtrl {
         // Tamaños por origen para el popup "archivos de la operación" (se calcula ANTES de
         // mover el plan al motor).
         let size_map = size_map_of(&plan);
+        let directory_sources = directory_sources_of(&plan);
         // Journal solo para operaciones largas y deshacibles-por-retomar.
         let (journal, journal_id) = if Self::journalable(&kind) {
             let id = format!("op-{}", self.next_journal_seq);
@@ -876,6 +899,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map,
+            directory_sources,
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -907,6 +933,7 @@ impl OpsCtrl {
             (None, None)
         };
         let size_map = size_map_of(&plan);
+        let directory_sources = directory_sources_of(&plan);
         let (rx, _h) = engine::spawn_with_no_replace_rename(
             plan,
             kind,
@@ -922,6 +949,7 @@ impl OpsCtrl {
         op.journal_id = journal_id;
         op.request = request;
         op.size_map = size_map;
+        op.directory_sources = directory_sources;
         // Salir de la fase Planning: limpiar el canal de plan y los contadores de escaneo.
         op.plan_rx = None;
         op.scan_files = 0;
@@ -1299,12 +1327,38 @@ impl OpsCtrl {
         // `pump_planning` siga drenando; una op parada en el conflicto de carpeta lo mantiene para
         // que el modal siga vivo y la decisión se procese al volver. La escritura async de un
         // pegado (`paste_write_rx`) también mantiene el timer hasta entregar su resultado.
-        self.paste_write_rx.is_none()
+        let counts_pending = self.pump_type_counts();
+        !counts_pending
+            && self.paste_write_rx.is_none()
             && self.pending_clipboard_writes.is_empty()
             && self
                 .active_ops
                 .iter()
                 .all(|o| o.rx.is_none() && o.plan_rx.is_none() && o.awaiting_folders.is_none())
+    }
+
+    /// Procesa a lo sumo 512 entradas por tick. Mientras termina, la presentación usa un total
+    /// genérico; el tipo y el tamaño provienen del plan, sin acceso a disco ni copias del resumen.
+    fn pump_type_counts(&mut self) -> bool {
+        let mut budget = 512usize;
+        let mut pending = false;
+        for op in &mut self.active_ops {
+            let Some(summary) = &op.summary else { continue };
+            let start = op.type_count_cursor.min(summary.items.len());
+            let end = start.saturating_add(budget).min(summary.items.len());
+            let counts = done_type_counts(
+                &summary.items[start..end],
+                &op.size_map,
+                &op.directory_sources,
+            );
+            op.type_counts.0 += counts.0;
+            op.type_counts.1 += counts.1;
+            op.type_counts.2 += counts.2;
+            op.type_count_cursor = end;
+            budget -= end - start;
+            pending |= end < summary.items.len();
+        }
+        pending
     }
 
     /// Consume el error de planificación pendiente para mostrar un aviso localizado. Se conserva
@@ -1757,11 +1811,18 @@ impl OpsCtrl {
                     0
                 };
 
-                // Detalle de archivos (solo historial): nombres inline si son 1-2, o "Ver archivos"
-                // si son más. Se calcula de los ítems Done del summary.
+                // Detalle de elementos (solo historial): nombres inline si son 1-2, o un enlace
+                // con tipos conocidos del plan si son más. No se accede al filesystem aquí.
                 let (files_summary, has_file_list, files_done_count) = match &o.summary {
                     Some(s) => file_summary_of(s),
                     None => (String::new(), false, 0),
+                };
+                let (known_files, known_directories, unknown_entries) = match &o.summary {
+                    Some(summary) if o.type_count_cursor < summary.items.len() => {
+                        (0, 0, files_done_count)
+                    }
+                    Some(_) => o.type_counts,
+                    None => (0, 0, 0),
                 };
 
                 let status = if planning {
@@ -1842,6 +1903,9 @@ impl OpsCtrl {
                         || o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
                     has_errors: o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
                     files_done_count,
+                    known_files,
+                    known_directories,
+                    unknown_entries,
                 }
             })
             .collect();
@@ -2197,23 +2261,54 @@ pub struct OpFileContext {
 ///   - `has_list`: `true` con 3+ Done → la UI muestra el enlace "Ver archivos" que abre el popup.
 ///   - `done_count`: cuántos archivos Done (para el texto "Ver N archivos").
 fn file_summary_of(summary: &OpSummary) -> (String, bool, i32) {
-    let done: Vec<String> = summary
+    let mut done = summary
         .items
         .iter()
-        .filter(|i| matches!(i.outcome, naygo_core::ops::OpOutcome::Done))
-        .map(|i| {
-            i.dest
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| i.dest.display().to_string())
-        })
-        .collect();
-    let count = done.len() as i32;
-    match done.len() {
-        0 => (String::new(), false, 0),
-        1..=2 => (done.join(", "), false, count),
-        _ => (String::new(), true, count),
+        .filter(|i| matches!(i.outcome, naygo_core::ops::OpOutcome::Done));
+    let Some(first) = done.next() else {
+        return (String::new(), false, 0);
+    };
+    let second = done.next();
+    if done.next().is_some() {
+        // El enlace no muestra nombres: contarlos sin convertir ni reservar cada ruta.
+        let count = 3usize.saturating_add(done.count());
+        return (
+            String::new(),
+            true,
+            i32::try_from(count).unwrap_or(i32::MAX),
+        );
     }
+    let name = |item: &OpItem| {
+        item.dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| item.dest.display().to_string())
+    };
+    match second {
+        Some(item) => (format!("{}, {}", name(first), name(item)), false, 2),
+        None => (name(first), false, 1),
+    }
+}
+
+/// Clasifica solo entradas conocidas por el plan, sin consultar archivos que pudieron cambiar.
+/// Los productores sin plan conservan un recuento genérico en lugar de adivinar su tipo.
+fn done_type_counts(
+    items: &[OpItem],
+    files: &HashMap<PathBuf, u64>,
+    directories: &std::collections::HashSet<PathBuf>,
+) -> (i32, i32, i32) {
+    let mut counts = (0, 0, 0);
+    for item in items
+        .iter()
+        .filter(|i| matches!(i.outcome, OpOutcome::Done))
+    {
+        match item.src.as_ref() {
+            Some(src) if directories.contains(src) => counts.1 += 1,
+            Some(src) if files.contains_key(src) => counts.0 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    counts
 }
 
 /// Ruta de `p` RELATIVA a `root` (PUNTO 3), con separadores `/` para la UI. Si `root` es `None` o
@@ -2420,8 +2515,11 @@ pub struct OpRowData {
     /// `true` si hay que ofrecer el enlace "Ver archivos" (op terminada con 3+ archivos Done).
     /// Cuando es `true`, la lista completa se pide con `op_file_list(index)`.
     pub has_file_list: bool,
-    /// Cuántos archivos se concretaron (Done). Lo usa la UI para el texto "Ver N archivos".
+    /// Total de entradas concretadas (Done), incluidas carpetas y tipos desconocidos.
     pub files_done_count: i32,
+    pub known_files: i32,
+    pub known_directories: i32,
+    pub unknown_entries: i32,
 }
 
 /// Convierte el resultado del worker de zip (`ArchiveOpItem` por entrada) en un `OpSummary` para
@@ -3381,8 +3479,105 @@ mod tests {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn history_counts_files_folders_and_unknown_without_disk_access() {
+        let file = PathBuf::from("source/file.txt");
+        let folder = PathBuf::from("source/folder");
+        let summary = OpSummary {
+            items: vec![
+                OpItem {
+                    dest: PathBuf::from("dest/file.txt"),
+                    src: Some(file.clone()),
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/folder"),
+                    src: Some(folder.clone()),
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/unknown"),
+                    src: None,
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/skipped"),
+                    src: Some(file.clone()),
+                    outcome: OpOutcome::Skipped,
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            done_type_counts(
+                &summary.items,
+                &HashMap::from([(file, 42)]),
+                &std::collections::HashSet::from([folder])
+            ),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn history_counts_the_7zip_fixture_as_files_and_folders() {
+        let mut summary = OpSummary::default();
+        let mut files = HashMap::new();
+        let mut directories = HashSet::new();
+        for i in 0..259 {
+            let path = PathBuf::from(format!("source/file-{i}"));
+            files.insert(path.clone(), 0);
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/file-{i}")),
+                src: Some(path),
+                outcome: OpOutcome::Done,
+            });
+        }
+        for i in 0..5 {
+            let path = PathBuf::from(format!("source/folder-{i}"));
+            directories.insert(path.clone());
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/folder-{i}")),
+                src: Some(path),
+                outcome: OpOutcome::Done,
+            });
+        }
+        assert_eq!(
+            done_type_counts(&summary.items, &files, &directories),
+            (259, 5, 0)
+        );
+    }
+
+    #[test]
+    fn history_type_count_is_bounded_per_tick_and_not_partially_reported() {
+        let mut controller = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(73);
+        let mut summary = OpSummary::default();
+        for i in 0..1025 {
+            let source = PathBuf::from(format!("source/{i}"));
+            op.size_map.insert(source.clone(), 0);
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/{i}")),
+                src: Some(source),
+                outcome: OpOutcome::Done,
+            });
+        }
+        op.summary = Some(summary);
+        controller.active_ops.push(op);
+        assert!(controller.pump_type_counts());
+        assert_eq!(controller.active_ops[0].type_count_cursor, 512);
+        let row = &controller.op_rows(naygo_core::format::DateFormat::default())[0];
+        assert_eq!((row.known_files, row.unknown_entries), (0, 1025));
+        assert!(controller.pump_type_counts());
+        assert!(!controller.pump_type_counts());
+        let row = &controller.op_rows(naygo_core::format::DateFormat::default())[0];
+        assert_eq!((row.known_files, row.unknown_entries), (1025, 0));
     }
 
     #[test]
@@ -4107,8 +4302,14 @@ mod tests {
                     is_dir: false,
                 },
                 naygo_core::ops::OpStep {
-                    from: None,
+                    from: Some(PathBuf::from("D:/src/sub")),
                     to: PathBuf::from("D:/dst/sub"),
+                    bytes: 0,
+                    is_dir: true,
+                },
+                naygo_core::ops::OpStep {
+                    from: None,
+                    to: PathBuf::from("D:/dst/unknown"),
                     bytes: 0,
                     is_dir: true,
                 },
@@ -4120,6 +4321,10 @@ mod tests {
         let map = size_map_of(&plan);
         assert_eq!(map.get(Path::new("D:/src/a.txt")), Some(&10));
         assert_eq!(map.len(), 1, "las carpetas no entran al mapa");
+        assert_eq!(
+            directory_sources_of(&plan),
+            HashSet::from([PathBuf::from("D:/src/sub")])
+        );
     }
 
     #[test]

@@ -619,6 +619,9 @@ pub(crate) fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
         files_summary: SharedString::from(r.files_summary.as_str()),
         has_file_list: r.has_file_list,
         files_done_count: r.files_done_count,
+        known_files: r.known_files,
+        known_directories: r.known_directories,
+        unknown_entries: r.unknown_entries,
     }
 }
 

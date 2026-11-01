@@ -25,6 +25,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - El arrastre entrante no comunica un movimiento completado al origen antes de la confirmación:
   Naygo ejecuta el movimiento solicitado después de que el usuario lo aprueba. Las fuentes que
   solo admiten mover se rechazan; si solo admiten copiar, se conserva el origen.
+- El historial distingue archivos, carpetas y elementos de tipo desconocido usando la información
+  del plan, sin consultar el disco al presentar el detalle. Cuando hay muchas entradas evita
+  construir nombres que no se muestran en el resumen.
 - Los errores fatales de operaciones se muestran como fallidos con su detalle, sin ofrecer un
   reintento automático cuando el estado parcial es desconocido.
 - Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para
