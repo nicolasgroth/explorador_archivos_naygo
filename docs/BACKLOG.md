@@ -64,6 +64,10 @@
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.
 > - [ ] Arrastrar carpetas anidadas desde 7-Zip al panel, preservando contenido y carpetas vacías.
+>   Prueba integrada experimental 2026-11-01: Nicolás arrastró y confirmó `E2 fixture` desde
+>   7-Zip a Slint/Winit; se verificaron 259 archivos por SHA-256, cuatro subcarpetas (una vacía)
+>   y ausencia de entradas faltantes o adicionales. Falta cubrir los demás casos, integrar y
+>   regenerar distribución; la instalación habitual aún no contiene esta corrección.
 >   El staging actual de `CF_HDROP` temporal rechaza explícitamente cualquier origen que no sea
 >   archivo (`open_ephemeral_hdrop_files`). Debe retener los contenidos antes de que 7-Zip borre
 >   el temporal, sin bloquear la interfaz innecesariamente; probar también el arrastre OLE real,
