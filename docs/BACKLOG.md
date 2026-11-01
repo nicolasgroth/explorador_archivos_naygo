@@ -4,6 +4,13 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] **Prioridad Windows, arrastre OLE:** `IDropTarget::Drop` puede devolver `DROPEFFECT_MOVE`
+>   al usar Shift antes de que el usuario confirme o el motor termine. Según
+>   [Microsoft](https://learn.microsoft.com/en-us/windows/desktop/api/oleidl/nf-oleidl-idroptarget-drop),
+>   el origen puede actuar sobre sus datos en respuesta a ese efecto. Es un riesgo del contrato;
+>   no se ha demostrado eliminación con Explorer ni probado la instalación concreta. Revisar también
+>   retornos tempranos con fallo/cancelación y efectos permitidos por la fuente; corregir antes de
+>   integrar el receptor experimental y ensayar exclusivamente con fixtures desechables.
 > - [ ] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
