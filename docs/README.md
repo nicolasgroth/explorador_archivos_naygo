@@ -4,18 +4,19 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-La distribución local **0.5.4 de avance** se regeneró el 2026-10-31 y fue verificada sin instalar,
-firmar ni publicar. Incluye controles de presentación 3D, prioridad de geometría y distinción del
-pie de panel y colores de materiales básicos 3MF; 7-Zip, materiales 3MF avanzados y aceptación
-manual continúan pendientes. Ver hashes y estado
+La distribución local **0.5.4 de avance** se regeneró el 2026-11-01 sin instalar, firmar ni publicar.
+Incluye controles de presentación 3D, prioridad de geometría, distinción del pie de panel, colores
+de materiales básicos 3MF y presentación de errores fatales de operaciones. El arrastre de carpetas
+desde 7-Zip pasó una prueba integrada en una rama experimental y aún no está en la distribución;
+materiales 3MF avanzados y aceptación manual continúan pendientes. Ver hashes y estado
 en [estado actual](ESTADO-ACTUAL.md).
 
-La instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre y abierta como
-PID 43624 (EXE SHA-256 `868a69dec0f6f79d0e91e54326eb9762cd745921467dd45a72fd5a4000bd2b5a`).
+La instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre
+(EXE SHA-256 `868a69dec0f6f79d0e91e54326eb9762cd745921467dd45a72fd5a4000bd2b5a`).
 La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hashes se registran en
 [`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup
-y el ZIP siguen sin firma Authenticode y no se han publicado. La sesión de Windows sigue bloqueada,
-por lo que no se hicieron pruebas interactivas.
+y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 sí se hizo la prueba
+interactiva de 7-Zip descrita arriba, en un binario experimental separado.
 La comparación W-07 controlada del 20 de octubre dio medianas 100k de 261,7 ms para el binario
 previo y 295,7 ms para el actual (+13,0 %), bajo el umbral orientativo de 15 %. Los dos runs tuvieron
 CPU total muestreada de 12–31 % y más de 44 GiB libres; por ser builds distintos y con actividad de
