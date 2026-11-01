@@ -1090,8 +1090,22 @@ impl OpsCtrl {
                             finished = Some(s);
                             break;
                         }
-                        OpMsg::Failed(_) => {
-                            finished = Some(OpSummary::default());
+                        OpMsg::Failed(error) => {
+                            // Un fallo fatal debe conservar su detalle en el historial. No se
+                            // registra origen para reintento: el estado parcial puede ser incierto.
+                            let dest = self.active_ops[i]
+                                .request
+                                .as_ref()
+                                .and_then(|req| req.dest_dir.clone())
+                                .unwrap_or_default();
+                            finished = Some(OpSummary {
+                                items: vec![OpItem {
+                                    dest,
+                                    src: None,
+                                    outcome: OpOutcome::Failed(error),
+                                }],
+                                ..Default::default()
+                            });
                             break;
                         }
                     }
@@ -3369,6 +3383,29 @@ mod tests {
             size_map: HashMap::new(),
             staging_guards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn fatal_worker_error_is_visible_and_not_automatically_retried() {
+        let mut controller = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(41);
+        let (tx, rx) = std::sync::mpsc::channel();
+        op.rx = Some(rx);
+        op.request = Some(naygo_core::ops::transfer(
+            false,
+            vec![],
+            PathBuf::from("D:/dst"),
+        ));
+        controller.active_ops.push(op);
+        tx.send(OpMsg::Failed("lectura rechazada".into())).unwrap();
+        controller.pump_ops();
+        let rows = controller.op_rows(naygo_core::format::DateFormat::default());
+        assert!(rows[0].has_errors && rows[0].has_file_list);
+        let files = controller.op_file_list(41);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].detail, "lectura rechazada");
+        assert_eq!(files[0].status, 2);
+        assert!(controller.retry_files(41).is_none());
     }
 
     #[test]

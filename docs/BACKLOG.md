@@ -4,9 +4,17 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
-> - [ ] Operaciones: `OpMsg::Failed` puede terminar mostrado como resumen vacío sin indicar el
->   error. Nicolás autorizó el 2026-10-31 una corrección general y pruebas del historial;
->   revisar los productores y conservar el detalle sin presentar un resultado fallido como éxito.
+> - [ ] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
+>   configuración el cierre automático al finalizar, activado por defecto. Conservar la
+>   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
+> - [ ] CI del experimento OLE [41245044960](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41245044960):
+>   el gate Windows falló en los dos tests que esperan español; la rama experimental aún no
+>   contiene el ajuste de idioma ya validado en la rama principal de avance. Platform pasó
+>   101 tests (6 ignorados); repetir CI al integrar. Linux mantiene fallos previamente anotados.
+> - [ ] Operaciones: corregida localmente la presentación de `OpMsg::Failed`: conserva el error
+>   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
+>   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534
+>   pruebas aprobadas, nueve ignoradas, Clippy y formato. Falta empaquetado actualizado.
 > - [ ] L-03/W-12: la corrida remota [41204625942](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41204625942)
 >   sobre `68d3fc38` ejecutó pruebas nativas en Ubuntu 26.04: core terminó con 970 aprobadas y
 >   27 fallidas. Hay casos con supuestos de rutas Windows y pruebas de serialización de rutas no
