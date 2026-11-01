@@ -11,7 +11,8 @@
 >   explícitamente por el usuario y restaurar una ubicación válida si cambió el layout.
 > - [ ] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
 >   detalle. En la prueba integrada del 2026-11-01 se indicó «264 archivos» para 259 archivos y
->   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo.
+>   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
+>   construcción repetida de nombres que no se muestran en el historial.
 > - [ ] CI del experimento OLE [41245044960](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41245044960):
 >   el gate Windows falló en los dos tests que esperan español; la rama experimental aún no
 >   contiene el ajuste de idioma ya validado en la rama principal de avance. Platform pasó
