@@ -754,7 +754,10 @@ component HistoryRow inherits Rectangle {
                 alignment: start;
                 link := Text {
                     // "Ver N archivos": compone Tr + el conteo (no se traduce el número).
-                    text: root.op.has-errors ? Tr.retry-review : Tr.ops-view-files + " " + root.op.files-done-count + " " + Tr.ops-files-word;
+                    text: root.op.has-errors ? Tr.retry-review : Tr.ops-view-files
+                        + (root.op.known-files > 0 ? " " + root.op.known-files + " " + (root.op.known-files == 1 ? Tr.ops-file-singular : Tr.ops-files-word) : "")
+                        + (root.op.known-directories > 0 ? (root.op.known-files > 0 ? " · " : " ") + root.op.known-directories + " " + (root.op.known-directories == 1 ? Tr.ops-folder-singular : Tr.ops-folders-word) : "")
+                        + (root.op.unknown-entries > 0 ? (root.op.known-files > 0 || root.op.known-directories > 0 ? " · " : " ") + root.op.unknown-entries + " " + (root.op.unknown-entries == 1 ? Tr.ops-entry-singular : Tr.ops-entries-word) : "");
                     color: link-touch.has-hover ? Theme.accent : Theme.text-dim;
                     font-size: 11px;
                     font-weight: 600;

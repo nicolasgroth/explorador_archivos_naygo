@@ -289,6 +289,11 @@ where
     tr.set_ops_verb_other(c.t("ops.verb_other").into());
     tr.set_ops_view_files(c.t("ops.view_files").into());
     tr.set_ops_files_word(c.t("ops.files_word").into());
+    tr.set_ops_file_singular(c.t("ops.file_singular").into());
+    tr.set_ops_folders_word(c.t("ops.folders_word").into());
+    tr.set_ops_folder_singular(c.t("ops.folder_singular").into());
+    tr.set_ops_entries_word(c.t("ops.entries_word").into());
+    tr.set_ops_entry_singular(c.t("ops.entry_singular").into());
     tr.set_ops_file_list_title(c.t("ops.file_list_title").into());
     tr.set_ops_file_skipped(c.t("ops.file_skipped").into());
     tr.set_ops_file_failed(c.t("ops.file_failed").into());

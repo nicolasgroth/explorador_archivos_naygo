@@ -99,6 +99,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards: Vec::new(),
         });
     }
@@ -229,6 +232,7 @@ impl OpsCtrl {
         op.rx = Some(rx);
         op.request = request;
         op.size_map = size_map_of(&plan);
+        op.directory_sources = directory_sources_of(&plan);
         op.plan_rx = None;
         op.scan_files = 0;
         op.scan_bytes = 0;

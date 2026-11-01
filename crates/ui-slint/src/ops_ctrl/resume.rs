@@ -54,6 +54,7 @@ impl OpsCtrl {
             ),
         );
         let size_map = size_map_of(&resume.plan);
+        let directory_sources = directory_sources_of(&resume.plan);
         let (rx, _h) = engine::spawn_with_no_replace_rename(
             resume.plan,
             journal.kind.clone(),
@@ -92,6 +93,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map,
+            directory_sources,
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards: Vec::new(),
         });
         self.drop_resume_item(id);

@@ -9,7 +9,11 @@
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
 > - [ ] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
 >   detalle. En la prueba integrada del 2026-11-01 se indicó «264 archivos» para 259 archivos y
->   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo.
+>   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. Implementación aislada pendiente
+>   de integrar y empaquetar; conserva «elementos» cuando el tipo no es conocido. Gate local:
+>   1.537 pruebas aprobadas, nueve ignoradas, Clippy y formato correctos.
+>   La misma implementación evita construir nombres ocultos en historiales grandes, optimización
+>   autorizada por Nicolás el 2026-11-01.
 > - [ ] CI del experimento OLE [41245044960](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41245044960):
 >   el gate Windows falló en los dos tests que esperan español; la rama experimental aún no
 >   contiene el ajuste de idioma ya validado en la rama principal de avance. Platform pasó

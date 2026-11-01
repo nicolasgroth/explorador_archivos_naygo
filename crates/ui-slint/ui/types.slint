@@ -361,7 +361,10 @@ export struct OpRowVm {
     // Detalle de QUÉ archivos se procesaron (solo en filas de historial):
     files-summary: string, // nombres inline si son 1-2 ("a.txt, b.txt"); vacío si son más o ninguno
     has-file-list: bool,   // true si hay 3+ archivos → la fila ofrece "Ver archivos" (abre popup)
-    files-done-count: int, // cuántos archivos se concretaron (para el texto "Ver N archivos")
+    files-done-count: int, // total de entradas concretadas
+    known-files: int,
+    known-directories: int,
+    unknown-entries: int,
 }
 
 // Una fila del popup "Archivos de la operación": ruta relativa + tamaño + estado (PUNTO 3).
