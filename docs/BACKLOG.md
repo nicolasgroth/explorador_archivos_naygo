@@ -4,6 +4,8 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] Paneles auxiliares únicos y apariencia activa por tema: implementación aislada en
+>   desarrollo; faltan pruebas, revisión visual, integración y distribución.
 > - [ ] **Prioridad Windows, arrastre OLE:** `IDropTarget::Drop` puede devolver `DROPEFFECT_MOVE`
 >   al usar Shift antes de que el usuario confirme o el motor termine. Según
 >   [Microsoft](https://learn.microsoft.com/en-us/windows/desktop/api/oleidl/nf-oleidl-idroptarget-drop),
@@ -16,6 +18,7 @@
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
 >   Cubrir planificación, cola, cancelación y conflictos; no cerrar un panel abierto
 >   explícitamente por el usuario y restaurar una ubicación válida si cambió el layout.
+>   Implementación aislada en desarrollo; faltan pruebas, integración y distribución.
 > - [ ] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
 >   detalle. En la prueba integrada del 2026-11-01 se indicó «264 archivos» para 259 archivos y
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la

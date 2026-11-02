@@ -221,6 +221,9 @@ pub struct Settings {
     /// Mostrar el resumen al terminar una operación. `#[serde(default)]` por retro-compat.
     #[serde(default = "default_show_op_summary")]
     pub show_op_summary: bool,
+    /// Ocultar al finalizar el panel abierto automáticamente, si no hubo errores.
+    #[serde(default = "default_auto_hide_operations")]
+    pub auto_hide_operations: bool,
     /// Pegar texto/imagen: pedir confirmación de nombre antes de crear (modo B).
     /// `false` (default) = crear directo con nombre automático (modo A).
     #[serde(default = "default_paste_confirm")]
@@ -511,6 +514,10 @@ fn default_show_op_summary() -> bool {
     true
 }
 
+fn default_auto_hide_operations() -> bool {
+    true
+}
+
 /// Default de `paste_confirm`: false (crear directo).
 fn default_paste_confirm() -> bool {
     false
@@ -619,6 +626,7 @@ impl Default for Settings {
             ops_display: OpsDisplay::Panel,
             confirm_trash: false,
             show_op_summary: true,
+            auto_hide_operations: true,
             paste_confirm: false,
             paste_text_name: "pegado {fecha}".into(),
             paste_text_ext: "txt".into(),
@@ -682,6 +690,9 @@ pub struct WorkspacePersist {
     /// anteriores a 0.4; serde lo migra como lista vacía (árboles comunes).
     #[serde(default)]
     pub tree_links: Vec<(crate::workspace::PaneId, crate::workspace::PaneId)>,
+    /// Ubicación previa del panel de operaciones cuando está oculto. Ausente en sesiones antiguas.
+    #[serde(default)]
+    pub operations_placement: Option<crate::workspace::layout::ClosedPanePlacement>,
 }
 
 /// Lee un archivo JSON y lo deserializa, devolviendo `None` si no existe o falla.
@@ -1089,6 +1100,7 @@ mod tests {
             ops_display: OpsDisplay::Modal,
             confirm_trash: true,
             show_op_summary: false,
+            auto_hide_operations: false,
             paste_confirm: true,
             paste_text_name: "nota {fecha}".into(),
             paste_text_ext: "md".into(),
@@ -1463,6 +1475,7 @@ mod tests {
         assert_eq!(s.ops_display, OpsDisplay::Panel);
         assert!(!s.confirm_trash);
         assert!(s.show_op_summary);
+        assert!(s.auto_hide_operations);
     }
 
     #[test]
@@ -1471,6 +1484,7 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ops_mode, OpsMode::Queue);
         assert!(s.show_op_summary);
+        assert!(s.auto_hide_operations);
     }
 
     #[test]
@@ -1518,6 +1532,7 @@ mod tests {
             files: Vec::new(),
             purposes: vec![(PaneId(3), crate::workspace::PanePurpose::Files)],
             tree_links: Vec::new(),
+            operations_placement: None,
         };
         save_workspace(dir.path(), &persist);
         let loaded = load_workspace(dir.path()).expect("debe cargar");
@@ -1538,6 +1553,7 @@ mod tests {
         let loaded = load_workspace(dir.path()).expect("un workspace v1 debe seguir cargando");
         assert_eq!(loaded.layout.pane_ids(), vec![crate::workspace::PaneId(5)]);
         assert!(loaded.tree_links.is_empty());
+        assert!(loaded.operations_placement.is_none());
     }
 
     #[test]

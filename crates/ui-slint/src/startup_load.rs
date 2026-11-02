@@ -149,6 +149,7 @@ mod tests {
             files: Vec::new(),
             purposes: Vec::new(),
             tree_links: Vec::new(),
+            operations_placement: None,
         };
         config::save_workspace(dir.path(), &workspace);
 

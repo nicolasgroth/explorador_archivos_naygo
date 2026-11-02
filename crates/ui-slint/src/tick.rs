@@ -753,6 +753,10 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // Drenar el progreso de las operaciones de archivo (F3).
                 let ops_done = ctrl.borrow_mut().ops.pump_ops();
                 ctrl.borrow_mut().reconcile_completed_operations();
+                let ops_hidden = ctrl.borrow_mut().maybe_hide_automatic_operations(ops_done);
+                if ops_hidden {
+                    sync_layout();
+                }
                 if let Some(error) = ctrl.borrow_mut().ops.take_clipboard_error() {
                     crate::logging::log_line(&format!("operación de portapapeles falló: {error}"));
                     let message = ctrl.borrow().config.t("ops.plan_failed");

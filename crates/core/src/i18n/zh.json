@@ -1035,6 +1035,8 @@
   "slint.cfg.confirm_trash": "确认移到回收站",
   "slint.cfg.confirm_drop": "在面板间拖动时询问",
   "slint.cfg.show_op_summary": "完成时显示摘要",
+  "slint.cfg.auto_hide_operations": "完成后隐藏操作面板",
+  "slint.cfg.tip.auto_hide_operations": "没有错误或跳过的项目时，隐藏自动打开的面板。手动打开的面板会保持显示。",
   "slint.cfg.paste_confirm": "粘贴时确认名称",
   "slint.cfg.paste_name": "粘贴文本的名称",
   "slint.cfg.paste_ext": "扩展名",

@@ -19,6 +19,7 @@ fn sample(root: &Path) -> TaskSpace {
             )],
             purposes: vec![(PaneId(1), PanePurpose::Files)],
             tree_links: vec![],
+            operations_placement: None,
         },
     )
     .unwrap()

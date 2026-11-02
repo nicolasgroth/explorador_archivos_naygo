@@ -339,6 +339,36 @@ impl WorkspaceCtrl {
     /// inicializa su `DirTree` desde las unidades del sistema.
     pub fn add_pane_of(&mut self, purpose: PanePurpose, area: Rect) {
         crate::logging::breadcrumb(&format!("abrir panel {:?}", purpose));
+        if matches!(purpose, PanePurpose::Operations) {
+            self.ensure_ops_pane();
+            self.automatic_operations_pane = None;
+            self.automatic_operations_prior.clear();
+            let existing = self
+                .ws
+                .panes()
+                .iter()
+                .find(|p| p.purpose == purpose)
+                .map(|p| p.id);
+            if let Some(id) = existing {
+                self.set_active(id);
+            }
+            return;
+        }
+        if matches!(
+            purpose,
+            PanePurpose::Basket | PanePurpose::Favorites | PanePurpose::Preview
+        ) {
+            let existing = self
+                .ws
+                .panes()
+                .iter()
+                .find(|p| p.purpose == purpose)
+                .map(|p| p.id);
+            if let Some(id) = existing {
+                self.set_active(id);
+                return;
+            }
+        }
         if matches!(purpose, PanePurpose::Search) {
             self.open_search_pane(area);
             return;
@@ -482,13 +512,57 @@ impl WorkspaceCtrl {
             })
             .unwrap_or(SplitDir::Horizontal);
         let new_id = self.ws.add_pane(PanePurpose::Operations, dir);
-        if let Some(active) = active {
+        if let Some(layout) = self
+            .operations_placement
+            .as_ref()
+            .and_then(|placement| placement.restore(&self.ws.layout, new_id))
+        {
+            self.ws.layout = layout;
+        } else if let Some(active) = active {
             self.ws.layout.split_leaf(active, split, new_id);
         }
+        self.automatic_operations_pane = Some(new_id);
+        self.automatic_operations_prior = self
+            .ops
+            .active_ops
+            .iter()
+            .filter(|op| op.summary.is_some())
+            .map(|op| op.id)
+            .collect();
         // Restaurar el activo previo (el panel de Operaciones no toma el foco).
         if let Some(prev) = prev_active {
             self.set_active(prev);
         }
+    }
+
+    /// Oculta solo el panel automático tras terminar toda la cola sin fallos ni omisiones. El
+    /// historial permanece en OpsCtrl; los paneles abiertos por el usuario no se cierran.
+    pub fn maybe_hide_automatic_operations(&mut self, idle: bool) -> bool {
+        let Some(pane) = self.automatic_operations_pane else {
+            return false;
+        };
+        if !self.config.settings.auto_hide_operations || !idle || self.ops.pending_dialog.is_some()
+        {
+            return false;
+        }
+        let mut relevant = self
+            .ops
+            .active_ops
+            .iter()
+            .filter(|op| !self.automatic_operations_prior.contains(&op.id));
+        if self.ops.has_pending_operation_error()
+            || relevant.any(|op| {
+                op.summary
+                    .as_ref()
+                    .is_none_or(|summary| summary.count_failed() > 0 || summary.count_skipped() > 0)
+            })
+        {
+            self.automatic_operations_pane = None;
+            self.automatic_operations_prior.clear();
+            return false;
+        }
+        self.close_pane(pane);
+        self.ws.pane(pane).is_none()
     }
 
     /// Los paneles que se cierran junto con `id`. Un explorador enlazado Árbol+Files es una
@@ -550,6 +624,12 @@ impl WorkspaceCtrl {
         if targets.is_empty() || self.ws.panes().len() <= targets.len() {
             return;
         }
+        let operations = targets.iter().copied().find(|target| {
+            self.ws
+                .pane(*target)
+                .is_some_and(|p| p.purpose == PanePurpose::Operations)
+        });
+        let visible_layout = operations.map(|_| self.ws.layout.clone());
         crate::logging::breadcrumb(&format!(
             "cerrar {}",
             targets
@@ -569,6 +649,17 @@ impl WorkspaceCtrl {
         }
         for target in &targets {
             self.ws.remove_pane(*target);
+        }
+        if let (Some(pane), Some(visible)) = (operations, visible_layout) {
+            self.operations_placement = Some(naygo_core::workspace::layout::ClosedPanePlacement {
+                pane,
+                visible,
+                hidden: self.ws.layout.clone(),
+            });
+            if self.automatic_operations_pane == Some(pane) {
+                self.automatic_operations_pane = None;
+                self.automatic_operations_prior.clear();
+            }
         }
         // Si el último Files activo era parte del bloque cerrado, recomputar.
         if self

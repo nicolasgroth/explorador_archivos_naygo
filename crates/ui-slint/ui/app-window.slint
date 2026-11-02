@@ -164,22 +164,25 @@ import { DriveBtn } from "drive-button.slint";
 // Un ítem del menú desplegable ▾.
 component MenuItem inherits Rectangle {
     in property <string> label;
+    in property <bool> enabled: true;
     callback clicked();
     accessible-role: button;
     accessible-label: root.label;
-    accessible-action-default => { root.clicked(); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
     height: 26px;
-    background: mi-touch.has-hover ? Theme.hover-bg : transparent;
+    background: root.enabled && mi-touch.has-hover ? Theme.hover-bg : transparent;
     border-radius: Theme.radius-sm;
     Text {
         text: root.label;
-        color: Theme.text;
+        color: root.enabled ? Theme.text : Theme.text-dim;
         vertical-alignment: center;
         x: 8px;
         width: parent.width - 16px;
         overflow: elide;
     }
     mi-touch := TouchArea {
+        enabled: root.enabled;
         clicked => { root.clicked(); }
     }
 }
@@ -326,6 +329,10 @@ export component AppWindow inherits Window {
     in property <int> active-path-pane: -1;
     in property <bool> toolbar-path-favorite;
     in property <[PaneVm]> panes;
+    in property <bool> has-favorites-pane;
+    in property <bool> has-preview-pane;
+    in property <bool> has-operations-pane;
+    in property <bool> has-basket-pane;
     in property <[SplitVm]> splits;
     callback go-up();
     // Navegación tipo navegador: atrás/adelante en el historial del panel activo + ir al inicio.
@@ -1295,7 +1302,9 @@ export component AppWindow inherits Window {
                         spacing: 6px;
                         Text {
                             text: p.title;
-                            color: (p.active || p.drag-over) ? Theme.text : Theme.text-dim;
+                            // Los paneles auxiliares son informativos aun sin foco; el borde y
+                            // el fondo de acento siguen señalando el foco real por separado.
+                            color: (p.active || p.drag-over || p.purpose != 0) ? Theme.text : Theme.text-dim;
                             font-weight: (p.active || p.drag-over) ? 700 : 500;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -2221,10 +2230,10 @@ export component AppWindow inherits Window {
             MenuItem { label: Tr.add-tree; clicked => { root.add-pane-of(1); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-inspector; clicked => { root.add-pane-of(2); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-history; clicked => { root.add-pane-of(3); root.add-menu-open = false; } }
-            MenuItem { label: Tr.add-favorites; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
-            MenuItem { label: Tr.add-preview; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
-            MenuItem { label: Tr.add-operations; clicked => { root.add-pane-of(6); root.add-menu-open = false; } }
-            MenuItem { label: Tr.add-basket; clicked => { root.add-pane-of(7); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-favorites; enabled: !root.has-favorites-pane; clicked => { root.add-pane-of(4); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-preview; enabled: !root.has-preview-pane; clicked => { root.add-pane-of(5); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-operations; enabled: !root.has-operations-pane; clicked => { root.add-pane-of(6); root.add-menu-open = false; } }
+            MenuItem { label: Tr.add-basket; enabled: !root.has-basket-pane; clicked => { root.add-pane-of(7); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-search; clicked => { root.add-pane-of(8); root.add-menu-open = false; } }
             MenuItem { label: Tr.add-recents; clicked => { root.add-pane-of(9); root.add-menu-open = false; } }
         }

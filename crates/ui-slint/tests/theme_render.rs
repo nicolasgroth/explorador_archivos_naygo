@@ -129,6 +129,7 @@ fn all_factory_themes_render_real_panels_and_independent_icon_color() {
         // panel/toolbar surfaces. Custom themes are intentionally not constrained here.
         for (surface, color) in [
             ("panel", theme.panel_bg),
+            ("active panel", theme.active_panel_bg),
             ("toolbar", theme.toolbar_bg),
             ("row", theme.row_bg),
             ("alternate row", theme.row_alt_bg),

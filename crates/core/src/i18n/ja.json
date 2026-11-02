@@ -1035,6 +1035,8 @@
   "slint.cfg.confirm_trash": "ごみ箱への送信を確認",
   "slint.cfg.confirm_drop": "パネル間のドラッグ時に確認",
   "slint.cfg.show_op_summary": "完了時に概要を表示",
+  "slint.cfg.auto_hide_operations": "完了時に操作パネルを隠す",
+  "slint.cfg.tip.auto_hide_operations": "エラーやスキップされた項目がない場合、自動的に開いたパネルを隠します。手動で開いたパネルは表示されたままです。",
   "slint.cfg.paste_confirm": "貼り付け時に名前を確認",
   "slint.cfg.paste_name": "貼り付けたテキストの名前",
   "slint.cfg.paste_ext": "拡張子",

@@ -1035,6 +1035,8 @@
   "slint.cfg.confirm_trash": "Confirmar envio para a lixeira",
   "slint.cfg.confirm_drop": "Perguntar ao arrastar entre painéis",
   "slint.cfg.show_op_summary": "Mostrar resumo ao terminar",
+  "slint.cfg.auto_hide_operations": "Ocultar Operações ao terminar",
+  "slint.cfg.tip.auto_hide_operations": "Oculta o painel aberto automaticamente se não houver erros ou itens ignorados. Um painel aberto manualmente permanece visível.",
   "slint.cfg.paste_confirm": "Confirmar o nome ao colar",
   "slint.cfg.paste_name": "Nome para texto colado",
   "slint.cfg.paste_ext": "Extensão",

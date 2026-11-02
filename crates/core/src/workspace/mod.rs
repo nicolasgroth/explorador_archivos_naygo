@@ -579,6 +579,7 @@ mod tests {
                 .collect(),
             purposes: w.panes().iter().map(|p| (p.id, p.purpose)).collect(),
             tree_links: w.tree_links(),
+            operations_placement: None,
         }
     }
 
@@ -615,6 +616,7 @@ mod tests {
             files: Vec::new(),
             purposes: Vec::new(),
             tree_links: Vec::new(),
+            operations_placement: None,
         };
         assert!(Workspace::from_persist(&persist).is_none());
     }

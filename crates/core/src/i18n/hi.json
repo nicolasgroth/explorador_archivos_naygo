@@ -1035,6 +1035,8 @@
   "slint.cfg.confirm_trash": "रीसायकल बिन में भेजने की पुष्टि करें",
   "slint.cfg.confirm_drop": "पैनलों के बीच खींचते समय पूछें",
   "slint.cfg.show_op_summary": "समाप्त होने पर सारांश दिखाएँ",
+  "slint.cfg.auto_hide_operations": "समाप्त होने पर ऑपरेशन छिपाएँ",
+  "slint.cfg.tip.auto_hide_operations": "त्रुटि या छोड़े गए आइटम न होने पर स्वतः खुला पैनल छिपता है। मैन्युअल रूप से खोला पैनल दिखाई देता रहता है।",
   "slint.cfg.paste_confirm": "पेस्ट करते समय नाम की पुष्टि करें",
   "slint.cfg.paste_name": "पेस्ट किए गए टेक्स्ट का नाम",
   "slint.cfg.paste_ext": "एक्सटेंशन",

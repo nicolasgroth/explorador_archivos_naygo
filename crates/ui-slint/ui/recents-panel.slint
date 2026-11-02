@@ -41,7 +41,7 @@ export component RecentsPanel inherits Rectangle {
     in property <[NavRow]> frequent-dirs;
     callback navigate(string);
     callback focus-pane();
-    background: Theme.inactive-panel-bg;
+    background: Theme.active-panel-bg;
     border-width: 1px;
     border-color: root.active ? Theme.active-pane-border : Theme.divider;
     VerticalLayout {

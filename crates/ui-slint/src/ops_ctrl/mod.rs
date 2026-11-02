@@ -1313,6 +1313,11 @@ impl OpsCtrl {
         self.pending_plan_error.take()
     }
 
+    /// No ocultar automáticamente el progreso antes de anunciar un error pendiente.
+    pub(crate) fn has_pending_operation_error(&self) -> bool {
+        self.pending_plan_error.is_some() || self.pending_paste_error.is_some()
+    }
+
     /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
     /// posición) con la acción dada. Se busca por id porque el vector se puede haber reordenado
     /// mientras el modal estaba abierto; resolver por posición mandaría la decisión a otra op.

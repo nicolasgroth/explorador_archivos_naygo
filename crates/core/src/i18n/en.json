@@ -1035,6 +1035,8 @@
   "slint.cfg.confirm_trash": "Confirm sending to Recycle Bin",
   "slint.cfg.confirm_drop": "Ask when dragging between panes",
   "slint.cfg.show_op_summary": "Show summary when finished",
+  "slint.cfg.auto_hide_operations": "Hide Operations when finished",
+  "slint.cfg.tip.auto_hide_operations": "Hides the automatically opened panel if there are no errors or skipped items. A manually opened panel stays visible.",
   "slint.cfg.paste_confirm": "Confirm name when pasting",
   "slint.cfg.paste_name": "Name for pasted text",
   "slint.cfg.paste_ext": "Extension",
