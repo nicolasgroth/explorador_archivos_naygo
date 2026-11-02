@@ -15,6 +15,15 @@ original: 259 archivos con SHA-256 coincidente y cuatro subcarpetas, incluida un
 entradas faltantes ni adicionales. Esta prueba cubre un árbol local concreto, no las demás
 fuentes ni los casos de cancelación y conflictos enumerados abajo.
 
+Después se adaptó el contrato OLE para no comunicar MOVE al origen antes de la confirmación.
+Las pruebas focalizadas de plataforma pasaron: 25 aprobadas y una medición ignorada, incluyendo
+Shift, fuentes que solo permiten copiar o mover y receptor cerrado. La prueba real anterior se
+ejecutó antes de esta adaptación y debe repetirse en el binario actualizado; tampoco sustituye
+la prueba real de cancelación de un movimiento desde Explorer. Clippy de plataforma para todos
+los targets también pasó sin avisos tras este ajuste. El gate completo de esta rama pasó con
+1.544 pruebas aprobadas, nueve ignoradas, Clippy y formato correctos. La validación con fuentes
+reales posteriores al cambio de efecto OLE sigue pendiente.
+
 La preparación se expone en Operaciones con un token cancelable; las pruebas sintéticas cubren
 cancelación antes y durante `GetData` y el retiro de la operación transitoria. Si el proveedor
 no retorna, la cancelación no garantiza interrumpir su llamada COM: se completa al regresar.

@@ -196,7 +196,7 @@ mod windows_impl {
     use std::collections::HashSet;
     use std::io::Write;
     use std::path::{Component, Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
     use std::sync::{mpsc::Sender, Arc};
     use windows::core::{implement, Interface, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
@@ -281,9 +281,18 @@ mod windows_impl {
         }
     }
 
-    fn effect_for_kind(kind: u8, grfkeystate: MODIFIERKEYS_FLAGS) -> DROPEFFECT {
+    fn effect_for_kind(kind: u8, grfkeystate: MODIFIERKEYS_FLAGS, allowed: u32) -> DROPEFFECT {
+        if allowed & DROPEFFECT_COPY.0 == 0 {
+            return DROPEFFECT(0);
+        }
         match kind {
-            ACCEPT_HDROP => effect_for(grfkeystate),
+            ACCEPT_HDROP
+                if effect_for(grfkeystate) == DROPEFFECT_MOVE
+                    && allowed & DROPEFFECT_MOVE.0 != 0 =>
+            {
+                DROPEFFECT_MOVE
+            }
+            ACCEPT_HDROP => DROPEFFECT_COPY,
             // Un archivo virtual se materializa en staging y luego se COPIA al destino. Mostrar
             // Move sería engañoso: no se puede mover una entrada fuera de un .zip.
             ACCEPT_VIRTUAL => DROPEFFECT_COPY,
@@ -755,6 +764,7 @@ mod windows_impl {
         /// Formato aceptado en el arrastre actual. `DragOver` no recibe el IDataObject, por eso
         /// conserva la decisión tomada en `DragEnter` y no pinta un efecto para datos inválidos.
         accepted_kind: AtomicU8,
+        allowed_effects: AtomicU32,
     }
 
     impl IDropTarget_Impl for NaygoDropTarget_Impl {
@@ -768,6 +778,8 @@ mod windows_impl {
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             // SAFETY: el SO entrega un puntero válido a un DROPEFFECT escribible.
+            let allowed = unsafe { pdweffect.as_ref() }.map_or(0, |effect| effect.0);
+            self.allowed_effects.store(allowed, Ordering::Relaxed);
             let kind = pdataobj.as_ref().map_or(ACCEPT_NONE, |data| {
                 // Un archivador puede ofrecer AMBOS formatos. Su CF_HDROP suele apuntar a una
                 // extracción temporal que desaparece apenas `Drop` retorna; como Naygo planifica
@@ -783,7 +795,7 @@ mod windows_impl {
             self.accepted_kind.store(kind, Ordering::Relaxed);
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
-                    *eff = effect_for_kind(kind, grfkeystate);
+                    *eff = effect_for_kind(kind, grfkeystate, allowed);
                 }
             }
             self.emit_hover(pt);
@@ -801,7 +813,11 @@ mod windows_impl {
             // SAFETY: igual que en DragEnter; puntero del SO a un DROPEFFECT escribible.
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
-                    *eff = effect_for_kind(self.accepted_kind.load(Ordering::Relaxed), grfkeystate);
+                    *eff = effect_for_kind(
+                        self.accepted_kind.load(Ordering::Relaxed),
+                        grfkeystate,
+                        self.allowed_effects.load(Ordering::Relaxed),
+                    );
                 }
             }
             self.emit_hover(pt);
@@ -811,6 +827,7 @@ mod windows_impl {
         /// El cursor sale de la ventana sin soltar: limpiar el resaltado del panel.
         fn DragLeave(&self) -> windows::core::Result<()> {
             self.accepted_kind.store(ACCEPT_NONE, Ordering::Relaxed);
+            self.allowed_effects.store(0, Ordering::Relaxed);
             self.emit_leave();
             Ok(())
         }
@@ -830,22 +847,28 @@ mod windows_impl {
             // ENTRAR al método, así los early-returns de abajo (dataobject nulo, GetData
             // fallido) no dejan el borde resaltado pegado.
             let accepted_kind = self.accepted_kind.swap(ACCEPT_NONE, Ordering::Relaxed);
+            let allowed = self.allowed_effects.swap(0, Ordering::Relaxed);
             self.emit_leave();
 
             // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
             // usa para enrutar el drop al panel bajo el cursor.
             let (screen_x, screen_y) = (pt.x, pt.y);
-            let effect = effect_for_kind(accepted_kind, grfkeystate);
-            // Reflejar el efecto elegido en la salida (el SO lo usa para la animación final).
+            // No comunicar éxito ante retornos tempranos. COPY mantiene intacto el origen;
+            // si el usuario confirma mover, lo ejecuta después el motor de Naygo.
             // SAFETY: puntero del SO a un DROPEFFECT escribible.
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
-                    *eff = effect;
+                    *eff = DROPEFFECT(0);
                 }
             }
 
-            let move_ = (grfkeystate.0 & MK_SHIFT.0) != 0;
-            let copy_forced = (grfkeystate.0 & MK_CONTROL.0) != 0;
+            if allowed & DROPEFFECT_COPY.0 == 0 {
+                return Ok(());
+            }
+
+            let copy_forced =
+                (grfkeystate.0 & MK_CONTROL.0) != 0 || allowed & DROPEFFECT_MOVE.0 == 0;
+            let move_ = (grfkeystate.0 & MK_SHIFT.0) != 0 && !copy_forced;
 
             // Tomar el IDataObject (puede venir nulo en casos raros).
             let data = match pdataobj.as_ref() {
@@ -860,7 +883,7 @@ mod windows_impl {
                 use naygo_core::ops::{OpMsg, OpSummary};
                 let token = naygo_core::cancel::CancellationToken::new();
                 let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-                self.send_payload(DropPayload {
+                let ready = self.send_payload(DropPayload {
                     delivery_cancel: None,
                     preparation: Some(super::DropPreparation {
                         token: token.clone(),
@@ -874,6 +897,9 @@ mod windows_impl {
                     staging: None,
                     error: None,
                 });
+                if !ready {
+                    return Ok(());
+                }
                 let format = hdrop_formatetc();
                 // SAFETY: `format` vive durante GetData; liberamos el medio antes de retornar.
                 if let Ok(mut medium) = unsafe { data.GetData(&format) } {
@@ -946,6 +972,11 @@ mod windows_impl {
                                             let _ = tx.send(payload);
                                             (waker)();
                                         });
+                                        unsafe {
+                                            if let Some(eff) = pdweffect.as_mut() {
+                                                *eff = DROPEFFECT_COPY;
+                                            }
+                                        }
                                     }
                                     Err(error) => {
                                         let cancelled = token.is_cancelled();
@@ -968,7 +999,7 @@ mod windows_impl {
                                 }
                             } else {
                                 let _ = progress_tx.send(OpMsg::Done(OpSummary::default()));
-                                self.send_payload(DropPayload {
+                                let delivered = self.send_payload(DropPayload {
                                     preparation: None,
                                     delivery_cancel: Some(token.clone()),
                                     paths,
@@ -979,6 +1010,13 @@ mod windows_impl {
                                     staging: None,
                                     error: None,
                                 });
+                                if delivered {
+                                    unsafe {
+                                        if let Some(eff) = pdweffect.as_mut() {
+                                            *eff = DROPEFFECT_COPY;
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             let detail = super::DROP_EMPTY.to_string();
@@ -1066,18 +1104,25 @@ mod windows_impl {
                 (waker)();
             });
 
+            unsafe {
+                if let Some(eff) = pdweffect.as_mut() {
+                    *eff = DROPEFFECT_COPY;
+                }
+            }
+
             Ok(())
         }
     }
 
     impl NaygoDropTarget_Impl {
-        fn send_payload(&self, payload: DropPayload) {
-            let _ = self.tx.send(payload);
+        fn send_payload(&self, payload: DropPayload) -> bool {
+            let delivered = self.tx.send(payload).is_ok();
             (self.waker)();
+            delivered
         }
 
         fn send_virtual_error(&self, screen_x: i32, screen_y: i32, error: String) {
-            self.send_payload(DropPayload {
+            let _ = self.send_payload(DropPayload {
                 preparation: None,
                 delivery_cancel: None,
                 paths: Vec::new(),
@@ -1205,6 +1250,7 @@ mod windows_impl {
                 drag_tx,
                 waker: waker.clone(),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
             }
             .into();
             let hwnd = hwnd_from_isize(raw_hwnd);
@@ -1550,6 +1596,136 @@ mod windows_impl {
         }
 
         #[test]
+        fn shift_drop_informara_copia_al_origen_y_conserva_intencion_de_mover() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            std::fs::write(&source, b"original").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+            unsafe {
+                target
+                    .DragEnter(&object, MK_SHIFT, point, &mut effect)
+                    .unwrap();
+                assert_eq!(effect, DROPEFFECT_MOVE);
+                target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
+            }
+            assert_eq!(effect, DROPEFFECT_COPY);
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .preparation
+                .is_some());
+            let payload = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+            assert!(payload.move_ && !payload.copy_forced);
+            assert_eq!(std::fs::read(source).unwrap(), b"original");
+        }
+
+        #[test]
+        fn drop_de_solo_mover_se_rechaza_sin_entregar_origen() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            std::fs::write(&source, b"original").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_MOVE;
+            unsafe {
+                target
+                    .DragEnter(&object, MK_SHIFT, point, &mut effect)
+                    .unwrap();
+                assert_eq!(effect, DROPEFFECT(0));
+                target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
+            }
+            assert_eq!(effect, DROPEFFECT(0));
+            assert!(rx.try_recv().is_err());
+            assert_eq!(std::fs::read(source).unwrap(), b"original");
+        }
+
+        #[test]
+        fn drop_de_solo_copiar_ignora_shift_para_no_mover() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            std::fs::write(&source, b"original").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .DragEnter(&object, MK_SHIFT, point, &mut effect)
+                    .unwrap();
+                target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
+            }
+            assert_eq!(effect, DROPEFFECT_COPY);
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .preparation
+                .is_some());
+            let payload = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+            assert!(!payload.move_ && payload.copy_forced);
+            assert_eq!(std::fs::read(source).unwrap(), b"original");
+        }
+
+        #[test]
+        fn drop_con_receptor_cerrado_no_notifica_exito() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            std::fs::write(&source, b"original").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            drop(rx);
+            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
+            }
+            .into();
+            let point = POINTL { x: 10, y: 10 };
+            let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+            unsafe {
+                target
+                    .DragEnter(&object, MK_SHIFT, point, &mut effect)
+                    .unwrap();
+                target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
+            }
+            assert_eq!(effect, DROPEFFECT(0));
+            assert_eq!(std::fs::read(source).unwrap(), b"original");
+        }
+
+        #[test]
         fn archivador_con_ambos_formatos_prefiere_staging_virtual() {
             assert_eq!(preferred_drop_kind(true, true), ACCEPT_VIRTUAL);
             assert_eq!(preferred_drop_kind(true, false), ACCEPT_VIRTUAL);
@@ -1592,6 +1768,7 @@ mod windows_impl {
                 drag_tx: hover_tx,
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1640,6 +1817,7 @@ mod windows_impl {
                     }
                 }),
                 accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0 | DROPEFFECT_MOVE.0),
             }
             .into();
             let cancel = std::thread::spawn(move || {
@@ -1690,6 +1868,7 @@ mod windows_impl {
                 drag_tx: hover_tx,
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0 | DROPEFFECT_MOVE.0),
             }
             .into();
             let cancel = std::thread::spawn(move || {
@@ -1743,6 +1922,7 @@ mod windows_impl {
                 drag_tx: hover_tx,
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
