@@ -8,6 +8,8 @@
 >   varios worktrees compartían `CARGO_TARGET_DIR`; la causa exacta no está confirmada. Repetir gates de seguridad OLE, recuento y
 >   receptor experimental con directorios independientes antes de integrar; las pruebas OLE
 >   focalizadas ya se ejecutaron por separado, pero el gate compartido no basta como evidencia.
+>   La rama de seguridad OLE pasó el gate aislado (1539 pruebas, 9 ignoradas, Clippy y formato);
+>   siguen pendientes los gates aislados de las otras ramas.
 > - [ ] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
@@ -22,6 +24,9 @@
 >   no se ha demostrado eliminación con Explorer ni probado la instalación concreta. Revisar también
 >   retornos tempranos con fallo/cancelación y efectos permitidos por la fuente; corregir antes de
 >   integrar el receptor experimental y ensayar exclusivamente con fixtures desechables.
+>   En la instancia experimental, cancelar un arrastre con Shift desde Directory Opus conservó
+>   íntegro el archivo sintético original y no creó nada en el destino; al confirmar Mover, el
+>   origen desapareció y la copia conservó el SHA-256 original. No equivale a probar Explorer.
 > - [ ] **Prioridad Windows, destino del drop asíncrono:** el receptor experimental resuelve las
 >   coordenadas al entregar el staging, después de una preparación que puede ser larga. Si el
 >   layout o la carpeta cambian entretanto, podría escoger otro destino; el fallback al panel activo
