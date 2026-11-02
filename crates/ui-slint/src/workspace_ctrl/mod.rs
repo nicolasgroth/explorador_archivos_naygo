@@ -20,7 +20,7 @@ use naygo_core::workspace::layout::{
     Rect, SerializableDockLayout, SplitDir, SplitHandle, SplitStep,
 };
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     mpsc::{self, Receiver, Sender},
@@ -137,6 +137,12 @@ pub struct RenameRequest {
 
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
+    /// Posición anterior del panel de operaciones cuando se cerró.
+    pub operations_placement: Option<naygo_core::workspace::layout::ClosedPanePlacement>,
+    /// Panel abierto automáticamente, que puede cerrarse al finalizar las operaciones.
+    pub automatic_operations_pane: Option<PaneId>,
+    /// Operaciones ya terminadas al abrir el panel automático; no afectan su cierre posterior.
+    pub automatic_operations_prior: HashSet<u64>,
     /// Presentación temporal; nunca se serializa ni sustituye el layout guardado.
     pub maximized_pane: Option<PaneId>,
     /// Configuración de la app (settings + i18n + temas + atajos), cargada del core y
@@ -767,6 +773,9 @@ impl WorkspaceCtrl {
         task_spaces.global_favorites = initial_favorites.clone();
         let mut c = WorkspaceCtrl {
             ws,
+            operations_placement: None,
+            automatic_operations_pane: None,
+            automatic_operations_prior: HashSet::new(),
             maximized_pane: None,
             config,
             startup_load_rx: None,

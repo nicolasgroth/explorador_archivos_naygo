@@ -1040,6 +1040,8 @@
   "slint.cfg.confirm_trash": "Confirmer l'envoi à la corbeille",
   "slint.cfg.confirm_drop": "Demander lors du glissement entre panneaux",
   "slint.cfg.show_op_summary": "Afficher le résumé à la fin",
+  "slint.cfg.auto_hide_operations": "Masquer les opérations une fois terminées",
+  "slint.cfg.tip.auto_hide_operations": "Masque le panneau ouvert automatiquement en l’absence d’erreurs ou d’éléments ignorés. Un panneau ouvert manuellement reste visible.",
   "slint.cfg.paste_confirm": "Confirmer le nom lors du collage",
   "slint.cfg.paste_name": "Nom pour le texte collé",
   "slint.cfg.paste_ext": "Extension",

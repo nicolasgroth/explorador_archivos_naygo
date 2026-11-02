@@ -1040,6 +1040,8 @@
   "slint.cfg.confirm_trash": "Conferma l'invio al Cestino",
   "slint.cfg.confirm_drop": "Chiedi quando si trascina tra i pannelli",
   "slint.cfg.show_op_summary": "Mostra il riepilogo al termine",
+  "slint.cfg.auto_hide_operations": "Nascondi Operazioni al termine",
+  "slint.cfg.tip.auto_hide_operations": "Nasconde il pannello aperto automaticamente se non ci sono errori o elementi ignorati. Un pannello aperto manualmente rimane visibile.",
   "slint.cfg.paste_confirm": "Conferma il nome quando si incolla",
   "slint.cfg.paste_name": "Nome per il testo incollato",
   "slint.cfg.paste_ext": "Estensione",

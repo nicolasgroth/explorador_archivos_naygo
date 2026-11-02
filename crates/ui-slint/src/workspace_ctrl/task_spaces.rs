@@ -530,6 +530,9 @@ impl WorkspaceCtrl {
         self.basket.clear();
         self.basket.add(space.resolved.basket.iter().cloned());
         self.ws = workspace;
+        self.operations_placement = space.resolved.workspace.operations_placement.clone();
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         self.relaunch_all_panes();
         self.typeahead = space.resolved.typeahead.clone();
         self.filter_hide_nonmatches = space.resolved.filter_hide_nonmatches;

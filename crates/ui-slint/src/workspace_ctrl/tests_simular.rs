@@ -49,6 +49,150 @@ fn drain_ops(c: &mut WorkspaceCtrl) -> bool {
     false
 }
 
+#[test]
+fn panel_automatico_se_oculta_tras_copia_y_conserva_historial() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let source = work.path().join("origen.txt");
+    let dest = work.path().join("destino");
+    std::fs::write(&source, b"contenido").unwrap();
+    std::fs::create_dir(&dest).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    c.ops.start_op(
+        naygo_core::ops::transfer(false, vec![source], dest.clone()),
+        "copiar".into(),
+        true,
+    );
+    assert!(drain_ops(&mut c));
+    assert!(c.maybe_hide_automatic_operations(true));
+    assert!(!c.has_purpose(PanePurpose::Operations));
+    assert_eq!(
+        std::fs::read(dest.join("origen.txt")).unwrap(),
+        b"contenido"
+    );
+    assert!(c.ops.active_ops.iter().any(|op| op.summary.is_some()));
+}
+
+#[test]
+fn panel_manual_y_opcion_desactivada_permanecen_visibles() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let source = work.path().join("origen.txt");
+    let dest = work.path().join("destino");
+    std::fs::write(&source, b"contenido").unwrap();
+    std::fs::create_dir(&dest).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.add_pane_of(
+        PanePurpose::Operations,
+        naygo_core::workspace::layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        },
+    );
+    c.ops.start_op(
+        naygo_core::ops::transfer(false, vec![source.clone()], dest.clone()),
+        "copiar".into(),
+        true,
+    );
+    assert!(drain_ops(&mut c));
+    assert!(!c.maybe_hide_automatic_operations(true));
+    assert!(c.has_purpose(PanePurpose::Operations));
+    let id =
+        c.ws.panes()
+            .iter()
+            .find(|p| p.purpose == PanePurpose::Operations)
+            .unwrap()
+            .id;
+    c.close_pane(id);
+    c.config.settings.auto_hide_operations = false;
+    c.ensure_ops_pane();
+    std::fs::remove_file(dest.join("origen.txt")).unwrap();
+    c.ops.start_op(
+        naygo_core::ops::transfer(false, vec![source], dest),
+        "copiar".into(),
+        true,
+    );
+    assert!(drain_ops(&mut c));
+    assert!(!c.maybe_hide_automatic_operations(true));
+    assert!(c.has_purpose(PanePurpose::Operations));
+}
+
+#[test]
+fn error_de_planificacion_no_oculta_panel_automatico() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let dest = work.path().join("destino");
+    std::fs::create_dir(&dest).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    c.ops.start_op(
+        naygo_core::ops::transfer(false, vec![work.path().join("inexistente")], dest),
+        "copiar".into(),
+        true,
+    );
+    assert!(drain_ops(&mut c));
+    assert!(!c.maybe_hide_automatic_operations(true));
+    assert!(c.has_purpose(PanePurpose::Operations));
+    assert!(c.ops.take_plan_error().is_some());
+}
+
+#[test]
+fn elementos_omitidos_mantienen_visible_el_panel_automatico() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let source = work.path().join("origen.txt");
+    let dest = work.path().join("destino");
+    std::fs::write(&source, b"nuevo").unwrap();
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::write(dest.join("origen.txt"), b"anterior").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    let req = naygo_core::ops::transfer(false, vec![source], dest.clone());
+    c.ops.start_op(req, "copiar".into(), true);
+    let mut skipped = false;
+    for _ in 0..4000 {
+        c.ops.pump_ops();
+        if let Some(crate::ops_ctrl::OpDialog::Conflict { op_id, .. }) =
+            c.ops.pending_dialog.clone()
+        {
+            c.ops.resolve_conflict(op_id, ConflictAction::Skip, false);
+            skipped = true;
+        }
+        if c.ops.active_ops.iter().any(|op| op.summary.is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(skipped, "debe ofrecer omitir el conflicto");
+    assert!(drain_ops(&mut c));
+    assert!(!c.maybe_hide_automatic_operations(true));
+    assert!(c.has_purpose(PanePurpose::Operations));
+    assert_eq!(std::fs::read(dest.join("origen.txt")).unwrap(), b"anterior");
+}
+
+#[test]
+fn cancelar_confirmacion_cierra_panel_automatico_sin_operacion() {
+    let work = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    c.ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+        sources: vec![work.path().join("prueba")],
+        permanent: false,
+    });
+    assert!(!c.maybe_hide_automatic_operations(true));
+    c.ops.pending_dialog = None;
+    assert!(c.maybe_hide_automatic_operations(true));
+}
+
 /// Posición de VISTA del ítem llamado `name` en el panel activo (índice contra `view_indices`,
 /// que es el mismo que consumen el clic y el teclado).
 fn active_pos_of(c: &WorkspaceCtrl, name: &str) -> Option<usize> {

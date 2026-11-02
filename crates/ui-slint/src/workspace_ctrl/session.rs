@@ -56,6 +56,7 @@ impl WorkspaceCtrl {
                 .collect(),
             purposes: self.ws.panes().iter().map(|p| (p.id, p.purpose)).collect(),
             tree_links: self.ws.tree_links(),
+            operations_placement: self.operations_placement.clone(),
         }
     }
 
@@ -112,6 +113,9 @@ impl WorkspaceCtrl {
             d.token.cancel();
         }
         self.ws = restored;
+        self.operations_placement = persist.operations_placement;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         // Relanzar el contenido de cada panel restaurado.
         let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
             .ws
@@ -204,6 +208,9 @@ impl WorkspaceCtrl {
             d.token.cancel();
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.operations_placement = None;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         self.relaunch_all_panes();
     }
 
@@ -227,14 +234,10 @@ impl WorkspaceCtrl {
         }
         let _ = write!(
             s,
-            "active={:?};layout={:?}",
+            "active={:?};layout={:?};operations_placement={:?}",
             self.ws.active_id().map(|a| a.0),
-            self.ws
-                .layout
-                .pane_ids()
-                .iter()
-                .map(|i| i.0)
-                .collect::<Vec<_>>()
+            self.ws.layout,
+            self.operations_placement
         );
         s
     }

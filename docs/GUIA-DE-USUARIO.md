@@ -133,6 +133,10 @@ Cada panel puede ser de un **tipo**:
 | **Vista previa** | Vista liviana del archivo enfocado: texto, imagen, …o el contenido de un comprimido (`.zip`, `.tar`, `.tar.gz`) como árbol con totales. |
 | **Operaciones** | Copias y movimientos en curso, en cola y recién terminados (ver §5). Aparece solo al iniciar una operación. |
 
+En cada espacio hay una sola Bandeja temporal, Favoritos, Vista previa y Operaciones: el menú
+deshabilita agregar otro mientras exista. Si una disposición anterior ya contiene duplicados,
+puedes cerrarlos sin que Naygo elimine automáticamente ninguno.
+
 **Dividir y reorganizar:**
 
 - El botón **＋** divide el panel activo (elige dirección: derecha/abajo/izq/arriba).
@@ -407,6 +411,10 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 Toda operación larga es **cancelable** y queda en el **Historial de acciones** con
 opción de deshacer. Pegar un **texto** o una **imagen** del portapapeles crea un
 archivo (formato y nombre configurables en *Configuración → Pegado / Avanzado*).
+El panel de Operaciones abierto automáticamente recupera su ubicación anterior cuando la
+disposición no cambió y se oculta al terminar sin errores ni elementos omitidos. Puedes desactivar
+este cierre en **Configuración → Operaciones**; los paneles abiertos manualmente y los resultados
+que necesitan revisión permanecen visibles.
 Renombrar nunca reemplaza otro archivo: si un proceso externo crea el nuevo nombre mientras
 Naygo ejecuta la operación, el renombre falla y conserva ambos archivos.
 Si un borrado por lote no puede enviar todos los orígenes a la Papelera, el historial conserva el

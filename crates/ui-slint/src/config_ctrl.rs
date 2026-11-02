@@ -776,6 +776,11 @@ impl ConfigCtrl {
         self.save();
     }
 
+    pub fn set_auto_hide_operations(&mut self, enabled: bool) {
+        self.settings.auto_hide_operations = enabled;
+        self.save();
+    }
+
     /// Mostrar la fila virtual ".." al tope de los paneles.
     pub fn set_show_parent(&mut self, v: bool) {
         self.settings.show_parent_entry = v;

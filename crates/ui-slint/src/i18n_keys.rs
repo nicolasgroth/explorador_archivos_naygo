@@ -669,6 +669,8 @@ where
     tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
     tr.set_cfg_confirm_drop(c.t("slint.cfg.confirm_drop").into());
     tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());
+    tr.set_cfg_auto_hide_operations(c.t("slint.cfg.auto_hide_operations").into());
+    tr.set_cfg_tip_auto_hide_operations(c.t("slint.cfg.tip.auto_hide_operations").into());
     tr.set_cfg_paste_confirm(c.t("slint.cfg.paste_confirm").into());
     tr.set_cfg_paste_name(c.t("slint.cfg.paste_name").into());
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());

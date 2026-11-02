@@ -1040,6 +1040,8 @@
   "slint.cfg.confirm_trash": "Confirmar envío a papelera",
   "slint.cfg.confirm_drop": "Preguntar al arrastrar entre paneles",
   "slint.cfg.show_op_summary": "Mostrar resumen al terminar",
+  "slint.cfg.auto_hide_operations": "Ocultar Operaciones al finalizar",
+  "slint.cfg.tip.auto_hide_operations": "Oculta el panel abierto automáticamente si no hay errores ni elementos omitidos. Un panel abierto manualmente permanece visible.",
   "slint.cfg.paste_confirm": "Confirmar nombre al pegar",
   "slint.cfg.paste_name": "Nombre para texto pegado",
   "slint.cfg.paste_ext": "Extensión",

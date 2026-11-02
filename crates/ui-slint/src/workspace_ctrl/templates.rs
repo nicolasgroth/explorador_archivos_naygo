@@ -60,6 +60,9 @@ impl WorkspaceCtrl {
             d.token.cancel();
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.operations_placement = None;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         self.relaunch_all_panes();
         self.templates.record_use(name, now_secs);
         self.persist_templates();
@@ -93,6 +96,9 @@ impl WorkspaceCtrl {
             d.token.cancel();
         }
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.operations_placement = None;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         self.relaunch_all_panes();
         true
     }

@@ -274,6 +274,7 @@ pub(crate) fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         confirm_trash: s.confirm_trash,
         confirm_drop_between_panes: s.confirm_drop_between_panes,
         show_op_summary: s.show_op_summary,
+        auto_hide_operations: s.auto_hide_operations,
         size_no_subdirs: s.size_no_subdirs,
         autostart: s.autostart,
         autostart_minimized: s.autostart_minimized,

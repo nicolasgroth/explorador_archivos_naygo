@@ -302,6 +302,7 @@ pub(crate) fn wire_config(
         set_confirm_drop_between_panes
     );
     cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
+    cfg_setter!(on_set_auto_hide_operations, bool, set_auto_hide_operations);
     cfg_setter!(on_set_show_parent, bool, set_show_parent);
     cfg_setter!(on_set_icon_only, bool, set_icon_only);
     {

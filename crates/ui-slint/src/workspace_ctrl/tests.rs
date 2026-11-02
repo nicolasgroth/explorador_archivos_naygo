@@ -2290,6 +2290,79 @@ fn ensure_ops_pane_agrega_una_vez_y_no_roba_foco() {
     assert_eq!(ops_count2, 1, "sigue habiendo exactamente uno");
 }
 
+#[test]
+fn paneles_auxiliares_unicos_no_se_duplican() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    for purpose in [
+        PanePurpose::Basket,
+        PanePurpose::Favorites,
+        PanePurpose::Preview,
+        PanePurpose::Operations,
+    ] {
+        c.add_pane_of(purpose, area());
+        c.add_pane_of(purpose, area());
+        assert_eq!(
+            c.ws.panes().iter().filter(|p| p.purpose == purpose).count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn operaciones_recupera_ubicacion_despues_de_reiniciar() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    let ops =
+        c.ws.panes()
+            .iter()
+            .find(|p| p.purpose == PanePurpose::Operations)
+            .unwrap()
+            .id;
+    let old_rect = c
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == ops)
+        .unwrap()
+        .1;
+    c.close_pane(ops);
+    c.save_session();
+    let mut restored = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(restored.load_session());
+    restored.ensure_ops_pane();
+    let reopened = restored
+        .ws
+        .panes()
+        .iter()
+        .find(|p| p.purpose == PanePurpose::Operations)
+        .unwrap()
+        .id;
+    let new_rect = restored
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == reopened)
+        .unwrap()
+        .1;
+    assert_eq!(old_rect, new_rect);
+}
+
+#[test]
+fn huella_de_sesion_detecta_cambio_de_tamano_sin_cambiar_paneles() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.ensure_ops_pane();
+    let before = c.session_fingerprint();
+    c.ws.layout.set_divider(&[], 0, 0.7);
+    assert_ne!(before, c.session_fingerprint());
+}
+
 /// Cuando NO hay sesión guardada, `load_session` devuelve `false` (señal de primera
 /// ejecución); cuando sí la hay, devuelve `true`.
 #[test]

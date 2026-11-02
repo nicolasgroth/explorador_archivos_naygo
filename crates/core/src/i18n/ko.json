@@ -1040,6 +1040,8 @@
   "slint.cfg.confirm_trash": "휴지통으로 보내기 확인",
   "slint.cfg.confirm_drop": "패널 간 끌 때 확인",
   "slint.cfg.show_op_summary": "완료 시 요약 표시",
+  "slint.cfg.auto_hide_operations": "완료 시 작업 패널 숨기기",
+  "slint.cfg.tip.auto_hide_operations": "오류나 건너뛴 항목이 없으면 자동으로 열린 패널을 숨깁니다. 직접 연 패널은 계속 표시됩니다.",
   "slint.cfg.paste_confirm": "붙여넣을 때 이름 확인",
   "slint.cfg.paste_name": "붙여넣은 텍스트 이름",
   "slint.cfg.paste_ext": "확장자",

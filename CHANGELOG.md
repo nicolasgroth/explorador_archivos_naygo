@@ -28,6 +28,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - El historial distingue archivos, carpetas y elementos de tipo desconocido usando la información
   del plan, sin consultar el disco al presentar el detalle. Cuando hay muchas entradas evita
   construir nombres que no se muestran en el resumen.
+- Los paneles auxiliares usan el fondo activo del tema sin ocultar la señal de foco. Bandeja,
+  Favoritos, Vista previa y Operaciones no se duplican al abrirlos; las disposiciones previas se
+  conservan. Operaciones recuerda su ubicación y puede ocultarse al terminar sin errores.
 - Los errores fatales de operaciones se muestran como fallidos con su detalle, sin ofrecer un
   reintento automático cuando el estado parcial es desconocido.
 - Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para

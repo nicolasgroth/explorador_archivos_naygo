@@ -1040,6 +1040,8 @@
   "slint.cfg.confirm_trash": "Verschieben in den Papierkorb bestätigen",
   "slint.cfg.confirm_drop": "Beim Ziehen zwischen Panels nachfragen",
   "slint.cfg.show_op_summary": "Zusammenfassung nach Abschluss anzeigen",
+  "slint.cfg.auto_hide_operations": "Operationen nach Abschluss ausblenden",
+  "slint.cfg.tip.auto_hide_operations": "Blendet das automatisch geöffnete Panel aus, wenn es keine Fehler oder übersprungenen Elemente gibt. Ein manuell geöffnetes Panel bleibt sichtbar.",
   "slint.cfg.paste_confirm": "Namen beim Einfügen bestätigen",
   "slint.cfg.paste_name": "Name für eingefügten Text",
   "slint.cfg.paste_ext": "Erweiterung",

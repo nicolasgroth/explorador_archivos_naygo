@@ -161,6 +161,17 @@ pub(crate) fn build_sync(
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
+            {
+                let c = ctrl.borrow();
+                ui.set_has_favorites_pane(
+                    c.has_purpose(naygo_core::workspace::PanePurpose::Favorites),
+                );
+                ui.set_has_preview_pane(c.has_purpose(naygo_core::workspace::PanePurpose::Preview));
+                ui.set_has_operations_pane(
+                    c.has_purpose(naygo_core::workspace::PanePurpose::Operations),
+                );
+                ui.set_has_basket_pane(c.has_purpose(naygo_core::workspace::PanePurpose::Basket));
+            }
             // El borrador pertenece a la carpeta/panel capturados al abrirlo. Si se cierra
             // ese panel o navega por otra vía, cancelar ANTES de tomar el préstamo mutable:
             // el callback cancela también validaciones/sugerencias y vuelve a prestar ctrl.
