@@ -45,3 +45,10 @@ Pendientes obligatorios: probar detención y cierre con proveedores lentos, arra
 interno, archivos virtuales, selecciones mixtas, colisiones y árboles grandes. Revisar el registro
 asíncrono y sus reintentos; validar los límites en máquinas modestas; medir UI y memoria. No
 mezclar ni publicar esta rama hasta completar esos controles y el build supervisado.
+
+Hallazgo posterior: el payload final se enruta por coordenadas al terminar la preparación, no al
+soltar. Si el usuario cambia distribución o carpeta durante el trabajo, puede apuntar a otro panel;
+el fallback al panel activo aumenta el riesgo. Abrir Operaciones antes de resolver el destino
+cambiaría también la geometría. El ajuste provisional de apertura se retiró; fijar y validar el
+destino original antes de cambiar el layout, sin fallback inseguro, y hacer cancelable y visible la
+preparación. La prueba integrada anterior se hizo sin cambiar la disposición.
