@@ -22,6 +22,11 @@
 >   no se ha demostrado eliminación con Explorer ni probado la instalación concreta. Revisar también
 >   retornos tempranos con fallo/cancelación y efectos permitidos por la fuente; corregir antes de
 >   integrar el receptor experimental y ensayar exclusivamente con fixtures desechables.
+> - [ ] **Prioridad Windows, destino del drop asíncrono:** el receptor experimental resuelve las
+>   coordenadas al entregar el staging, después de una preparación que puede ser larga. Si el
+>   layout o la carpeta cambian entretanto, podría escoger otro destino; el fallback al panel activo
+>   también requiere revisión. Fijar destino y carpeta al recibir el drop, asegurar cancelación
+>   visible sin cambiar el hit-test, y probar navegación, cierre y reordenamiento con fixtures.
 > - [ ] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
