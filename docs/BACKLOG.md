@@ -10,10 +10,10 @@
 >   focalizadas ya se ejecutaron por separado, pero el gate compartido no basta como evidencia.
 >   La rama de seguridad OLE pasó el gate aislado (1539 pruebas, 9 ignoradas, Clippy y formato);
 >   siguen pendientes los gates aislados de las otras ramas.
-> - [ ] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
+> - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
-> - [ ] Temas: dar a Propiedades, Vista previa, Operaciones y demás paneles informativos una
+> - [x] Temas: dar a Propiedades, Vista previa, Operaciones y demás paneles informativos una
 >   apariencia legible y activa en todos los temas, conservando una señal clara del foco real.
 > - [ ] Actualizar README y capturas representativas al terminar las mejoras visuales; verificar
 >   que las imágenes correspondan a la versión real y no contengan información privada.
@@ -33,11 +33,13 @@
 >   layout o la carpeta cambian entretanto, podría escoger otro destino; el fallback al panel activo
 >   también requiere revisión. Fijar destino y carpeta al recibir el drop, asegurar cancelación
 >   visible sin cambiar el hit-test, y probar navegación, cierre y reordenamiento con fixtures.
-> - [ ] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
+> - [x] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
 >   Cubrir planificación, cola, cancelación y conflictos; no cerrar un panel abierto
 >   explícitamente por el usuario y restaurar una ubicación válida si cambió el layout.
+>   Integrado en `2319e51d`; gate conjunto: 1553 pruebas aprobadas, 9 ignoradas, Clippy y formato
+>   correctos. Distribución e inspección visual manual pendientes.
 > - [ ] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
 >   detalle. En la prueba integrada del 2026-11-01 se indicó «264 archivos» para 259 archivos y
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
