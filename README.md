@@ -54,7 +54,7 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
 - **Consultas guardadas multiraíz** desde F3 o Ctrl+P: filtros de nombre/contenido, tamaño y
   fechas relativas, ejecución explícita cancelable, resultados seleccionables y envío a bandeja.
   Sin indexador residente. [Guía de consultas](docs/BUSQUEDAS-GUARDADAS.md).
-- **Espacios por tarea** desde Disposiciones o Ctrl+P: guardado explícito de paneles, rutas,
+- **Espacios por tarea** desde su botón en la barra o Ctrl+P: guardado explícito de paneles, rutas,
   columnas, filtros y bandeja; importar/exportar `.naygospace`, raíz portable y revisión antes
   de cambiar de tarea, sin interrumpir copias o movimientos. [Guía de espacios](docs/ESPACIOS.md).
 - Navegación por paneles dual (o múltiples), con ir atrás/adelante (incluidos los botones
@@ -63,6 +63,7 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
   **común** para todos los paneles o **dedicado** a un Files; “Explorador enlazado” crea la
   pareja Árbol + Archivos ya agrupada y el vínculo se conserva al reiniciar.
 - Columnas estilo planilla: ordenar, filtrar por tipo de columna y reordenar arrastrando.
+- En Windows, íconos del sistema para archivos como opción configurable, desactivada por defecto.
 - Operaciones entre paneles (copiar, mover, eliminar) con cola opcional, progreso y cancelación;
   los borrados grandes incluyen planificación y vista previa configurable.
 - Asistente de sincronización recursiva entre dos paneles: izquierda→derecha,
@@ -91,6 +92,8 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
   editable, resultados incrementales y rutas relativas.
 - Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código, modelos
   3D STL/3MF rasterizados por CPU y contenido de archivos ZIP, TAR y TAR.GZ.
+  Los modelos 3D ofrecen rotación con el mouse, tonos y vistas sólidas, con bordes o en malla;
+  3MF admite colores de materiales básicos y puede usar la miniatura si no hay geometría usable.
   Imágenes/SVG/PDF/comprimidos usan lectores aislados cancelables con límites Windows.
   WebP/GIF/APNG animados con pausa/reanudación y repetición, decodificación secuencial
   acotada y reloj dedicado al preview; sin convertir Naygo en reproductor de audio/vídeo.

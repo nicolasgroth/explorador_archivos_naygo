@@ -4,6 +4,13 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
+>   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
+>   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
+> - [ ] Temas: dar a Propiedades, Vista previa, Operaciones y demás paneles informativos una
+>   apariencia legible y activa en todos los temas, conservando una señal clara del foco real.
+> - [ ] Actualizar README y capturas representativas al terminar las mejoras visuales; verificar
+>   que las imágenes correspondan a la versión real y no contengan información privada.
 > - [ ] **Prioridad Windows, arrastre OLE:** `IDropTarget::Drop` puede devolver `DROPEFFECT_MOVE`
 >   al usar Shift antes de que el usuario confirme o el motor termine. Según
 >   [Microsoft](https://learn.microsoft.com/en-us/windows/desktop/api/oleidl/nf-oleidl-idroptarget-drop),
