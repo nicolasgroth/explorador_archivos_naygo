@@ -4,14 +4,12 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-La distribución local **0.5.4 de avance** se regeneró el 2026-11-01 sin instalar, firmar ni publicar.
-Incluye controles de presentación 3D, prioridad de geometría, distinción del pie de panel, colores
-de materiales básicos 3MF y presentación de errores fatales de operaciones. El arrastre de carpetas
-desde 7-Zip pasó una prueba integrada en una rama experimental y aún no está en la distribución;
-materiales 3MF avanzados y aceptación manual continúan pendientes. Ver hashes y estado
-en [estado actual](ESTADO-ACTUAL.md).
+La distribución local **0.5.4 de avance**, compilada e instalada el 2026-11-02, incluye mejoras de
+paneles, seguridad del arrastre OLE y recuentos del historial. Los artefactos no están firmados ni
+publicados. El arrastre de carpetas desde 7-Zip permanece experimental; la aceptación visual y los
+materiales 3MF avanzados siguen pendientes. Ver hashes y estado en [estado actual](ESTADO-ACTUAL.md).
 
-La instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre
+Registro histórico: la instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre
 (EXE SHA-256 `868a69dec0f6f79d0e91e54326eb9762cd745921467dd45a72fd5a4000bd2b5a`).
 La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hashes se registran en
 [`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup

@@ -9,7 +9,8 @@
 >   receptor experimental con directorios independientes antes de integrar; las pruebas OLE
 >   focalizadas ya se ejecutaron por separado, pero el gate compartido no basta como evidencia.
 >   La rama de seguridad OLE pasó el gate aislado (1539 pruebas, 9 ignoradas, Clippy y formato);
->   siguen pendientes los gates aislados de las otras ramas.
+>   La combinación de recuento, seguridad y paneles pasó el gate aislado (1553 pruebas, 9
+>   ignoradas, Clippy y formato); queda pendiente la validación del receptor experimental.
 > - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
@@ -27,7 +28,8 @@
 >   En la instancia experimental, cancelar un arrastre con Shift desde Directory Opus conservó
 >   íntegro el archivo sintético original y no creó nada en el destino; al confirmar Mover, el
 >   origen desapareció y la copia conservó el SHA-256 original. No equivale a probar Explorer.
->   Protección incorporada a la rama de avance en `73ff7ed6`; gate integrado y distribución pendientes.
+>   Protección incorporada en `73ff7ed6`, validada en el gate conjunto e instalada el 2026-11-02;
+>   queda pendiente la comprobación nativa con Explorer.
 > - [ ] **Prioridad Windows, destino del drop asíncrono:** el receptor experimental resuelve las
 >   coordenadas al entregar el staging, después de una preparación que puede ser larga. Si el
 >   layout o la carpeta cambian entretanto, podría escoger otro destino; el fallback al panel activo
@@ -39,12 +41,12 @@
 >   Cubrir planificación, cola, cancelación y conflictos; no cerrar un panel abierto
 >   explícitamente por el usuario y restaurar una ubicación válida si cambió el layout.
 >   Integrado en `2319e51d`; gate conjunto: 1553 pruebas aprobadas, 9 ignoradas, Clippy y formato
->   correctos. Distribución e inspección visual manual pendientes.
-> - [ ] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
+>   correctos. Distribución instalada el 2026-11-02; inspección visual manual pendiente.
+> - [x] Historial de operaciones: distinguir archivos y carpetas en los recuentos y textos de
 >   detalle. En la prueba integrada del 2026-11-01 se indicó «264 archivos» para 259 archivos y
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
 >   construcción repetida de nombres que no se muestran en el historial.
->   Implementación incorporada a la rama de avance en `ac7418f1`; gate integrado y distribución pendientes.
+>   Incorporado en `ac7418f1`, validado en el gate conjunto e instalado el 2026-11-02.
 > - [ ] CI del experimento OLE [41245044960](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41245044960):
 >   el gate Windows falló en los dos tests que esperan español; la rama experimental aún no
 >   contiene el ajuste de idioma ya validado en la rama principal de avance. Platform pasó

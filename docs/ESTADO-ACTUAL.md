@@ -4,7 +4,20 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-## Distribución local de avance — 2026-11-01
+## Distribución local instalada — 2026-11-02
+
+La compilación Windows 0.5.4 de `2319e51d` pasó el gate conjunto: 1553 pruebas,
+9 ignoradas, Clippy y formato correctos. El build supervisado terminó con pico de 10,74 GiB.
+Setup y ZIP están sin firma Authenticode. Setup terminó con código 0; el EXE instalado, el del
+ZIP y `target/release/naygo.exe` coinciden. Settings, workspace, favoritos y plantillas se
+conservaron byte a byte al instalar. Naygo se inició y respondió como PID 34208. Inspección
+visual manual y arrastre experimental de carpetas de 7-Zip siguen pendientes.
+
+- Setup: `df7f645a560a04cdf356fd07ad125c7ce03bbd4fd7d5c6a57283f2970b8e1daf`.
+- ZIP: `58b91ec65f435f37d2bfdd4f3175abcb4887ed21908ee4034b4ceb12cd8b6d1b`.
+- EXE: `8341510e8f285fbcd2a9f26dfe9ea297f2c977d483af23925f277580925a3793`.
+
+## Registro histórico: distribución local de avance — 2026-11-01
 
 La instalación abierta en este PC declara versión 0.5.4 y su ejecutable tiene SHA-256
 `17c8c55c1e321428b8aafba33c5ffe12ad8934064342af469ce8313d29b74dd8`, coincidente con el release
