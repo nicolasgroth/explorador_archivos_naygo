@@ -4,6 +4,10 @@
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] Validación aislada por rama: una compilación de paneles vio un núcleo anterior mientras
+>   varios worktrees compartían `CARGO_TARGET_DIR`; la causa exacta no está confirmada. Repetir gates de seguridad OLE, recuento y
+>   receptor experimental con directorios independientes antes de integrar; las pruebas OLE
+>   focalizadas ya se ejecutaron por separado, pero el gate compartido no basta como evidencia.
 > - [ ] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
