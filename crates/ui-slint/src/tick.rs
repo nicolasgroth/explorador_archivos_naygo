@@ -19,6 +19,67 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Solo enruta el punto entregado por OLE. Ausencia o fallo de hit-test no autoriza a
+/// elegir el panel activo: este puede apuntar a una carpeta ajena al gesto del usuario.
+fn route_external_drop(
+    ctrl: &mut WorkspaceCtrl,
+    content: Option<(f32, f32)>,
+    payload: &naygo_platform::drop_target::DropPayload,
+) -> bool {
+    content.is_some_and(|(x, y)| {
+        ctrl.drop_at_with_staging(
+            x,
+            y,
+            payload.move_,
+            payload.copy_forced,
+            payload.paths.clone(),
+            payload.staging.clone(),
+        )
+    })
+}
+
+#[cfg(test)]
+mod drop_routing_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_or_missing_coordinates_never_route_to_active_panel() {
+        let active = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let file = source.path().join("fixture.txt");
+        std::fs::write(&file, b"fixture").unwrap();
+        let mut ctrl =
+            WorkspaceCtrl::new_in(active.path().to_path_buf(), config.path().to_path_buf());
+        ctrl.set_area(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        });
+        let payload = naygo_platform::drop_target::DropPayload {
+            preparation: None,
+            delivery_cancel: None,
+            paths: vec![file.clone()],
+            move_: false,
+            copy_forced: true,
+            screen_x: 0,
+            screen_y: 0,
+            staging: None,
+            error: None,
+        };
+        assert!(!route_external_drop(&mut ctrl, None, &payload));
+        assert!(!route_external_drop(
+            &mut ctrl,
+            Some((-50.0, -50.0)),
+            &payload
+        ));
+        assert!(ctrl.pending_drop.is_none());
+        assert!(!active.path().join("fixture.txt").exists());
+        assert_eq!(std::fs::read(file).unwrap(), b"fixture");
+    }
+}
+
 /// Dependencias que el tick necesita del arranque de `main` (canales, handles y flags
 /// compartidos). Agruparlas evita una firma de 15 parámetros sueltos.
 pub(crate) struct TickDeps {
@@ -373,7 +434,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                             naygo_platform::window::bring_to_front(hwnd);
                         }
                         // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
-                        // HWND o ScreenToClient falla, caemos al fallback del panel activo.
+                        // HWND o ScreenToClient falla, no se puede determinar el destino.
                         let client = naygo_hwnd(&ui).and_then(|hwnd| {
                             naygo_platform::window::screen_to_client(
                                 hwnd,
@@ -381,37 +442,20 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 payload.screen_y,
                             )
                         });
-                        if let Some((client_x, client_y)) = client {
+                        let content = client.map(|(client_x, client_y)| {
                             let scale = ui.window().scale_factor().max(0.01);
                             let cx = client_x as f32 / scale;
                             let cy = client_y as f32 / scale - TOP_BAR_H;
-                            routed = ctrl.borrow_mut().drop_at_with_staging(
-                                cx,
-                                cy,
-                                payload.move_,       // move_hint (Shift del OLE)
-                                payload.copy_forced, // copy_forced (Ctrl del OLE)
-                                payload.paths.clone(),
-                                payload.staging.clone(),
-                            );
-                        }
+                            (cx, cy)
+                        });
+                        routed = route_external_drop(&mut ctrl.borrow_mut(), content, &payload);
                     }
-                    // Fallback: si no se pudo enrutar por el punto (sin ventana, o el cursor
-                    // no cayó sobre un panel Files), caer al panel activo como antes para no
-                    // perder el drop.
+                    // Nunca redirigir al panel activo: podría apuntar a una carpeta distinta de
+                    // la que el usuario eligió. Rechazar también los drops sin coordenadas.
                     if !routed {
-                        // Extraer active_id() a un `let` propio para SOLTAR el Ref compartido
-                        // ANTES del borrow_mut() de abajo. Si se hiciera el `if let` directo
-                        // sobre `ctrl.borrow().active_id()`, el Ref del scrutinee vive durante
-                        // todo el cuerpo del `if let` y choca con el borrow_mut() → panic
-                        // "already borrowed" (mismo patrón que la ruta feliz ya evita arriba).
-                        let active = ctrl.borrow().active_id();
-                        if let Some(active) = active {
-                            ctrl.borrow_mut().drop_external_with_staging(
-                                active,
-                                payload.paths,
-                                payload.move_,
-                                payload.copy_forced,
-                                payload.staging,
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.invoke_show_toast(
+                                ctrl.borrow().config.t("drop.invalid_target").into(),
                             );
                         }
                     }

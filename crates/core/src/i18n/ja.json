@@ -780,6 +780,7 @@
   "slint.dialog.copy": "コピー",
   "slint.dialog.move": "移動",
   "drop.virtual_failed": "ドラッグしたファイルを展開できませんでした",
+  "drop.invalid_target": "ドロップしたファイルの有効な保存先を特定できませんでした。",
   "drop.check_busy": "競合の確認中です。もう一度ドロップしてください。",
   "drop.check_failed": "ドロップ先の競合を確認できませんでした",
   "slint.drop.confirm_title": "確認",

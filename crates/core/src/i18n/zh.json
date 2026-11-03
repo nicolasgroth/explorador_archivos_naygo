@@ -780,6 +780,7 @@
   "slint.dialog.copy": "复制",
   "slint.dialog.move": "移动",
   "drop.virtual_failed": "无法提取拖放的文件",
+  "drop.invalid_target": "无法确定拖放文件的有效目标位置。",
   "drop.check_busy": "冲突检查仍在进行，请重新拖放。",
   "drop.check_failed": "无法检查目标位置的冲突",
   "slint.drop.confirm_title": "确认",

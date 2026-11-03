@@ -780,6 +780,7 @@
   "slint.dialog.copy": "Kopieren",
   "slint.dialog.move": "Verschieben",
   "drop.virtual_failed": "Die gezogenen Dateien konnten nicht extrahiert werden",
+  "drop.invalid_target": "Für die abgelegten Dateien konnte kein gültiges Ziel ermittelt werden.",
   "drop.check_busy": "Die Konfliktprüfung läuft noch. Bitte erneut ablegen.",
   "drop.check_failed": "Zielkonflikte konnten nicht geprüft werden",
   "slint.drop.confirm_title": "Bestätigen",

@@ -780,6 +780,7 @@
   "slint.dialog.copy": "Copia",
   "slint.dialog.move": "Sposta",
   "drop.virtual_failed": "Impossibile estrarre i file trascinati",
+  "drop.invalid_target": "Impossibile determinare una destinazione valida per i file trascinati.",
   "drop.check_busy": "Il controllo dei conflitti è ancora in corso. Riprova a rilasciare.",
   "drop.check_failed": "Impossibile verificare i conflitti nella destinazione",
   "slint.drop.confirm_title": "Conferma",

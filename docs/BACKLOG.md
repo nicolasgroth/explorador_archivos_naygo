@@ -1,5 +1,9 @@
 # Backlog — pendientes y mejoras de Naygo
 
+> Arrastre experimental: en desarrollo el rechazo explícito cuando no hay destino válido,
+> sin redirigir al panel activo. Sigue pendiente fijar el destino y la fila al instante del
+> drop; esta corrección aislada no elimina la carrera asíncrona.
+
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 >

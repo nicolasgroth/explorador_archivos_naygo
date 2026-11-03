@@ -780,6 +780,7 @@
   "slint.dialog.copy": "कॉपी",
   "slint.dialog.move": "स्थानांतरित करें",
   "drop.virtual_failed": "खींची गई फ़ाइलें निकाली नहीं जा सकीं",
+  "drop.invalid_target": "छोड़ी गई फ़ाइलों के लिए मान्य गंतव्य निर्धारित नहीं किया जा सका।",
   "drop.check_busy": "संघर्ष जाँच अभी जारी है। कृपया फिर से छोड़ें।",
   "drop.check_failed": "गंतव्य पर संघर्षों की जाँच नहीं हो सकी",
   "slint.drop.confirm_title": "पुष्टि करें",

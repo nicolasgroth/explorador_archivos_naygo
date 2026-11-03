@@ -780,6 +780,7 @@
   "slint.dialog.copy": "Copiar",
   "slint.dialog.move": "Mover",
   "drop.virtual_failed": "Não foi possível extrair os arquivos arrastados",
+  "drop.invalid_target": "Não foi possível determinar um destino válido para os arquivos arrastados.",
   "drop.check_busy": "A verificação de conflitos ainda está em andamento. Solte novamente.",
   "drop.check_failed": "Não foi possível verificar conflitos no destino",
   "slint.drop.confirm_title": "Confirmar",

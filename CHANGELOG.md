@@ -22,6 +22,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   100.000 elementos y 64 KiB por ruta.
 
 ### Plataforma Windows
+- Un arrastre externo sin destino válido deja de redirigirse al panel activo y muestra un aviso.
 - Operaciones: los errores fatales del worker quedan registrados como fallidos con su detalle,
   sin habilitar reintentos automáticos para resultados parcialmente desconocidos.
 - Papelera: asocia cada callback con la identidad del Shell obtenida antes de eliminar, para
