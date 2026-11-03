@@ -2,6 +2,7 @@
 
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
+> Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
 > - [ ] Validación aislada por rama: una compilación de paneles vio un núcleo anterior mientras
