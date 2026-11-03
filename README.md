@@ -10,6 +10,10 @@ incluidos, temas y sets de íconos personalizables.
 
 <p align="center"><em>Ejemplo sintético: árbol, dos carpetas en paralelo y propiedades, todo en una sola ventana. Las rutas y nombres mostrados son ficticios.</em></p>
 
+Las imágenes son ilustrativas y pueden corresponder a una versión anterior; no sustituyen una
+captura de la versión instalada. Para preparar capturas nuevas sin datos personales, ver
+[capturas sintéticas](docs/CAPTURAS-SINTETICAS.md).
+
 > **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
 > redimensionado en vivo (mover un divisor solo afecta a sus dos vecinos; doble clic =
 > 50/50), árbol de carpetas, columnas estilo planilla (orden + filtros), renombrado en
