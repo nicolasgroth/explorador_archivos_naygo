@@ -20,8 +20,9 @@
 //! `Drop` priorizamos archivos virtuales (`CFSTR_FILEDESCRIPTORW` + `CFSTR_FILECONTENTS`) cuando
 //! están disponibles: 7-Zip/WinRAR pueden publicar además un `CF_HDROP` temporal y retirarlo al
 //! volver de `Drop`, antes de que nuestra planificación asíncrona alcance a leerlo. Los streams
-//! virtuales se marshalean a un worker COM, se materializan en un staging propio y recién entonces
-//! se entregan a la UI. Si la fuente solo ofrece `CF_HDROP` (Explorer/escritorio), extraemos esas
+//! virtuales se materializan en un staging propio en el STA OLE dedicado antes de retornar de Drop,
+//! manteniendo vivo al proveedor sin bloquear UI. El origen espera, y las llamadas COM bloqueantes
+//! no se pueden interrumpir hasta que regresen. Si la fuente solo ofrece `CF_HDROP`, extraemos esas
 //! rutas con el helper compartido `clipboard::extract_hdrop_paths`.
 
 use crate::dir_watch::Waker;
@@ -198,14 +199,19 @@ mod windows_impl {
     use std::path::{Component, Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
     use std::sync::{mpsc::Sender, Arc};
-    use windows::core::{implement, Interface, Ref};
+    #[cfg(test)]
+    use windows::core::Interface;
+    use windows::core::{implement, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
     use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+    #[cfg(test)]
     use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
+    #[cfg(test)]
     use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
+    #[cfg(test)]
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
     use windows::Win32::System::Com::{
-        CoInitializeEx, CoUninitialize, IDataObject, IStream, COINIT_MULTITHREADED,
-        DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
+        IDataObject, IStream, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
     };
     use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
     use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
@@ -483,8 +489,10 @@ mod windows_impl {
             .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
     }
 
+    #[cfg(test)]
     struct ComWorkerGuard;
 
+    #[cfg(test)]
     impl Drop for ComWorkerGuard {
         fn drop(&mut self) {
             // SAFETY: solo se construye después de un CoInitializeEx exitoso en este hilo.
@@ -493,29 +501,16 @@ mod windows_impl {
     }
 
     fn materialize_virtual_drop(
-        marshaled_raw: usize,
+        data: &IDataObject,
         descriptors: &[VirtualDescriptor],
+        token: &naygo_core::cancel::CancellationToken,
     ) -> Result<(Vec<PathBuf>, Arc<StagedDropGuard>), String> {
-        // SAFETY: inicialización COM del worker; balanceada por ComWorkerGuard.
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-            .ok()
-            .map_err(|error| format!("no se pudo inicializar COM en el worker: {error}"))?;
-        let _com = ComWorkerGuard;
-        // SAFETY: el puntero proviene de `IStream::into_raw` justo antes de lanzar este worker y
-        // representa el stream creado por CoMarshalInterThreadInterfaceInStream.
-        let marshaled = unsafe { IStream::from_raw(marshaled_raw as *mut core::ffi::c_void) };
-        // SAFETY: consume el stream de marshaling una sola vez y entrega el proxy IDataObject.
-        let data_result: windows::core::Result<IDataObject> =
-            unsafe { CoGetInterfaceAndReleaseStream(&marshaled) };
-        // CoGetInterfaceAndReleaseStream ya liberó la referencia COM subyacente al stream. Evitar
-        // que el wrapper Rust haga un segundo Release al salir del scope.
-        std::mem::forget(marshaled);
-        let data =
-            data_result.map_err(|error| format!("no se pudo recuperar el origen OLE: {error}"))?;
-
         let root = create_staging_dir()?;
         let guard = Arc::new(StagedDropGuard::new(root.clone()));
         for (index, descriptor) in descriptors.iter().enumerate() {
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
+            }
             let destination = root.join(&descriptor.relative);
             if descriptor.is_dir {
                 std::fs::create_dir_all(&destination).map_err(|error| {
@@ -530,7 +525,10 @@ mod windows_impl {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| format!("no se pudo crear {}: {error}", parent.display()))?;
             }
-            write_virtual_file(&data, index, &destination)?;
+            write_virtual_file(data, index, &destination, token)?;
+        }
+        if token.is_cancelled() {
+            return Err("captura cancelada".into());
         }
         let paths = virtual_top_level_paths(&root, descriptors);
         if paths.is_empty() {
@@ -645,6 +643,7 @@ mod windows_impl {
         data: &IDataObject,
         index: usize,
         destination: &Path,
+        token: &naygo_core::cancel::CancellationToken,
     ) -> Result<(), String> {
         let format = contents_formatetc(index)
             .ok_or_else(|| "Windows no registró FileContents".to_string())?;
@@ -668,12 +667,18 @@ mod windows_impl {
                     // la interfaz para leer y ReleaseStgMedium libera su propia referencia.
                     let stream = unsafe { (*medium.u.pstm).clone() }
                         .ok_or_else(|| "FileContents entregó un IStream nulo".to_string())?;
-                    copy_stream(&stream, &mut file)?;
+                    copy_stream(&stream, &mut file, token)?;
                 }
                 value if value == TYMED_HGLOBAL.0 as u32 => {
                     // SAFETY: el discriminante TYMED_HGLOBAL hace activa la rama `hGlobal`.
                     let hglobal = unsafe { medium.u.hGlobal };
+                    if token.is_cancelled() {
+                        return Err("captura cancelada".into());
+                    }
                     copy_hglobal(hglobal, &mut file)?;
+                    if token.is_cancelled() {
+                        return Err("captura cancelada".into());
+                    }
                 }
                 _ => return Err("FileContents entregó un medio no compatible".to_string()),
             }
@@ -690,9 +695,16 @@ mod windows_impl {
         result
     }
 
-    fn copy_stream(stream: &IStream, file: &mut std::fs::File) -> Result<(), String> {
+    fn copy_stream(
+        stream: &IStream,
+        file: &mut std::fs::File,
+        token: &naygo_core::cancel::CancellationToken,
+    ) -> Result<(), String> {
         let mut buffer = vec![0u8; 256 * 1024];
         loop {
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
+            }
             let mut read = 0u32;
             // SAFETY: buffer válido para `len` bytes; `read` vive durante la llamada.
             unsafe {
@@ -706,6 +718,9 @@ mod windows_impl {
             .map_err(|error| format!("falló la lectura del stream virtual: {error}"))?;
             if read == 0 {
                 break;
+            }
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
             }
             file.write_all(&buffer[..read as usize])
                 .map_err(|error| format!("falló la escritura del archivo temporal: {error}"))?;
@@ -1047,66 +1062,77 @@ mod windows_impl {
                 return Ok(());
             }
 
+            use naygo_core::ops::{OpMsg, OpSummary};
+            let token = naygo_core::cancel::CancellationToken::new();
+            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+            if !self.send_payload(DropPayload {
+                preparation: Some(super::DropPreparation {
+                    token: token.clone(),
+                    receiver: progress_rx,
+                }),
+                delivery_cancel: None,
+                paths: Vec::new(),
+                move_: false,
+                copy_forced: true,
+                screen_x,
+                screen_y,
+                staging: None,
+                error: None,
+            }) {
+                return Ok(());
+            }
+
+            if token.is_cancelled() {
+                let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                (self.waker)();
+                return Ok(());
+            }
             let descriptors = match read_virtual_descriptors(data) {
                 Ok(value) => value,
                 Err(error) => {
-                    self.send_virtual_error(screen_x, screen_y, error);
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else {
+                        let _ = progress_tx.send(OpMsg::Failed(error.clone()));
+                        self.send_virtual_error(screen_x, screen_y, error);
+                    }
                     return Ok(());
                 }
             };
-
-            // COM exige marshaling explícito entre el STA de la UI y el worker. Pasamos el
-            // stream marshaleado como puntero opaco (su única operación válida será reconstruirlo
-            // con `IStream::from_raw` en el worker ya inicializado para COM).
-            let marshaled =
-                match unsafe { CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, data) } {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        self.send_virtual_error(
-                            screen_x,
-                            screen_y,
-                            format!("no se pudo transferir el origen OLE al worker: {error}"),
-                        );
-                        return Ok(());
-                    }
-                };
-            let marshaled_raw = marshaled.into_raw() as usize;
-            let tx = self.tx.clone();
-            let waker = self.waker.clone();
-            std::thread::spawn(move || {
-                let result = materialize_virtual_drop(marshaled_raw, &descriptors);
-                let payload = match result {
-                    Ok((paths, staging)) => DropPayload {
+            // Este callback corre en el STA OLE dedicado, no en UI. Mantener Drop abierto
+            // conserva la vida del IDataObject aun si el origen no ofrece modo asíncrono.
+            // GetData/Read bloqueantes no son interrumpibles; el token se revisa entre pasos.
+            match materialize_virtual_drop(data, &descriptors, &token) {
+                Ok((paths, staging)) if !token.is_cancelled() => {
+                    let _ = progress_tx.send(OpMsg::Done(OpSummary::default()));
+                    let delivered = self.send_payload(DropPayload {
                         preparation: None,
-                        delivery_cancel: None,
+                        delivery_cancel: Some(token),
                         paths,
-                        // Una entrada de archivo comprimido solo se puede copiar al filesystem.
                         move_: false,
                         copy_forced: true,
                         screen_x,
                         screen_y,
                         staging: Some(staging),
                         error: None,
-                    },
-                    Err(error) => DropPayload {
-                        preparation: None,
-                        delivery_cancel: None,
-                        paths: Vec::new(),
-                        move_: false,
-                        copy_forced: true,
-                        screen_x,
-                        screen_y,
-                        staging: None,
-                        error: Some(error),
-                    },
-                };
-                let _ = tx.send(payload);
-                (waker)();
-            });
-
-            unsafe {
-                if let Some(eff) = pdweffect.as_mut() {
-                    *eff = DROPEFFECT_COPY;
+                    });
+                    if delivered {
+                        unsafe {
+                            if let Some(eff) = pdweffect.as_mut() {
+                                *eff = DROPEFFECT_COPY;
+                            }
+                        }
+                    }
+                }
+                result => {
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else if let Err(error) = result {
+                        let _ = progress_tx.send(OpMsg::Failed(error.clone()));
+                        self.send_virtual_error(screen_x, screen_y, error);
+                    }
                 }
             }
 
@@ -1946,6 +1972,18 @@ mod windows_impl {
                 b"contenido"
             );
             assert!(payload.paths[0].join("nested/empty").is_dir());
+        }
+
+        #[test]
+        fn captura_virtual_cancelada_no_solicita_contenido() {
+            let token = naygo_core::cancel::CancellationToken::new();
+            token.cancel();
+            let data = crate::dnd::test_file_data_object(Vec::new());
+            let descriptors = vec![VirtualDescriptor {
+                relative: PathBuf::from("folder"),
+                is_dir: true,
+            }];
+            assert!(materialize_virtual_drop(&data, &descriptors, &token).is_err());
         }
 
         #[test]

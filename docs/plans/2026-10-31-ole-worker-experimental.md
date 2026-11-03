@@ -52,3 +52,13 @@ el fallback al panel activo aumenta el riesgo. Abrir Operaciones antes de resolv
 cambiaría también la geometría. El ajuste provisional de apertura se retiró; fijar y validar el
 destino original antes de cambiar el layout, sin fallback inseguro, y hacer cancelable y visible la
 preparación. La prueba integrada anterior se hizo sin cambiar la disposición.
+# Nota experimental 2026-11-03: vida de objetos virtuales
+
+La materialización virtual se efectúa durante `Drop` en el STA OLE dedicado para que el
+proveedor permanezca activo hasta terminar, sin depender de `IDataObjectAsyncCapability`.
+El origen espera durante la extracción; la cancelación se comprueba entre archivos y lecturas,
+pero una llamada COM bloqueante solo termina cuando el proveedor retorna. El staging se limpia
+al fallar o cancelar. Las 26 pruebas focalizadas de plataforma pasaron (una ignorada) y Clippy
+de plataforma pasó en target aislado. Esto no prueba aún con un proveedor virtual real ni con
+un objeto sintético cuya vida termine exactamente al retornar `Drop`; tampoco resuelve el destino
+asíncrono o la visibilidad de la cancelación en UI. No integrar sin esas validaciones.
