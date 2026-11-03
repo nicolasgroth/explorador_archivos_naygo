@@ -61,5 +61,8 @@ pero una llamada COM bloqueante solo termina cuando el proveedor retorna. El sta
 al fallar o cancelar. Las 27 pruebas focalizadas de plataforma pasaron (una ignorada) y Clippy
 de plataforma pasó en target aislado. Un IDataObject sintético sin soporte asíncrono entrega un
 archivo cuyo origen se invalida justo después de Drop; la prueba comprueba el contenido preparado.
+Otra prueba bloquea GetData, cancela y comprueba que solo se complete la cancelación tras el retorno
+del proveedor, sin entregar rutas ni notificar copia. El conjunto ampliado tiene 28 pruebas aprobadas
+y una ignorada; Clippy de plataforma pasó.
 Esto no prueba aún con un proveedor virtual real, ni resuelve el destino asíncrono o la visibilidad
 de la cancelación en UI. No integrar sin esas validaciones.

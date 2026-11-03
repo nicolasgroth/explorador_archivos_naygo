@@ -1331,6 +1331,10 @@ mod windows_impl {
         #[implement(IDataObject)]
         struct VirtualLifetimeSource {
             alive: Arc<std::sync::atomic::AtomicBool>,
+            gate: Option<(
+                std::sync::mpsc::Sender<()>,
+                std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+            )>,
         }
 
         impl windows::Win32::System::Com::IDataObject_Impl for VirtualLifetimeSource_Impl {
@@ -1363,6 +1367,13 @@ mod windows_impl {
                     }
                     bytes
                 } else if format.cfFormat == contents_formatetc(0).unwrap().cfFormat {
+                    if let Some((entered, resume)) = &self.gate {
+                        let _ = entered.send(());
+                        let _ = resume
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(5));
+                    }
                     b"virtual-content".to_vec()
                 } else {
                     return Err(windows::Win32::Foundation::E_FAIL.into());
@@ -2079,10 +2090,64 @@ mod windows_impl {
         }
 
         #[test]
+        fn cancelar_virtual_durante_getdata_espera_retorno_y_descarta_resultado() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let source: IDataObject = VirtualLifetimeSource {
+                    alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    gate: Some((entered_tx, std::sync::Mutex::new(resume_rx))),
+                }
+                .into();
+                let (drag_tx, _) = std::sync::mpsc::channel();
+                let target: IDropTarget = NaygoDropTarget {
+                    tx,
+                    drag_tx,
+                    waker: Arc::new(|| {}),
+                    accepted_kind: AtomicU8::new(ACCEPT_VIRTUAL),
+                    allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0),
+                }
+                .into();
+                let mut effect = DROPEFFECT_COPY;
+                unsafe {
+                    target
+                        .Drop(
+                            &source,
+                            MODIFIERKEYS_FLAGS(0),
+                            POINTL { x: 1, y: 1 },
+                            &mut effect,
+                        )
+                        .unwrap();
+                }
+                effect
+            });
+            let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            let preparation = event.preparation.take().unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            preparation.token.cancel();
+            resume_tx.send(()).unwrap();
+            assert!(matches!(
+                preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                naygo_core::ops::OpMsg::Cancelled(_)
+            ));
+            assert_eq!(worker.join().unwrap(), DROPEFFECT(0));
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err());
+        }
+
+        #[test]
         fn virtual_content_se_materializa_antes_de_retornar_drop() {
             let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let source: IDataObject = VirtualLifetimeSource {
                 alive: alive.clone(),
+                gate: None,
             }
             .into();
             let (tx, rx) = std::sync::mpsc::channel();
