@@ -1327,6 +1327,110 @@ mod windows_impl {
     mod tests {
         use super::*;
 
+        // Proveedor sintético sin IDataObjectAsyncCapability: rechaza lecturas después de Drop.
+        #[implement(IDataObject)]
+        struct VirtualLifetimeSource {
+            alive: Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl windows::Win32::System::Com::IDataObject_Impl for VirtualLifetimeSource_Impl {
+            fn GetData(
+                &self,
+                f: *const FORMATETC,
+            ) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
+                use windows::Win32::System::Memory::{
+                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+                };
+                if !self.alive.load(Ordering::SeqCst) {
+                    return Err(windows::Win32::Foundation::E_FAIL.into());
+                }
+                let format = unsafe { f.as_ref() }.ok_or(windows::Win32::Foundation::E_FAIL)?;
+                let bytes = if format.cfFormat == descriptor_formatetc().unwrap().cfFormat {
+                    let name: Vec<u16> = "archivo.txt".encode_utf16().collect();
+                    let mut filename = [0u16; 260];
+                    filename[..name.len()].copy_from_slice(&name);
+                    let desc = FILEDESCRIPTORW {
+                        cFileName: filename,
+                        ..Default::default()
+                    };
+                    let mut bytes = vec![0u8; 4 + size_of::<FILEDESCRIPTORW>()];
+                    bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+                    unsafe {
+                        std::ptr::write_unaligned(
+                            bytes.as_mut_ptr().add(4).cast::<FILEDESCRIPTORW>(),
+                            desc,
+                        );
+                    }
+                    bytes
+                } else if format.cfFormat == contents_formatetc(0).unwrap().cfFormat {
+                    b"virtual-content".to_vec()
+                } else {
+                    return Err(windows::Win32::Foundation::E_FAIL.into());
+                };
+                let h = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }?;
+                let ptr = unsafe { GlobalLock(h) };
+                if ptr.is_null() {
+                    return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+                    let _ = GlobalUnlock(h);
+                }
+                Ok(windows::Win32::System::Com::STGMEDIUM {
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                    u: windows::Win32::System::Com::STGMEDIUM_0 { hGlobal: h },
+                    pUnkForRelease: std::mem::ManuallyDrop::new(None),
+                })
+            }
+            fn GetDataHere(
+                &self,
+                _: *const FORMATETC,
+                _: *mut windows::Win32::System::Com::STGMEDIUM,
+            ) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn QueryGetData(&self, _: *const FORMATETC) -> windows::core::HRESULT {
+                windows::Win32::Foundation::S_OK
+            }
+            fn GetCanonicalFormatEtc(
+                &self,
+                _: *const FORMATETC,
+                _: *mut FORMATETC,
+            ) -> windows::core::HRESULT {
+                windows::Win32::Foundation::E_NOTIMPL
+            }
+            fn SetData(
+                &self,
+                _: *const FORMATETC,
+                _: *const windows::Win32::System::Com::STGMEDIUM,
+                _: windows::core::BOOL,
+            ) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn EnumFormatEtc(
+                &self,
+                _: u32,
+            ) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn DAdvise(
+                &self,
+                _: *const FORMATETC,
+                _: u32,
+                _: Ref<windows::Win32::System::Com::IAdviseSink>,
+            ) -> windows::core::Result<u32> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn DUnadvise(&self, _: u32) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn EnumDAdvise(
+                &self,
+            ) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+        }
+
         #[test]
         fn closing_registration_signals_worker_without_reusing_thread_id() {
             use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
@@ -1972,6 +2076,46 @@ mod windows_impl {
                 b"contenido"
             );
             assert!(payload.paths[0].join("nested/empty").is_dir());
+        }
+
+        #[test]
+        fn virtual_content_se_materializa_antes_de_retornar_drop() {
+            let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let source: IDataObject = VirtualLifetimeSource {
+                alive: alive.clone(),
+            }
+            .into();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (drag_tx, _) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_VIRTUAL),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0),
+            }
+            .into();
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &source,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 1, y: 1 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            alive.store(false, Ordering::SeqCst);
+            assert_eq!(effect, DROPEFFECT_COPY);
+            let preparation = rx.try_recv().unwrap();
+            assert!(preparation.preparation.is_some());
+            let payload = rx.try_recv().unwrap();
+            assert!(payload.error.is_none(), "{:?}", payload.error);
+            assert_eq!(
+                std::fs::read(&payload.paths[0]).unwrap(),
+                b"virtual-content"
+            );
         }
 
         #[test]

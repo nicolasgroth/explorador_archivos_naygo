@@ -58,7 +58,8 @@ La materialización virtual se efectúa durante `Drop` en el STA OLE dedicado pa
 proveedor permanezca activo hasta terminar, sin depender de `IDataObjectAsyncCapability`.
 El origen espera durante la extracción; la cancelación se comprueba entre archivos y lecturas,
 pero una llamada COM bloqueante solo termina cuando el proveedor retorna. El staging se limpia
-al fallar o cancelar. Las 26 pruebas focalizadas de plataforma pasaron (una ignorada) y Clippy
-de plataforma pasó en target aislado. Esto no prueba aún con un proveedor virtual real ni con
-un objeto sintético cuya vida termine exactamente al retornar `Drop`; tampoco resuelve el destino
-asíncrono o la visibilidad de la cancelación en UI. No integrar sin esas validaciones.
+al fallar o cancelar. Las 27 pruebas focalizadas de plataforma pasaron (una ignorada) y Clippy
+de plataforma pasó en target aislado. Un IDataObject sintético sin soporte asíncrono entrega un
+archivo cuyo origen se invalida justo después de Drop; la prueba comprueba el contenido preparado.
+Esto no prueba aún con un proveedor virtual real, ni resuelve el destino asíncrono o la visibilidad
+de la cancelación en UI. No integrar sin esas validaciones.
