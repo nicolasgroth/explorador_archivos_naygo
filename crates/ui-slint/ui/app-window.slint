@@ -1681,6 +1681,17 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+            // El destino OLE se distingue incluso si tiene pestañas o es la Bandeja. Es solo
+            // una señal visual: no cambia el foco ni intercepta los eventos del contenido.
+            for p in root.panes: Rectangle {
+                x: p.x;
+                y: p.y;
+                width: p.w;
+                height: p.h;
+                background: transparent;
+                border-width: p.drag-over ? 3px : 0px;
+                border-color: Theme.accent;
+            }
             // Barras de splitter arrastrables. La barra VISIBLE es fina (4px), pero la zona de
             // agarre (TouchArea) se ENSANCHA ~5px a cada lado para que sea fácil de tomar con el
             // mouse (4px era casi imposible de pinchar). La barra visible va centrada en la zona.

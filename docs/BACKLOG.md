@@ -5,6 +5,9 @@
 > Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [ ] Deseable futuro: opción desactivada por defecto para activar el panel al pasar el mouse;
+>   evaluar demora configurable, accesibilidad y riesgo de cambios de foco involuntarios. El
+>   resaltado del destino durante un arrastre es independiente y no debe cambiar el foco.
 > - [ ] Validación aislada por rama: una compilación de paneles vio un núcleo anterior mientras
 >   varios worktrees compartían `CARGO_TARGET_DIR`; la causa exacta no está confirmada. Repetir gates de seguridad OLE, recuento y
 >   receptor experimental con directorios independientes antes de integrar; las pruebas OLE

@@ -424,6 +424,8 @@ no se ofrece un reintento automático cuando no se conoce el estado parcial.
 Al arrastrar desde otra aplicación, Naygo confirma con ella la recepción sin pedirle que borre el
 origen; si eliges mover, Naygo realiza el movimiento tras tu confirmación. Una fuente que solo
 permita mover no puede entregar sus elementos a Naygo; una que solo permita copiar se copia.
+Durante el arrastre, un borde de acento señala el panel de archivos o la bandeja bajo el cursor;
+este resaltado es visual y no cambia el foco del teclado.
 El enlace de detalle distingue archivos y carpetas cuando el plan conoce su tipo; en otros casos
 indica «elementos» sin asumir que todos sean archivos.
 Naygo solo registra como recuperable un elemento cuya identidad en la Papelera pudo confirmar.
