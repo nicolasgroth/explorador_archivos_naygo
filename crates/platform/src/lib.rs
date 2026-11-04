@@ -16,6 +16,7 @@ pub mod dir_watch;
 pub mod dnd;
 pub mod drive_space;
 pub mod drives;
+pub mod drop_snapshot;
 pub mod drop_target;
 pub mod eject;
 pub mod exe_meta;

@@ -66,3 +66,10 @@ del proveedor, sin entregar rutas ni notificar copia. El conjunto ampliado tiene
 y una ignorada; Clippy de plataforma pasó.
 Esto no prueba aún con un proveedor virtual real, ni resuelve el destino asíncrono o la visibilidad
 de la cancelación en UI. No integrar sin esas validaciones.
+
+El prototipo `drop_snapshot` conserva destinos inmutables por PaneId y coordenadas físicas,
+rechaza regiones ambiguas y publicaciones obsoletas. No está conectado a UI ni a Drop: no
+demuestra que todos los cambios de viewport, layout, DPI y modelo invaliden a tiempo. Una
+alternativa segura cuando no se pueda acreditar el destino es pedir al usuario elegirlo de forma
+explícita, sin preselección ni fallback; esto añade interacción y no sustituye determinar el
+destino original al soltar.
