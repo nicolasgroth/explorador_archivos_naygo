@@ -40,6 +40,7 @@ mod probe {
                 drop-target-row(id, row) => { root.row-hit = row; }
             }
             public function hit-row-at(y: length) -> int { return panel.drop-row-at(y); }
+            public function hit-cell-at(x: length, y: length) -> int { return panel.drop-cell-at(x, y); }
         }
     }
 
@@ -118,9 +119,14 @@ mod probe {
                 let Some(ui) = slot.as_ref().and_then(slint::Weak::upgrade) else {
                     return 0;
                 };
+                let scale = ui.window().scale_factor();
+                println!("window_scale_factor={scale}");
                 let mut found = 0;
                 for y in 0..1000 {
                     let row = ui.invoke_hit_row_at(y as f32);
+                    if row >= 0 && ui.invoke_hit_cell_at(150., y as f32) != row {
+                        return 0;
+                    }
                     if row == 0 {
                         found |= 1;
                     }
@@ -132,6 +138,11 @@ mod probe {
                     }
                     if row == -2 {
                         found |= 8;
+                    }
+                    if ui.invoke_hit_cell_at(-1., y as f32) != -2
+                        || ui.invoke_hit_cell_at(1000., y as f32) != -2
+                    {
+                        return 0;
                     }
                 }
                 found

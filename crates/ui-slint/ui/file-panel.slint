@@ -351,6 +351,12 @@ export component FilePanel inherits FocusScope {
         let row = floor((y - list.absolute-position.y - list.viewport-y) / root.row-h);
         return row >= 0 && row < root.rows.length ? row : -1;
     }
+    public function drop-cell-at(x: length, y: length) -> int {
+        if (x < list.absolute-position.x || x >= list.absolute-position.x + list.width) {
+            return -2;
+        }
+        return root.drop-row-at(y);
+    }
     changed drag-client-y => {
         root.drop-target-row(root.pane-id, max(-1, root.drop-row-at(root.drag-client-y)));
     }

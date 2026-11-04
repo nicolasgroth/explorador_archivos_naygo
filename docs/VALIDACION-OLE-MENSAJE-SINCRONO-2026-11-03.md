@@ -35,9 +35,11 @@ La lectura inmediata del callback `changed drag-client-y` no produjo valores al 
 el mensaje nativo: su evaluación no es síncrona. Un cambio experimental en `FilePanel` extrae
 la fórmula a una función pública consultable en el hilo UI y comprueba límites verticales del
 viewport: dos filas, espacio vacío y fuera de lista produjeron máscara 15. Al restaurar el scroll
-a la fila 30 de un modelo de 40 se detectó hasta la 39. Un intento previo con foco no desplazó
+a la fila 30 de un modelo de 40 se detectó hasta la 39. La consulta 2D rechaza puntos fuera
+de los límites horizontales del ListView; la ventana de prueba usó factor de escala 1, no prueba
+otros DPI. Un intento previo con foco no desplazó
 el fixture; no se concluyó un defecto de producto. Falta enlazar la instancia repetida correcta de
-AppWindow, validar coordenadas X/DPI, estado de modelo y carpeta, cierre durante el callback y
+AppWindow, validar escalas DPI adicionales, estado de modelo y carpeta, cierre durante el callback y
 probar con `WorkspaceCtrl` y cambios de sesión reales. Este experimento no fija el destino OLE.
 
 Condiciones si se explora esta vía: instalar y retirar subclass en el hilo propietario; verificar
