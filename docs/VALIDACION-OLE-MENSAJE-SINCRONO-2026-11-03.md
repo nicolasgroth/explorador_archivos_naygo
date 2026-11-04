@@ -54,3 +54,37 @@ resizing, cierre, timeout, callback posterior y origen colgado con fixtures; no 
 indica que puede esperar a otro hilo o vencer, pero ignora timeout en la misma cola.
 [SetWindowSubclass](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-setwindowsubclass)
 no cuenta referencias del callback, por lo que el ciclo de vida debe gestionarse explícitamente.
+
+## Invariantes para una implementación futura
+
+1. Debe existir un punto de captura documentado para el Drop que vincule simultáneamente HWND,
+   posición de pantalla, escala, panel y carpeta. No deducir el panel desde el foco, ni confiar en
+   un último hover que puede estar atrasado. Cualquier `Leave` de OLE puede preceder al payload.
+2. Un hit-test de fila necesita rectángulo de lista en ambas dimensiones, scroll, altura de fila,
+   índice visible y estado del modelo. La identidad capturada debe ser una ruta propia, no un
+   índice reutilizable después de un watcher, ordenamiento o cambio de filtro. Diferenciar fila,
+   espacio vacío y fuera de lista; punto fuera del área, geometría ausente, overlay o lectura no
+   coherente deben rechazar el gesto. Probar nombre de fila que cambia y carpetas que desaparecen.
+3. Si se publica geometría en Rust, cada cambio de layout, viewport, escala, contenido visible,
+   carpeta, pestaña, sesión, cierre y creación de panel debe invalidar la versión antes de que
+   pueda capturarse; no se ha identificado aún un punto central que acredite ese invariante.
+   Una firma hash no sustituye una versión monótona ni pruebas de intercalaciones. El callback
+   `changed drag-client-y` es diferido: no usar un setter seguido de lectura como hit-test.
+4. El hilo UI nunca espera disco ni al proveedor OLE. Un mensaje nativo enviado desde STA tiene
+   timeout y se descarta si el hilo UI está ocupado o el préstamo del controlador no está libre;
+   capturar panics antes de cruzar la frontera `extern`, y no usar punteros a memoria de stack en
+   mensajes cuyo callback puede terminar después del timeout. Identificadores de petición deben
+   impedir cruces entre drops concurrentes y referencias deben sobrevivir hasta terminar callback.
+5. La preparación y cualquier apertura de Operaciones ocurren después de fijar destino. El
+   resultado tardío usa exactamente la ruta e identidad capturadas o se rechaza; navegación o
+   cierre posteriores nunca lo redirigen. Cancelación limpia staging y no crea un destino parcial.
+6. Antes de integrar se requieren pruebas de capturas simultáneas, cambios antes de leer el primer
+   evento UI, durante preparación y antes de confirmar, cambios de DPI/movimiento de ventana,
+   scroll parcial, reaprovechamiento de `PaneId`, pestañas, sesiones y errores por reentrancia,
+   timeout o ventana destruida. Medir latencia y comparar accesibilidad UIA de ventana real.
+
+Un experimento mínimo con Slint 1.16 intentó acceder `repeated[i].hit()` desde el padre y falló
+en compilación (`Unknown unqualified identifier 'repeated'`). No se comprobó una API pública
+estable para direccionar el `FilePanel` de un repeater por índice desde AppWindow. El resultado
+no descarta otras arquitecturas; las alternativas de instrumentación o componentes retenidos por
+ID deben evaluarse sin introducir un supuesto de acceso inexistente.
