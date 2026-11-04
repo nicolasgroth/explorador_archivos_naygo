@@ -15,9 +15,30 @@ El callback lento duró 250 ms: el emisor recibió timeout antes de terminar el 
 también ejecutó una llamada anidada en el mismo hilo y rechazó mediante un flag de ocupado.
 El fixture reproducible está en `scripts/probe-drop-ui-rpc.ps1`, fuera de distribución.
 
-La prueba no valida subclass de winit, selección de fila o panel, cambios de layout, rendimiento,
+La primera prueba no valida subclass de winit, selección de fila o panel, cambios de layout, rendimiento,
 accesibilidad, ciclo de vida tras cerrar la ventana ni reentrancia de Slint. No basta para afirmar
 que el destino capturado coincida con lo visible al usuario.
+
+Un segundo fixture, `crates/ui-slint/examples/drop_subclass_probe.rs`, usa una ventana Slint con
+backend winit/software real. El 2026-11-03 instaló el subclass en el hilo UI, procesó un mensaje
+desde otro hilo que modificó una propiedad Slint, detectó reentrada simulada, observó timeout y
+callback tardío, y retiró el subclass antes de cerrar. Resultado: `winit_subclass=ok;
+slint_property=1; reentrancy=rejected; timeout_and_late_callback=ok; subclass_removed=ok`.
+El request sintético usa un ID, registro `Mutex`, estado atómico y `Arc`: al vencer timeout se
+marca abandonado y elimina la entrada; el callback conserva su `Arc` y no puede completar la
+respuesta tardía. Se comprueba que su última referencia se libere. Es un escenario controlado,
+no una auditoría de todas las intercalaciones concurrentes. Un primer intento de obtener el HWND antes del event loop produjo `NotSupported`; el fixture espera
+la realización con un timer. La prueba no invoca la app, el `WorkspaceCtrl`, ni hit-test de filas;
+no ejercita UI Automation, cierre durante callback ni todas las carreras de memoria tras timeout.
+
+La lectura inmediata del callback `changed drag-client-y` no produjo valores al consultar desde
+el mensaje nativo: su evaluación no es síncrona. Un cambio experimental en `FilePanel` extrae
+la fórmula a una función pública consultable en el hilo UI y comprueba límites verticales del
+viewport: dos filas, espacio vacío y fuera de lista produjeron máscara 15. Al restaurar el scroll
+a la fila 30 de un modelo de 40 se detectó hasta la 39. Un intento previo con foco no desplazó
+el fixture; no se concluyó un defecto de producto. Falta enlazar la instancia repetida correcta de
+AppWindow, validar coordenadas X/DPI, estado de modelo y carpeta, cierre durante el callback y
+probar con `WorkspaceCtrl` y cambios de sesión reales. Este experimento no fija el destino OLE.
 
 Condiciones si se explora esta vía: instalar y retirar subclass en el hilo propietario; verificar
 identidad de ventana y thread; rechazar reentrancia y `RefCell` ocupado; timeout breve sin llamar

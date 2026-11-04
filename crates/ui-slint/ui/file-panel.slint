@@ -344,10 +344,15 @@ export component FilePanel inherits FocusScope {
     // coordenadas lógico de cliente; `viewport-y` es negativo al bajar, igual que en body-touch.
     // Se ejecuta con cada DragOver que Rust recibe de OLE, no durante el listado ni en el UI thread
     // haciendo I/O. La comprobación de rango impide convertir el espacio vacío en un destino.
+    public function drop-row-at(y: length) -> int {
+        if (y < list.absolute-position.y || y >= list.absolute-position.y + list.height) {
+            return -2;
+        }
+        let row = floor((y - list.absolute-position.y - list.viewport-y) / root.row-h);
+        return row >= 0 && row < root.rows.length ? row : -1;
+    }
     changed drag-client-y => {
-        let row = floor((root.drag-client-y - list.absolute-position.y - list.viewport-y) / root.row-h);
-        root.drop-target-row(root.pane-id,
-            row >= 0 && row < root.rows.length ? row : -1);
+        root.drop-target-row(root.pane-id, max(-1, root.drop-row-at(root.drag-client-y)));
     }
     // Al NAVEGAR (cambia la carpeta del panel), el viewport vuelve arriba y el próximo foco se
     // revela otra vez: si no, la carpeta nueva heredaría el offset de la anterior.
