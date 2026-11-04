@@ -9,10 +9,11 @@ Operaciones o esperar al proveedor. Una posible vía es solicitar un hit-test al
 ventana mediante un mensaje Win32 con timeout. No está implementada ni aceptada para producción.
 
 Una prueba local con ventana WinForms STA sintética y oculta, no la ventana Slint de Naygo,
-produjo `ping=42; reentrancy=rejected; timeout_ms=29; callback_completed_after_timeout=true`.
+instaló y retiró un subclass en su hilo propietario y produjo `ping=42; reentrancy=rejected;
+timeout_ms=29; callback_completed_after_timeout=true; late_response_discarded=true`.
 El callback lento duró 250 ms: el emisor recibió timeout antes de terminar el callback. La prueba
 también ejecutó una llamada anidada en el mismo hilo y rechazó mediante un flag de ocupado.
-El fixture local está en `target/agent-out/probe-ole-timeout.ps1`, fuera de distribución.
+El fixture reproducible está en `scripts/probe-drop-ui-rpc.ps1`, fuera de distribución.
 
 La prueba no valida subclass de winit, selección de fila o panel, cambios de layout, rendimiento,
 accesibilidad, ciclo de vida tras cerrar la ventana ni reentrancia de Slint. No basta para afirmar
