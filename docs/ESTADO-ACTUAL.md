@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 
 ## Distribución local instalada — 2026-11-08
 
-La versión Windows 0.5.4 está compilada, instalada y abierta (proceso Naygo 53536). El commit integrado es
-`c7a9f105`; gate aislado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y formato
+La versión Windows 0.5.4 está compilada, instalada y abierta (proceso Naygo 53536). El commit
+integrado de producto es `c7a9f105`; gate aislado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y formato
 correcto. El build supervisado tuvo un pico de 10,78 GiB. El setup terminó con código 0 y el
 instalador preservó la configuración existente. El EXE instalado coincide con el de Release;
 el ZIP portable no incluye PDB. Setup y portable siguen sin firma Authenticode. La instalación
@@ -20,8 +20,11 @@ queda arrancada tras documentar el cierre de esta entrega; no se publica un rele
 - `naygo.exe` Release: SHA-256
   `ae97c9a0d68fb56fec8e698bb2b6fdb855b02f1d4f6711e3835e5bd5ed38496c`.
 
-La aceptación interactiva final de OLE con Explorer, Directory Opus y 7-Zip, y el CI de la
-rama integrada, siguen pendientes. No declarar compatibilidad general hasta registrar esa matriz.
+La corrida manual de CI [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478)
+se lanzó sobre `a28d2810`: benchmark Windows aprobado; Linux falló en `core/platform` (972
+aprobadas, 27 fallidas); el gate Windows seguía en ejecución al actualizar este registro. La
+aceptación interactiva final de OLE con Explorer, Directory Opus y 7-Zip sigue pendiente. No
+declarar compatibilidad general hasta registrar esa matriz.
 
 ## Distribución local instalada — 2026-11-02 (histórico)
 

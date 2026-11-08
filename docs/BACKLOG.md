@@ -48,9 +48,11 @@
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
 >   construcción repetida de nombres que no se muestran en el historial.
 >   Incorporado en `ac7418f1`, validado en el gate conjunto e instalado el 2026-11-02.
-> - [ ] CI Windows actualizado para la rama integrada; el gate local pasó, pero se debe revisar
->   la corrida disparada por el push. Linux conserva fallos de compatibilidad ya documentados y
->   sigue en segundo plano frente a la prioridad Windows.
+> - [ ] CI remoto de la rama integrada: corrida manual
+>   [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478)
+>   sobre `a28d2810`; benchmark aprobado, Linux falló 972/27 en core/platform y gate Windows
+>   seguía en ejecución al actualizar el registro. Revisar el desenlace del gate; Linux se mantiene
+>   en segundo plano frente a la prioridad Windows.
 > - [x] Operaciones: corregida la presentación de `OpMsg::Failed`: conserva el error
 >   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
 >   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534
@@ -65,6 +67,12 @@
 >   Causa comprobada en `saved_search::tests::non_utf8_roots_round_trip_without_changing_utf8_wire_shape`:
 >   la aserción busca JSON compacto, pero `to_bytes` usa `serde_json::to_vec_pretty`; la aserción
 >   falla por espacios antes de comprobar el round-trip. No atribuir pérdida de datos a ese fallo.
+>   Repetición del 2026-11-08 en el commit `a28d2810`, corrida
+>   [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478):
+>   Ubuntu 26.04 falló en el mismo job (`972` aprobadas, `27` fallidas); entre los casos visibles
+>   siguen apareciendo expectativas de semántica de rutas Windows en pruebas del core. Formato e
+>   i18n pasaron; los pasos Linux siguientes se omitieron. El benchmark remoto pasó. No prueba un
+>   fallo funcional en Windows; Windows Gate sigue corriendo en esa misma ejecución.
 > - [ ] W-12/Papelera Windows: el gate remoto de la corrida 41204625942 falló en
 >   `enviar_un_archivo_a_papelera` y `papelera_recicla_el_junction_sin_seguir_su_destino`:
 >   no se obtuvo identidad directa para el archivo y no se localizó el junction al restaurar.
