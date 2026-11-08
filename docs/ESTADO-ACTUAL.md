@@ -34,7 +34,9 @@ fijados por SHA completos verificados. Ambos declaran Node 24. En el despacho ma
 queda activo por defecto y Linux/benchmark pasan a optativos; así el gate prioritario no ejecuta
 por accidente la matriz Linux que sigue pendiente. La corrida de comprobación
 [42512780530](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42512780530)
-está en curso; falta confirmar los dos jobs y revisar sus logs por advertencias de Node.
+terminó con gate Windows y benchmark aprobados; el gate ejecutó 1.572 tests, 9 ignorados, Clippy,
+formato, pins, prueba SignPath e i18n. Linux fue omitido por diseño. Revisé los logs de ambos jobs:
+no contienen advertencias de Node 20. No requiere regenerar el instalador porque no cambió el producto.
 
 La reanudación de la aceptación OLE no pudo capturar la ventana: Computer Use devolvió
 `FrameArrived timed out`. No se interactuó con la aplicación en ese intento; sigue pendiente la
