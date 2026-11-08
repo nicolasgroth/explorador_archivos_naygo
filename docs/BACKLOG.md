@@ -1184,7 +1184,11 @@ septiembre siguen siendo históricos hasta cerrar la nueva validación.
   invocar el enumerador al restaurar el recibo directo; gate, Clippy y distribución final verificados.
 - [x] W-12 — acciones CI/release fijadas a cinco SHAs verificados por API; YAML, bloques PowerShell
   `pwsh` y `scripts/check_action_pins.py` pasan localmente.
-- [ ] W-12 — confirmar el workflow actualizado en un runner Windows Server 2025.
+- [x] W-12 — workflow actualizado confirmado en runner Windows Server 2025:
+  corrida [42512780530](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42512780530)
+  con gate Windows aprobado (1.572 tests, 9 ignorados, Clippy y formato); benchmark aprobado.
+  Linux quedó omitido por diseño. Los logs no muestran avisos de Node 20.
+  Las notas fechadas abajo documentan revalidaciones anteriores y se conservan como historial.
   Reconsulta remota 2026-10-30: la última CI es la corrida `34155852541` del 7 de septiembre,
   commit `abdef402babd2c136744c67ee9833c2f67bf0f16`, fallida al restaurar Papelera; Clippy se
   omitió. El workflow y `trash.rs` locales difieren de ese commit, así que no valida el código actual.
