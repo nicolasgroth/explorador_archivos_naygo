@@ -7,11 +7,11 @@ SPDX-License-Identifier: MIT
 ## Distribución local instalada — 2026-11-08
 
 La versión Windows 0.5.4 está compilada, instalada y abierta (proceso Naygo 53536). El commit
-integrado de producto es `c7a9f105`; gate aislado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y formato
-correcto. El build supervisado tuvo un pico de 10,78 GiB. El setup terminó con código 0 y el
+integrado de producto es `c7a9f105`; gate local aislado: 1.572 pruebas aprobadas, 9 ignoradas,
+Clippy sin warnings y formato correcto. El build supervisado tuvo un pico de 10,78 GiB. El setup terminó con código 0 y el
 instalador preservó la configuración existente. El EXE instalado coincide con el de Release;
 el ZIP portable no incluye PDB. Setup y portable siguen sin firma Authenticode. La instalación
-queda arrancada tras documentar el cierre de esta entrega; no se publica un release de GitHub.
+se dejó abierta tras la instalación; no se publicó un release de GitHub.
 
 - Setup `dist/Naygo-0.5.4-setup.exe`: SHA-256
   `3eee7fae42bd441fda8524408f9099b3442ff919b3282863cf425982dd21cff9`.
@@ -21,10 +21,11 @@ queda arrancada tras documentar el cierre de esta entrega; no se publica un rele
   `ae97c9a0d68fb56fec8e698bb2b6fdb855b02f1d4f6711e3835e5bd5ed38496c`.
 
 La corrida manual de CI [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478)
-se lanzó sobre `a28d2810`: benchmark Windows aprobado; Linux falló en `core/platform` (972
-aprobadas, 27 fallidas); el gate Windows seguía en ejecución al actualizar este registro. La
-aceptación interactiva final de OLE con Explorer, Directory Opus y 7-Zip sigue pendiente. No
-declarar compatibilidad general hasta registrar esa matriz.
+se lanzó sobre `a28d2810`: gate Windows aprobado (1.571 tests, 9 ignorados, Clippy sin warnings,
+formato, pins de acciones, verificación de firma e i18n); benchmark aprobado. El job Linux falló
+en `core/platform` (972 aprobadas, 27 fallidas), registrado aparte en el backlog. La aceptación
+interactiva final de OLE con Explorer, Directory Opus y 7-Zip sigue pendiente; no declarar
+compatibilidad general hasta registrar esa matriz.
 
 ## Distribución local instalada — 2026-11-02 (histórico)
 

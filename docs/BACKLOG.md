@@ -48,11 +48,11 @@
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
 >   construcción repetida de nombres que no se muestran en el historial.
 >   Incorporado en `ac7418f1`, validado en el gate conjunto e instalado el 2026-11-02.
-> - [ ] CI remoto de la rama integrada: corrida manual
+> - [x] CI remoto Windows de la rama integrada: corrida manual
 >   [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478)
->   sobre `a28d2810`; benchmark aprobado, Linux falló 972/27 en core/platform y gate Windows
->   seguía en ejecución al actualizar el registro. Revisar el desenlace del gate; Linux se mantiene
->   en segundo plano frente a la prioridad Windows.
+>   sobre `a28d2810`; gate Windows aprobado: 1.571 tests, 9 ignorados, Clippy sin warnings,
+>   formato, pins, verificación SignPath e i18n; benchmark aprobado. El workflow total quedó
+>   fallido solo por Linux (972 aprobadas, 27 fallidas), que se sigue por separado en L-03/W-12.
 > - [x] Operaciones: corregida la presentación de `OpMsg::Failed`: conserva el error
 >   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
 >   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534
@@ -71,8 +71,8 @@
 >   [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478):
 >   Ubuntu 26.04 falló en el mismo job (`972` aprobadas, `27` fallidas); entre los casos visibles
 >   siguen apareciendo expectativas de semántica de rutas Windows en pruebas del core. Formato e
->   i18n pasaron; los pasos Linux siguientes se omitieron. El benchmark remoto pasó. No prueba un
->   fallo funcional en Windows; Windows Gate sigue corriendo en esa misma ejecución.
+>   i18n pasaron; los pasos Linux siguientes se omitieron. El benchmark remoto y el gate Windows
+>   pasaron; el fallo Linux no prueba un fallo funcional en Windows.
 > - [ ] W-12/Papelera Windows: el gate remoto de la corrida 41204625942 falló en
 >   `enviar_un_archivo_a_papelera` y `papelera_recicla_el_junction_sin_seguir_su_destino`:
 >   no se obtuvo identidad directa para el archivo y no se localizó el junction al restaurar.

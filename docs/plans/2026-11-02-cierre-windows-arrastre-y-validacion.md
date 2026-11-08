@@ -110,10 +110,11 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
   EXE del ZIP igual a release; instalación terminó con código 0 y preservó settings, sesión,
   favoritos y plantillas. El README y las capturas quedaron actualizados; hashes registrados en
   `docs/ESTADO-ACTUAL.md`.
-- [ ] CI manual sobre `a28d2810` (run `42504789478`): benchmark aprobado; Linux falló 972/27 en
-  `core/platform`; gate Windows aún estaba en ejecución al registrar. Anotar su desenlace y
-  completar la aceptación OLE real con Explorer, Directory Opus y 7-Zip antes de declarar
-  compatibilidad cerrada.
+- [x] CI manual sobre `a28d2810` (run `42504789478`): gate Windows aprobado (1.571 tests, 9
+  ignorados, Clippy, formato, pins, prueba SignPath e i18n); benchmark aprobado. El workflow
+  global quedó fallido por Linux, con 972 aprobadas y 27 fallidas en `core/platform`; esa incidencia
+  se sigue aparte. Completar la aceptación OLE real con Explorer, Directory Opus y 7-Zip antes de
+  declarar compatibilidad cerrada.
 - [ ] Firma: continuar preparación y verificar requisitos de SignPath OSS; la aprobación de la
   organización, credenciales y la primera firma real dependen del servicio y de Nicolás. No
   afirmar firma ni publicación antes de verificarlas.
