@@ -10,44 +10,32 @@
 > pendientes de Windows. Un drop interno tardío exige selector. La cancelación antes de GetData
 > no interrumpe una llamada COM bloqueante; se aplica cuando esta retorna.
 >
-> **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> **Solicitudes Windows 0.5.4, 2026-10-29 — estado actual:**
 > - [x] Señal visual durante arrastre: destacar con borde el panel de archivos o la Bandeja bajo
 >   el cursor, incluidos paneles con pestañas, sin cambiar el foco del teclado. Integrado en
 >   `715904d4`; aceptación visual manual queda pendiente junto con la matriz Windows.
 > - [ ] Deseable futuro: opción desactivada por defecto para activar el panel al pasar el mouse;
 >   evaluar demora configurable, accesibilidad y riesgo de cambios de foco involuntarios. El
 >   resaltado del destino durante un arrastre es independiente y no debe cambiar el foco.
-> - [ ] Validación aislada por rama: una compilación de paneles vio un núcleo anterior mientras
->   varios worktrees compartían `CARGO_TARGET_DIR`; la causa exacta no está confirmada. Repetir gates de seguridad OLE, recuento y
->   receptor experimental con directorios independientes antes de integrar; las pruebas OLE
->   focalizadas ya se ejecutaron por separado, pero el gate compartido no basta como evidencia.
->   La rama de seguridad OLE pasó el gate aislado (1539 pruebas, 9 ignoradas, Clippy y formato);
->   La combinación de recuento, seguridad y paneles pasó el gate aislado (1553 pruebas, 9
->   ignoradas, Clippy y formato); queda pendiente la validación del receptor experimental.
+> - [x] Gate final aislado: receptor OLE, recuento, seguridad y paneles pasaron con directorio
+>   `CARGO_TARGET_DIR` dedicado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y
+>   formato correcto. La prueba manual con Explorer/Directory Opus/7-Zip sigue pendiente.
 > - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
 > - [x] Temas: dar a Propiedades, Vista previa, Operaciones y demás paneles informativos una
 >   apariencia legible y activa en todos los temas, conservando una señal clara del foco real.
-> - [ ] Actualizar README y capturas representativas al terminar las mejoras visuales; verificar
->   que las imágenes correspondan a la versión real y no contengan información privada.
-> - [ ] **Prioridad Windows, arrastre OLE:** `IDropTarget::Drop` puede devolver `DROPEFFECT_MOVE`
->   al usar Shift antes de que el usuario confirme o el motor termine. Según
->   [Microsoft](https://learn.microsoft.com/en-us/windows/desktop/api/oleidl/nf-oleidl-idroptarget-drop),
->   el origen puede actuar sobre sus datos en respuesta a ese efecto. Es un riesgo del contrato;
->   no se ha demostrado eliminación con Explorer ni probado la instalación concreta. Revisar también
->   retornos tempranos con fallo/cancelación y efectos permitidos por la fuente; corregir antes de
->   integrar el receptor experimental y ensayar exclusivamente con fixtures desechables.
->   En la instancia experimental, cancelar un arrastre con Shift desde Directory Opus conservó
->   íntegro el archivo sintético original y no creó nada en el destino; al confirmar Mover, el
->   origen desapareció y la copia conservó el SHA-256 original. No equivale a probar Explorer.
->   Protección incorporada en `73ff7ed6`, validada en el gate conjunto e instalada el 2026-11-02;
->   queda pendiente la comprobación nativa con Explorer.
-> - [ ] **Prioridad Windows, destino del drop asíncrono:** el receptor experimental resuelve las
->   coordenadas al entregar el staging, después de una preparación que puede ser larga. Si el
->   layout o la carpeta cambian entretanto, podría escoger otro destino; el fallback al panel activo
->   también requiere revisión. Fijar destino y carpeta al recibir el drop, asegurar cancelación
->   visible sin cambiar el hit-test, y probar navegación, cierre y reordenamiento con fixtures.
+> - [x] Actualizar README y dos capturas representativas con Naygo 0.5.4, temas `dark-blue` y
+>   `paper`, usando un perfil aislado y datos sintéticos. Las imágenes se inspeccionaron; no
+>   sustituyen la matriz manual de aceptación.
+> - [x] **Prioridad Windows, efecto OLE:** se cubrieron los retornos de cancelación/error y se
+>   negocian los efectos permitidos antes de indicar éxito. La prueba manual previa con Directory
+>   Opus verificó cancelar y mover con una fixture y SHA-256; aún no sustituye Explorer ni la
+>   matriz final. Código incorporado en la build 0.5.4 instalada el 2026-11-08.
+> - [x] **Prioridad Windows, destino del drop asíncrono:** consulta sincrónica a UI antes de
+>   `GetData`, captura panel/ruta, rechaza el fallback al panel activo y confirma la ruta completa;
+>   si el panel ya cambió, abre el selector explícito. Limitaciones y matriz manual pendientes en
+>   [el plan de cierre Windows](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
 > - [x] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
@@ -60,15 +48,14 @@
 >   cinco carpetas incluida la raíz; Nicolás autorizó corregirlo. También autorizó evitar la
 >   construcción repetida de nombres que no se muestran en el historial.
 >   Incorporado en `ac7418f1`, validado en el gate conjunto e instalado el 2026-11-02.
-> - [ ] CI del experimento OLE [41245044960](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41245044960):
->   el gate Windows falló en los dos tests que esperan español; la rama experimental aún no
->   contiene el ajuste de idioma ya validado en la rama principal de avance. Platform pasó
->   101 tests (6 ignorados); repetir CI al integrar. Linux mantiene fallos previamente anotados.
-> - [ ] Operaciones: corregida localmente la presentación de `OpMsg::Failed`: conserva el error
+> - [ ] CI Windows actualizado para la rama integrada; el gate local pasó, pero se debe revisar
+>   la corrida disparada por el push. Linux conserva fallos de compatibilidad ya documentados y
+>   sigue en segundo plano frente a la prioridad Windows.
+> - [x] Operaciones: corregida la presentación de `OpMsg::Failed`: conserva el error
 >   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
 >   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534
->   pruebas aprobadas, nueve ignoradas, Clippy y formato. Empaquetada el 2026-11-01; falta
->   instalar y validar la nueva distribución.
+>   pruebas aprobadas, nueve ignoradas, Clippy y formato. Incluida en 0.5.4, instalada el
+>   2026-11-08 y cubierta por el gate integrado de 1.572 pruebas.
 > - [ ] L-03/W-12: la corrida remota [41204625942](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/41204625942)
 >   sobre `68d3fc38` ejecutó pruebas nativas en Ubuntu 26.04: core terminó con 970 aprobadas y
 >   27 fallidas. Hay casos con supuestos de rutas Windows y pruebas de serialización de rutas no
@@ -117,15 +104,17 @@
 > - [x] Empaquetado: corregida la mezcla de un setup anterior con un ZIP nuevo cuando falta Inno;
 >   el preflight preserva dist y aborta si existe setup de la misma versión. La prueba aislada
 >   pasa y preserva también el manifiesto. Empaquetado normal supervisado y hashes verificados.
-> - [ ] Arrastrar carpetas anidadas desde 7-Zip al panel, preservando contenido y carpetas vacías.
+> - [x] Receptor integrado para arrastrar carpetas anidadas desde 7-Zip al panel, preservando
+>   contenido y carpetas vacías.
 >   Prueba integrada experimental 2026-11-01: Nicolás arrastró y confirmó `E2 fixture` desde
 >   7-Zip a Slint/Winit; se verificaron 259 archivos por SHA-256, cuatro subcarpetas (una vacía)
->   y ausencia de entradas faltantes o adicionales. Falta cubrir los demás casos, integrar y
->   regenerar distribución; la instalación habitual aún no contiene esta corrección.
->   El staging actual de `CF_HDROP` temporal rechaza explícitamente cualquier origen que no sea
->   archivo (`open_ephemeral_hdrop_files`). Debe retener los contenidos antes de que 7-Zip borre
->   el temporal, sin bloquear la interfaz innecesariamente; probar también el arrastre OLE real,
->   archivos mezclados, errores y estructuras grandes. La regresión anterior cubre solo archivos.
+>   y ausencia de entradas faltantes o adicionales. La implementación ampliada quedó integrada,
+>   pasó el gate aislado y está en la 0.5.4 instalada el 2026-11-08. La matriz adicional de fuentes,
+>   conflictos y cancelación aún requiere aceptación manual.
+>   Estado del hallazgo inicial: `open_ephemeral_hdrop_files` se amplió para retener árboles antes
+>   de que 7-Zip retire el temporal, fuera del hilo UI. El receptor también maneja objetos virtuales
+>   en staging y conserva carpetas vacías. Esto quedó integrado en 0.5.4; la matriz manual de
+>   archivos mezclados, errores, tamaño y fuentes externas sigue abierta.
 >   Revisión adicional: el callback espera como máximo dos segundos a que el worker abra los
 >   handles y luego retorna aunque no estén listos; enumerar un árbol sin resolver esa carrera no
 >   garantiza conservar árboles grandes. Investigar la captura de la raíz temporal completa y su

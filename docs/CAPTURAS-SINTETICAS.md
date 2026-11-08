@@ -20,3 +20,15 @@ hay nombres, rutas, correo, datos del equipo ni otras ventanas privadas. Si apar
 captura y corregir el entorno. No presentar capturas editadas como imágenes originales de la app.
 Registrar versión, tema, funciones visibles y fecha; mantener en el backlog cualquier imagen nueva
 que aún no tenga inspección visual. El fixture solo prepara datos: no captura ni valida la interfaz.
+
+## Capturas actualizadas 2026-11-08
+
+- `assets/screenshots/naygo-multipanel.png`: Naygo 0.5.4, tema `dark-blue`, dos paneles de
+  archivos y Propiedades; barra compacta, 1020×780 px.
+- `assets/screenshots/naygo-minimal.png`: Naygo 0.5.4, tema `paper`, disposición Minimalista;
+  1020×780 px.
+
+Ambas imágenes son capturas directas de la ventana usando el ejecutable del release, con perfil
+aislado y los archivos sintéticos de `D:\NaygoDemo`. Se inspeccionaron antes de incorporarlas:
+no contienen carpetas personales, nombres de cuenta ni capacidad real de discos. Las capturas no
+validan la matriz interactiva de arrastre OLE.

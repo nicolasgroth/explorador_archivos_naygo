@@ -7,14 +7,17 @@ SPDX-License-Identifier: MIT
 ## Objetivo y estado
 
 Preparar una entrega Windows integrada, priorizando el arrastre entre aplicaciones, sin perder
-datos ni congelar la interfaz. La base instalada es 0.5.4 de avance: paneles auxiliares, cierre
-automático configurable de Operaciones, recuentos y protección del efecto OLE ya están integrados.
-El gate conjunto pasó 1553 pruebas, 9 ignoradas, Clippy y formato; el instalador no tiene firma.
-No volver a implementar estos puntos: verificar su comportamiento real y corregir regresiones.
+datos ni congelar la interfaz. La entrega local 0.5.4 integra paneles auxiliares, cierre
+automático configurable de Operaciones, recuentos, protección del efecto OLE y un receptor STA que
+captura el destino antes de consultar el origen. El gate conjunto pasó 1.572 pruebas, 9 ignoradas,
+Clippy y formato. El build supervisado se instaló localmente y preservó la configuración; el setup
+no tiene firma. README y capturas sintéticas fueron actualizados, y el portable y setup están en
+`dist/`. Falta completar la aceptación OLE interactiva y revisar el CI posterior al push.
 
-Una rama experimental recibió una carpeta real desde 7-Zip 24.07 y conservó 259 archivos y cuatro
-subcarpetas, una vacía, contrastados por SHA-256. No está en la instalación: resolver el destino
-asíncrono y la cancelación visible, además de ampliar las pruebas, antes de integrarla.
+La prueba E2 anterior recibió desde 7-Zip 24.07 una carpeta con 259 archivos y cuatro
+subcarpetas, una vacía, contrastados por SHA-256. La nueva arquitectura ya está integrada, pero
+esa aceptación se debe repetir sobre la build final: la prueba anterior no demuestra el handshake,
+la confirmación ni la cancelación de esta versión.
 
 ## Fundamento y elección técnica
 
@@ -38,32 +41,34 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 
 ### 1. Fijar el destino y proteger datos
 
-- [ ] Diseñar una instantánea inmutable del destino asociado al momento de soltar: panel, ruta o
-  carpeta bajo el cursor, geometría y versión de la vista. Debe cubrir cambios entre el evento
-  OLE y su procesamiento por UI, además de cambios durante la extracción; no basta con resolver
-  coordenadas cuando termina el staging.
-- [ ] El destino puede conservar la ruta elegida o rechazar la operación si ya no es válido; no
-  redirigir silenciosamente al panel activo. Confirmar siempre la ruta real antes de escribir.
-- [ ] Evitar el efecto `MOVE` prematuro y respetar efectos permitidos, modificadores y confirmación;
-  mantener origen y destino intactos en cancelaciones, errores y conflictos no resueltos.
-- [ ] Probar cambios de carpeta, cierre/reordenamiento de paneles y ventanas, redimensionamiento,
-  carpetas bajo cursor y dos drops simultáneos. Cubrir que cancelar no deje parciales ni staging.
+- [x] Antes de `GetData`, el STA solicita al hilo UI el panel Files bajo el punto del drop y captura
+  su id y ruta. Un destino inválido, ocupado por otro tipo de panel o que no se puede consultar se
+  rechaza; no hay fallback al panel activo. Si la ruta ya no corresponde al panel tras la
+  preparación, la UI pide elegir explícitamente otro panel abierto. La subcarpeta se elige
+  navegando a ella antes del drop.
+- [x] Confirmar con la ruta completa antes de escribir. La confirmación permite envolver rutas
+  largas y cancelar sin ejecutar la operación.
+- [x] Negociar los efectos permitidos y diferir la operación de Naygo hasta después de la
+  confirmación; respetar los modificadores de copia/movimiento recibidos y resolver conflictos por
+  el flujo habitual.
+- [ ] La consulta del destino ocurre antes de `GetData`, pero no sincroniza atómicamente todos los
+  mensajes de ratón ya encolados por Windows. Completar la matriz de cambios de carpeta, cierre y
+  reordenamiento de paneles, dos drops simultáneos y cancelación; verificar ausencia de parciales.
 
 ### 2. Recepción interoperable
 
-- [ ] Integrar selectivamente el receptor experimental con COM/OLE y el modelo de ventanas de
-  Slint; validar vida de objetos, marshalling y salida limpia del worker, sin E/S en UI.
-- [ ] Para rutas persistentes, usar el motor habitual; para temporales de 7-Zip, asegurar la vida
-  de todo el árbol antes de que el origen lo retire. Preservar carpetas vacías y rechazar rutas o
-  enlaces inseguros. No depender del nombre del directorio temporal como prueba de propiedad.
-- [ ] Para objetos virtuales negociar capacidades reales y materializar de forma acotada. Mantener
-  cancelación, progreso, colisiones e historial; si un origen no ofrece garantías suficientes,
-  fallar de forma explícita y segura en vez de anunciar éxito o copiar parcialmente en silencio.
-- [ ] Hacer visible la preparación cancelable sin modificar la geometría usada para seleccionar
-  el destino. Medir tiempo de respuesta, memoria, descriptores y coste de staging en árboles
-  pequeños y grandes, incluidos tiempos de `GetData` bloqueante y cancelación durante COM.
-- [ ] Revisar arrastres internos de Naygo y portapapeles copiar/cortar/pegar para no degradarlos;
-  no convertir el arrastre en portapapeles ni aplicar supuestos entre ambos mecanismos.
+- [x] Receptor OLE STA separado del hilo UI, con referencias COM conservadas durante el ciclo de
+  drop y preparación comunicada por canales. El hit-test se hace antes de pedir datos al origen.
+- [x] Rutas persistentes y árboles temporales `CF_HDROP`: copia acotada fuera de la UI, conserva
+  carpetas vacías, valida rutas/reparse points y limita archivos, carpetas y profundidad.
+- [x] Objetos virtuales `FILEDESCRIPTOR`/`FILECONTENTS`: materialización en staging antes del
+  motor habitual de operaciones. Se rechaza explícitamente un formato sin destino válido.
+- [x] Preparación visible y cancelable antes de completar la consulta de datos; el historial
+  diferencia archivos y carpetas y evita reconstruir listas completas de nombres no mostrados.
+  Una llamada COM bloqueante a `GetData` no se puede interrumpir: la solicitud de cancelación se
+  aplica cuando esa llamada retorna.
+- [x] Se conservaron las rutas de arrastre interno y el portapapeles como flujos separados; el
+  gate cubre regresiones automatizadas. La validación interactiva final sigue pendiente.
 
 ### 3. Matriz de aceptación Windows
 
@@ -90,17 +95,23 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 - [ ] Evaluar visualmente órbita respecto a cámara, colores, modos sólido/bordes/malla y colores
   base 3MF ya implementados; medir en equipos modestos. Texturas y materiales extendidos son una
   capacidad adicional, no declarar soporte integral; no agregarlos sin evaluar coste y alcance.
-- [ ] Actualizar README y capturas reales con datos sintéticos y sin rutas privadas; registrar qué
-  fue probado y mantener en backlog lo no aceptado. Consolidar entradas históricas contradictorias
-  sin borrar evidencia. Comprobar preview de texto y límites configurables en las otras máquinas
-  cuando exista acceso, sin asumir que se validó un sistema remoto.
+- [x] Actualizar README y dos capturas de Naygo 0.5.4 con perfil aislado, dos temas y datos
+  sintéticos; inspeccionadas sin rutas personales ni detalles de discos. Ver
+  `docs/CAPTURAS-SINTETICAS.md`.
+- [ ] Consolidar entradas históricas contradictorias sin borrar evidencia. Comprobar preview de
+  texto y límites configurables en las otras máquinas cuando exista acceso, sin asumir que se
+  validó un sistema remoto.
 
 ### 5. Entrega y pendientes externos
 
-- [ ] Unificar en la rama de avance, actualizar grafo, ejecutar pruebas, Clippy y formato; repetir
-  CI Windows. Ejecutar el build de distribución solo, con supervisor, verificar hashes, contenido,
-  PDB opcional y que ZIP/EXE instalado coincidan. Respaldar configuración, instalar, arrancar y
-  verificar respuesta y datos preservados; dejar setup en `dist/` y subir commits/documentación.
+- [x] Integrar en la rama de avance y actualizar Graphify. Gate local: 1.572 pruebas aprobadas,
+  9 ignoradas, Clippy sin warnings y formato limpio.
+- [x] Build supervisado de distribución: pico 10,78 GiB; ZIP y setup 0.5.4 creados. ZIP sin PDB,
+  EXE del ZIP igual a release; instalación terminó con código 0 y preservó settings, sesión,
+  favoritos y plantillas. El README y las capturas quedaron actualizados; hashes registrados en
+  `docs/ESTADO-ACTUAL.md`.
+- [ ] Repetir CI Windows después del push y completar la aceptación OLE real con Explorer,
+  Directory Opus y 7-Zip antes de declarar compatibilidad cerrada.
 - [ ] Firma: continuar preparación y verificar requisitos de SignPath OSS; la aprobación de la
   organización, credenciales y la primera firma real dependen del servicio y de Nicolás. No
   afirmar firma ni publicación antes de verificarlas.

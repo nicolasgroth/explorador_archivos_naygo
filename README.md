@@ -5,13 +5,13 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 incluidos, temas y sets de íconos personalizables.
 
 <p align="center">
-  <img src="assets/screenshots/naygo-multipanel.png" alt="Naygo con árbol de carpetas, dos paneles de archivos y panel de propiedades" width="100%">
+  <img src="assets/screenshots/naygo-multipanel.png" alt="Naygo 0.5.4 con dos paneles de archivos y propiedades en tema dark-blue" width="100%">
 </p>
 
-<p align="center"><em>Ejemplo sintético: árbol, dos carpetas en paralelo y propiedades, todo en una sola ventana. Las rutas y nombres mostrados son ficticios.</em></p>
+<p align="center"><em>Captura real de Naygo 0.5.4: dos carpetas y propiedades en una ventana. Tema dark-blue, barra compacta y datos sintéticos.</em></p>
 
-Las imágenes son ilustrativas y pueden corresponder a una versión anterior; no sustituyen una
-captura de la versión instalada. Para preparar capturas nuevas sin datos personales, ver
+Las capturas se actualizaron el 2026-11-08 con el ejecutable 0.5.4 y una configuración aislada;
+las rutas y nombres son ficticios. El procedimiento de captura está en
 [capturas sintéticas](docs/CAPTURAS-SINTETICAS.md).
 
 > **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
@@ -105,9 +105,12 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
 - Barra de unidades de disco con espacio libre/total y porcentaje usado; ícono propio para
   unidades USB y expulsión segura.
 - Integración con Windows: menú contextual del shell, "Abrir con", ejecutar `.exe` como
-  administrador con Shift o clic derecho, detección de cambios y de
-  dispositivos, drag & drop —incluidos archivos virtuales desde 7-Zip/WinRAR—, bandeja del
-  sistema y arranque opcional con el sistema.
+  administrador con Shift o clic derecho, detección de cambios y de dispositivos, y drag & drop
+  interno o externo desde Explorer y gestores de archivos. La recepción admite carpetas y archivos
+  virtuales de aplicaciones como 7-Zip/WinRAR, conserva el árbol temporal y confirma la ruta
+  completa del destino; si el panel cambia durante la preparación, exige elegir otro destino abierto.
+  La matriz de compatibilidad por aplicación sigue en validación. Incluye bandeja del sistema y
+  arranque opcional con Windows.
 - Sets de íconos: diez de fábrica (Lucide, Mono, Tabler, Material, Flat Color, Fluent,
   Outline, Tiles, Vivid y Pastel),
   cambio de ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
@@ -129,7 +132,9 @@ Naygo no obliga a trabajar siempre con una interfaz compleja. Una plantilla pued
 la carpeta actual para navegar con la máxima claridad, y otra puede reunir árbol, varios
 paneles de archivos y propiedades para operaciones más exigentes.
 
-![Naygo en su disposición minimalista de un panel con datos de demostración](assets/screenshots/naygo-minimal.png)
+![Naygo 0.5.4 en disposición Minimalista, tema paper y archivos sintéticos](assets/screenshots/naygo-minimal.png)
+
+<p align="center"><em>Disposición Minimalista en tema paper; solo muestra datos de demostración.</em></p>
 
 Las disposiciones se pueden guardar y restaurar. El árbol puede ser común a todos los paneles
 o estar enlazado a uno específico, para que cada zona de trabajo conserve su propio contexto.

@@ -4,7 +4,26 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-## Distribución local instalada — 2026-11-02
+## Distribución local instalada — 2026-11-08
+
+La versión Windows 0.5.4 está compilada, instalada y abierta (proceso Naygo 53536). El commit integrado es
+`c7a9f105`; gate aislado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y formato
+correcto. El build supervisado tuvo un pico de 10,78 GiB. El setup terminó con código 0 y el
+instalador preservó la configuración existente. El EXE instalado coincide con el de Release;
+el ZIP portable no incluye PDB. Setup y portable siguen sin firma Authenticode. La instalación
+queda arrancada tras documentar el cierre de esta entrega; no se publica un release de GitHub.
+
+- Setup `dist/Naygo-0.5.4-setup.exe`: SHA-256
+  `3eee7fae42bd441fda8524408f9099b3442ff919b3282863cf425982dd21cff9`.
+- Portable `dist/Naygo-0.5.4-portable.zip`: SHA-256
+  `8591f5965000baa683e5d99e757d03159466dfdbc485e9795e9fca45f7db54b9`.
+- `naygo.exe` Release: SHA-256
+  `ae97c9a0d68fb56fec8e698bb2b6fdb855b02f1d4f6711e3835e5bd5ed38496c`.
+
+La aceptación interactiva final de OLE con Explorer, Directory Opus y 7-Zip, y el CI de la
+rama integrada, siguen pendientes. No declarar compatibilidad general hasta registrar esa matriz.
+
+## Distribución local instalada — 2026-11-02 (histórico)
 
 La compilación Windows 0.5.4 de `2319e51d` pasó el gate conjunto: 1553 pruebas,
 9 ignoradas, Clippy y formato correctos. El build supervisado terminó con pico de 10,74 GiB.
