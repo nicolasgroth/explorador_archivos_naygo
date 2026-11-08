@@ -19,7 +19,7 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24; firma del commit verificada por GitHub API el 2026-11-08
 
       - name: Verificar Windows Server 2025
         shell: pwsh
@@ -114,7 +114,7 @@ jobs:
       - name: Subir naygo.exe sin firmar
         id: upload-unsigned-exe
         if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24; firma del commit verificada por GitHub API el 2026-11-08
         with:
           name: naygo-unsigned-exe-${{ github.run_id }}
           path: target/release/naygo.exe
@@ -191,7 +191,7 @@ jobs:
       - name: Subir setup.exe sin firmar
         id: upload-unsigned-setup
         if: vars.NAYGO_SIGNPATH_ENABLED == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24; firma del commit verificada por GitHub API el 2026-11-08
         with:
           name: naygo-unsigned-setup-${{ github.run_id }}
           path: ${{ runner.temp }}\naygo-signpath-setup-input\setup.exe

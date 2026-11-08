@@ -9,6 +9,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_linux:
+        description: Ejecutar validaciones Linux 26.04 además del gate Windows.
+        type: boolean
+        required: false
+        default: false
+      run_benchmark:
+        description: Ejecutar el benchmark informativo de Windows.
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "0 7 * * 1"
 
@@ -25,7 +36,7 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24; firma del commit verificada por GitHub API el 2026-11-08
 
       - name: Verificar Windows Server 2025
         shell: pwsh
@@ -74,14 +85,13 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   # Validación nativa Linux opt-in mientras L-03/L-04 cierran sus capacidades y su matriz.
-  # No forma parte del gate Windows por defecto: no debe retrasar una entrega Windows antes
-  # de que la aceptación Linux esté cerrada. Se ejecuta al despachar CI manualmente.
+  # No forma parte del gate Windows por defecto: habilitarla explícitamente al despachar CI.
   linux-native:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_linux
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24; firma del commit verificada por GitHub API el 2026-11-08
 
       - name: Verificar Ubuntu 26.04 x86_64
         shell: bash
@@ -143,13 +153,13 @@ jobs:
         run: cargo clippy -p naygo-ui-slint --all-targets --locked -- -D warnings
 
   benchmark:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_benchmark)
     runs-on: windows-2025
     env:
       CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24; firma del commit verificada por GitHub API el 2026-11-08
 
       - name: Verificar Windows Server 2025
         shell: pwsh
@@ -183,7 +193,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Guardar informe sintético (informativo)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verificado por GitHub API el 2026-10-15
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24; firma del commit verificada por GitHub API el 2026-11-08
         with:
           name: naygo-benchmark-${{ github.run_id }}
           path: benchmark-report.jsonl
