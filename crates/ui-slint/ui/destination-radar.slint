@@ -9,14 +9,15 @@ import { Tr } from "i18n.slint";
 export component DestinationRadar inherits Rectangle {
     in property <[DestinationRadarRowVm]> rows;
     in property <string> title;
+    in property <bool> require-explicit: false;
     callback choose(int);
     callback browse();
     callback dismiss();
-    property <int> focused-row: 0;
+    property <int> focused-row: root.require-explicit ? -1 : 0;
     changed focused-row => {
-        if root.focused-row * 44px < -destinations.viewport-y {
+        if root.focused-row >= 0 && root.focused-row * 44px < -destinations.viewport-y {
             destinations.viewport-y = -root.focused-row * 44px;
-        } else if (root.focused-row + 1) * 44px > -destinations.viewport-y + destinations.height {
+        } else if root.focused-row >= 0 && (root.focused-row + 1) * 44px > -destinations.viewport-y + destinations.height {
             destinations.viewport-y = min(0px, destinations.height - (root.focused-row + 1) * 44px);
         }
     }
@@ -31,7 +32,7 @@ export component DestinationRadar inherits Rectangle {
             if (ev.text == Key.Escape) { root.dismiss(); return accept; }
             if (ev.text == Key.DownArrow) { root.focused-row = min(root.rows.length - 1, root.focused-row + 1); return accept; }
             if (ev.text == Key.UpArrow) { root.focused-row = max(0, root.focused-row - 1); return accept; }
-            if (ev.text == Key.Return && root.rows.length > 0) { root.choose(root.focused-row); return accept; }
+            if (ev.text == Key.Return && root.focused-row >= 0 && root.focused-row < root.rows.length) { root.choose(root.focused-row); return accept; }
             if (ev.text == "1") { root.choose(0); return accept; }
             if (ev.text == "2") { root.choose(1); return accept; }
             if (ev.text == "3") { root.choose(2); return accept; }
@@ -66,7 +67,7 @@ export component DestinationRadar inherits Rectangle {
                     touch := TouchArea { mouse-cursor: pointer; clicked => { root.choose(row.number - 1); } }
                 }
                 }
-                Button {
+                if !root.require-explicit: Button {
                     text: Tr.destination-radar-browse;
                     horizontal-stretch: 1;
                     clicked => { root.browse(); }

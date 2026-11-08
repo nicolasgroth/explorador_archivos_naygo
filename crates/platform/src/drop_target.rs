@@ -20,15 +20,21 @@
 //! `Drop` priorizamos archivos virtuales (`CFSTR_FILEDESCRIPTORW` + `CFSTR_FILECONTENTS`) cuando
 //! están disponibles: 7-Zip/WinRAR pueden publicar además un `CF_HDROP` temporal y retirarlo al
 //! volver de `Drop`, antes de que nuestra planificación asíncrona alcance a leerlo. Los streams
-//! virtuales se marshalean a un worker COM, se materializan en un staging propio y recién entonces
-//! se entregan a la UI. Si la fuente solo ofrece `CF_HDROP` (Explorer/escritorio), extraemos esas
+//! virtuales se materializan en un staging propio en el STA OLE dedicado antes de retornar de Drop,
+//! manteniendo vivo al proveedor sin bloquear UI. El origen espera, y las llamadas COM bloqueantes
+//! no se pueden interrumpir hasta que regresen. Si la fuente solo ofrece `CF_HDROP`, extraemos esas
 //! rutas con el helper compartido `clipboard::extract_hdrop_paths`.
 
 use crate::dir_watch::Waker;
 use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Arc};
 
-// Captura de árboles efímeros; todavía no se conecta al receptor OLE de producción.
+pub const DROP_EMPTY: &str = "naygo:drop-empty";
+pub const DROP_BAD_MEDIUM: &str = "naygo:drop-bad-medium";
+pub const DROP_GETDATA_FAILED: &str = "naygo:drop-getdata-failed";
+pub const DROP_TARGET_UNAVAILABLE: &str = "naygo:drop-target-unavailable";
+
+// Captura de árboles efímeros antes de que el origen retire sus temporales.
 #[cfg(windows)]
 #[allow(dead_code)]
 mod hdrop_tree;
@@ -73,6 +79,20 @@ pub type StagedDrop = Arc<StagedDropGuard>;
 /// copiar, y el PUNTO del cursor al soltar (en coordenadas de PANTALLA, píxeles físicos) para
 /// que la UI enrute el drop al panel que está bajo el cursor (no al panel activo).
 pub struct DropPayload {
+    /// Solicitud al hilo UI anterior a GetData; respuesta vacía rechaza el destino.
+    pub destination_probe: Option<std::sync::mpsc::SyncSender<Option<CapturedDropDestination>>>,
+    /// Carpeta y panel capturados antes de que el proveedor ejecute GetData.
+    pub captured_destination: Option<CapturedDropDestination>,
+    /// Marca interna observada durante DoDragDrop; no autentica fuentes externas concurrentes.
+    pub internal_source: bool,
+    /// Inicio de GetData para rutas persistentes; incluye espera en cola antes del hit-test UI.
+    pub hdrop_started_at: Option<std::time::Instant>,
+    /// Evento del mismo canal: mostrar la preparación mientras consulta al proveedor.
+    pub show_preparation: bool,
+    /// Inicio de preparación cancelable; los demás campos se ignoran para este evento.
+    pub preparation: Option<DropPreparation>,
+    /// Evita entregar un resultado encolado si el usuario canceló la preparación.
+    pub delivery_cancel: Option<naygo_core::cancel::CancellationToken>,
     /// Rutas absolutas de los archivos/carpetas soltados.
     pub paths: Vec<PathBuf>,
     /// `true` si `MK_SHIFT` estaba activo al soltar (mover); `false` = copiar.
@@ -94,6 +114,130 @@ pub struct DropPayload {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedDropDestination {
+    pub pane_id: u64,
+    pub path: PathBuf,
+}
+
+/// Solicita al hilo UI resolver el punto antes de pedir datos al proveedor. El timeout no
+/// autoriza usar coordenadas tardías; una respuesta posterior se descarta al cerrar el canal.
+#[cfg(windows)]
+fn request_drop_destination(
+    tx: &Sender<DropPayload>,
+    waker: &Waker,
+    screen_x: i32,
+    screen_y: i32,
+) -> Option<CapturedDropDestination> {
+    let (response, receiver) = std::sync::mpsc::sync_channel(1);
+    tx.send(DropPayload {
+        destination_probe: Some(response),
+        captured_destination: None,
+        internal_source: false,
+        hdrop_started_at: None,
+        show_preparation: false,
+        preparation: None,
+        delivery_cancel: None,
+        paths: Vec::new(),
+        move_: false,
+        copy_forced: true,
+        screen_x,
+        screen_y,
+        staging: None,
+        error: None,
+    })
+    .ok()?;
+    (waker)();
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .ok()
+        .flatten()
+}
+
+impl DropPayload {
+    /// Un proveedor lento o una cola UI atrasada invalida la interpretación posterior del punto.
+    pub fn requires_explicit_destination_at(&self, now: std::time::Instant) -> bool {
+        self.staging.is_some()
+            || self.hdrop_started_at.is_some_and(|started| {
+                now.checked_duration_since(started)
+                    .is_none_or(|elapsed| elapsed > std::time::Duration::from_millis(150))
+            })
+    }
+}
+
+#[cfg(test)]
+mod destination_timing_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[cfg(windows)]
+    #[test]
+    fn destination_probe_captures_response_and_coordinates() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker: Waker = Arc::new(|| {});
+        let worker = std::thread::spawn(move || request_drop_destination(&tx, &waker, 20, 30));
+        let mut probe = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!((probe.screen_x, probe.screen_y), (20, 30));
+        let expected = CapturedDropDestination {
+            pane_id: 42,
+            path: PathBuf::from(r"C:\destination"),
+        };
+        probe
+            .destination_probe
+            .take()
+            .unwrap()
+            .send(Some(expected.clone()))
+            .unwrap();
+        assert_eq!(worker.join().unwrap(), Some(expected));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn destination_probe_rejects_timeout_and_late_reply() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker: Waker = Arc::new(|| {});
+        let worker = std::thread::spawn(move || request_drop_destination(&tx, &waker, 0, 0));
+        let mut probe = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(worker.join().unwrap(), None);
+        assert!(probe
+            .destination_probe
+            .take()
+            .unwrap()
+            .try_send(None)
+            .is_err());
+    }
+
+    #[test]
+    fn delayed_hdrop_requires_explicit_destination_including_ui_queue_time() {
+        let start = Instant::now();
+        let payload = DropPayload {
+            hdrop_started_at: Some(start),
+            show_preparation: false,
+            destination_probe: None,
+            captured_destination: None,
+            internal_source: true,
+            preparation: None,
+            delivery_cancel: None,
+            paths: Vec::new(),
+            move_: false,
+            copy_forced: true,
+            screen_x: 0,
+            screen_y: 0,
+            staging: None,
+            error: None,
+        };
+        assert!(!payload.requires_explicit_destination_at(start + Duration::from_millis(150)));
+        assert!(payload.requires_explicit_destination_at(start + Duration::from_millis(151)));
+        assert!(payload.requires_explicit_destination_at(start - Duration::from_millis(1)));
+    }
+}
+
+/// Canal para mostrar la preparación de un drop y solicitar cancelación desde la UI.
+pub struct DropPreparation {
+    pub token: naygo_core::cancel::CancellationToken,
+    pub receiver: std::sync::mpsc::Receiver<naygo_core::ops::OpMsg>,
+}
+
 /// Evento de HOVER durante un arrastre, para resaltar EN VIVO el panel bajo el cursor (borde +
 /// título) mientras el usuario arrastra archivos sobre la ventana. Viaja por un canal HERMANO
 /// (`drag_tx`), SEPARADO del [`DropPayload`] final (`drop_tx`): el hover es de alta frecuencia y
@@ -107,7 +251,11 @@ pub struct DropPayload {
 /// solo re-pinta si CAMBIÓ respecto del último (un hit-test + comparación, barato).
 pub enum DragHover {
     /// El cursor está sobre la ventana en este punto de PANTALLA (físico) durante un arrastre.
-    Over { screen_x: i32, screen_y: i32 },
+    Over {
+        screen_x: i32,
+        screen_y: i32,
+        internal_source: bool,
+    },
     /// El cursor salió de la ventana (o se soltó): limpiar cualquier resaltado de hover.
     Leave,
 }
@@ -125,12 +273,14 @@ pub struct DropTargetGuard {
 }
 
 impl DropTargetGuard {
-    /// `true` solo cuando `RegisterDragDrop` quedó realmente instalado. Un guard
-    /// inerte permite que la UI reintente tras la creación tardía del HWND/OLE.
+    /// `true` mientras el registro está iniciándose o instalado. El arranque es asíncrono;
+    /// si falla, pasa a `false` y la UI puede reintentar sin duplicar workers.
     pub fn is_registered(&self) -> bool {
         #[cfg(windows)]
         {
-            self.inner.is_some()
+            self.inner
+                .as_ref()
+                .is_some_and(|registration| registration.is_active())
         }
         #[cfg(not(windows))]
         {
@@ -153,8 +303,8 @@ pub fn register(
 /// Registra `hwnd` como destino de drop OLE. Cuando el usuario suelta archivos, envía un
 /// [`DropPayload`] por `tx`; mientras arrastra sobre la ventana, envía eventos [`DragHover`] por
 /// `drag_tx` (para resaltar el panel bajo el cursor). En ambos casos despierta la UI con `waker`.
-/// `hwnd` es el handle nativo (`isize`). Tolerante: si OLE/registro falla, devuelve un guard inerte
-/// (no crashea; simplemente no llegarán drops). Debe llamarse en el **hilo de UI** (apartamento STA).
+/// `hwnd` es el handle nativo (`isize`). El registro se inicia en un STA propio y sus fallos se
+/// reflejan en el guard para que la UI reintente. Se llama en el hilo UI para revocar a winit.
 #[cfg(windows)]
 pub fn register(
     hwnd: isize,
@@ -180,19 +330,21 @@ mod windows_impl {
     use std::collections::HashSet;
     use std::io::Write;
     use std::path::{Component, Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-    use std::sync::{
-        mpsc::{sync_channel, Sender},
-        Arc,
-    };
-    use windows::core::{implement, Interface, Ref};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+    use std::sync::{mpsc::Sender, Arc};
+    #[cfg(test)]
+    use windows::core::Interface;
+    use windows::core::{implement, Ref};
     use windows::Win32::Foundation::{HGLOBAL, HWND, POINTL};
     use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+    #[cfg(test)]
     use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
+    #[cfg(test)]
     use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
+    #[cfg(test)]
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
     use windows::Win32::System::Com::{
-        CoInitializeEx, CoUninitialize, IDataObject, IStream, COINIT_MULTITHREADED,
-        DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
+        IDataObject, IStream, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
     };
     use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
     use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
@@ -269,8 +421,6 @@ mod windows_impl {
     }
 
     fn effect_for_kind(kind: u8, grfkeystate: MODIFIERKEYS_FLAGS, allowed: u32) -> DROPEFFECT {
-        // El destino solo puede comprometerse de forma segura si la fuente admite COPY:
-        // la confirmación y la operación real ocurren después de retornar de Drop.
         if allowed & DROPEFFECT_COPY.0 == 0 {
             return DROPEFFECT(0);
         }
@@ -472,8 +622,10 @@ mod windows_impl {
             .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
     }
 
+    #[cfg(test)]
     struct ComWorkerGuard;
 
+    #[cfg(test)]
     impl Drop for ComWorkerGuard {
         fn drop(&mut self) {
             // SAFETY: solo se construye después de un CoInitializeEx exitoso en este hilo.
@@ -482,29 +634,16 @@ mod windows_impl {
     }
 
     fn materialize_virtual_drop(
-        marshaled_raw: usize,
+        data: &IDataObject,
         descriptors: &[VirtualDescriptor],
+        token: &naygo_core::cancel::CancellationToken,
     ) -> Result<(Vec<PathBuf>, Arc<StagedDropGuard>), String> {
-        // SAFETY: inicialización COM del worker; balanceada por ComWorkerGuard.
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-            .ok()
-            .map_err(|error| format!("no se pudo inicializar COM en el worker: {error}"))?;
-        let _com = ComWorkerGuard;
-        // SAFETY: el puntero proviene de `IStream::into_raw` justo antes de lanzar este worker y
-        // representa el stream creado por CoMarshalInterThreadInterfaceInStream.
-        let marshaled = unsafe { IStream::from_raw(marshaled_raw as *mut core::ffi::c_void) };
-        // SAFETY: consume el stream de marshaling una sola vez y entrega el proxy IDataObject.
-        let data_result: windows::core::Result<IDataObject> =
-            unsafe { CoGetInterfaceAndReleaseStream(&marshaled) };
-        // CoGetInterfaceAndReleaseStream ya liberó la referencia COM subyacente al stream. Evitar
-        // que el wrapper Rust haga un segundo Release al salir del scope.
-        std::mem::forget(marshaled);
-        let data =
-            data_result.map_err(|error| format!("no se pudo recuperar el origen OLE: {error}"))?;
-
         let root = create_staging_dir()?;
         let guard = Arc::new(StagedDropGuard::new(root.clone()));
         for (index, descriptor) in descriptors.iter().enumerate() {
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
+            }
             let destination = root.join(&descriptor.relative);
             if descriptor.is_dir {
                 std::fs::create_dir_all(&destination).map_err(|error| {
@@ -519,7 +658,10 @@ mod windows_impl {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| format!("no se pudo crear {}: {error}", parent.display()))?;
             }
-            write_virtual_file(&data, index, &destination)?;
+            write_virtual_file(data, index, &destination, token)?;
+        }
+        if token.is_cancelled() {
+            return Err("captura cancelada".into());
         }
         let paths = virtual_top_level_paths(&root, descriptors);
         if paths.is_empty() {
@@ -530,11 +672,13 @@ mod windows_impl {
 
     /// Archivo de 7-Zip ya abierto mientras el `Drop` OLE todavía está activo. El handle mantiene
     /// legible el contenido aunque 7-Zip retire su nombre temporal inmediatamente después.
+    #[cfg(test)]
     struct OpenedHdropFile {
         source: PathBuf,
         file: std::fs::File,
     }
 
+    #[cfg(test)]
     fn open_ephemeral_hdrop_files(paths: &[PathBuf]) -> Result<Vec<OpenedHdropFile>, String> {
         let mut opened = Vec::with_capacity(paths.len());
         let mut names = HashSet::with_capacity(paths.len());
@@ -575,6 +719,7 @@ mod windows_impl {
         Ok(opened)
     }
 
+    #[cfg(test)]
     fn stage_opened_hdrop_files(
         files: Vec<OpenedHdropFile>,
     ) -> Result<(Vec<PathBuf>, Arc<StagedDropGuard>), String> {
@@ -609,54 +754,6 @@ mod windows_impl {
         Ok((paths, guard))
     }
 
-    /// Inicia el snapshot de una ruta temporal de 7-Zip en un worker. La espera de dos segundos
-    /// es SOLO hasta que el worker abrió los handles (no hasta copiar bytes); sin ese acuse, el
-    /// proveedor puede borrar el temporal antes de que el worker alcance a abrirlo. La copia de
-    /// verdad, potencialmente grande, sigue fuera del callback OLE y del hilo de UI.
-    fn spawn_ephemeral_hdrop_staging(
-        paths: Vec<PathBuf>,
-        screen_x: i32,
-        screen_y: i32,
-        tx: Sender<DropPayload>,
-        waker: Waker,
-    ) {
-        let (ready_tx, ready_rx) = sync_channel::<()>(1);
-        std::thread::spawn(move || {
-            let opened = open_ephemeral_hdrop_files(&paths);
-            // Aunque el receptor ya haya agotado el timeout, enviar no bloquea y el worker aún
-            // puede informar el error concreto a la UI.
-            let _ = ready_tx.send(());
-            let payload = match opened.and_then(stage_opened_hdrop_files) {
-                Ok((paths, staging)) => DropPayload {
-                    paths,
-                    move_: false,
-                    copy_forced: true,
-                    screen_x,
-                    screen_y,
-                    staging: Some(staging),
-                    error: None,
-                },
-                Err(error) => DropPayload {
-                    paths: Vec::new(),
-                    move_: false,
-                    copy_forced: true,
-                    screen_x,
-                    screen_y,
-                    staging: None,
-                    error: Some(error),
-                },
-            };
-            let _ = tx.send(payload);
-            (waker)();
-        });
-        if ready_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .is_err()
-        {
-            tracing::warn!("el worker no alcanzó a abrir el temporal de 7-Zip durante Drop");
-        }
-    }
-
     fn create_staging_dir() -> Result<PathBuf, String> {
         let base = std::env::temp_dir().join("Naygo").join("virtual-drops");
         std::fs::create_dir_all(&base)
@@ -679,6 +776,7 @@ mod windows_impl {
         data: &IDataObject,
         index: usize,
         destination: &Path,
+        token: &naygo_core::cancel::CancellationToken,
     ) -> Result<(), String> {
         let format = contents_formatetc(index)
             .ok_or_else(|| "Windows no registró FileContents".to_string())?;
@@ -702,12 +800,18 @@ mod windows_impl {
                     // la interfaz para leer y ReleaseStgMedium libera su propia referencia.
                     let stream = unsafe { (*medium.u.pstm).clone() }
                         .ok_or_else(|| "FileContents entregó un IStream nulo".to_string())?;
-                    copy_stream(&stream, &mut file)?;
+                    copy_stream(&stream, &mut file, token)?;
                 }
                 value if value == TYMED_HGLOBAL.0 as u32 => {
                     // SAFETY: el discriminante TYMED_HGLOBAL hace activa la rama `hGlobal`.
                     let hglobal = unsafe { medium.u.hGlobal };
+                    if token.is_cancelled() {
+                        return Err("captura cancelada".into());
+                    }
                     copy_hglobal(hglobal, &mut file)?;
+                    if token.is_cancelled() {
+                        return Err("captura cancelada".into());
+                    }
                 }
                 _ => return Err("FileContents entregó un medio no compatible".to_string()),
             }
@@ -724,9 +828,16 @@ mod windows_impl {
         result
     }
 
-    fn copy_stream(stream: &IStream, file: &mut std::fs::File) -> Result<(), String> {
+    fn copy_stream(
+        stream: &IStream,
+        file: &mut std::fs::File,
+        token: &naygo_core::cancel::CancellationToken,
+    ) -> Result<(), String> {
         let mut buffer = vec![0u8; 256 * 1024];
         loop {
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
+            }
             let mut read = 0u32;
             // SAFETY: buffer válido para `len` bytes; `read` vive durante la llamada.
             unsafe {
@@ -740,6 +851,9 @@ mod windows_impl {
             .map_err(|error| format!("falló la lectura del stream virtual: {error}"))?;
             if read == 0 {
                 break;
+            }
+            if token.is_cancelled() {
+                return Err("captura cancelada".into());
             }
             file.write_all(&buffer[..read as usize])
                 .map_err(|error| format!("falló la escritura del archivo temporal: {error}"))?;
@@ -785,15 +899,18 @@ mod windows_impl {
     }
 
     /// `IDropTarget` que reenvía las rutas soltadas por un canal y despierta la UI.
-    /// `#[implement(IDropTarget)]` genera vtable/refcount/QueryInterface; solo escribimos
+    /// `#[implement(IDropTarget, Agile = false)]` mantiene las llamadas en el STA receptor;
+    /// el macro genera vtable/refcount/QueryInterface y solo escribimos
     /// los cuatro métodos del trait.
-    #[implement(IDropTarget)]
+    #[implement(IDropTarget, Agile = false)]
     struct NaygoDropTarget {
         tx: Sender<DropPayload>,
         /// Canal hermano para los eventos de HOVER (resaltar el panel bajo el cursor). Separado de
         /// `tx` a propósito: el hover es de alta frecuencia y visual; el drop es el commit.
         drag_tx: Sender<DragHover>,
         waker: Waker,
+        #[cfg(test)]
+        bypass_destination_probe: bool,
         /// Formato aceptado en el arrastre actual. `DragOver` no recibe el IDataObject, por eso
         /// conserva la decisión tomada en `DragEnter` y no pinta un efecto para datos inválidos.
         accepted_kind: AtomicU8,
@@ -867,9 +984,8 @@ mod windows_impl {
 
         /// El usuario suelta: priorizamos la variante virtual si está disponible; así evitamos
         /// rutas temporales efímeras de archivadores. Si la fuente solo ofrece `CF_HDROP`, usamos
-        /// sus rutas reales. La materialización posterior usa workers, pero `GetData` se invoca en
-        /// este callback y algunos proveedores pueden bloquearlo al extraer contenido; además el
-        /// snapshot de temporales espera hasta dos segundos. Esa latencia aún requiere solución.
+        /// sus rutas reales. `GetData` y la captura corren en el STA receptor, nunca en la UI.
+        /// Si el proveedor bloquea COM, cancelar queda pendiente hasta que devuelva el control.
         fn Drop(
             &self,
             pdataobj: Ref<IDataObject>,
@@ -887,7 +1003,9 @@ mod windows_impl {
             // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
             // usa para enrutar el drop al panel bajo el cursor.
             let (screen_x, screen_y) = (pt.x, pt.y);
-            // NONE por defecto: errores y cancelaciones tempranas no notifican éxito a la fuente.
+            let internal_source = crate::dnd::internal_drag_active();
+            // No comunicar éxito ante retornos tempranos. COPY mantiene intacto el origen;
+            // si el usuario confirma mover, lo ejecuta después el motor de Naygo.
             // SAFETY: puntero del SO a un DROPEFFECT escribible.
             unsafe {
                 if let Some(eff) = pdweffect.as_mut() {
@@ -909,13 +1027,78 @@ mod windows_impl {
                 None => return Ok(()),
             };
 
+            if accepted_kind != ACCEPT_HDROP && accepted_kind != ACCEPT_VIRTUAL {
+                return Ok(());
+            }
+            let captured_destination = if internal_source {
+                None
+            } else {
+                #[cfg(test)]
+                let result = if self.bypass_destination_probe {
+                    Some(super::CapturedDropDestination {
+                        pane_id: 1,
+                        path: std::env::temp_dir(),
+                    })
+                } else {
+                    super::request_drop_destination(&self.tx, &self.waker, screen_x, screen_y)
+                };
+                #[cfg(not(test))]
+                let result =
+                    super::request_drop_destination(&self.tx, &self.waker, screen_x, screen_y);
+                match result {
+                    Some(destination) => Some(destination),
+                    None => {
+                        self.send_virtual_error(
+                            screen_x,
+                            screen_y,
+                            super::DROP_TARGET_UNAVAILABLE.to_string(),
+                        );
+                        return Ok(());
+                    }
+                }
+            };
+
             // Camino de rutas reales. Explorer/escritorio entregan rutas persistentes y siguen
             // directo al planificador. 7-Zip, en cambio, entrega un `CF_HDROP` a un archivo
             // efímero en Temp: lo snapshotteamos antes de retornar de Drop.
             if accepted_kind == ACCEPT_HDROP {
+                use naygo_core::ops::{OpMsg, OpSummary};
+                let token = naygo_core::cancel::CancellationToken::new();
+                let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+                let mut progress_rx = Some(progress_rx);
+                if !internal_source
+                    && !self.send_payload(DropPayload {
+                        show_preparation: true,
+                        destination_probe: None,
+                        captured_destination: None,
+                        internal_source: false,
+                        hdrop_started_at: None,
+                        preparation: Some(super::DropPreparation {
+                            token: token.clone(),
+                            receiver: progress_rx.take().expect("receptor disponible"),
+                        }),
+                        delivery_cancel: None,
+                        paths: Vec::new(),
+                        move_: false,
+                        copy_forced: true,
+                        screen_x,
+                        screen_y,
+                        staging: None,
+                        error: None,
+                    })
+                {
+                    return Ok(());
+                }
                 let format = hdrop_formatetc();
                 // SAFETY: `format` vive durante GetData; liberamos el medio antes de retornar.
+                let hdrop_started_at = std::time::Instant::now();
                 if let Ok(mut medium) = unsafe { data.GetData(&format) } {
+                    if token.is_cancelled() {
+                        unsafe { ReleaseStgMedium(&mut medium) };
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                        return Ok(());
+                    }
                     if medium.tymed == TYMED_HGLOBAL.0 as u32 {
                         // SAFETY: con TYMED_HGLOBAL la unión contiene un HDROP válido mientras
                         // viva el STGMEDIUM.
@@ -925,20 +1108,135 @@ mod windows_impl {
                         };
                         if !paths.is_empty() {
                             if needs_ephemeral_hdrop_staging(&paths) {
-                                spawn_ephemeral_hdrop_staging(
-                                    paths,
-                                    screen_x,
-                                    screen_y,
-                                    self.tx.clone(),
-                                    self.waker.clone(),
-                                );
-                                unsafe {
-                                    if let Some(eff) = pdweffect.as_mut() {
-                                        *eff = DROPEFFECT_COPY;
+                                // El origen interno no abrió preparación antes de GetData para
+                                // no cambiar su layout durante DoDragDrop en el hilo UI.
+                                if internal_source
+                                    && !self.send_payload(DropPayload {
+                                        show_preparation: true,
+                                        destination_probe: None,
+                                        captured_destination: None,
+                                        internal_source: false,
+                                        hdrop_started_at: None,
+                                        preparation: Some(super::DropPreparation {
+                                            token: token.clone(),
+                                            receiver: progress_rx
+                                                .take()
+                                                .expect("receptor disponible"),
+                                        }),
+                                        delivery_cancel: None,
+                                        paths: Vec::new(),
+                                        move_: false,
+                                        copy_forced: true,
+                                        screen_x,
+                                        screen_y,
+                                        staging: None,
+                                        error: None,
+                                    })
+                                {
+                                    unsafe { ReleaseStgMedium(&mut medium) };
+                                    return Ok(());
+                                }
+                                match super::hdrop_tree::capture(&paths, &token) {
+                                    Ok(mut captured) => {
+                                        captured.release_directories();
+                                        let tx = self.tx.clone();
+                                        let waker = self.waker.clone();
+                                        let captured_destination = captured_destination.clone();
+                                        std::thread::spawn(move || {
+                                            let result = create_staging_dir().and_then(|root| {
+                                                let guard =
+                                                    Arc::new(StagedDropGuard::new(root.clone()));
+                                                captured
+                                                    .materialize(&root, &token)
+                                                    .map(|paths| (paths, guard))
+                                                    .map_err(|error| error.to_string())
+                                            });
+                                            let payload = match result {
+                                                Ok((paths, staging)) => DropPayload {
+                                                    show_preparation: false,
+                                                    destination_probe: None,
+                                                    captured_destination: captured_destination
+                                                        .clone(),
+                                                    internal_source,
+                                                    hdrop_started_at: None,
+                                                    preparation: None,
+                                                    delivery_cancel: Some(token.clone()),
+                                                    paths,
+                                                    move_: false,
+                                                    copy_forced: true,
+                                                    screen_x,
+                                                    screen_y,
+                                                    staging: Some(staging),
+                                                    error: None,
+                                                },
+                                                Err(error) => DropPayload {
+                                                    show_preparation: false,
+                                                    destination_probe: None,
+                                                    captured_destination: None,
+                                                    internal_source: false,
+                                                    hdrop_started_at: None,
+                                                    preparation: None,
+                                                    delivery_cancel: None,
+                                                    paths: Vec::new(),
+                                                    move_: false,
+                                                    copy_forced: true,
+                                                    screen_x,
+                                                    screen_y,
+                                                    staging: None,
+                                                    error: Some(error),
+                                                },
+                                            };
+                                            let cancelled = token.is_cancelled();
+                                            let terminal = if cancelled {
+                                                OpMsg::Cancelled(OpSummary::default())
+                                            } else if let Some(error) = &payload.error {
+                                                OpMsg::Failed(error.clone())
+                                            } else {
+                                                OpMsg::Done(OpSummary::default())
+                                            };
+                                            let _ = progress_tx.send(terminal);
+                                            if cancelled {
+                                                (waker)();
+                                                return;
+                                            }
+                                            let _ = tx.send(payload);
+                                            (waker)();
+                                        });
+                                        unsafe {
+                                            if let Some(eff) = pdweffect.as_mut() {
+                                                *eff = DROPEFFECT_COPY;
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let cancelled = token.is_cancelled();
+                                        let message = if cancelled {
+                                            OpMsg::Cancelled(OpSummary::default())
+                                        } else {
+                                            OpMsg::Failed(error.to_string())
+                                        };
+                                        let _ = progress_tx.send(message);
+                                        if cancelled {
+                                            (self.waker)();
+                                        } else {
+                                            self.send_virtual_error(
+                                                screen_x,
+                                                screen_y,
+                                                error.to_string(),
+                                            );
+                                        }
                                     }
                                 }
                             } else {
+                                let _ = progress_tx.send(OpMsg::Done(OpSummary::default()));
                                 let delivered = self.send_payload(DropPayload {
+                                    show_preparation: false,
+                                    destination_probe: None,
+                                    captured_destination: captured_destination.clone(),
+                                    internal_source,
+                                    hdrop_started_at: Some(hdrop_started_at),
+                                    preparation: None,
+                                    delivery_cancel: Some(token.clone()),
                                     paths,
                                     move_,
                                     copy_forced,
@@ -955,10 +1253,27 @@ mod windows_impl {
                                     }
                                 }
                             }
+                        } else {
+                            let detail = super::DROP_EMPTY.to_string();
+                            let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                            self.send_virtual_error(screen_x, screen_y, detail);
                         }
+                    } else {
+                        let detail = super::DROP_BAD_MEDIUM.to_string();
+                        let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                        self.send_virtual_error(screen_x, screen_y, detail);
                     }
                     // SAFETY: medio devuelto por GetData, aún no liberado.
                     unsafe { ReleaseStgMedium(&mut medium) };
+                } else {
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else {
+                        let detail = super::DROP_GETDATA_FAILED.to_string();
+                        let _ = progress_tx.send(OpMsg::Failed(detail.clone()));
+                        self.send_virtual_error(screen_x, screen_y, detail);
+                    }
                 }
                 return Ok(());
             }
@@ -967,64 +1282,87 @@ mod windows_impl {
                 return Ok(());
             }
 
+            use naygo_core::ops::{OpMsg, OpSummary};
+            let token = naygo_core::cancel::CancellationToken::new();
+            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+            if !self.send_payload(DropPayload {
+                show_preparation: true,
+                destination_probe: None,
+                captured_destination: None,
+                internal_source: false,
+                hdrop_started_at: None,
+                preparation: Some(super::DropPreparation {
+                    token: token.clone(),
+                    receiver: progress_rx,
+                }),
+                delivery_cancel: None,
+                paths: Vec::new(),
+                move_: false,
+                copy_forced: true,
+                screen_x,
+                screen_y,
+                staging: None,
+                error: None,
+            }) {
+                return Ok(());
+            }
+
+            if token.is_cancelled() {
+                let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                (self.waker)();
+                return Ok(());
+            }
             let descriptors = match read_virtual_descriptors(data) {
                 Ok(value) => value,
                 Err(error) => {
-                    self.send_virtual_error(screen_x, screen_y, error);
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else {
+                        let _ = progress_tx.send(OpMsg::Failed(error.clone()));
+                        self.send_virtual_error(screen_x, screen_y, error);
+                    }
                     return Ok(());
                 }
             };
-
-            // COM exige marshaling explícito entre el STA de la UI y el worker. Pasamos el
-            // stream marshaleado como puntero opaco (su única operación válida será reconstruirlo
-            // con `IStream::from_raw` en el worker ya inicializado para COM).
-            let marshaled =
-                match unsafe { CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, data) } {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        self.send_virtual_error(
-                            screen_x,
-                            screen_y,
-                            format!("no se pudo transferir el origen OLE al worker: {error}"),
-                        );
-                        return Ok(());
-                    }
-                };
-            let marshaled_raw = marshaled.into_raw() as usize;
-            let tx = self.tx.clone();
-            let waker = self.waker.clone();
-            std::thread::spawn(move || {
-                let result = materialize_virtual_drop(marshaled_raw, &descriptors);
-                let payload = match result {
-                    Ok((paths, staging)) => DropPayload {
+            // Este callback corre en el STA OLE dedicado, no en UI. Mantener Drop abierto
+            // conserva la vida del IDataObject aun si el origen no ofrece modo asíncrono.
+            // GetData/Read bloqueantes no son interrumpibles; el token se revisa entre pasos.
+            match materialize_virtual_drop(data, &descriptors, &token) {
+                Ok((paths, staging)) if !token.is_cancelled() => {
+                    let _ = progress_tx.send(OpMsg::Done(OpSummary::default()));
+                    let delivered = self.send_payload(DropPayload {
+                        show_preparation: false,
+                        destination_probe: None,
+                        captured_destination: captured_destination.clone(),
+                        internal_source,
+                        hdrop_started_at: None,
+                        preparation: None,
+                        delivery_cancel: Some(token),
                         paths,
-                        // Una entrada de archivo comprimido solo se puede copiar al filesystem.
                         move_: false,
                         copy_forced: true,
                         screen_x,
                         screen_y,
                         staging: Some(staging),
                         error: None,
-                    },
-                    Err(error) => DropPayload {
-                        paths: Vec::new(),
-                        move_: false,
-                        copy_forced: true,
-                        screen_x,
-                        screen_y,
-                        staging: None,
-                        error: Some(error),
-                    },
-                };
-                let _ = tx.send(payload);
-                (waker)();
-            });
-
-            // COPY impide que la fuente elimine datos antes de la confirmación. Si el usuario
-            // solicitó mover, Naygo ejecutará el movimiento por su propio motor después.
-            unsafe {
-                if let Some(eff) = pdweffect.as_mut() {
-                    *eff = DROPEFFECT_COPY;
+                    });
+                    if delivered {
+                        unsafe {
+                            if let Some(eff) = pdweffect.as_mut() {
+                                *eff = DROPEFFECT_COPY;
+                            }
+                        }
+                    }
+                }
+                result => {
+                    if token.is_cancelled() {
+                        let _ = progress_tx.send(OpMsg::Cancelled(OpSummary::default()));
+                        (self.waker)();
+                    } else if let Err(error) = result {
+                        let _ = progress_tx.send(OpMsg::Failed(error.clone()));
+                        self.send_virtual_error(screen_x, screen_y, error);
+                    }
                 }
             }
 
@@ -1041,6 +1379,13 @@ mod windows_impl {
 
         fn send_virtual_error(&self, screen_x: i32, screen_y: i32, error: String) {
             let _ = self.send_payload(DropPayload {
+                show_preparation: false,
+                destination_probe: None,
+                captured_destination: None,
+                internal_source: false,
+                hdrop_started_at: None,
+                preparation: None,
+                delivery_cancel: None,
                 paths: Vec::new(),
                 move_: false,
                 copy_forced: true,
@@ -1059,6 +1404,7 @@ mod windows_impl {
             let _ = self.drag_tx.send(DragHover::Over {
                 screen_x: pt.x,
                 screen_y: pt.y,
+                internal_source: crate::dnd::internal_drag_active(),
             });
             (self.waker)();
         }
@@ -1072,25 +1418,45 @@ mod windows_impl {
 
     /// Mantiene vivo el registro de drop. Su `Drop` revoca con `RevokeDragDrop`.
     pub struct Registration {
-        hwnd: HWND,
-        // Mantiene viva la interfaz mientras dure el registro (RevokeDragDrop la libera, pero
-        // conservar la referencia es explícito y evita sorpresas de ciclo de vida).
-        _target: IDropTarget,
+        state: Arc<RegistrationState>,
     }
 
-    impl Drop for Registration {
+    struct RegistrationState {
+        failed: AtomicBool,
+        shutdown_event: isize,
+        #[cfg(test)]
+        registered: AtomicBool,
+    }
+
+    impl Drop for RegistrationState {
         fn drop(&mut self) {
-            // SAFETY: `hwnd` fue registrado con RegisterDragDrop en este mismo hilo; revocar
-            // es la operación inversa y es segura aunque el registro ya no estuviera (devuelve
-            // error, que ignoramos).
+            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            // El estado compartido vive hasta que el worker y el guard liberan su referencia.
             unsafe {
-                let _ = RevokeDragDrop(self.hwnd);
+                let _ = CloseHandle(HANDLE(self.shutdown_event as *mut _));
             }
         }
     }
 
-    /// Inicializa OLE en este hilo (idempotente/tolerante) y registra el `IDropTarget`.
-    /// Devuelve `Some(Registration)` si el registro fue exitoso, o `None` si algo falló.
+    impl Registration {
+        pub fn is_active(&self) -> bool {
+            !self.state.failed.load(Ordering::Acquire)
+        }
+    }
+
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            use windows::Win32::Foundation::HANDLE;
+            use windows::Win32::System::Threading::SetEvent;
+            // Señal persistente, sin depender de IDs de hilos que Windows podría reutilizar.
+            unsafe {
+                let _ = SetEvent(HANDLE(self.state.shutdown_event as *mut _));
+            }
+        }
+    }
+
+    /// Revoca el target de winit en UI e inicia un STA receptor. El guard queda activo durante
+    /// el arranque; un fallo asíncrono cambia su estado para permitir el reintento de la UI.
     pub fn register(
         hwnd: isize,
         tx: Sender<DropPayload>,
@@ -1102,22 +1468,10 @@ mod windows_impl {
             return None;
         }
 
-        // OleInitialize debe llamarse una vez por hilo antes de RegisterDragDrop. Si el hilo
-        // ya está OLE-inicializado (p. ej. por winit), devuelve S_FALSE o RPC_E_CHANGED_MODE;
-        // ambos son tolerables (no llamamos OleUninitialize: no fuimos quienes inicializamos).
-        // SAFETY: llamada estándar de inicialización OLE en el hilo de UI (STA).
-        unsafe {
-            let _ = OleInitialize(None);
-        }
-
-        let target: IDropTarget = NaygoDropTarget {
-            tx,
-            drag_tx,
-            waker,
-            accepted_kind: AtomicU8::new(ACCEPT_NONE),
-            allowed_effects: AtomicU32::new(0),
-        }
-        .into();
+        use windows::Win32::System::Threading::CreateEventW;
+        // Reservar la señal antes de revocar el target previo. El guard y el worker comparten
+        // su vida; cerrar la ventana nunca espera a un proveedor OLE lento en el hilo UI.
+        let shutdown_event = unsafe { CreateEventW(None, true, false, None) }.ok()?;
 
         // winit (sobre el que corre Slint) ya registró SU PROPIO IDropTarget al crear la
         // ventana: tiene drag&drop ON por defecto y Slint 1.16 no lo desactiva. Una ventana
@@ -1131,23 +1485,301 @@ mod windows_impl {
             let _ = RevokeDragDrop(hwnd);
         }
 
-        // SAFETY: hwnd no es nulo y `target` es una interfaz IDropTarget válida; el SO toma
-        // su propia referencia. Cualquier error (p. ej. DRAGDROP_E_ALREADYREGISTERED) → None.
-        let result = unsafe { RegisterDragDrop(hwnd, &target) };
-        if result.is_err() {
-            tracing::warn!(?result, "RegisterDragDrop falló");
-            return None;
-        }
-
-        Some(Registration {
-            hwnd,
-            _target: target,
-        })
+        let state = Arc::new(RegistrationState {
+            failed: AtomicBool::new(false),
+            shutdown_event: shutdown_event.0 as isize,
+            #[cfg(test)]
+            registered: AtomicBool::new(false),
+        });
+        let worker_state = state.clone();
+        let raw_hwnd = hwnd.0 as isize;
+        std::thread::spawn(move || {
+            use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+            use windows::Win32::System::Ole::OleUninitialize;
+            use windows::Win32::System::Threading::WaitForSingleObject;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, MSG, PM_REMOVE,
+                QS_ALLINPUT, WM_QUIT,
+            };
+            if unsafe { OleInitialize(None) }.is_err() {
+                worker_state.failed.store(true, Ordering::Release);
+                (waker)();
+                return;
+            }
+            let mut message = MSG::default();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx,
+                waker: waker.clone(),
+                accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: false,
+            }
+            .into();
+            let hwnd = hwnd_from_isize(raw_hwnd);
+            if unsafe { RegisterDragDrop(hwnd, &target) }.is_err() {
+                worker_state.failed.store(true, Ordering::Release);
+                (waker)();
+            } else {
+                #[cfg(test)]
+                worker_state.registered.store(true, Ordering::Release);
+                let shutdown = HANDLE(worker_state.shutdown_event as *mut _);
+                'messages: loop {
+                    let result = unsafe {
+                        MsgWaitForMultipleObjects(Some(&[shutdown]), false, u32::MAX, QS_ALLINPUT)
+                    };
+                    if result == WAIT_OBJECT_0 {
+                        break;
+                    }
+                    if result.0 != WAIT_OBJECT_0.0 + 1 {
+                        tracing::warn!(?result, "falló espera del receptor OLE");
+                        break;
+                    }
+                    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                        if message.message == WM_QUIT {
+                            break 'messages;
+                        }
+                        unsafe {
+                            DispatchMessageW(&message);
+                        }
+                    }
+                }
+                unsafe {
+                    let _ = RevokeDragDrop(hwnd);
+                }
+                if unsafe { WaitForSingleObject(shutdown, 0) } != WAIT_OBJECT_0 {
+                    worker_state.failed.store(true, Ordering::Release);
+                    (waker)();
+                }
+            }
+            drop(target);
+            unsafe {
+                OleUninitialize();
+            }
+        });
+        Some(Registration { state })
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        // Proveedor sintético sin IDataObjectAsyncCapability: rechaza lecturas después de Drop.
+        #[implement(IDataObject)]
+        struct VirtualLifetimeSource {
+            alive: Arc<std::sync::atomic::AtomicBool>,
+            gate: Option<(
+                std::sync::mpsc::Sender<()>,
+                std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+            )>,
+        }
+
+        impl windows::Win32::System::Com::IDataObject_Impl for VirtualLifetimeSource_Impl {
+            fn GetData(
+                &self,
+                f: *const FORMATETC,
+            ) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
+                use windows::Win32::System::Memory::{
+                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+                };
+                if !self.alive.load(Ordering::SeqCst) {
+                    return Err(windows::Win32::Foundation::E_FAIL.into());
+                }
+                let format = unsafe { f.as_ref() }.ok_or(windows::Win32::Foundation::E_FAIL)?;
+                let bytes = if format.cfFormat == descriptor_formatetc().unwrap().cfFormat {
+                    let name: Vec<u16> = "archivo.txt".encode_utf16().collect();
+                    let mut filename = [0u16; 260];
+                    filename[..name.len()].copy_from_slice(&name);
+                    let desc = FILEDESCRIPTORW {
+                        cFileName: filename,
+                        ..Default::default()
+                    };
+                    let mut bytes = vec![0u8; 4 + size_of::<FILEDESCRIPTORW>()];
+                    bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+                    unsafe {
+                        std::ptr::write_unaligned(
+                            bytes.as_mut_ptr().add(4).cast::<FILEDESCRIPTORW>(),
+                            desc,
+                        );
+                    }
+                    bytes
+                } else if format.cfFormat == contents_formatetc(0).unwrap().cfFormat {
+                    if let Some((entered, resume)) = &self.gate {
+                        let _ = entered.send(());
+                        let _ = resume
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(5));
+                    }
+                    b"virtual-content".to_vec()
+                } else {
+                    return Err(windows::Win32::Foundation::E_FAIL.into());
+                };
+                let h = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }?;
+                let ptr = unsafe { GlobalLock(h) };
+                if ptr.is_null() {
+                    return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+                    let _ = GlobalUnlock(h);
+                }
+                Ok(windows::Win32::System::Com::STGMEDIUM {
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                    u: windows::Win32::System::Com::STGMEDIUM_0 { hGlobal: h },
+                    pUnkForRelease: std::mem::ManuallyDrop::new(None),
+                })
+            }
+            fn GetDataHere(
+                &self,
+                _: *const FORMATETC,
+                _: *mut windows::Win32::System::Com::STGMEDIUM,
+            ) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn QueryGetData(&self, _: *const FORMATETC) -> windows::core::HRESULT {
+                windows::Win32::Foundation::S_OK
+            }
+            fn GetCanonicalFormatEtc(
+                &self,
+                _: *const FORMATETC,
+                _: *mut FORMATETC,
+            ) -> windows::core::HRESULT {
+                windows::Win32::Foundation::E_NOTIMPL
+            }
+            fn SetData(
+                &self,
+                _: *const FORMATETC,
+                _: *const windows::Win32::System::Com::STGMEDIUM,
+                _: windows::core::BOOL,
+            ) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn EnumFormatEtc(
+                &self,
+                _: u32,
+            ) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn DAdvise(
+                &self,
+                _: *const FORMATETC,
+                _: u32,
+                _: Ref<windows::Win32::System::Com::IAdviseSink>,
+            ) -> windows::core::Result<u32> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn DUnadvise(&self, _: u32) -> windows::core::Result<()> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+            fn EnumDAdvise(
+                &self,
+            ) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+                Err(windows::Win32::Foundation::E_NOTIMPL.into())
+            }
+        }
+
+        #[test]
+        fn closing_registration_signals_worker_without_reusing_thread_id() {
+            use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+            use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+            let event = unsafe { CreateEventW(None, true, false, None) }.unwrap();
+            let state = Arc::new(RegistrationState {
+                failed: AtomicBool::new(false),
+                shutdown_event: event.0 as isize,
+                registered: AtomicBool::new(false),
+            });
+            let worker = state.clone();
+            drop(Registration { state });
+            let result = unsafe { WaitForSingleObject(HANDLE(worker.shutdown_event as *mut _), 0) };
+            assert_eq!(result, WAIT_OBJECT_0);
+        }
+
+        #[test]
+        fn registration_worker_installs_and_revokes_on_shutdown() {
+            use windows::core::w;
+            use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows::Win32::System::Ole::OleUninitialize;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
+                RegisterClassW, UnregisterClassW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WNDCLASSW,
+            };
+
+            unsafe extern "system" fn proc(
+                hwnd: HWND,
+                msg: u32,
+                wp: WPARAM,
+                lp: LPARAM,
+            ) -> LRESULT {
+                unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+            }
+            unsafe { OleInitialize(None) }.unwrap();
+            let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }.unwrap().0);
+            let class = w!("NaygoDropRegistrationWorkerTest");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: instance,
+                lpszClassName: class,
+                ..Default::default()
+            };
+            assert_ne!(unsafe { RegisterClassW(&wc) }, 0);
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    class,
+                    w!(""),
+                    WINDOW_STYLE::default(),
+                    0,
+                    0,
+                    100,
+                    100,
+                    None,
+                    None,
+                    Some(instance),
+                    None,
+                )
+            }
+            .unwrap();
+            let (tx, _) = std::sync::mpsc::channel();
+            let (hover, _) = std::sync::mpsc::channel();
+            let registration = register(hwnd.0 as isize, tx, hover, Arc::new(|| {})).unwrap();
+            let state = registration.state.clone();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut message = MSG::default();
+            while !state.registered.load(Ordering::Acquire)
+                && !state.failed.load(Ordering::Acquire)
+                && std::time::Instant::now() < deadline
+            {
+                while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                state.registered.load(Ordering::Acquire),
+                "registro OLE no se completó"
+            );
+            drop(registration);
+            while Arc::strong_count(&state) > 1 && std::time::Instant::now() < deadline {
+                while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(Arc::strong_count(&state), 1, "el worker no terminó");
+            unsafe {
+                DestroyWindow(hwnd).unwrap();
+                UnregisterClassW(class, Some(instance)).unwrap();
+                OleUninitialize();
+            }
+        }
 
         #[test]
         fn sondeo_cowait_mide_despacho_de_mensaje_de_ventana() {
@@ -1343,7 +1975,7 @@ mod windows_impl {
         }
 
         #[test]
-        fn shift_drop_no_notifica_movimiento_antes_de_la_confirmacion() {
+        fn shift_drop_informara_copia_al_origen_y_conserva_intencion_de_mover() {
             let temp = tempfile::tempdir().unwrap();
             let source = temp.path().join("source.txt");
             std::fs::write(&source, b"original").unwrap();
@@ -1356,6 +1988,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1367,17 +2001,19 @@ mod windows_impl {
                 assert_eq!(effect, DROPEFFECT_MOVE);
                 target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
             }
-            assert_eq!(
-                effect, DROPEFFECT_COPY,
-                "el origen no debe borrar antes de confirmar"
-            );
+            assert_eq!(effect, DROPEFFECT_COPY);
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .preparation
+                .is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-            assert!(payload.move_);
+            assert!(payload.move_ && !payload.copy_forced);
             assert_eq!(std::fs::read(source).unwrap(), b"original");
         }
 
         #[test]
-        fn fuente_que_solo_admite_mover_se_rechaza_sin_entregar_archivos() {
+        fn drop_de_solo_mover_se_rechaza_sin_entregar_origen() {
             let temp = tempfile::tempdir().unwrap();
             let source = temp.path().join("source.txt");
             std::fs::write(&source, b"original").unwrap();
@@ -1390,6 +2026,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1407,7 +2045,7 @@ mod windows_impl {
         }
 
         #[test]
-        fn fuente_que_solo_admite_copiar_no_se_mueve_con_shift() {
+        fn drop_de_solo_copiar_ignora_shift_para_no_mover() {
             let temp = tempfile::tempdir().unwrap();
             let source = temp.path().join("source.txt");
             std::fs::write(&source, b"original").unwrap();
@@ -1420,6 +2058,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1428,42 +2068,21 @@ mod windows_impl {
                 target
                     .DragEnter(&object, MK_SHIFT, point, &mut effect)
                     .unwrap();
-                assert_eq!(effect, DROPEFFECT_COPY);
                 target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
             }
             assert_eq!(effect, DROPEFFECT_COPY);
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .preparation
+                .is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
             assert!(!payload.move_ && payload.copy_forced);
             assert_eq!(std::fs::read(source).unwrap(), b"original");
         }
 
         #[test]
-        fn drop_sin_rutas_no_notifica_una_copia_exitosa() {
-            let object = crate::dnd::test_file_data_object(Vec::new());
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (hover_tx, _hover_rx) = std::sync::mpsc::channel();
-            let target: IDropTarget = NaygoDropTarget {
-                tx,
-                drag_tx: hover_tx,
-                waker: Arc::new(|| {}),
-                accepted_kind: AtomicU8::new(ACCEPT_NONE),
-                allowed_effects: AtomicU32::new(0),
-            }
-            .into();
-            let point = POINTL { x: 10, y: 10 };
-            let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
-            unsafe {
-                target
-                    .DragEnter(&object, MK_SHIFT, point, &mut effect)
-                    .unwrap();
-                target.Drop(&object, MK_SHIFT, point, &mut effect).unwrap();
-            }
-            assert_eq!(effect, DROPEFFECT(0));
-            assert!(rx.try_recv().is_err());
-        }
-
-        #[test]
-        fn receptor_cerrado_no_notifica_copia_ni_movimiento() {
+        fn drop_con_receptor_cerrado_no_notifica_exito() {
             let temp = tempfile::tempdir().unwrap();
             let source = temp.path().join("source.txt");
             std::fs::write(&source, b"original").unwrap();
@@ -1477,6 +2096,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1520,10 +2141,11 @@ mod windows_impl {
 
         #[test]
         fn hdrop_temporal_de_archivo_funciona_por_interfaz_ole() {
-            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
-            let parent = temp.path().join("7zE1234567");
-            std::fs::create_dir(&parent).unwrap();
-            let source = parent.join("file.txt");
+            let temp = tempfile::Builder::new()
+                .prefix("7zE")
+                .tempdir_in(std::env::temp_dir())
+                .unwrap();
+            let source = temp.path().join("file.txt");
             std::fs::write(&source, b"contenido").unwrap();
             let object = crate::dnd::test_file_data_object(vec![source]);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1534,6 +2156,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1546,6 +2170,9 @@ mod windows_impl {
                     .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
                     .unwrap();
             }
+            let preparation = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(preparation.show_preparation);
+            assert!(preparation.preparation.is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
             assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
             assert!(payload.staging.is_some());
@@ -1553,13 +2180,138 @@ mod windows_impl {
             assert_eq!(std::fs::read(&payload.paths[0]).unwrap(), b"contenido");
         }
 
+        #[test]
+        fn cancelar_antes_de_recibir_hdrop_no_entrega_rutas() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let temp = tempfile::Builder::new()
+                .prefix("7zE")
+                .tempdir_in(std::env::temp_dir())
+                .unwrap();
+            let source = temp.path().join("original.txt");
+            std::fs::write(&source, b"contenido").unwrap();
+            let object = crate::dnd::test_file_data_object(vec![source.clone()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::sync_channel::<()>(1);
+            let resume_rx = std::sync::Mutex::new(resume_rx);
+            let wakes = AtomicUsize::new(0);
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(move || {
+                    // El primer wake limpia el hover; el segundo anuncia preparación.
+                    if wakes.fetch_add(1, Ordering::SeqCst) == 1 {
+                        resume_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                    }
+                }),
+                accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0 | DROPEFFECT_MOVE.0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
+            }
+            .into();
+            let cancel = std::thread::spawn(move || {
+                let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                let preparation = event.preparation.take().unwrap();
+                preparation.token.cancel();
+                resume_tx.send(()).unwrap();
+                let terminal = preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(matches!(terminal, naygo_core::ops::OpMsg::Cancelled(_)));
+                assert!(rx
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err());
+            });
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &object,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 10, y: 10 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            cancel.join().unwrap();
+            assert_eq!(std::fs::read(source).unwrap(), b"contenido");
+        }
+
+        #[test]
+        fn hdrop_persistente_permite_cancelar_antes_de_terminar_getdata() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("original.txt");
+            std::fs::write(&source, b"contenido").unwrap();
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let object = crate::dnd::test_gated_file_data_object(
+                vec![source.clone()],
+                entered_tx,
+                resume_rx,
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, _) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx: hover_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_HDROP),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0 | DROPEFFECT_MOVE.0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
+            }
+            .into();
+            let cancel = std::thread::spawn(move || {
+                let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                let preparation = event.preparation.take().unwrap();
+                entered_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                preparation.token.cancel();
+                assert!(rx
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err());
+                resume_tx.send(()).unwrap();
+                let terminal = preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(matches!(terminal, naygo_core::ops::OpMsg::Cancelled(_)));
+                assert!(rx
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err());
+            });
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &object,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 10, y: 10 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            cancel.join().unwrap();
+            assert_eq!(std::fs::read(source).unwrap(), b"contenido");
+        }
+
         // Caso de aceptación pendiente: el proveedor sintético entrega CF_HDROP como un
         // archivador, pero no reproduce extracción ni ciclo de vida COM de 7-Zip.
         #[test]
-        #[ignore = "pendiente soporte de carpetas temporales y validación OLE real"]
         fn hdrop_temporal_de_carpeta_preserva_arbol_y_vacios() {
-            let temp = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
-            let source = temp.path().join("7zE8765432").join("carpeta");
+            let temp = tempfile::Builder::new()
+                .prefix("7zE")
+                .tempdir_in(std::env::temp_dir())
+                .unwrap();
+            let source = temp.path().join("carpeta");
             std::fs::create_dir_all(source.join("nested/empty")).unwrap();
             std::fs::write(source.join("nested/file.txt"), b"contenido").unwrap();
             let object = crate::dnd::test_file_data_object(vec![source]);
@@ -1571,6 +2323,8 @@ mod windows_impl {
                 waker: Arc::new(|| {}),
                 accepted_kind: AtomicU8::new(ACCEPT_NONE),
                 allowed_effects: AtomicU32::new(0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
             }
             .into();
             let point = POINTL { x: 10, y: 10 };
@@ -1583,6 +2337,9 @@ mod windows_impl {
                     .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
                     .unwrap();
             }
+            let preparation = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(preparation.show_preparation);
+            assert!(preparation.preparation.is_some());
             let payload = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
             assert!(payload.error.is_none(), "drop falló: {:?}", payload.error);
             assert!(payload.staging.is_some());
@@ -1592,6 +2349,118 @@ mod windows_impl {
                 b"contenido"
             );
             assert!(payload.paths[0].join("nested/empty").is_dir());
+        }
+
+        #[test]
+        fn cancelar_virtual_durante_getdata_espera_retorno_y_descarta_resultado() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let source: IDataObject = VirtualLifetimeSource {
+                    alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    gate: Some((entered_tx, std::sync::Mutex::new(resume_rx))),
+                }
+                .into();
+                let (drag_tx, _) = std::sync::mpsc::channel();
+                let target: IDropTarget = NaygoDropTarget {
+                    tx,
+                    drag_tx,
+                    waker: Arc::new(|| {}),
+                    accepted_kind: AtomicU8::new(ACCEPT_VIRTUAL),
+                    allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0),
+                    #[cfg(test)]
+                    bypass_destination_probe: true,
+                }
+                .into();
+                let mut effect = DROPEFFECT_COPY;
+                unsafe {
+                    target
+                        .Drop(
+                            &source,
+                            MODIFIERKEYS_FLAGS(0),
+                            POINTL { x: 1, y: 1 },
+                            &mut effect,
+                        )
+                        .unwrap();
+                }
+                effect
+            });
+            let mut event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            assert!(event.show_preparation);
+            let preparation = event.preparation.take().unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            preparation.token.cancel();
+            resume_tx.send(()).unwrap();
+            assert!(matches!(
+                preparation
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                naygo_core::ops::OpMsg::Cancelled(_)
+            ));
+            assert_eq!(worker.join().unwrap(), DROPEFFECT(0));
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err());
+        }
+
+        #[test]
+        fn virtual_content_se_materializa_antes_de_retornar_drop() {
+            let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let source: IDataObject = VirtualLifetimeSource {
+                alive: alive.clone(),
+                gate: None,
+            }
+            .into();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (drag_tx, _) = std::sync::mpsc::channel();
+            let target: IDropTarget = NaygoDropTarget {
+                tx,
+                drag_tx,
+                waker: Arc::new(|| {}),
+                accepted_kind: AtomicU8::new(ACCEPT_VIRTUAL),
+                allowed_effects: AtomicU32::new(DROPEFFECT_COPY.0),
+                #[cfg(test)]
+                bypass_destination_probe: true,
+            }
+            .into();
+            let mut effect = DROPEFFECT_COPY;
+            unsafe {
+                target
+                    .Drop(
+                        &source,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL { x: 1, y: 1 },
+                        &mut effect,
+                    )
+                    .unwrap();
+            }
+            alive.store(false, Ordering::SeqCst);
+            assert_eq!(effect, DROPEFFECT_COPY);
+            let preparation = rx.try_recv().unwrap();
+            assert!(preparation.show_preparation);
+            assert!(preparation.preparation.is_some());
+            let payload = rx.try_recv().unwrap();
+            assert!(payload.error.is_none(), "{:?}", payload.error);
+            assert_eq!(
+                std::fs::read(&payload.paths[0]).unwrap(),
+                b"virtual-content"
+            );
+        }
+
+        #[test]
+        fn captura_virtual_cancelada_no_solicita_contenido() {
+            let token = naygo_core::cancel::CancellationToken::new();
+            token.cancel();
+            let data = crate::dnd::test_file_data_object(Vec::new());
+            let descriptors = vec![VirtualDescriptor {
+                relative: PathBuf::from("folder"),
+                is_dir: true,
+            }];
+            assert!(materialize_virtual_drop(&data, &descriptors, &token).is_err());
         }
 
         #[test]

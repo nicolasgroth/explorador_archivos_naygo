@@ -22,6 +22,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   100.000 elementos y 64 KiB por ruta.
 
 ### Plataforma Windows
+- El receptor OLE usa un STA separado, conserva carpetas temporales y captura el panel de destino
+  antes de consultar al origen; exige confirmar su ruta completa y permite elegir otro si cambió. Las
+  preparaciones notifican progreso antes de consultar al origen y admiten solicitar cancelación.
 - El destino válido de un arrastre se marca con un borde de acento, también en paneles con
   pestañas y en la bandeja temporal, sin cambiar el foco del teclado.
 - El arrastre entrante no comunica un movimiento completado al origen antes de la confirmación:

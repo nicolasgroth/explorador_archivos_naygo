@@ -5,6 +5,7 @@
 import { MessageVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
 
 // Botón de diálogo reutilizable (copia del de op-dialogs para no acoplar los archivos).
 component DlgBtn inherits Rectangle {
@@ -94,10 +95,15 @@ export component MessageModal inherits Rectangle {
                 }
             }
 
-            Text {
-                text: root.vm.body;
-                color: Theme.text;
-                wrap: word-wrap;
+            ScrollView {
+                width: 100%;
+                height: min(220px, max(36px, message-body.preferred-height));
+                message-body := Text {
+                    text: root.vm.body;
+                    color: Theme.text;
+                    width: 100%;
+                    wrap: word-wrap;
+                }
             }
 
             HorizontalLayout {

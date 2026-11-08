@@ -64,11 +64,8 @@ fn show_drop_confirmation(
         return;
     };
     let tr = ui.global::<Tr>();
-    let dest_name = pd
-        .dest_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| pd.dest_dir.display().to_string());
+    // La ruta completa distingue carpetas homónimas antes de confirmar una transferencia.
+    let dest_name = format_destination_for_confirmation(&pd.dest_dir);
     let more_tmpl = tr.get_drop_confirm_more().to_string();
     let items = pd.names_summary(|n| more_tmpl.replace("{n}", &n.to_string()));
     let template = if pd.is_move {
@@ -102,6 +99,14 @@ fn show_drop_confirmation(
             }
         }
     });
+}
+
+/// Inserta puntos de corte invisibles para que carpetas largas se envuelvan en el modal.
+fn format_destination_for_confirmation(path: &std::path::Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\u{200b}")
+        .replace('/', "/\u{200b}")
 }
 
 /// Construye `start_timer`: la factory que (re)arranca el timer de 30 ms con el tick completo.
@@ -295,7 +300,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     if let Some(msg) = last {
                         let new_over = match msg {
                             naygo_platform::drop_target::DragHover::Leave => None,
-                            naygo_platform::drop_target::DragHover::Over { screen_x, screen_y } => {
+                            naygo_platform::drop_target::DragHover::Over {
+                                screen_x,
+                                screen_y,
+                                internal_source,
+                            } => {
                                 ui_weak.upgrade().and_then(|ui| {
                                     let client = naygo_hwnd(&ui).and_then(|hwnd| {
                                         naygo_platform::window::screen_to_client(
@@ -308,7 +317,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                         let cy = client_y as f32 / scale - TOP_BAR_H;
                                         // `pane_at` es &self; el Ref temporal muere al ligar el let.
                                         ctrl.borrow()
-                                            .pane_at(cx, cy)
+                                            .drop_hover_pane(cx, cy, internal_source)
                                             .map(|pane| (pane, client_y as f32 / scale))
                                     })
                                 })
@@ -325,72 +334,170 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         }
                     }
                 }
-                while let Ok(payload) = drop_rx.try_recv() {
-                    if let Some(error) = payload.error.as_ref() {
-                        let base = ctrl.borrow().config.t("drop.virtual_failed");
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.invoke_show_toast(format!("{base}: {error}").into());
-                        }
-                        crate::logging::log_line(&format!(
-                            "drop virtual no materializado: {error}"
-                        ));
-                        continue;
-                    }
-                    let mut routed = false;
-                    if let Some(ui) = ui_weak.upgrade() {
-                        // Tras el bucle modal de `DoDragDrop` (OLE), la ventana de Naygo deja
-                        // de ser la foreground del SO: el primer clic en el modal de conflicto
-                        // que pueda levantar `drop_at` solo reactivaría la ventana en vez de
-                        // accionar el botón. La traemos al frente AQUÍ, antes de procesar el
-                        // drop, para que el modal aparezca con la ventana ya enfocada y el
-                        // primer clic vaya al botón. No toca `ctrl`, así que no hay riesgo de
-                        // doble-préstamo.
-                        if let Some(hwnd) = naygo_hwnd(&ui) {
-                            naygo_platform::window::bring_to_front(hwnd);
-                        }
-                        // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
-                        // HWND o ScreenToClient falla, caemos al fallback del panel activo.
-                        let client = naygo_hwnd(&ui).and_then(|hwnd| {
-                            naygo_platform::window::screen_to_client(
+                while let Ok(mut payload) = drop_rx.try_recv() {
+                    if let Some(response) = payload.destination_probe.take() {
+                        let destination = ui_weak.upgrade().and_then(|ui| {
+                            let hwnd = naygo_hwnd(&ui)?;
+                            let (x, y) = naygo_platform::window::screen_to_client(
                                 hwnd,
                                 payload.screen_x,
                                 payload.screen_y,
-                            )
-                        });
-                        if let Some((client_x, client_y)) = client {
+                            )?;
                             let scale = ui.window().scale_factor().max(0.01);
-                            let cx = client_x as f32 / scale;
-                            let cy = client_y as f32 / scale - TOP_BAR_H;
-                            routed = ctrl.borrow_mut().drop_at_with_staging(
-                                cx,
-                                cy,
-                                payload.move_,       // move_hint (Shift del OLE)
-                                payload.copy_forced, // copy_forced (Ctrl del OLE)
-                                payload.paths.clone(),
-                                payload.staging.clone(),
-                            );
-                        }
+                            let cx = x as f32 / scale;
+                            let cy = y as f32 / scale - TOP_BAR_H;
+                            ctrl.try_borrow()
+                                .ok()?
+                                .capture_external_drop_destination(cx, cy)
+                        });
+                        let _ = response.try_send(destination);
+                        continue;
                     }
-                    // Fallback: si no se pudo enrutar por el punto (sin ventana, o el cursor
-                    // no cayó sobre un panel Files), caer al panel activo como antes para no
-                    // perder el drop.
-                    if !routed {
-                        // Extraer active_id() a un `let` propio para SOLTAR el Ref compartido
-                        // ANTES del borrow_mut() de abajo. Si se hiciera el `if let` directo
-                        // sobre `ctrl.borrow().active_id()`, el Ref del scrutinee vive durante
-                        // todo el cuerpo del `if let` y choca con el borrow_mut() → panic
-                        // "already borrowed" (mismo patrón que la ruta feliz ya evita arriba).
-                        let active = ctrl.borrow().active_id();
-                        if let Some(active) = active {
-                            ctrl.borrow_mut().drop_external_with_staging(
-                                active,
-                                payload.paths,
-                                payload.move_,
-                                payload.copy_forced,
-                                payload.staging,
-                            );
+                    if let Some(preparation) = payload.preparation.take() {
+                        let mut controller = ctrl.borrow_mut();
+                        let label = controller.config.t("ops.preparing_drop");
+                        controller.ops.start_drop_preparation(preparation, label);
+                        if payload.show_preparation {
+                            controller.ensure_ops_pane();
+                            drop(controller);
+                            sync_layout();
                         }
+                        continue;
                     }
+                    if payload
+                        .delivery_cancel
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        continue;
+                    }
+                    if let Some(error) = payload.error.as_ref() {
+                        let no_target =
+                            error == naygo_platform::drop_target::DROP_TARGET_UNAVAILABLE;
+                        let base =
+                            (!no_target).then(|| ctrl.borrow().config.t("drop.virtual_failed"));
+                        let key = match error.as_str() {
+                            naygo_platform::drop_target::DROP_EMPTY => Some("drop.empty"),
+                            naygo_platform::drop_target::DROP_BAD_MEDIUM => Some("drop.bad_medium"),
+                            naygo_platform::drop_target::DROP_GETDATA_FAILED => {
+                                Some("drop.getdata_failed")
+                            }
+                            naygo_platform::drop_target::DROP_TARGET_UNAVAILABLE => {
+                                Some("drop.no_target")
+                            }
+                            _ => None,
+                        };
+                        let detail = key
+                            .map(|key| ctrl.borrow().config.t(key))
+                            .unwrap_or_else(|| error.clone());
+                        let message =
+                            base.map_or_else(|| detail.clone(), |base| format!("{base}: {detail}"));
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.invoke_show_toast(message.into());
+                        }
+                        crate::logging::log_line(&format!("drop no materializado: {error}"));
+                        continue;
+                    }
+                    let captured_still_open =
+                        payload
+                            .captured_destination
+                            .as_ref()
+                            .is_some_and(|destination| {
+                                ctrl.borrow()
+                                    .ws
+                                    .pane(PaneId(destination.pane_id))
+                                    .and_then(|pane| pane.files.as_ref())
+                                    .is_some_and(|files| files.current_dir == destination.path)
+                            });
+                    let routed = if !payload.internal_source
+                        && payload.captured_destination.is_none()
+                    {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.invoke_show_toast(ctrl.borrow().config.t("drop.no_target").into());
+                        }
+                        false
+                    } else if (!payload.internal_source && !captured_still_open)
+                        || (payload.internal_source
+                            && payload.requires_explicit_destination_at(std::time::Instant::now()))
+                    {
+                        // La preparación puede tardar: no reinterpretar coordenadas tardías.
+                        let opened = ctrl.borrow_mut().open_external_drop_selector(
+                            payload.paths.clone(),
+                            payload.move_,
+                            payload.copy_forced,
+                            payload.internal_source,
+                            payload.staging.clone(),
+                        );
+                        if !opened {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.invoke_show_toast(
+                                    ctrl.borrow().config.t("drop.check_failed").into(),
+                                );
+                            }
+                        }
+                        sync_layout();
+                        false
+                    } else if let Some(destination) = payload.captured_destination.as_ref() {
+                        let mut controller = ctrl.borrow_mut();
+                        let was_idle = controller.pending_drop.is_none();
+                        let routed = controller.queue_selected_external_drop(
+                            PaneId(destination.pane_id),
+                            destination.path.clone(),
+                            payload.move_,
+                            payload.copy_forced,
+                            payload.paths.clone(),
+                            payload.staging.clone(),
+                        );
+                        if was_idle && controller.pending_drop.is_some() {
+                            controller.pending_drop_external_confirmation = true;
+                        }
+                        routed
+                    } else {
+                        let mut routed = false;
+                        if let Some(ui) = ui_weak.upgrade() {
+                            // Tras el bucle modal de `DoDragDrop` (OLE), la ventana de Naygo deja
+                            // de ser la foreground del SO: el primer clic en el modal de conflicto
+                            // que pueda levantar `drop_at` solo reactivaría la ventana en vez de
+                            // accionar el botón. La traemos al frente AQUÍ, antes de procesar el
+                            // drop, para que el modal aparezca con la ventana ya enfocada y el
+                            // primer clic vaya al botón. No toca `ctrl`, así que no hay riesgo de
+                            // doble-préstamo.
+                            if let Some(hwnd) = naygo_hwnd(&ui) {
+                                naygo_platform::window::bring_to_front(hwnd);
+                            }
+                            // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
+                            // Si no se puede convertir, no se selecciona un destino implícito.
+                            let client = naygo_hwnd(&ui).and_then(|hwnd| {
+                                naygo_platform::window::screen_to_client(
+                                    hwnd,
+                                    payload.screen_x,
+                                    payload.screen_y,
+                                )
+                            });
+                            if let Some((client_x, client_y)) = client {
+                                let scale = ui.window().scale_factor().max(0.01);
+                                let cx = client_x as f32 / scale;
+                                let cy = client_y as f32 / scale - TOP_BAR_H;
+                                routed = ctrl.borrow_mut().drop_at_from_ole(
+                                    cx,
+                                    cy,
+                                    payload.move_,       // move_hint (Shift del OLE)
+                                    payload.copy_forced, // copy_forced (Ctrl del OLE)
+                                    payload.internal_source,
+                                    payload.paths.clone(),
+                                    payload.staging.clone(),
+                                );
+                            }
+                        }
+                        if !routed {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.invoke_show_toast(
+                                    ctrl.borrow().config.t("drop.no_target").into(),
+                                );
+                            }
+                        }
+                        routed
+                    };
                     // Tras soltar, el resaltado de arrastre debe irse aunque el `Leave` del
                     // OLE no haya llegado/procesado todavía (defensa: que el borde no se quede
                     // pegado). Si ya estaba limpio, `set_drag_over` no marca cambio.
@@ -906,4 +1013,22 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
             },
         );
     })
+}
+
+#[cfg(test)]
+mod drop_confirmation_tests {
+    use super::format_destination_for_confirmation;
+    use std::path::Path;
+
+    #[test]
+    fn confirmation_path_adds_invisible_breaks_without_changing_visible_text() {
+        let path = Path::new(r"C:\Users\Nicolas\Carpetas\destino");
+        let formatted = format_destination_for_confirmation(path);
+        assert!(formatted.contains('\\'));
+        assert!(formatted.contains('\u{200b}'));
+        assert_eq!(
+            formatted.replace('\u{200b}', ""),
+            path.display().to_string()
+        );
+    }
 }

@@ -231,6 +231,7 @@ where
     tr.set_basket_save_list(c.t("basket.save_list").into());
     tr.set_basket_open_list(c.t("basket.open_list").into());
     tr.set_destination_radar_browse(c.t("destination_radar.browse").into());
+    tr.set_drop_select_destination(c.t("drop.select_destination").into());
     tr.set_comparison_select_different_tip(c.t("slint.comparison.select_different_tip").into());
     tr.set_comparison_select_only_here_tip(c.t("slint.comparison.select_only_here_tip").into());
     tr.set_comparison_copy_tip(c.t("slint.comparison.copy_tip").into());
