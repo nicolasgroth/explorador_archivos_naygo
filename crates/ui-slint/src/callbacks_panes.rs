@@ -391,6 +391,9 @@ pub(crate) fn wire_panes(ui: &AppWindow, ctx: &WireCtx) {
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
         ui.on_destination_radar_choose(move |index| {
+            if index < 0 {
+                return;
+            }
             ctrl.borrow_mut()
                 .destination_radar_resolve(index.max(0) as usize);
             start_timer();

@@ -3,6 +3,12 @@
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 > Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
+> Integración OLE en validación: el indicador interno usa guard RAII durante DoDragDrop; no
+> autentica un origen externo concurrente malicioso. Para una entrega externa se consulta a UI
+> antes de GetData y se confirma la ruta capturada; si el panel cambió se pide elegir destino.
+> Las subcarpetas necesitan navegación previa. La consulta no captura atómicamente eventos
+> pendientes de Windows. Un drop interno tardío exige selector. La cancelación antes de GetData
+> no interrumpe una llamada COM bloqueante; se aplica cuando esta retorna.
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
 > - [ ] Deseable futuro: opción desactivada por defecto para activar el panel al pasar el mouse;

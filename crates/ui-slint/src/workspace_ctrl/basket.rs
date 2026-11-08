@@ -244,6 +244,10 @@ impl WorkspaceCtrl {
             sources,
             candidates: rank([open], usize::MAX),
             origin: DestinationRadarOrigin::Basket,
+            drop_staging: None,
+            drop_copy_forced: false,
+            drop_internal_source: false,
+            drop_panes: Vec::new(),
         });
         true
     }

@@ -7,6 +7,128 @@ use slint::Model;
 use std::time::Duration;
 
 #[test]
+fn drop_sin_destino_exige_seleccion_y_confirmacion() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"dato").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.config.settings.confirm_drop_between_panes = false;
+    assert!(c.open_external_drop_selector(vec![file.clone()], false, true, false, None));
+    assert!(c.pending_drop.is_none());
+    c.destination_radar_resolve(usize::MAX);
+    assert!(c.pending_drop.is_none());
+    assert!(c.destination_radar.is_some());
+    assert!(!work.path().join("archivo.txt").exists());
+    c.destination_radar_resolve(0);
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Confirmation
+    );
+    assert_eq!(c.pending_drop.as_ref().unwrap().dest_dir, work.path());
+    assert!(!work.path().join("archivo.txt").exists());
+    c.cancel_pending_drop();
+    assert!(file.exists());
+    assert!(!work.path().join("archivo.txt").exists());
+}
+
+#[test]
+fn drop_externo_exige_confirmacion_aun_con_conflicto_y_preferencia_desactivada() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"nuevo").unwrap();
+    std::fs::write(work.path().join("archivo.txt"), b"anterior").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.config.settings.confirm_drop_between_panes = false;
+    assert!(c.open_external_drop_selector(vec![file.clone()], false, true, false, None));
+    c.destination_radar_resolve(0);
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Confirmation
+    );
+    assert_eq!(c.pending_drop.as_ref().unwrap().dest_dir, work.path());
+    c.cancel_pending_drop();
+    assert_eq!(
+        std::fs::read(work.path().join("archivo.txt")).unwrap(),
+        b"anterior"
+    );
+    assert_eq!(std::fs::read(file).unwrap(), b"nuevo");
+}
+
+#[test]
+fn drop_ole_externo_rapido_ignora_fila_sin_acreditar_y_confirma_ruta() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"nuevo").unwrap();
+    std::fs::create_dir(work.path().join("subcarpeta")).unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.config.settings.confirm_drop_between_panes = false;
+    let pane = c.ws.active_id().unwrap();
+    let row = active_pos_of(&c, "subcarpeta").unwrap();
+    c.set_drag_over_at(Some(pane), Some(140.0));
+    c.set_drag_over_row(pane, row as i32);
+    let (_, rect) = c
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .unwrap();
+    assert!(c.drop_at_from_ole(
+        rect.x + rect.w / 2.0,
+        rect.y + rect.h / 2.0,
+        false,
+        true,
+        false,
+        vec![file.clone()],
+        None
+    ));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Confirmation
+    );
+    assert_eq!(c.pending_drop.as_ref().unwrap().dest_dir, work.path());
+    c.cancel_pending_drop();
+    assert!(!work.path().join("archivo.txt").exists());
+    assert_eq!(std::fs::read(file).unwrap(), b"nuevo");
+}
+
+#[test]
+fn selector_de_drop_rechaza_panel_cuya_ruta_cambio() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"dato").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    assert!(c.open_external_drop_selector(vec![file.clone()], false, true, false, None));
+    let pane = c.destination_radar.as_ref().unwrap().drop_panes[0];
+    c.ws.pane_mut(pane)
+        .unwrap()
+        .files
+        .as_mut()
+        .unwrap()
+        .current_dir = other.path().to_path_buf();
+    c.destination_radar_resolve(0);
+    assert!(c.pending_drop.is_none());
+    assert!(c.destination_radar.is_none());
+    assert!(file.exists());
+    assert!(!other.path().join("archivo.txt").exists());
+}
+
+#[test]
 fn preview_respects_tabs_maximized_panel_window_visibility_and_close() {
     let work = tempfile::tempdir().unwrap();
     let cfg = tempfile::tempdir().unwrap();
@@ -1846,6 +1968,10 @@ fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
     // El centro de cada panel resuelve a ESE panel.
     let (ox, oy) = center(origin);
     let (dx, dy) = center(dest);
+    let captured = c.capture_external_drop_destination(dx, dy).unwrap();
+    assert_eq!(captured.pane_id, dest.0);
+    assert_eq!(captured.path, b.path());
+    assert!(c.capture_external_drop_destination(-50.0, -50.0).is_none());
     assert_eq!(
         c.pane_at(ox, oy),
         Some(origin),
@@ -1863,6 +1989,37 @@ fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
     assert!(!c.set_drag_over(Some(dest)), "mismo valor: no cambia");
     assert!(c.set_drag_over(None), "limpiar: cambia");
     assert_eq!(c.drag_over_pane(), None);
+}
+
+#[test]
+fn captura_externa_rechaza_bandeja() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    let area = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 800.0,
+        h: 600.0,
+    };
+    c.set_area(area);
+    c.add_pane_of(PanePurpose::Basket, area);
+    let basket =
+        c.ws.panes()
+            .iter()
+            .find(|pane| pane.purpose == PanePurpose::Basket)
+            .unwrap()
+            .id;
+    let (_, rect) = c
+        .pane_rects(area)
+        .into_iter()
+        .find(|(id, _)| *id == basket)
+        .unwrap();
+    let (x, y) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    assert_eq!(c.pane_at(x, y), Some(basket));
+    assert!(c.capture_external_drop_destination(x, y).is_none());
+    assert_eq!(c.drop_hover_pane(x, y, false), None);
+    assert_eq!(c.drop_hover_pane(x, y, true), Some(basket));
 }
 
 /// D-1: al soltar dentro del MISMO panel sobre una fila-carpeta, el hit-test de FilePanel deja

@@ -645,6 +645,7 @@ export component AppWindow inherits Window {
     in property <[DestinationRadarRowVm]> destination-radar-rows;
     in property <bool> destination-radar-open;
     in property <bool> destination-radar-move;
+    in property <bool> destination-radar-explicit;
     callback destination-radar-choose(int);
     callback destination-radar-browse();
     callback destination-radar-cancel();
@@ -2565,7 +2566,8 @@ export component AppWindow inherits Window {
     }
     if root.destination-radar-open: DestinationRadar {
         width: 100%; height: 100%; rows: root.destination-radar-rows;
-        title: (root.destination-radar-move ? Tr.ops-file-kind-move : Tr.ops-file-kind-copy) + "…";
+        require-explicit: root.destination-radar-explicit;
+        title: root.destination-radar-explicit ? Tr.drop-select-destination : (root.destination-radar-move ? Tr.ops-file-kind-move : Tr.ops-file-kind-copy) + "…";
         choose(index) => { root.destination-radar-choose(index); }
         browse => { root.destination-radar-browse(); }
         dismiss => { root.destination-radar-cancel(); }

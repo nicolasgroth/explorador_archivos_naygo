@@ -207,6 +207,9 @@ pub(crate) fn build_sync(
             }
             let active = c.active_id();
             ui.set_destination_radar_open(c.destination_radar.is_some());
+            ui.set_destination_radar_explicit(c.destination_radar.as_ref().is_some_and(|radar| {
+                radar.origin == crate::workspace_ctrl::DestinationRadarOrigin::ExternalDrop
+            }));
             ui.set_destination_radar_move(
                 c.destination_radar
                     .as_ref()

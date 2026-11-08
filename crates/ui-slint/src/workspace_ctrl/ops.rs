@@ -435,6 +435,30 @@ impl WorkspaceCtrl {
         self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, None)
     }
 
+    /// Un origen externo sin fila acreditada usa la carpeta del panel y exige confirmación.
+    #[allow(clippy::too_many_arguments)]
+    pub fn drop_at_from_ole(
+        &mut self,
+        content_x: f32,
+        content_y: f32,
+        move_hint: bool,
+        copy_forced: bool,
+        internal_source: bool,
+        paths: Vec<std::path::PathBuf>,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        let was_idle = self.pending_drop.is_none();
+        if !internal_source {
+            self.drag_over_row = None;
+        }
+        let routed =
+            self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, staging);
+        if was_idle && self.pending_drop.is_some() {
+            self.pending_drop_external_confirmation = !internal_source;
+        }
+        routed
+    }
+
     /// Variante que enlaza el staging de un origen OLE virtual con el modal/cola/operación.
     pub fn drop_at_with_staging(
         &mut self,
@@ -445,7 +469,6 @@ impl WorkspaceCtrl {
         paths: Vec<std::path::PathBuf>,
         staging: Option<naygo_platform::drop_target::StagedDrop>,
     ) -> bool {
-        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
         if paths.is_empty() {
             crate::logging::breadcrumb("drop_at: sin rutas, no-op");
@@ -523,6 +546,23 @@ impl WorkspaceCtrl {
                 dest_dir.display()
             ));
         }
+        self.queue_selected_external_drop(target, dest_dir, move_hint, copy_forced, paths, staging)
+    }
+
+    /// Usa un destino elegido expresamente; comparte validación, conflictos y confirmación.
+    pub fn queue_selected_external_drop(
+        &mut self,
+        target: PaneId,
+        dest_dir: std::path::PathBuf,
+        move_hint: bool,
+        copy_forced: bool,
+        paths: Vec<std::path::PathBuf>,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
+        if paths.is_empty() {
+            return false;
+        }
         // No permitir soltar una carpeta sobre sí misma ni dentro de uno de sus descendientes.
         // `Path::starts_with` compara componentes, no prefijos de texto, y también cubre el caso
         // de la carpeta exacta. Esta defensa es previa al motor: evita requests imposibles y
@@ -582,6 +622,7 @@ impl WorkspaceCtrl {
             count,
             staging,
         });
+        self.pending_drop_external_confirmation = false;
         self.pending_drop_confirmation = false;
         // El probe de conflicto se hace en worker antes de elegir entre confirmación genérica y
         // diálogo lado a lado. Mantener una sola plaza evita acumular threads cuando un destino
@@ -599,6 +640,7 @@ impl WorkspaceCtrl {
             });
         if let Err(error) = spawned {
             self.pending_drop = None;
+            self.pending_drop_external_confirmation = false;
             self.pending_drop_confirmation = false;
             self.pending_listing_error =
                 Some(format!("{}: {error}", self.config.t("drop.check_failed")));
@@ -632,12 +674,15 @@ impl WorkspaceCtrl {
             Err(error) => {
                 crate::logging::log_line(&format!("preconsulta de drop falló: {error}"));
                 self.pending_drop = None;
+                self.pending_drop_external_confirmation = false;
                 self.pending_listing_error =
                     Some(format!("{}: {error}", self.config.t("drop.check_failed")));
                 return DropProbeEvent::Failed;
             }
         };
-        if !occupied && self.config.settings.confirm_drop_between_panes {
+        if self.pending_drop_external_confirmation
+            || (!occupied && self.config.settings.confirm_drop_between_panes)
+        {
             self.pending_drop_confirmation = true;
             return DropProbeEvent::Confirmation;
         }
@@ -675,6 +720,7 @@ impl WorkspaceCtrl {
     /// Devuelve true si había un drop pendiente y se lanzó. No-op (false) si no había ninguno.
     pub fn confirm_pending_drop(&mut self) -> bool {
         self.pending_drop_confirmation = false;
+        self.pending_drop_external_confirmation = false;
         let Some(pd) = self.pending_drop.take() else {
             return false;
         };
@@ -707,6 +753,7 @@ impl WorkspaceCtrl {
     /// El usuario CANCELÓ el drop pendiente (botón Cancelar / Esc / clic fuera): lo descarta sin
     /// copiar ni mover nada.
     pub fn cancel_pending_drop(&mut self) {
+        self.pending_drop_external_confirmation = false;
         if let Some(cancel) = &self.drop_collision_cancel {
             cancel.cancel();
         }

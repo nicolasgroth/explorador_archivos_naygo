@@ -243,6 +243,8 @@ pub enum OpsMode {
 /// Estado completo de operaciones de archivo.
 pub struct OpsCtrl {
     pub active_ops: Vec<ActiveOp>,
+    /// Preparaciones OLE transitorias: se eliminan al terminar, sin crear historial falso.
+    drop_preparations: HashSet<u64>,
     pub pending_dialog: Option<OpDialog>,
     pub undo_history: Vec<UndoEntry>,
     pub next_undo_id: u64,
@@ -328,6 +330,7 @@ impl OpsCtrl {
     pub fn new(config_dir: PathBuf) -> OpsCtrl {
         OpsCtrl {
             active_ops: Vec::new(),
+            drop_preparations: HashSet::new(),
             pending_dialog: None,
             undo_history: Vec::new(),
             next_undo_id: 1,
@@ -1231,6 +1234,13 @@ impl OpsCtrl {
                 self.active_ops[i].staging_guards.clear();
             }
         }
+
+        self.active_ops.retain(|op| {
+            if op.summary.is_some() && self.drop_preparations.remove(&op.id) {
+                return false;
+            }
+            true
+        });
 
         // Abrir el modal de conflicto de CARPETA (P3) si alguna op está parada esperando esa
         // decisión y no hay otro modal abierto. Se prioriza sobre el conflicto por archivo porque

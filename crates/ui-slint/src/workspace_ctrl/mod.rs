@@ -111,12 +111,17 @@ pub struct DestinationRadar {
     /// La operación que se confirma al elegir un destino. El radar se comparte entre la
     /// selección de un panel Files y la bandeja temporal, sin confundir sus rutas de origen.
     pub origin: DestinationRadarOrigin,
+    pub drop_staging: Option<naygo_platform::drop_target::StagedDrop>,
+    pub drop_copy_forced: bool,
+    pub drop_internal_source: bool,
+    pub drop_panes: Vec<PaneId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DestinationRadarOrigin {
     FilesSelection,
     Basket,
+    ExternalDrop,
 }
 
 /// Estado estable de una sesión de renombrado inline.
@@ -270,6 +275,8 @@ pub struct WorkspaceCtrl {
     pub drop_collision_cancel: Option<naygo_core::CancellationToken>,
     /// Drop libre cuya confirmación genérica ya puede abrirse en UI.
     pub pending_drop_confirmation: bool,
+    /// Exige confirmar el destino completo para un drop OLE externo.
+    pub pending_drop_external_confirmation: bool,
     /// Último clic (panel, posición de vista, instante) para detectar el doble-clic en Rust
     /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
     /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
@@ -841,6 +848,7 @@ impl WorkspaceCtrl {
             drop_collision_rx: None,
             drop_collision_cancel: None,
             pending_drop_confirmation: false,
+            pending_drop_external_confirmation: false,
             last_click: None,
             last_open: None,
             typeahead: String::new(),

@@ -20,6 +20,32 @@
 //! usuario suelta o cancela, y devuelve el efecto final. Tolerante: cualquier fallo se
 //! reporta como `DndError`, nunca hace panic.
 
+#[cfg(windows)]
+static ACTIVE_DRAG_SOURCES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(windows)]
+pub(crate) fn internal_drag_active() -> bool {
+    ACTIVE_DRAG_SOURCES.load(std::sync::atomic::Ordering::Acquire) != 0
+}
+
+#[cfg(windows)]
+struct InternalDragGuard;
+
+#[cfg(windows)]
+impl InternalDragGuard {
+    fn new() -> Self {
+        ACTIVE_DRAG_SOURCES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Drop for InternalDragGuard {
+    fn drop(&mut self) {
+        ACTIVE_DRAG_SOURCES.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// Resultado de un arrastre OLE iniciado por Naygo hacia el SO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragOutcome {
@@ -53,6 +79,8 @@ pub use windows_impl::start_drag;
 
 #[cfg(all(windows, test))]
 pub(crate) use windows_impl::test_file_data_object;
+#[cfg(all(windows, test))]
+pub(crate) use windows_impl::test_gated_file_data_object;
 
 #[cfg(windows)]
 mod windows_impl {
@@ -132,16 +160,42 @@ mod windows_impl {
     #[implement(IDataObject)]
     struct FilesDataObject {
         paths: Vec<PathBuf>,
+        #[cfg(test)]
+        gate: Option<(
+            std::sync::mpsc::Sender<()>,
+            std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        )>,
     }
 
     #[cfg(test)]
     pub(crate) fn test_file_data_object(paths: Vec<PathBuf>) -> IDataObject {
-        FilesDataObject { paths }.into()
+        FilesDataObject { paths, gate: None }.into()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_gated_file_data_object(
+        paths: Vec<PathBuf>,
+        entered: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) -> IDataObject {
+        FilesDataObject {
+            paths,
+            gate: Some((entered, std::sync::Mutex::new(resume))),
+        }
+        .into()
     }
 
     impl IDataObject_Impl for FilesDataObject_Impl {
         /// Único método "real": ante CF_HDROP devuelve un STGMEDIUM con un HGLOBAL fresco.
         fn GetData(&self, pformatetcin: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+            #[cfg(test)]
+            if let Some((entered, resume)) = &self.gate {
+                let _ = entered.send(());
+                let _ = resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(5));
+            }
             // SAFETY: el SO entrega un puntero válido a un FORMATETC; lo leemos por copia.
             let format = unsafe {
                 match pformatetcin.as_ref() {
@@ -306,6 +360,8 @@ mod windows_impl {
             // Construir los dos objetos COM y obtener sus interfaces.
             let data_object: IDataObject = FilesDataObject {
                 paths: paths.to_vec(),
+                #[cfg(test)]
+                gate: None,
             }
             .into();
             let drop_source: IDropSource = NaygoDropSource.into();
@@ -313,6 +369,7 @@ mod windows_impl {
             let mut effect = DROPEFFECT::default();
             // El bucle modal del SO. Ofrecemos COPY|MOVE; el destino y los modificadores del
             // usuario deciden el efecto final, que el SO escribe en `effect`.
+            let _source_guard = super::InternalDragGuard::new();
             let result: HRESULT = DoDragDrop(
                 &data_object,
                 &drop_source,
@@ -343,6 +400,17 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn internal_drag_guard_resets_on_early_exit() {
+        assert!(!internal_drag_active());
+        {
+            let _guard = InternalDragGuard::new();
+            assert!(internal_drag_active());
+        }
+        assert!(!internal_drag_active());
+    }
 
     /// `start_drag` con lista vacía devuelve `NoItems` sin tocar OLE (no entra al bucle
     /// modal). En no-Windows el stub también es `NoItems` por la misma guarda… salvo que

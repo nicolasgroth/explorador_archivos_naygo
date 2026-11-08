@@ -48,6 +48,30 @@ impl WorkspaceCtrl {
         })
     }
 
+    /// Captura solo destinos Files. Bandeja no admite entregas OLE externas silenciosas.
+    pub fn capture_external_drop_destination(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> Option<naygo_platform::drop_target::CapturedDropDestination> {
+        let id = self.pane_at(x, y)?;
+        let files = self.ws.pane(id)?.files.as_ref()?;
+        Some(naygo_platform::drop_target::CapturedDropDestination {
+            pane_id: id.0,
+            path: files.current_dir.clone(),
+        })
+    }
+
+    /// El hover externo solo marca paneles que aceptan el destino capturado.
+    pub fn drop_hover_pane(&self, x: f32, y: f32, internal_source: bool) -> Option<PaneId> {
+        if internal_source {
+            self.pane_at(x, y)
+        } else {
+            let pane = self.pane_at(x, y)?;
+            self.ws.pane(pane)?.files.as_ref().map(|_| pane)
+        }
+    }
+
     /// Fija el panel resaltado por arrastre (hover de drop). Conserva esta API pequeña para los
     /// callers que no traen coordenadas (y para las pruebas); el camino OLE usa
     /// `set_drag_over_at` para además informar la fila destino a `FilePanel`.
@@ -989,11 +1013,93 @@ impl WorkspaceCtrl {
             sources: self.selected_paths(),
             candidates,
             origin: DestinationRadarOrigin::FilesSelection,
+            drop_staging: None,
+            drop_copy_forced: false,
+            drop_internal_source: false,
+            drop_panes: Vec::new(),
         });
         false
     }
 
+    /// No infiere el panel original: el usuario debe elegir expresamente una carpeta abierta.
+    pub fn open_external_drop_selector(
+        &mut self,
+        paths: Vec<PathBuf>,
+        move_hint: bool,
+        copy_forced: bool,
+        internal_source: bool,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        if paths.is_empty()
+            || self.destination_radar.is_some()
+            || self.pending_drop.is_some()
+            || self.ops.pending_dialog.is_some()
+            || self.drop_collision_rx.is_some()
+        {
+            return false;
+        }
+        use naygo_core::destination_radar::{DestinationCandidate, DestinationSource};
+        let mut panes = Vec::new();
+        let mut candidates = Vec::new();
+        for (id, _) in self.pane_rects(self.last_area) {
+            if let Some(files) = self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+                panes.push(id);
+                candidates.push(DestinationCandidate {
+                    path: files.current_dir.clone(),
+                    label: format!("{} · {}", self.pane_label(id), id.0),
+                    source: DestinationSource::OpenPanel,
+                });
+            }
+        }
+        if candidates.is_empty() {
+            return false;
+        }
+        self.destination_radar = Some(DestinationRadar {
+            move_files: move_hint,
+            sources: paths,
+            candidates,
+            origin: DestinationRadarOrigin::ExternalDrop,
+            drop_staging: staging,
+            drop_copy_forced: copy_forced,
+            drop_internal_source: internal_source,
+            drop_panes: panes,
+        });
+        true
+    }
+
     pub fn destination_radar_resolve(&mut self, index: usize) {
+        if let Some(radar) = self.destination_radar.as_ref() {
+            if radar.origin == DestinationRadarOrigin::ExternalDrop {
+                let Some((&pane, candidate)) =
+                    radar.drop_panes.get(index).zip(radar.candidates.get(index))
+                else {
+                    return;
+                };
+                let path = candidate.path.clone();
+                if self
+                    .ws
+                    .pane(pane)
+                    .and_then(|p| p.files.as_ref())
+                    .is_none_or(|f| f.current_dir != path)
+                {
+                    self.destination_radar = None;
+                    self.pending_listing_error = Some(self.config.t("drop.check_failed"));
+                    return;
+                }
+                let radar = self.destination_radar.take().expect("radar existe");
+                let internal = radar.drop_internal_source;
+                self.queue_selected_external_drop(
+                    pane,
+                    path,
+                    radar.move_files,
+                    radar.drop_copy_forced,
+                    radar.sources,
+                    radar.drop_staging,
+                );
+                self.pending_drop_external_confirmation = !internal && self.pending_drop.is_some();
+                return;
+            }
+        }
         let Some(radar) = self.destination_radar.take() else {
             return;
         };
@@ -1027,6 +1133,7 @@ impl WorkspaceCtrl {
             DestinationRadarOrigin::Basket => {
                 self.basket_transfer_paths(radar.sources, path, radar.move_files);
             }
+            DestinationRadarOrigin::ExternalDrop => { /* selección solo por panel identificado */ }
         }
     }
 
