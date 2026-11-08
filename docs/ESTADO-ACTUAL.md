@@ -38,9 +38,18 @@ terminó con gate Windows y benchmark aprobados; el gate ejecutó 1.572 tests, 9
 formato, pins, prueba SignPath e i18n. Linux fue omitido por diseño. Revisé los logs de ambos jobs:
 no contienen advertencias de Node 20. No requiere regenerar el instalador porque no cambió el producto.
 
-La reanudación de la aceptación OLE no pudo capturar la ventana: Computer Use devolvió
-`FrameArrived timed out`. No se interactuó con la aplicación en ese intento; sigue pendiente la
-prueba manual con Explorer, Directory Opus y 7-Zip.
+Reintento OLE local del 2026-11-08: `list_apps` encontró Naygo y 7-Zip, pero la captura de Naygo
+agotó el tiempo dos veces (`window capture timed out: timed out waiting on channel`), también tras
+reenumerar la ventana. No se inició el arrastre ni se alteró contenido de la app. Naygo 0.5.4
+continúa abierto y responde con el SHA-256 Release esperado.
+
+En el checkout actual pasó `cargo test -p naygo-platform --locked drop_target::`: 31 pruebas
+aprobadas y una ignorada. La medición exploratoria de captura/materialización informó 1.000 archivos:
+462 ms / 1,50 s; 10.000: 4,77 s / 12,09 s. Incluye operaciones en temporales locales, no es una
+medición de OLE ni del recorrido completo de 7-Zip. Preparé una fixture sintética de 35 archivos,
+subcarpetas anidadas y una carpeta vacía; `7z t` pasó y el destino de prueba sigue vacío:
+`target/agent-out/e2-7zip-fixtures/20261108-170222-3ff39c1e/`. La aceptación real con Explorer,
+Directory Opus y 7-Zip sigue pendiente.
 
 ## Distribución local instalada — 2026-11-02 (histórico)
 

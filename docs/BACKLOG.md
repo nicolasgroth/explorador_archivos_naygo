@@ -20,6 +20,11 @@
 > - [x] Gate final aislado: receptor OLE, recuento, seguridad y paneles pasaron con directorio
 >   `CARGO_TARGET_DIR` dedicado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y
 >   formato correcto. La prueba manual con Explorer/Directory Opus/7-Zip sigue pendiente.
+> - [x] Revalidación local del receptor OLE, 2026-11-08: 31 pruebas aprobadas, 1 ignorada; fixture
+>   sintética de 35 archivos con árbol y carpeta vacía validada por `7z t`. La medición exploratoria
+>   de 10.000 archivos pequeños fue 4,77 s para capturar y 12,09 s para materializar, sin medir OLE
+>   ni 7-Zip. La captura de ventana agotó el tiempo incluso tras reenumerar; la matriz interactiva
+>   sigue abierta y no se inició un arrastre en este reintento.
 > - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.

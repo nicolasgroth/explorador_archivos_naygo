@@ -12,12 +12,20 @@ automático configurable de Operaciones, recuentos, protección del efecto OLE y
 captura el destino antes de consultar el origen. El gate conjunto pasó 1.572 pruebas, 9 ignoradas,
 Clippy y formato. El build supervisado se instaló localmente y preservó la configuración; el setup
 no tiene firma. README y capturas sintéticas fueron actualizados, y el portable y setup están en
-`dist/`. Falta completar la aceptación OLE interactiva y revisar el CI posterior al push.
+`dist/`. El CI posterior al push (run `42512780530`) aprobó Windows y benchmark; Linux fue omitido
+por diseño. Falta completar la aceptación OLE interactiva.
 
 La prueba E2 anterior recibió desde 7-Zip 24.07 una carpeta con 259 archivos y cuatro
 subcarpetas, una vacía, contrastados por SHA-256. La nueva arquitectura ya está integrada, pero
 esa aceptación se debe repetir sobre la build final: la prueba anterior no demuestra el handshake,
 la confirmación ni la cancelación de esta versión.
+
+Reintento local 2026-11-08: `cargo test -p naygo-platform --locked drop_target::` aprobó 31 pruebas
+y dejó una medición ignorada; la medición explícita midió la captura/materialización de 10.000
+archivos pequeños en 4,77/12,09 s. La fixture ZIP sintética actual pasó `7z t` (35 archivos,
+árbol anidado y carpeta vacía), con destino todavía vacío. La captura de la ventana de Naygo expiró
+dos veces incluso tras reenumerarla; no se realizó arrastre OLE. Esta medición local no sustituye la
+matriz interactiva ni representa el tiempo end-to-end de 7-Zip.
 
 ## Fundamento y elección técnica
 
