@@ -82,6 +82,8 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 
 ### 4. Cierre visual y documentación
 
+- [x] Marcar el panel Files o la Bandeja que está bajo el cursor durante un arrastre, sin mover
+  el foco de teclado. Implementado en `715904d4`; falta validar visualmente en la instalación.
 - [ ] Validar en la instalación real paneles únicos y duplicados heredados, ubicación tras cerrar,
   reiniciar y cambiar el layout, autocierre y errores; revisar foco y apariencia en temas claros,
   oscuros y contrastantes. No eliminar disposiciones o preferencias existentes.

@@ -5,6 +5,9 @@
 > Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
 >
 > **Solicitudes Windows 0.5.4, 2026-10-29 — pendientes de implementación:**
+> - [x] Señal visual durante arrastre: destacar con borde el panel de archivos o la Bandeja bajo
+>   el cursor, incluidos paneles con pestañas, sin cambiar el foco del teclado. Integrado en
+>   `715904d4`; aceptación visual manual queda pendiente junto con la matriz Windows.
 > - [ ] Deseable futuro: opción desactivada por defecto para activar el panel al pasar el mouse;
 >   evaluar demora configurable, accesibilidad y riesgo de cambios de foco involuntarios. El
 >   resaltado del destino durante un arrastre es independiente y no debe cambiar el foco.
