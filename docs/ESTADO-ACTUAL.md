@@ -27,6 +27,19 @@ en `core/platform` (972 aprobadas, 27 fallidas), registrado aparte en el backlog
 interactiva final de OLE con Explorer, Directory Opus y 7-Zip sigue pendiente; no declarar
 compatibilidad general hasta registrar esa matriz.
 
+## CI — migración de acciones a Node 24, 2026-11-08
+
+El commit `c552d897` actualiza `actions/checkout` a v7.0.1 y `actions/upload-artifact` a v7.0.2,
+fijados por SHA completos verificados. Ambos declaran Node 24. En el despacho manual, el gate Windows
+queda activo por defecto y Linux/benchmark pasan a optativos; así el gate prioritario no ejecuta
+por accidente la matriz Linux que sigue pendiente. La corrida de comprobación
+[42512780530](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42512780530)
+está en curso; falta confirmar los dos jobs y revisar sus logs por advertencias de Node.
+
+La reanudación de la aceptación OLE no pudo capturar la ventana: Computer Use devolvió
+`FrameArrived timed out`. No se interactuó con la aplicación en ese intento; sigue pendiente la
+prueba manual con Explorer, Directory Opus y 7-Zip.
+
 ## Distribución local instalada — 2026-11-02 (histórico)
 
 La compilación Windows 0.5.4 de `2319e51d` pasó el gate conjunto: 1553 pruebas,

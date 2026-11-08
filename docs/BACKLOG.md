@@ -53,6 +53,11 @@
 >   sobre `a28d2810`; gate Windows aprobado: 1.571 tests, 9 ignorados, Clippy sin warnings,
 >   formato, pins, verificación SignPath e i18n; benchmark aprobado. El workflow total quedó
 >   fallido solo por Linux (972 aprobadas, 27 fallidas), que se sigue por separado en L-03/W-12.
+> - [ ] W-12/CI: la advertencia por runtimes Node 20 se corrigió en `c552d897`: `checkout`
+>   v7.0.1 y `upload-artifact` v7.0.2 están fijados a SHA completos con firmas verificadas y
+>   ambos declaran Node 24. El despacho manual ejecuta Windows por defecto; Linux y benchmark
+>   quedan optativos. Corrida de validación [42512780530](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42512780530)
+>   en curso; cerrar al confirmar gate y benchmark y revisar advertencias de runtime.
 > - [x] Operaciones: corregida la presentación de `OpMsg::Failed`: conserva el error
 >   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
 >   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534
