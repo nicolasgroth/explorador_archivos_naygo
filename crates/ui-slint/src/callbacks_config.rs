@@ -301,6 +301,16 @@ pub(crate) fn wire_config(
         bool,
         set_confirm_drop_between_panes
     );
+    cfg_setter!(
+        on_set_confirm_external_drops,
+        bool,
+        set_confirm_external_drops
+    );
+    cfg_setter!(
+        on_set_skip_external_drop_confirmation_session,
+        bool,
+        set_skip_external_drop_confirmation_session
+    );
     cfg_setter!(on_set_show_op_summary, bool, set_show_op_summary);
     cfg_setter!(on_set_auto_hide_operations, bool, set_auto_hide_operations);
     cfg_setter!(on_set_show_parent, bool, set_show_parent);

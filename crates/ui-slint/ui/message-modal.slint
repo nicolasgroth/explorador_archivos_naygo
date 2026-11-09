@@ -5,7 +5,7 @@
 import { MessageVm } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
-import { ScrollView } from "std-widgets.slint";
+import { CheckBox, ScrollView } from "std-widgets.slint";
 
 // Botón de diálogo reutilizable (copia del de op-dialogs para no acoplar los archivos).
 component DlgBtn inherits Rectangle {
@@ -32,8 +32,10 @@ component DlgBtn inherits Rectangle {
 
 export component MessageModal inherits Rectangle {
     in property <MessageVm> vm;
+    in property <bool> external-drop: false;
     callback message-confirm();
     callback message-cancel();
+    callback drop-confirm(int);
 
     visible: root.vm.kind > 0;
     background: #000000aa;
@@ -42,6 +44,9 @@ export component MessageModal inherits Rectangle {
     // struct (`vm.kind`) NO dispara en Slint; espejarlo en una property propia sí dispara `changed k`.
     // Mismo patrón que op-dialogs.slint (ver su `changed k`).
     property <int> k: root.vm.kind;
+    // Alcance elegido en el diálogo de arrastre: 0=solo esta vez, 1=sesión, 2=permanente.
+    // Solo se aplica al confirmar la copia/movimiento; cancelar no modifica preferencias.
+    property <int> drop-confirm-scope: 0;
     // Al APARECER el modal (k pasa de 0 a >0) forzamos el foco al FocusScope. Sin esto, el modal se
     // pinta pero el FocusScope no tiene el foco: el PRIMER clic del usuario se gasta en dar foco (y
     // recién el SEGUNDO acciona el botón) — el bug del "doble clic" que reportó Nicolás. op-dialogs
@@ -49,6 +54,9 @@ export component MessageModal inherits Rectangle {
     changed k => {
         if (root.k > 0) {
             msg-focus.focus();
+        }
+        if (root.k == 3) {
+            root.drop-confirm-scope = 0;
         }
     }
 
@@ -106,6 +114,24 @@ export component MessageModal inherits Rectangle {
                 }
             }
 
+            if root.vm.kind == 3 && root.external-drop: VerticalLayout {
+                spacing: 4px;
+                CheckBox {
+                    text: Tr.drop-no-ask-session;
+                    checked: root.drop-confirm-scope == 1;
+                    toggled => {
+                        root.drop-confirm-scope = self.checked ? 1 : 0;
+                    }
+                }
+                CheckBox {
+                    text: Tr.drop-no-ask-always;
+                    checked: root.drop-confirm-scope == 2;
+                    toggled => {
+                        root.drop-confirm-scope = self.checked ? 2 : 0;
+                    }
+                }
+            }
+
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px;
@@ -118,7 +144,13 @@ export component MessageModal inherits Rectangle {
                     label: root.vm.confirm-label;
                     primary: root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4 || root.vm.kind == 5;
                     danger: root.vm.danger;
-                    clicked => { root.message-confirm(); }
+                    clicked => {
+                        if root.vm.kind == 3 {
+                            root.drop-confirm(root.drop-confirm-scope);
+                        } else {
+                            root.message-confirm();
+                        }
+                    }
                 }
             }
         }

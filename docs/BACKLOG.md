@@ -21,10 +21,11 @@
 >   `CARGO_TARGET_DIR` dedicado: 1.572 pruebas aprobadas, 9 ignoradas, Clippy sin warnings y
 >   formato correcto. La prueba manual con Explorer/Directory Opus/7-Zip sigue pendiente.
 > - [x] Revalidación local del receptor OLE, 2026-11-08: 31 pruebas aprobadas, 1 ignorada; fixture
->   sintética de 35 archivos con árbol y carpeta vacía validada por `7z t`. La medición exploratoria
->   de 10.000 archivos pequeños fue 4,77 s para capturar y 12,09 s para materializar, sin medir OLE
->   ni 7-Zip. La captura de ventana agotó el tiempo incluso tras reenumerar; la matriz interactiva
->   sigue abierta y no se inició un arrastre en este reintento.
+>   sintética de 35 archivos con árbol y carpeta vacía validada por `7z t`. Nicolás la arrastró desde
+>   7-Zip a un destino OneDrive; se comprobaron 35 archivos y 4 carpetas, con estructura y hashes
+>   idénticos. La medición exploratoria de 10.000 archivos pequeños fue 4,77 s para capturar y
+>   12,09 s para materializar, sin medir OLE end-to-end. La matriz de Explorer/Directory Opus y los
+>   casos de mover, cancelar y condiciones adversas siguen abiertos.
 > - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
@@ -41,6 +42,10 @@
 >   `GetData`, captura panel/ruta, rechaza el fallback al panel activo y confirma la ruta completa;
 >   si el panel ya cambió, abre el selector explícito. Limitaciones y matriz manual pendientes en
 >   [el plan de cierre Windows](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
+> - [x] Confirmación de drops externos: omitirla por sesión o de forma persistente desde el diálogo;
+>   ambos valores son modificables en Configuración. La opción permanente sobrevive al reinicio y la
+>   de sesión se restablece al cerrar Naygo. La prevalidación del destino y los diálogos de conflicto
+>   siguen activos. Incluido en 0.5.5, gate completo y build supervisado aprobados el 2026-11-08.
 > - [x] Panel de operaciones: recordar su ubicación al volver a abrirlo y ofrecer en
 >   configuración el cierre automático al finalizar, activado por defecto. Conservar la
 >   visibilidad de errores y la posibilidad de consultar el historial. Solicitado el 2026-11-01.
@@ -321,7 +326,8 @@
 >   visual de capturas Dracula/Solarized/Paper; gate completo aprobado (1.511 pruebas, 8 ignoradas,
 >   Clippy y formato). Distribución supervisada generada y ZIP verificado; falta aceptación nativa.
 >   La comprobación no cubre todas las superficies, estados ni temas personalizados.
-> - [ ] Subir la versión a 0.5.4 y generar/validar setup y portable tras las correcciones.
+> - [x] Versión 0.5.4 y setup/portable validados en la instalación local del 2026-11-08; la
+>   actualización de drops externos quedó en 0.5.5.
 > **Instalación 2026-10-20:** con autorización previa, el setup 0.5.3 de W-06B se actualizó in-place.
 > Naygo queda abierto/respondiente como PID 43624; EXE instalado idéntico a Release y ZIP. Los
 > cuatro JSON de usuario conservaron hashes y parsean; el PDB previo conserva SHA-256

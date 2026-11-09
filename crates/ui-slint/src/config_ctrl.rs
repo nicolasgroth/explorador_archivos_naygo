@@ -50,6 +50,9 @@ pub(crate) struct ThemeSaveRequest {
 /// Estado de configuración de la app: ajustes + idioma + temas + atajos.
 pub struct ConfigCtrl {
     pub settings: Settings,
+    /// Preferencia efímera: omitir la confirmación de drops OLE externos hasta cerrar Naygo.
+    /// No se serializa para que la opción de sesión vuelva a preguntar tras reiniciar.
+    pub skip_external_drop_confirmation_session: bool,
     pub i18n: I18n,
     pub themes: ThemeCatalog,
     /// Catálogo de sets de íconos descubierto al cargar o importar packs; callbacks lo consultan
@@ -91,6 +94,7 @@ impl ConfigCtrl {
         let settings = Settings::default();
         let keymap = KeyMap::defaults();
         ConfigCtrl {
+            skip_external_drop_confirmation_session: false,
             i18n: I18n::embedded(&settings.language),
             settings: settings.clone(),
             themes: ThemeCatalog::embedded(),
@@ -144,6 +148,7 @@ impl ConfigCtrl {
         };
         let keymap = config::load_keymap(&config_dir);
         ConfigCtrl {
+            skip_external_drop_confirmation_session: false,
             startup_saved_settings: std::cell::RefCell::new(settings.clone()),
             startup_dirty_settings: Mutex::new(HashSet::new()),
             startup_keymap_dirty: Mutex::new(false),
@@ -768,6 +773,17 @@ impl ConfigCtrl {
     pub fn set_confirm_drop_between_panes(&mut self, v: bool) {
         self.settings.confirm_drop_between_panes = v;
         self.save();
+    }
+
+    /// Preguntar antes de aceptar arrastres desde aplicaciones externas (OLE).
+    pub fn set_confirm_external_drops(&mut self, v: bool) {
+        self.settings.confirm_external_drops = v;
+        self.save();
+    }
+
+    /// Omitir la confirmación de arrastres externos hasta cerrar Naygo. Solo estado de sesión.
+    pub fn set_skip_external_drop_confirmation_session(&mut self, v: bool) {
+        self.skip_external_drop_confirmation_session = v;
     }
 
     /// Mostrar el resumen al terminar una operación.

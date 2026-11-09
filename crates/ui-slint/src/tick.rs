@@ -59,6 +59,7 @@ pub(crate) struct TickDeps {
 fn show_drop_confirmation(
     ui_weak: &slint::Weak<AppWindow>,
     pd: &crate::workspace_ctrl::PendingDrop,
+    external: bool,
 ) {
     let Some(ui) = ui_weak.upgrade() else {
         return;
@@ -81,6 +82,7 @@ fn show_drop_confirmation(
     } else {
         tr.get_dlg_copy()
     };
+    ui.set_drop_confirmation_external(external);
     ui.set_message(MessageVm {
         kind: 3,
         level: 0,
@@ -511,7 +513,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     // entre paneles), NO se ejecutó todavía. Abrimos el modal de confirmación
                     // "¿Copiar/Mover N a «destino»?". Al confirmar, `on_message_confirm` (kind 3)
                     // llama a `confirm_pending_drop`; al cancelar, `cancel_pending_drop` lo descarta.
-                    let pending = ctrl.borrow_mut().take_pending_drop_confirmation();
+                    let (pending, external_confirmation) = {
+                        let mut ctrl = ctrl.borrow_mut();
+                        let external = ctrl.pending_drop_external_confirmation;
+                        (ctrl.take_pending_drop_confirmation(), external)
+                    };
                     // Los destinos lógicos como la bandeja se resuelven de inmediato y no crean
                     // pendiente ni probe. Los drops a Files esperan el resultado del worker.
                     let direct_drop_ran = routed
@@ -525,7 +531,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                         sync_rows();
                     }
                     if let Some(pd) = pending {
-                        show_drop_confirmation(&ui_weak, &pd);
+                        show_drop_confirmation(&ui_weak, &pd, external_confirmation);
                     } else if direct_drop_ran {
                         // La bandeja u otro destino lógico pudo mutar el modelo de filas.
                         sync_layout();
@@ -546,8 +552,13 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 let drop_probe_event = { ctrl.borrow_mut().pump_drop_collision_probe() };
                 match drop_probe_event {
                     crate::workspace_ctrl::DropProbeEvent::Confirmation => {
-                        if let Some(pd) = ctrl.borrow_mut().take_pending_drop_confirmation() {
-                            show_drop_confirmation(&ui_weak, &pd);
+                        let (pending, external_confirmation) = {
+                            let mut ctrl = ctrl.borrow_mut();
+                            let external = ctrl.pending_drop_external_confirmation;
+                            (ctrl.take_pending_drop_confirmation(), external)
+                        };
+                        if let Some(pd) = pending {
+                            show_drop_confirmation(&ui_weak, &pd, external_confirmation);
                         }
                     }
                     crate::workspace_ctrl::DropProbeEvent::Started => {

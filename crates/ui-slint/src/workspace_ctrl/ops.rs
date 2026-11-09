@@ -680,9 +680,13 @@ impl WorkspaceCtrl {
                 return DropProbeEvent::Failed;
             }
         };
-        if self.pending_drop_external_confirmation
-            || (!occupied && self.config.settings.confirm_drop_between_panes)
-        {
+        let should_confirm = if self.pending_drop_external_confirmation {
+            self.config.settings.confirm_external_drops
+                && !self.config.skip_external_drop_confirmation_session
+        } else {
+            !occupied && self.config.settings.confirm_drop_between_panes
+        };
+        if should_confirm {
             self.pending_drop_confirmation = true;
             return DropProbeEvent::Confirmation;
         }

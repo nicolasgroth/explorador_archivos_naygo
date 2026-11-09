@@ -33,6 +33,29 @@ pub(crate) fn wire_history(
         pending_undo,
         ..
     } = ctx;
+    // El alcance seleccionado en la confirmación OLE se aplica únicamente al aceptar la
+    // operación. Cancelar el modal no debe modificar preferencias.
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak_for_drop_confirmation = ui.as_weak();
+        ui.on_drop_confirmation(move |scope| {
+            let Some(ui) = ui_weak_for_drop_confirmation.upgrade() else {
+                return;
+            };
+            if !ui.get_drop_confirmation_external() {
+                return;
+            }
+            let mut c = ctrl.borrow_mut();
+            match scope {
+                1 => c.config.set_skip_external_drop_confirmation_session(true),
+                2 => {
+                    c.config.set_skip_external_drop_confirmation_session(false);
+                    c.config.set_confirm_external_drops(false);
+                }
+                _ => {}
+            }
+        });
+    }
     {
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();

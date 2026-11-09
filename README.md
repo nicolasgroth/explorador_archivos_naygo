@@ -109,7 +109,9 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
   interno o externo desde Explorer y gestores de archivos. La recepción admite carpetas y archivos
   virtuales de aplicaciones como 7-Zip/WinRAR, conserva el árbol temporal y confirma la ruta
   completa del destino; si el panel cambia durante la preparación, exige elegir otro destino abierto.
-  La matriz de compatibilidad por aplicación sigue en validación. Incluye bandeja del sistema y
+  La confirmación puede omitirse por una sesión o desactivarse en Configuración; los conflictos
+  siguen solicitando una decisión. La matriz de compatibilidad por aplicación sigue en validación.
+  Incluye bandeja del sistema y
   arranque opcional con Windows.
 - Sets de íconos: diez de fábrica (Lucide, Mono, Tabler, Material, Flat Color, Fluent,
   Outline, Tiles, Vivid y Pastel),

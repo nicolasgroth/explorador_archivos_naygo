@@ -368,6 +368,10 @@ pub struct Settings {
     /// es independiente y SIEMPRE aparece, esté esto en `true` o `false`.
     #[serde(default = "default_confirm_drop_between_panes")]
     pub confirm_drop_between_panes: bool,
+    /// Preguntar antes de aceptar un arrastre desde otra aplicación (Explorer, 7-Zip, etc.).
+    /// Es independiente de la confirmación de arrastres internos entre paneles. Default `true`.
+    #[serde(default = "default_confirm_external_drops")]
+    pub confirm_external_drops: bool,
     /// Geometría de la ventana principal (tamaño/posición/maximizado) para restaurar al
     /// abrir. `None` = nunca se guardó (primera vez) → la app usa el tamaño por defecto.
     #[serde(default)]
@@ -578,6 +582,11 @@ fn default_confirm_drop_between_panes() -> bool {
     true
 }
 
+/// Default de `confirm_external_drops`: true (preguntar antes de aceptar un drop OLE externo).
+fn default_confirm_external_drops() -> bool {
+    true
+}
+
 /// Default de `global_hotkey_enabled`: true (activado de fábrica).
 fn default_global_hotkey_enabled() -> bool {
     true
@@ -664,6 +673,7 @@ impl Default for Settings {
             show_system: true,
             hide_dotfiles: false,
             confirm_drop_between_panes: true,
+            confirm_external_drops: true,
             window: None,
             global_hotkey_enabled: true,
             global_hotkey: default_global_hotkey(),
@@ -1154,6 +1164,7 @@ mod tests {
             show_system: false,
             hide_dotfiles: true,
             confirm_drop_between_panes: false,
+            confirm_external_drops: true,
             window: Some(WindowGeometry {
                 width: 1280,
                 height: 800,
@@ -1665,6 +1676,7 @@ mod tests {
         assert!(!s.hide_dotfiles);
         // Un settings.json viejo sin el campo conserva la red de seguridad (preguntar = true).
         assert!(s.confirm_drop_between_panes);
+        assert!(s.confirm_external_drops);
     }
 
     #[test]
@@ -1674,6 +1686,11 @@ mod tests {
             s.confirm_drop_between_panes,
             "por defecto se pregunta antes de copiar/mover entre paneles"
         );
+    }
+
+    #[test]
+    fn settings_confirm_external_drops_default_es_true() {
+        assert!(Settings::default().confirm_external_drops);
     }
 
     #[test]

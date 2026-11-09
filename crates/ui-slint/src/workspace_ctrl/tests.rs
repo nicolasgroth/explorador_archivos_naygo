@@ -63,6 +63,79 @@ fn drop_externo_exige_confirmacion_aun_con_conflicto_y_preferencia_desactivada()
 }
 
 #[test]
+fn drop_externo_omite_confirmacion_si_se_desactiva_durante_la_sesion() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"dato").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.config.skip_external_drop_confirmation_session = true;
+
+    assert!(c.open_external_drop_selector(vec![file], false, true, false, None));
+    c.destination_radar_resolve(0);
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Started,
+        "el drop externo libre se ejecuta sin el modal genérico durante la sesión"
+    );
+    assert!(c.pending_drop.is_none());
+    assert!(c.config.settings.confirm_external_drops);
+    assert!(!work.path().join("archivo.txt").exists());
+
+    for _ in 0..4_000 {
+        c.ops.pump_ops();
+        if work.path().join("archivo.txt").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(work.path().join("archivo.txt").exists());
+}
+
+#[test]
+fn drop_externo_sin_confirmacion_sigue_pidiendo_decision_ante_conflicto() {
+    let work = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = source.path().join("archivo.txt");
+    std::fs::write(&file, b"nuevo").unwrap();
+    std::fs::write(work.path().join("archivo.txt"), b"anterior").unwrap();
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.config.skip_external_drop_confirmation_session = true;
+
+    assert!(c.open_external_drop_selector(vec![file], false, true, false, None));
+    c.destination_radar_resolve(0);
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Started,
+        "el drop omite la confirmación genérica"
+    );
+
+    let mut conflict_prompted = false;
+    for _ in 0..4_000 {
+        c.ops.pump_ops();
+        if matches!(
+            c.ops.pending_dialog,
+            Some(crate::ops_ctrl::OpDialog::Conflict { .. })
+        ) {
+            conflict_prompted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(conflict_prompted, "el conflicto conserva su diálogo propio");
+    assert_eq!(
+        std::fs::read(work.path().join("archivo.txt")).unwrap(),
+        b"anterior"
+    );
+}
+
+#[test]
 fn drop_ole_externo_rapido_ignora_fila_sin_acreditar_y_confirma_ruta() {
     let work = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();

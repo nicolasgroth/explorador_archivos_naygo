@@ -7,7 +7,14 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
-## [0.5.4] (en preparación)
+## [0.5.5] (build local instalada el 2026-11-08)
+
+### Windows
+- La confirmación de arrastres desde aplicaciones externas permite omitir el aviso solo durante
+  la sesión o desactivarlo de forma persistente. Ambas opciones se pueden volver a cambiar en
+  Configuración; los conflictos de archivos y la validación del destino siguen activos.
+
+## [0.5.4] (build local instalada el 2026-11-08)
 
 ### Linux (experimental; aceptación nativa pendiente)
 - La instancia única usa un lock por usuario y Unix socket dentro de un `XDG_RUNTIME_DIR` validado;

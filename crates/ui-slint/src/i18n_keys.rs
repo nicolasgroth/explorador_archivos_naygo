@@ -371,6 +371,8 @@ where
     tr.set_drop_confirm_copy(c.t("slint.drop.confirm_copy").into());
     tr.set_drop_confirm_move(c.t("slint.drop.confirm_move").into());
     tr.set_drop_confirm_more(c.t("slint.drop.confirm_more").into());
+    tr.set_drop_no_ask_session(c.t("slint.drop.no_ask_session").into());
+    tr.set_drop_no_ask_always(c.t("slint.drop.no_ask_always").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
     // Submenú "Abrir ▸": "Abrir" reusa slint.ctx.open (mismo texto); Explorador reusa
@@ -669,6 +671,8 @@ where
     tr.set_cfg_title_path(c.t("slint.cfg.title_path").into());
     tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
     tr.set_cfg_confirm_drop(c.t("slint.cfg.confirm_drop").into());
+    tr.set_cfg_confirm_external_drop(c.t("slint.cfg.confirm_external_drop").into());
+    tr.set_cfg_skip_external_drop_session(c.t("slint.cfg.skip_external_drop_session").into());
     tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());
     tr.set_cfg_auto_hide_operations(c.t("slint.cfg.auto_hide_operations").into());
     tr.set_cfg_tip_auto_hide_operations(c.t("slint.cfg.tip.auto_hide_operations").into());
@@ -771,6 +775,10 @@ where
     tr.set_cfg_tip_ops_mode(c.t("slint.cfg.tip.ops_mode").into());
     tr.set_cfg_tip_confirm_trash(c.t("slint.cfg.tip.confirm_trash").into());
     tr.set_cfg_tip_confirm_drop(c.t("slint.cfg.tip.confirm_drop").into());
+    tr.set_cfg_tip_confirm_external_drop(c.t("slint.cfg.tip.confirm_external_drop").into());
+    tr.set_cfg_tip_skip_external_drop_session(
+        c.t("slint.cfg.tip.skip_external_drop_session").into(),
+    );
     tr.set_cfg_tip_show_op_summary(c.t("slint.cfg.tip.show_op_summary").into());
     tr.set_cfg_tip_paste_confirm(c.t("slint.cfg.tip.paste_confirm").into());
     tr.set_cfg_tip_paste_name(c.t("slint.cfg.tip.paste_name").into());

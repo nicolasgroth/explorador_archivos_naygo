@@ -341,7 +341,7 @@ export component ConfigWindow inherits Window {
     // modifica ajustes: encuentra la sección donde vive la opción, no solo su categoría.
     property <[string]> category-terms: [
         Tr.cfg-show-parent + " " + Tr.cfg-icon-only + " " + Tr.cfg-bar-position + " " + Tr.cfg-window-title + " " + Tr.cfg-size-no-subdirs + " " + Tr.cfg-autostart + " " + Tr.cfg-autostart-minimized + " " + Tr.cfg-default-table + " " + Tr.cfg-language,
-        Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-auto-hide-operations + " " + Tr.cfg-animations,
+        Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-confirm-external-drop + " " + Tr.cfg-skip-external-drop-session + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-auto-hide-operations + " " + Tr.cfg-animations,
         Tr.cfg-paste-confirm + " " + Tr.cfg-paste-name + " " + Tr.cfg-paste-ext + " " + Tr.cfg-paste-image-name + " " + Tr.cfg-paste-image-fmt + " " + Tr.cfg-paste-jpg-quality,
         Tr.theme-tok-icon-accent + " " + Tr.icons-open-settings + " " + Tr.fonts-title + " " + Tr.fonts-interface + " " + Tr.fonts-listings + " " + Tr.fonts-preview + " " + Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.cfg-system-file-icons + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
         Tr.cfg-reset-all + " " + Tr.cfg-sc-action + " " + Tr.cfg-sc-combo + " " + Tr.cfg-change + " " + Tr.cfg-reset,
@@ -368,6 +368,8 @@ export component ConfigWindow inherits Window {
     callback set-window-title-mode(int);
     callback set-confirm-trash(bool);
     callback set-confirm-drop-between-panes(bool);
+    callback set-confirm-external-drops(bool);
+    callback set-skip-external-drop-confirmation-session(bool);
     callback set-show-op-summary(bool);
     callback set-auto-hide-operations(bool);
     callback set-show-parent(bool);
@@ -742,6 +744,20 @@ export component ConfigWindow inherits Window {
                                     label: Tr.cfg-confirm-drop;
                                     tip: Tr.cfg-tip-confirm-drop;
                                     Switch { checked: root.vm.confirm-drop-between-panes; toggled => { root.set-confirm-drop-between-panes(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-external-drop;
+                                    tip: Tr.cfg-tip-confirm-external-drop;
+                                    Switch { checked: root.vm.confirm-external-drops; toggled => { root.set-confirm-external-drops(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-skip-external-drop-session;
+                                    tip: Tr.cfg-tip-skip-external-drop-session;
+                                    Switch {
+                                        checked: root.vm.skip-external-drop-confirmation-session;
+                                        enabled: root.vm.confirm-external-drops;
+                                        toggled => { root.set-skip-external-drop-confirmation-session(self.checked); }
+                                    }
                                 }
                                 Field {
                                     label: Tr.cfg-show-op-summary;

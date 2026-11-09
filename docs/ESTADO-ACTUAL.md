@@ -6,26 +6,26 @@ SPDX-License-Identifier: MIT
 
 ## Distribución local instalada — 2026-11-08
 
-La versión Windows 0.5.4 está compilada, instalada y abierta (proceso Naygo 53536). El commit
-integrado de producto es `c7a9f105`; gate local aislado: 1.572 pruebas aprobadas, 9 ignoradas,
-Clippy sin warnings y formato correcto. El build supervisado tuvo un pico de 10,78 GiB. El setup terminó con código 0 y el
-instalador preservó la configuración existente. El EXE instalado coincide con el de Release;
-el ZIP portable no incluye PDB. Setup y portable siguen sin firma Authenticode. La instalación
-se dejó abierta tras la instalación; no se publicó un release de GitHub.
+Naygo Windows 0.5.5 está instalada y abierta (proceso 38940, responde). El gate supervisado pasó
+1.575 pruebas, 9 ignoradas, Clippy sin warnings y formato correcto; pico máximo del gate 9,15 GiB.
+Las traducciones de los diez idiomas pasaron el verificador. El build de Release y empaquetado tuvo
+un pico de 10,83 GiB. Setup terminó con código 0; el ZIP portable no contiene PDB. Setup y portable
+siguen sin firma Authenticode. Los artefactos locales están listos; todavía no se publicó un release
+de GitHub.
 
-- Setup `dist/Naygo-0.5.4-setup.exe`: SHA-256
-  `3eee7fae42bd441fda8524408f9099b3442ff919b3282863cf425982dd21cff9`.
-- Portable `dist/Naygo-0.5.4-portable.zip`: SHA-256
-  `8591f5965000baa683e5d99e757d03159466dfdbc485e9795e9fca45f7db54b9`.
-- `naygo.exe` Release: SHA-256
-  `ae97c9a0d68fb56fec8e698bb2b6fdb855b02f1d4f6711e3835e5bd5ed38496c`.
+- Setup `dist/Naygo-0.5.5-setup.exe`: SHA-256
+  `34f2d5d9cbf8ca137f808f1bdfafba486719bdee418c59c723452d65fe10ec4f`.
+- Portable `dist/Naygo-0.5.5-portable.zip`: SHA-256
+  `b2ade8d0d189cf8b3e274e83dc0afa923a16b4cebc2bdded55ea6280e264d007`.
+- `naygo.exe` instalado/Release: SHA-256
+  `2c4cb26d7969d179ec5e8a8da8d870daf35fd0e46dc05cbce838fdae6260e52c`.
 
 La corrida manual de CI [42504789478](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42504789478)
 se lanzó sobre `a28d2810`: gate Windows aprobado (1.571 tests, 9 ignorados, Clippy sin warnings,
 formato, pins de acciones, verificación de firma e i18n); benchmark aprobado. El job Linux falló
-en `core/platform` (972 aprobadas, 27 fallidas), registrado aparte en el backlog. La aceptación
-interactiva final de OLE con Explorer, Directory Opus y 7-Zip sigue pendiente; no declarar
-compatibilidad general hasta registrar esa matriz.
+en `core/platform` (972 aprobadas, 27 fallidas), registrado aparte en el backlog. Ya se verificó
+una copia de carpeta desde 7-Zip con manifiesto y hashes; la matriz con Explorer, Directory Opus,
+movimiento y cancelación sigue pendiente. No declarar compatibilidad general hasta registrarla.
 
 ## CI — migración de acciones a Node 24, 2026-11-08
 
@@ -46,10 +46,19 @@ continúa abierto y responde con el SHA-256 Release esperado.
 En el checkout actual pasó `cargo test -p naygo-platform --locked drop_target::`: 31 pruebas
 aprobadas y una ignorada. La medición exploratoria de captura/materialización informó 1.000 archivos:
 462 ms / 1,50 s; 10.000: 4,77 s / 12,09 s. Incluye operaciones en temporales locales, no es una
-medición de OLE ni del recorrido completo de 7-Zip. Preparé una fixture sintética de 35 archivos,
-subcarpetas anidadas y una carpeta vacía; `7z t` pasó y el destino de prueba sigue vacío:
-`target/agent-out/e2-7zip-fixtures/20261108-170222-3ff39c1e/`. La aceptación real con Explorer,
-Directory Opus y 7-Zip sigue pendiente.
+medición de OLE ni del recorrido completo de 7-Zip. La fixture sintética de 35 archivos,
+subcarpetas anidadas y una carpeta vacía pasó `7z t`. Nicolás la arrastró desde 7-Zip a una carpeta
+de OneDrive: estructura y hashes coinciden (35 archivos, 4 carpetas, 0 faltantes, extras o cambios).
+La fixture se dejó intacta en el destino elegido. La aceptación con Explorer, Directory Opus y el
+resto de la matriz de cancelación/movimiento sigue pendiente.
+
+## 0.5.5 — confirmación de arrastres externos
+
+El checkout agrega dos formas de omitir el modal de copia/movimiento al recibir un drop externo:
+por sesión o de forma persistente. Ambas se muestran en Configuración, con la primera restablecida
+al reiniciar. El ajuste no cambia los drops internos entre paneles ni elimina la validación del
+destino o el diálogo de conflictos. Pasaron las pruebas dirigidas para defaults, omisión temporal
+y conflicto; el gate completo, empaquetado e instalación local terminaron correctamente.
 
 ## Distribución local instalada — 2026-11-02 (histórico)
 

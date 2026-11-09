@@ -9,23 +9,28 @@ SPDX-License-Identifier: MIT
 Preparar una entrega Windows integrada, priorizando el arrastre entre aplicaciones, sin perder
 datos ni congelar la interfaz. La entrega local 0.5.4 integra paneles auxiliares, cierre
 automático configurable de Operaciones, recuentos, protección del efecto OLE y un receptor STA que
-captura el destino antes de consultar el origen. El gate conjunto pasó 1.572 pruebas, 9 ignoradas,
-Clippy y formato. El build supervisado se instaló localmente y preservó la configuración; el setup
-no tiene firma. README y capturas sintéticas fueron actualizados, y el portable y setup están en
-`dist/`. El CI posterior al push (run `42512780530`) aprobó Windows y benchmark; Linux fue omitido
-por diseño. Falta completar la aceptación OLE interactiva.
+captura el destino antes de consultar el origen. La build 0.5.5 agrega la omisión reversible por
+sesión o persistente de la confirmación externa, configurable desde el diálogo y Configuración.
+El gate de 0.5.5 pasó 1.575 pruebas, 9 ignoradas, Clippy y formato; setup y portable se generaron
+bajo supervisor, y la versión quedó instalada localmente. El setup no tiene firma. README y
+capturas sintéticas fueron actualizados; el CI posterior al push (run `42512780530`) aprobó Windows
+y benchmark; Linux fue omitido por diseño. La aceptación OLE general aún requiere completar la
+matriz de clientes y condiciones.
 
 La prueba E2 anterior recibió desde 7-Zip 24.07 una carpeta con 259 archivos y cuatro
-subcarpetas, una vacía, contrastados por SHA-256. La nueva arquitectura ya está integrada, pero
-esa aceptación se debe repetir sobre la build final: la prueba anterior no demuestra el handshake,
-la confirmación ni la cancelación de esta versión.
+subcarpetas, una vacía, contrastados por SHA-256. El 2026-11-08 Nicolás confirmó una segunda
+prueba con 7-Zip: soltó la fixture sintética `E2 fixture`, aceptó la copia y el manifiesto de 35
+archivos y 4 carpetas coincidió en hashes y estructura en el destino elegido. La fixture se dejó
+en ese destino sincronizado por OneDrive. Esto valida una copia de carpeta con esta build, pero no
+cierra mover/cancelar, otras aplicaciones ni la matriz de condiciones adversas.
 
-Reintento local 2026-11-08: `cargo test -p naygo-platform --locked drop_target::` aprobó 31 pruebas
-y dejó una medición ignorada; la medición explícita midió la captura/materialización de 10.000
-archivos pequeños en 4,77/12,09 s. La fixture ZIP sintética actual pasó `7z t` (35 archivos,
-árbol anidado y carpeta vacía), con destino todavía vacío. La captura de la ventana de Naygo expiró
-dos veces incluso tras reenumerarla; no se realizó arrastre OLE. Esta medición local no sustituye la
-matriz interactiva ni representa el tiempo end-to-end de 7-Zip.
+Revalidación local 2026-11-08: `cargo test -p naygo-platform --locked drop_target::` aprobó 31
+pruebas y dejó una medición ignorada; la medición explícita midió la captura/materialización de
+10.000 archivos pequeños en 4,77/12,09 s. La fixture ZIP sintética pasó `7z t` (35 archivos,
+árbol anidado y carpeta vacía). La captura automática de la ventana expiró dos veces, pero Nicolás
+completó manualmente la copia integrada en la build 0.5.4 y se verificó el manifiesto: 35 archivos,
+4 carpetas, sin faltantes, extras ni hashes distintos. Esto no representa el tiempo end-to-end de
+7-Zip ni cierra la matriz de otros clientes y condiciones adversas.
 
 ## Fundamento y elección técnica
 
@@ -59,9 +64,15 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 - [x] Negociar los efectos permitidos y diferir la operación de Naygo hasta después de la
   confirmación; respetar los modificadores de copia/movimiento recibidos y resolver conflictos por
   el flujo habitual.
+- [x] En drops externos, permitir desactivar la confirmación por sesión o persistentemente. Ambos
+  controles están disponibles también en Configuración; omitir el modal genérico conserva la
+  validación de destino y la decisión independiente de los conflictos. Build local 0.5.5 instalada.
 - [ ] La consulta del destino ocurre antes de `GetData`, pero no sincroniza atómicamente todos los
   mensajes de ratón ya encolados por Windows. Completar la matriz de cambios de carpeta, cierre y
   reordenamiento de paneles, dos drops simultáneos y cancelación; verificar ausencia de parciales.
+- [ ] Omitir la confirmación externa por sesión o de forma permanente desde el diálogo, con ambos
+  controles modificables en Configuración. Incluso al omitirla deben seguir activos el probe del
+  destino y el diálogo propio de los conflictos.
 
 ### 2. Recepción interoperable
 

@@ -353,6 +353,8 @@ export global Tr {
     in property <string> drop-confirm-copy: "¿Copiar {items} a «{dest}»?";
     in property <string> drop-confirm-move: "¿Mover {items} a «{dest}»?";
     in property <string> drop-confirm-more: " y {n} más";
+    in property <string> drop-no-ask-session: "No volver a preguntar durante esta sesión";
+    in property <string> drop-no-ask-always: "No volver a preguntar (se reactiva en Configuración)";
 
     // Menú contextual (context-menu).
     in property <string> ctx-open: "Abrir";
@@ -678,6 +680,8 @@ export global Tr {
     in property <string> cfg-title-path: "Solo la ruta";
     in property <string> cfg-confirm-trash: "Confirmar envío a papelera";
     in property <string> cfg-confirm-drop: "Preguntar al arrastrar entre paneles";
+    in property <string> cfg-confirm-external-drop: "Preguntar al arrastrar desde otras aplicaciones";
+    in property <string> cfg-skip-external-drop-session: "Omitir durante esta sesión";
     in property <string> cfg-show-op-summary: "Mostrar resumen al terminar";
     in property <string> cfg-auto-hide-operations: "Ocultar Operaciones al finalizar";
     in property <string> cfg-tip-auto-hide-operations: "Oculta el panel abierto automáticamente si no hay errores ni elementos omitidos. Un panel abierto manualmente permanece visible.";
@@ -801,6 +805,8 @@ export global Tr {
     in property <string> cfg-tip-window-title: "Qué muestra la barra de título: solo la app, la app con la ruta del panel activo, o solo la ruta.";
     in property <string> cfg-tip-confirm-trash: "Pide confirmación antes de enviar archivos a la papelera.";
     in property <string> cfg-tip-confirm-drop: "Pregunta qué hacer (copiar/mover) al arrastrar archivos entre paneles.";
+    in property <string> cfg-tip-confirm-external-drop: "Pregunta antes de aceptar archivos o carpetas arrastrados desde Explorer, 7-Zip u otra aplicación. Los conflictos siguen mostrando su propio diálogo.";
+    in property <string> cfg-tip-skip-external-drop-session: "Omite esa pregunta hasta cerrar Naygo. No se guarda y se puede volver a activar aquí en cualquier momento.";
     in property <string> cfg-tip-show-op-summary: "Muestra un resumen al terminar una operación de archivos (cuántos, errores).";
     // Pegado (cat 2).
     in property <string> cfg-tip-paste-confirm: "Pide confirmar el nombre antes de crear el archivo al pegar texto o una imagen.";

@@ -273,6 +273,8 @@ pub(crate) fn build_settings_vm(c: &config_ctrl::ConfigCtrl) -> SettingsVm {
         },
         confirm_trash: s.confirm_trash,
         confirm_drop_between_panes: s.confirm_drop_between_panes,
+        confirm_external_drops: s.confirm_external_drops,
+        skip_external_drop_confirmation_session: c.skip_external_drop_confirmation_session,
         show_op_summary: s.show_op_summary,
         auto_hide_operations: s.auto_hide_operations,
         size_no_subdirs: s.size_no_subdirs,
