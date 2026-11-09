@@ -60,6 +60,18 @@ al reiniciar. El ajuste no cambia los drops internos entre paneles ni elimina la
 destino o el diálogo de conflictos. Pasaron las pruebas dirigidas para defaults, omisión temporal
 y conflicto; el gate completo, empaquetado e instalación local terminaron correctamente.
 
+La revisión final del 2026-11-08 recibió dos capturas de Nicolás: el modal de confirmación muestra
+las opciones de omisión por sesión y permanente; la segunda captura muestra la carpeta copiada en el
+destino. Se comparó ese destino con la fixture sintética: 35 archivos, 4 directorios, 39 entradas y
+cero diferencias SHA-256. Esto confirma copia de carpeta desde 7-Zip 24.07 y la presencia visual de
+las opciones; no se seleccionaron las casillas ni se probó su comportamiento visual tras reiniciar.
+La matriz adicional de Explorer y condiciones adversas permanece separada en el plan de cierre.
+
+El gate remoto final sobre el commit de producto `af2c64f3` ([42543957372](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42543957372))
+aprobó Windows: 1.575 tests, 9 ignorados, Clippy sin warnings, formato, pins e i18n. Linux y
+benchmark se omitieron por diseño. El commit de producto `af2c64f3` contiene el código de 0.5.5;
+este registro documental no requiere recompilar.
+
 ## Distribución local instalada — 2026-11-02 (histórico)
 
 La compilación Windows 0.5.4 de `2319e51d` pasó el gate conjunto: 1553 pruebas,

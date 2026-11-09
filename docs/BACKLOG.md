@@ -23,9 +23,13 @@
 > - [x] Revalidación local del receptor OLE, 2026-11-08: 31 pruebas aprobadas, 1 ignorada; fixture
 >   sintética de 35 archivos con árbol y carpeta vacía validada por `7z t`. Nicolás la arrastró desde
 >   7-Zip a un destino OneDrive; se comprobaron 35 archivos y 4 carpetas, con estructura y hashes
->   idénticos. La medición exploratoria de 10.000 archivos pequeños fue 4,77 s para capturar y
->   12,09 s para materializar, sin medir OLE end-to-end. La matriz de Explorer/Directory Opus y los
->   casos de mover, cancelar y condiciones adversas siguen abiertos.
+>   idénticos. En la comprobación final de 0.5.5 Nicolás confirmó otra copia y aportó capturas del
+>   diálogo (incluye las dos casillas para no volver a preguntar) y del resultado; el manifiesto
+>   volvió a coincidir: 35 archivos, 4 directorios, 39 entradas y cero diferencias SHA-256. Esto no
+>   prueba elegir las casillas ni su persistencia tras reinicio. La medición exploratoria de 10.000
+>   archivos pequeños fue 4,77 s para capturar y 12,09 s para materializar, sin medir OLE end-to-end.
+>   Explorer y los casos de condiciones adversas siguen abiertos; Directory Opus tiene una prueba
+>   previa documentada de mover/cancelar.
 > - [x] Paneles auxiliares: impedir abrir duplicados de Bandeja temporal, Operaciones, Favoritos
 >   y Vista previa; conservar y permitir cerrar duplicados existentes sin perder su disposición.
 >   Los árboles enlazados a paneles Files siguen admitiendo sus propios enlaces.
@@ -68,7 +72,11 @@
 >   ambos declaran Node 24. El despacho manual ejecuta Windows por defecto; Linux y benchmark
 >   quedan optativos. Corrida de validación [42512780530](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42512780530)
 >   aprobada: gate Windows 1.572 tests, 9 ignorados, Clippy y formato; benchmark aprobado; Linux
->   omitido según lo solicitado. Los logs de ambos jobs no contienen avisos de Node 20.
+>   omitido según lo solicitado. Los logs de ambos jobs no contienen avisos de Node 20. El gate
+>   final del commit de producto `af2c64f3`
+>   ([42543957372](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42543957372))
+>   también aprobó Windows: 1.575 tests, 9 ignorados, Clippy, formato, pins e i18n; Linux y benchmark
+>   se omitieron por diseño. El cierre documental posterior no cambia código.
 > - [x] Operaciones: corregida la presentación de `OpMsg::Failed`: conserva el error
 >   como fallo en el historial y no ofrece reintento automático de estado parcial desconocido.
 >   Nicolás autorizó esta corrección el 2026-10-31; el gate local completo pasó con 1.534

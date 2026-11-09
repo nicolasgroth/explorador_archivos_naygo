@@ -15,7 +15,9 @@ El gate de 0.5.5 pasó 1.575 pruebas, 9 ignoradas, Clippy y formato; setup y por
 bajo supervisor, y la versión quedó instalada localmente. El setup no tiene firma. README y
 capturas sintéticas fueron actualizados; el CI posterior al push (run `42512780530`) aprobó Windows
 y benchmark; Linux fue omitido por diseño. La aceptación OLE general aún requiere completar la
-matriz de clientes y condiciones.
+matriz de clientes y condiciones. El gate final posterior de Windows (`42543957372`) también aprobó
+el HEAD de producto `af2c64f3`: 1.575 pruebas, 9 ignoradas, Clippy, formato, pins e i18n; Linux y
+benchmark se omitieron por diseño.
 
 La prueba E2 anterior recibió desde 7-Zip 24.07 una carpeta con 259 archivos y cuatro
 subcarpetas, una vacía, contrastados por SHA-256. El 2026-11-08 Nicolás confirmó una segunda
@@ -31,6 +33,18 @@ pruebas y dejó una medición ignorada; la medición explícita midió la captur
 completó manualmente la copia integrada en la build 0.5.4 y se verificó el manifiesto: 35 archivos,
 4 carpetas, sin faltantes, extras ni hashes distintos. Esto no representa el tiempo end-to-end de
 7-Zip ni cierra la matriz de otros clientes y condiciones adversas.
+
+Revisión de cierre 2026-11-08: la build local 0.5.5 sigue instalada y el proceso Naygo responde; su
+ejecutable coincide con el hash registrado en `docs/ESTADO-ACTUAL.md`. La rama de avance estaba limpia
+y sincronizada con `origin` al iniciar esta revisión. Computer Use volvió a fallar al capturar la
+ventana; Nicolás completó la comprobación y entregó dos capturas: la primera muestra la confirmación
+con ambas casillas de «no volver a preguntar» sin marcar; la segunda muestra `E2 fixture` en el
+destino. La comparación posterior del manifiesto sintético fuente/destino dio 35 archivos, 4
+directorios, 39 entradas y cero diferencias SHA-256. Queda validada otra copia de carpeta en 0.5.5
+y la presencia visual de las dos opciones, pero no el comportamiento al seleccionar cada casilla.
+Directory Opus está instalado, pero su mera presencia no se cuenta como prueba. La evidencia previa
+registrada en `docs/BACKLOG.md` cubre mover/cancelar desde Directory Opus; Explorer y la matriz
+restante de condiciones adversas continúan abiertas.
 
 ## Fundamento y elección técnica
 
@@ -70,9 +84,11 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 - [ ] La consulta del destino ocurre antes de `GetData`, pero no sincroniza atómicamente todos los
   mensajes de ratón ya encolados por Windows. Completar la matriz de cambios de carpeta, cierre y
   reordenamiento de paneles, dos drops simultáneos y cancelación; verificar ausencia de parciales.
-- [ ] Omitir la confirmación externa por sesión o de forma permanente desde el diálogo, con ambos
+- [x] Omitir la confirmación externa por sesión o de forma permanente desde el diálogo, con ambos
   controles modificables en Configuración. Incluso al omitirla deben seguir activos el probe del
-  destino y el diálogo propio de los conflictos.
+  destino y el diálogo propio de los conflictos. Implementado y probado en el gate 0.5.5; la captura
+  de Nicolás confirma que las dos casillas aparecen en el diálogo. No se probó manualmente elegir
+  cada casilla ni revisar su estado en Configuración después de reiniciar.
 
 ### 2. Recepción interoperable
 
@@ -91,9 +107,17 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
 
 ### 3. Matriz de aceptación Windows
 
-- [ ] Probar realmente con Explorer, Directory Opus y 7-Zip instalado; incluir otra versión de
-  7-Zip si está disponible. Identificar versiones y formatos realmente ofrecidos, sin registrar
-  rutas ni contenido privado. No afirmar compatibilidad universal con programas no probados.
+- [x] 7-Zip 24.07: se aceptaron dos copias manuales de carpetas sintéticas, una de 259 archivos y
+  otra de 35 archivos con cuatro carpetas (incluida una vacía). Los manifiestos, hashes y estructura
+  coincidieron. La segunda copia se repitió durante este cierre desde la build 0.5.5: 35 archivos,
+  4 directorios, 39 entradas y cero diferencias SHA-256. Esto acredita copia de carpetas en esa
+  versión; no acredita movimiento ni cancelación.
+- [x] Directory Opus: la evidencia previa registrada en `docs/BACKLOG.md` cubre cancelar y mover
+  una fixture con verificación SHA-256 en la integración anterior a 0.5.5. La versión 0.5.5 no cambió
+  la negociación de efectos OLE; no se vuelve a contar esto como prueba en esa build.
+- [ ] Explorer: probar archivos y carpetas desde una ventana real, y registrar el resultado. La
+  instalación de Explorer es parte de Windows, pero no hubo una sesión de drop con Naygo durante
+  esta revisión. No afirmar compatibilidad universal con programas no probados.
 - [ ] Casos: archivos, carpetas, mezcla, vacías/anidadas, Unicode, archivos grandes y muchos
   pequeños; mismo disco y distinto disco, USB/red disponible, ruta larga, acceso denegado y destino
   que desaparece. Cubrir archivos virtuales con origen sintético y aplicaciones disponibles.
@@ -129,6 +153,15 @@ compatibles; incorporar dependencias solo con mejora demostrada y sin regresione
   EXE del ZIP igual a release; instalación terminó con código 0 y preservó settings, sesión,
   favoritos y plantillas. El README y las capturas quedaron actualizados; hashes registrados en
   `docs/ESTADO-ACTUAL.md`.
+- [x] Cierre de producto 0.5.5, 2026-11-08: gate local supervisado (1.575 pruebas aprobadas,
+  9 ignoradas, Clippy sin warnings, formato e i18n correctos), setup y ZIP generados, setup instalado
+  y ejecutable abierto con hash coincidente. Los hashes y el pico de memoria constan en
+  `docs/ESTADO-ACTUAL.md`. La distribución Windows sigue sin firma Authenticode y no se publicó un
+  GitHub Release.
+- [x] CI final sobre `af2c64f3` (run
+  [42543957372](https://github.com/nicolasgroth/explorador_archivos_naygo/actions/runs/42543957372)):
+  Windows gate aprobado: 1.575 tests, 9 ignorados, Clippy sin warnings, formato, pins e i18n.
+  Linux y benchmark omitidos por diseño. El commit documental de este cierre no modifica código.
 - [x] CI manual sobre `a28d2810` (run `42504789478`): gate Windows aprobado (1.571 tests, 9
   ignorados, Clippy, formato, pins, prueba SignPath e i18n); benchmark aprobado. El workflow
   global quedó fallido por Linux, con 972 aprobadas y 27 fallidas en `core/platform`; esa incidencia
