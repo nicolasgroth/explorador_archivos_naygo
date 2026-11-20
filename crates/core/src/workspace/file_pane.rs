@@ -13,14 +13,24 @@ use crate::filter::VisibilityFlags;
 use crate::fs_model::{Entry, SortSpec, ViewMode};
 use crate::workspace::nav_history::{NavContext, NavHistory};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+fn new_navigation_revision() -> u64 {
+    // Una disposición restaurada puede volver a usar el mismo PaneId y la misma carpeta.
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Estado de un panel de archivos. Lo serializable se persiste; `entries` no
 /// (se re-lista al abrir) y `history` tampoco (arranca limpio cada sesión).
 #[derive(Debug)]
 pub struct FilePaneState {
     pub current_dir: PathBuf,
+    /// Identidad de la visita. Un refresco conserva la visita, Atrás o Adelante inicia otra.
+    pub navigation_revision: u64,
     pub entries: Vec<Entry>,
     pub sort: SortSpec,
     pub view: ViewMode,
@@ -46,6 +56,10 @@ pub struct FilePaneState {
     /// persiste (vive en settings.json); existe para que `view_indices` agrupe IGUAL
     /// que el render y los índices nunca se desalineen.
     pub group_new_at_end: bool,
+    /// Original sort keys for renamed rows and arrival order, scoped to this visit and sort.
+    renamed_sort_keys: HashMap<PathBuf, Entry>,
+    arrival_order: HashMap<PathBuf, usize>,
+    next_arrival: usize,
     /// Espejo runtime de los flags de visibilidad globales (ocultos/sistema/dotfiles). Lo
     /// setea la UI cuando cambia el menú "ojo". NO se persiste (vive en settings.json).
     /// `compute_view_indices` lo aplica junto a los filtros de columna, así la VISTA (y por
@@ -105,6 +119,7 @@ impl Clone for FilePaneState {
     fn clone(&self) -> Self {
         FilePaneState {
             current_dir: self.current_dir.clone(),
+            navigation_revision: self.navigation_revision,
             entries: self.entries.clone(),
             sort: self.sort,
             view: self.view,
@@ -119,6 +134,9 @@ impl Clone for FilePaneState {
             table: self.table.clone(),
             highlighted: self.highlighted.clone(),
             group_new_at_end: self.group_new_at_end,
+            renamed_sort_keys: self.renamed_sort_keys.clone(),
+            arrival_order: self.arrival_order.clone(),
+            next_arrival: self.next_arrival,
             visibility: self.visibility,
             visual_filter: self.visual_filter.clone(),
             hidden_paths: self.hidden_paths.clone(),
@@ -162,6 +180,7 @@ impl FilePaneState {
         history.push(dir.clone());
         FilePaneState {
             current_dir: dir,
+            navigation_revision: new_navigation_revision(),
             entries: Vec::new(),
             sort: SortSpec::default(),
             view: ViewMode::default(),
@@ -176,6 +195,9 @@ impl FilePaneState {
             table: TableState::default(),
             highlighted: std::collections::HashSet::new(),
             group_new_at_end: false,
+            renamed_sort_keys: HashMap::new(),
+            arrival_order: HashMap::new(),
+            next_arrival: 0,
             visibility: VisibilityFlags::default(),
             visual_filter: None,
             hidden_paths: std::collections::HashSet::new(),
@@ -309,15 +331,140 @@ impl FilePaneState {
         self.highlighted.clear();
     }
 
-    /// Sincroniza el conjunto de resaltadas con el set autoritativo del watcher (las rutas que
-    /// siguen "frescas"). Lo llama el tick tras podar las vencidas, para que las filas dejen de
-    /// quedarse al final cuando se les vence el resaltado (solo importa si `group_new_at_end`).
-    /// `fresh` son las rutas todavía vigentes; las que ya no estén se quitan de `highlighted`.
+    /// Expira el resaltado del watcher sin tocar la posición de las filas.
     pub fn sync_highlighted<F>(&mut self, still_fresh: F)
     where
         F: Fn(&Path) -> bool,
     {
         self.highlighted.retain(|p| still_fresh(p));
+    }
+
+    /// Registra llegadas por orden de detección. La siguiente ordenación explícita las integra.
+    pub fn record_arrivals(&mut self, paths: &[PathBuf]) {
+        if !self.group_new_at_end {
+            return;
+        }
+        for path in paths {
+            self.arrival_order.entry(path.clone()).or_insert_with(|| {
+                let rank = self.next_arrival;
+                self.next_arrival += 1;
+                rank
+            });
+        }
+    }
+
+    pub fn forget_display_path(&mut self, path: &Path) {
+        self.renamed_sort_keys.remove(path);
+        self.arrival_order.remove(path);
+        self.highlighted.remove(path);
+    }
+
+    pub fn set_group_new_at_end(&mut self, enabled: bool) {
+        if self.group_new_at_end == enabled {
+            return;
+        }
+        self.preserve_context_for_listing();
+        self.group_new_at_end = enabled;
+        self.arrival_order.clear();
+        self.next_arrival = 0;
+        self.apply_pending_nav_context();
+    }
+
+    pub fn reset_display_order(&mut self) {
+        self.renamed_sort_keys.clear();
+        self.arrival_order.clear();
+        self.next_arrival = 0;
+        self.entries_changed();
+    }
+
+    pub fn reorder_by(&mut self, key: crate::fs_model::SortKey, ascending: bool) {
+        self.preserve_context_for_listing();
+        self.sort.key = key;
+        self.sort.ascending = ascending;
+        crate::sort::sort_entries(&mut self.entries, &self.sort);
+        self.reset_display_order();
+        self.apply_pending_nav_context();
+    }
+
+    /// Actualiza identidad y nombre a partir de un renombrado confirmado. Conserva la clave
+    /// anterior para el sort y traslada el contexto que se capturó antes de mutar las entradas.
+    pub fn rename_entry(&mut self, from: &Path, to: &Path) -> bool {
+        if from == to {
+            return false;
+        }
+        let Some(index) = self.entries.iter().position(|entry| entry.path == from) else {
+            return false;
+        };
+        let original = self.entries[index].clone();
+        // Un Created adelantado o un reemplazo pueden haber publicado el destino primero.
+        let mut index = index;
+        if let Some(duplicate) = self.entries.iter().position(|entry| entry.path == to) {
+            self.entries.remove(duplicate);
+            if duplicate < index {
+                index -= 1;
+            }
+        }
+        let sort_key = self.renamed_sort_keys.remove(from).unwrap_or(original);
+        self.forget_display_path(to);
+        self.renamed_sort_keys.insert(to.to_owned(), sort_key);
+        if let Some(rank) = self.arrival_order.remove(from) {
+            self.arrival_order.insert(to.to_owned(), rank);
+        }
+        self.highlighted.remove(from);
+        self.entries[index].path = to.to_owned();
+        self.entries[index].name = to
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(context) = self.pending_nav_context.as_mut() {
+            for path in context
+                .selected_paths
+                .iter_mut()
+                .chain(context.focused_path.iter_mut())
+                .chain(context.selection_anchor_path.iter_mut())
+                .chain(context.scroll_anchor_path.iter_mut())
+            {
+                if path == from {
+                    *path = to.to_owned();
+                }
+            }
+        }
+        true
+    }
+
+    /// Publica un snapshot automático en un paso. Retiene el orden de las llegadas conocidas
+    /// y registra las que el watcher no vio. El llamador solo publica snapshots completos.
+    pub fn reconcile_entries(&mut self, entries: Vec<Entry>) {
+        let positions: HashMap<_, _> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (&entry.path, index))
+            .collect();
+        let mut previous = Vec::with_capacity(self.entries.len());
+        previous.resize_with(self.entries.len(), || None);
+        let mut incoming = Vec::new();
+        let mut arrivals = Vec::new();
+        for entry in entries {
+            if let Some(&index) = positions.get(&entry.path) {
+                previous[index] = Some(entry);
+            } else {
+                if self.group_new_at_end {
+                    arrivals.push(entry.path.clone());
+                }
+                incoming.push(entry);
+            }
+        }
+        for (entry, updated) in self.entries.iter().zip(&previous) {
+            if updated.is_none() {
+                self.renamed_sort_keys.remove(&entry.path);
+                self.arrival_order.remove(&entry.path);
+                self.highlighted.remove(&entry.path);
+            }
+        }
+        self.record_arrivals(&arrivals);
+        self.entries = previous.into_iter().flatten().chain(incoming).collect();
+        self.entries_changed();
     }
 
     /// Marca un lote de rutas recién aparecidas (watcher: Created) como resaltadas Y las deja
@@ -339,8 +486,7 @@ impl FilePaneState {
         if new_paths.is_empty() {
             return 0;
         }
-        // El caché de la vista se invalida solo (la firma incluye `highlighted.len()` cuando se
-        // agrupa al final, y los nuevos `entries` cambian el len). Calculamos la vista YA ordenada.
+        // Calculamos las posiciones en la vista, con el orden de llegadas ya registrado.
         let new_set: std::collections::HashSet<&PathBuf> = new_paths.iter().collect();
         let positions: Vec<usize> = self
             .view_indices()
@@ -454,8 +600,7 @@ impl FilePaneState {
     }
 
     /// Firma O(1) de los inputs que determinan la vista. Si no cambia entre llamadas, el
-    /// caché es válido. Captura: nº de entries, sort, filtros (su hash), agrupar-al-final,
-    /// y nº de resaltadas (solo afecta el orden si `group_new_at_end`). No itera entries.
+    /// caché es válido. Los cambios estructurales del orden por ruta invalidan entries por revisión.
     fn view_signature(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -471,10 +616,6 @@ impl FilePaneState {
         // Los flags de visibilidad cambian qué entries entran a la vista: parte de la firma.
         self.visibility.hash(&mut h);
         self.visual_filter.hash(&mut h);
-        // El conjunto de resaltadas solo cambia el orden si se agrupan al final.
-        if self.group_new_at_end {
-            self.highlighted.len().hash(&mut h);
-        }
         h.finish()
     }
 
@@ -508,6 +649,17 @@ impl FilePaneState {
         indices
     }
 
+    /// Devuelve solo el caché vigente; nunca ordena ni filtra sincrónicamente.
+    /// Permite que operaciones de UI cancelables rechacen una vista aún no materializada.
+    pub fn cached_view_indices_shared(&self) -> Option<Arc<[usize]>> {
+        let signature = self.view_signature();
+        self.view_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| cache.signature == signature)
+            .map(|cache| Arc::clone(&cache.indices))
+    }
+
     /// Acceso de TEST al contador de recomputes (cuántas veces se recalculó la vista).
     #[cfg(test)]
     pub fn view_recomputes_for_test(&self) -> u32 {
@@ -515,8 +667,7 @@ impl FilePaneState {
     }
 
     /// Cálculo CRUDO de los índices de vista (filtrar → ordenar → agrupar-al-final).
-    /// No cachea; lo invoca `view_indices`. Si `new_items_at_end`, las filas resaltadas
-    /// van al final de forma ESTABLE (conservando su orden relativo).
+    /// No cachea; lo invoca `view_indices`. Las llegadas quedan en orden de detección.
     ///
     /// Filtra por DOS criterios en AND: los flags de visibilidad (ocultos/sistema/dotfiles)
     /// y los filtros de columna activos. Aplicar la visibilidad AQUÍ (no solo al pintar) es
@@ -540,10 +691,33 @@ impl FilePaneState {
             .map(|(i, _)| i)
             .collect();
         let sort = self.sort;
-        idx.sort_by(|&a, &b| crate::sort::cmp_entries(&self.entries[a], &self.entries[b], &sort));
-        if new_items_at_end && !self.highlighted.is_empty() {
-            let hl = &self.highlighted;
-            idx.sort_by_key(|&i| hl.contains(&self.entries[i].path));
+        if self.renamed_sort_keys.is_empty() && (!new_items_at_end || self.arrival_order.is_empty())
+        {
+            idx.sort_by(|&a, &b| {
+                crate::sort::cmp_entries(&self.entries[a], &self.entries[b], &sort)
+            });
+        } else {
+            // Resolver las rutas una vez por entrada, fuera del comparador de ordenamiento.
+            let keys: Vec<_> = self
+                .entries
+                .iter()
+                .map(|entry| {
+                    let arrival = if new_items_at_end {
+                        self.arrival_order.get(&entry.path).copied()
+                    } else {
+                        None
+                    };
+                    let original = self.renamed_sort_keys.get(&entry.path).unwrap_or(entry);
+                    (arrival, original)
+                })
+                .collect();
+            idx.sort_by(|&a, &b| {
+                let (arrival_a, entry_a) = keys[a];
+                let (arrival_b, entry_b) = keys[b];
+                arrival_a
+                    .cmp(&arrival_b)
+                    .then_with(|| crate::sort::cmp_entries(entry_a, entry_b, &sort))
+            });
         }
         idx
     }
@@ -634,12 +808,22 @@ impl FilePaneState {
         }
     }
 
+    /// Si el usuario cambia la selección durante un listado, esa elección sustituye el contexto
+    /// anterior que iba a restaurarse al terminar. No realiza I/O ni altera el historial de rutas.
+    pub fn update_pending_context_after_selection(&mut self) {
+        if self.pending_nav_context.is_some() {
+            self.capture_current_nav_context();
+            self.pending_nav_context = self.history.current_context().cloned();
+        }
+    }
+
     /// Seleccionar y desplazar a rutas confirmadas cuando termine el listado incremental.
     pub fn reveal_after_listing(&mut self, paths: Vec<PathBuf>) {
         // Rearmar el observador Slint aunque dos reveals terminen en el mismo índice.
         self.restored_scroll_row = None;
         self.pending_nav_context = Some(NavContext {
             focused_path: paths.first().cloned(),
+            selection_anchor_path: paths.first().cloned(),
             scroll_anchor_path: paths.first().cloned(),
             selected_paths: paths,
             table: None,
@@ -649,9 +833,10 @@ impl FilePaneState {
 
     /// Reemplaza la carpeta actual sin tocar el historial (uso interno).
     fn enter(&mut self, dir: PathBuf) {
+        self.navigation_revision = new_navigation_revision();
         self.current_dir = dir;
         self.entries.clear();
-        self.entries_changed();
+        self.reset_display_order();
         self.focused = None;
         self.selected.clear();
         self.anchor = None;
@@ -669,6 +854,7 @@ impl FilePaneState {
         };
         let context = NavContext {
             focused_path: self.focused.and_then(path_at),
+            selection_anchor_path: self.anchor.and_then(path_at),
             selected_paths: self
                 .selected
                 .iter()
@@ -692,7 +878,16 @@ impl FilePaneState {
         }
         self.visual_filter = context.visual_filter;
         let view = self.view_indices();
+        let positions = (context.selected_paths.len() > 8).then(|| {
+            view.iter()
+                .enumerate()
+                .map(|(position, &index)| (self.entries[index].path.as_path(), position))
+                .collect::<HashMap<_, _>>()
+        });
         let position_of = |path: &Path| {
+            if let Some(positions) = &positions {
+                return positions.get(path).copied();
+            }
             view.iter().position(|real| {
                 self.entries
                     .get(*real)
@@ -710,7 +905,11 @@ impl FilePaneState {
             .and_then(position_of)
             .or_else(|| self.selected.first().copied())
             .or_else(|| (!view.is_empty()).then_some(0));
-        self.anchor = self.focused;
+        self.anchor = context
+            .selection_anchor_path
+            .as_deref()
+            .and_then(position_of)
+            .or(self.focused);
         self.restored_scroll_row = context.scroll_anchor_path.as_deref().and_then(position_of);
         self.scroll_anchor_path = context.scroll_anchor_path;
         self.presentation_changed();
@@ -1277,7 +1476,7 @@ mod tests {
     }
 
     #[test]
-    fn view_al_final_mueve_resaltadas_al_fondo() {
+    fn view_al_final_conserva_llegadas_tras_expirar_resaltado() {
         use crate::fs_model::{Entry, EntryKind};
         let mut s = FilePaneState::new(p("D:/x"));
         let mk = |name: &str| Entry {
@@ -1291,11 +1490,15 @@ mod tests {
             system: false,
         };
         s.entries = vec![mk("a"), mk("b"), mk("c")];
-        s.highlighted.insert(p("D:/x/b"));
-        // Sin flag: orden natural.
         assert_eq!(s.view_indices(), vec![0, 1, 2]);
-        // Con flag: b (idx 1) al final, estable. (Cálculo crudo, sin pasar por el caché.)
-        assert_eq!(s.compute_view_indices(true), vec![0, 2, 1]);
+        s.group_new_at_end = true;
+        s.record_arrivals(&[p("D:/x/c"), p("D:/x/b")]);
+        s.select_arrivals(&[p("D:/x/c"), p("D:/x/b")]);
+        assert_eq!(s.view_indices(), vec![0, 2, 1]);
+        s.sync_highlighted(|_| false);
+        assert_eq!(s.view_indices(), vec![0, 2, 1]);
+        s.reset_display_order();
+        assert_eq!(s.view_indices(), vec![0, 1, 2]);
     }
 
     #[test]
@@ -1343,6 +1546,7 @@ mod tests {
         s.entries = vec![mk("a"), mk("b"), mk("c")];
         // Con "agrupar al final", el nuevo ("a", que ordenaría primero) cae al final de la vista.
         s.group_new_at_end = true;
+        s.record_arrivals(&[p("D:/x/a")]);
         let n = s.select_arrivals(&[p("D:/x/a")]);
         assert_eq!(n, 1);
         // Vista con a al final: [b, c, a] → "a" en la última posición (2).
@@ -1453,6 +1657,25 @@ mod tests {
         let d = p.view_indices();
         assert_eq!(d.len(), 51);
         assert_eq!(p.view_recomputes_for_test(), 3, "agregar entry recalcula");
+    }
+
+    #[test]
+    fn consulta_cache_de_vista_nunca_dispara_ordenamiento() {
+        let mut pane = pane_n(20);
+        assert!(pane.cached_view_indices_shared().is_none());
+        assert_eq!(pane.view_recomputes_for_test(), 0);
+        let view = pane.view_indices_shared();
+        assert!(Arc::ptr_eq(
+            &view,
+            &pane.cached_view_indices_shared().unwrap()
+        ));
+        pane.sort.ascending = !pane.sort.ascending;
+        assert!(pane.cached_view_indices_shared().is_none());
+        assert_eq!(
+            pane.view_recomputes_for_test(),
+            1,
+            "consultar no ordena de nuevo"
+        );
     }
 
     #[test]

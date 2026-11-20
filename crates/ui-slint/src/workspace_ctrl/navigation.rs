@@ -28,6 +28,16 @@ impl WorkspaceCtrl {
         shift: bool,
         now: std::time::Instant,
     ) -> bool {
+        if !self.is_deep_active(id)
+            && self
+                .ws
+                .pane(id)
+                .and_then(|pane| pane.files.as_ref())
+                .and_then(|files| files.view_entry_at(pos))
+                .is_some()
+        {
+            self.mark_explicit_creation_selection(id);
+        }
         // El PointerEvent tiene el estado actual de las teclas. Sincronizarlo antes de resolver
         // un doble clic evita que Ctrl pegado tras un modal convierta un clic normal en
         // "abrir en otro panel". También permite que Ctrl+doble clic siga funcionando.
@@ -36,7 +46,32 @@ impl WorkspaceCtrl {
         // Ventana amplia (700 ms): bajo render por software en una VM, el segundo `clicked`
         // puede llegar al hilo de UI con latencia; un umbral chico se pierde el doble-clic.
         const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(700);
-        let is_double = !self.opened_recently(now)
+        let same_deep_target = !self.is_deep_active(id)
+            || self.deep_visible_entry(id, pos).is_some_and(|entry| {
+                self.deep_job
+                    .as_ref()
+                    .and_then(|job| job.focused_path.as_ref())
+                    == Some(&entry.path)
+            });
+        let current_deep_path = self
+            .deep_visible_entry(id, pos)
+            .map(|entry| entry.path.clone());
+        let changed_deep_gesture = self
+            .deep_job
+            .as_ref()
+            .filter(|job| job.pane == id)
+            .and_then(|job| job.last_pointer_path.as_ref())
+            .is_some_and(|(previous, t)| {
+                now.duration_since(*t) <= DOUBLE_CLICK
+                    && current_deep_path.as_ref() != Some(previous)
+            });
+        if let Some(job) = self.deep_job.as_mut().filter(|job| job.pane == id) {
+            job.suppress_native_double = changed_deep_gesture;
+            job.last_pointer_path = current_deep_path.map(|path| (path, now));
+        }
+        let is_double = same_deep_target
+            && (!self.is_deep_active(id) || (!ctrl && !shift))
+            && !self.opened_recently(now)
             && matches!(
                 self.last_click,
                 Some((lid, lpos, t)) if lid == id && lpos == pos && now.duration_since(t) <= DOUBLE_CLICK
@@ -46,8 +81,16 @@ impl WorkspaceCtrl {
             self.last_open = Some(now);
             return self.on_row_double_clicked_with_shift(id, pos, shift);
         }
-        self.last_click = Some((id, pos, now));
+        self.last_click = if self.is_deep_active(id) && (ctrl || shift) {
+            None
+        } else {
+            Some((id, pos, now))
+        };
         self.set_active(id);
+        if self.is_deep_active(id) {
+            self.deep_select_at(id, pos, ctrl, shift);
+            return false;
+        }
         if let Some(f) = self.ws.active_files_mut() {
             if shift {
                 f.select_range_to(pos);
@@ -57,6 +100,7 @@ impl WorkspaceCtrl {
                 f.select_single(pos);
             }
         }
+        self.sync_explicit_creation_selection(id);
         false
     }
 
@@ -66,6 +110,10 @@ impl WorkspaceCtrl {
     /// del arrastre (filas de alto fijo).
     pub fn select_rect_range(&mut self, id: PaneId, from_pos: i32, to_pos: i32, additive: bool) {
         self.set_active(id);
+        if self.is_deep_active(id) {
+            self.deep_select_rect(id, from_pos, to_pos, additive);
+            return;
+        }
         let Some(f) = self.ws.active_files_mut() else {
             return;
         };
@@ -77,6 +125,8 @@ impl WorkspaceCtrl {
         let hi = from_pos.max(to_pos).clamp(0, len - 1) as usize;
         let positions: Vec<usize> = (lo..=hi).collect();
         f.select_rect(&positions, additive);
+        self.mark_explicit_creation_selection(id);
+        self.sync_explicit_creation_selection(id);
     }
 
     /// ¿Se abrió algo por doble-clic hace muy poco? (Para que los dos detectores no
@@ -96,6 +146,31 @@ impl WorkspaceCtrl {
         ctrl: bool,
         shift: bool,
     ) -> bool {
+        let changed_since_first_click = self
+            .deep_job
+            .as_ref()
+            .filter(|job| job.pane == id)
+            .and_then(|job| job.last_pointer_path.as_ref())
+            .is_some_and(|(path, at)| {
+                std::time::Instant::now().saturating_duration_since(*at)
+                    <= std::time::Duration::from_millis(700)
+                    && self
+                        .deep_visible_entry(id, pos)
+                        .is_none_or(|entry| &entry.path != path)
+            });
+        if changed_since_first_click {
+            self.last_click = None;
+            return false;
+        }
+        if let Some(job) = self
+            .deep_job
+            .as_mut()
+            .filter(|job| job.pane == id && job.suppress_native_double)
+        {
+            job.suppress_native_double = false;
+            self.last_click = None;
+            return false;
+        }
         // Este callback nativo llega después del mouse-up y no entrega el PointerEvent. La UI
         // conserva sus modificadores para el gesto y los pasa explícitamente; no confiar en
         // `ctrl_down`/`shift_down`, que pueden quedar obsoletos si un modal perdió key-release.
@@ -125,11 +200,7 @@ impl WorkspaceCtrl {
 
         // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
         if self.is_deep_active(id) {
-            let target = self
-                .deep_job
-                .as_ref()
-                .and_then(|d| d.items.get(pos))
-                .map(|(e, _depth)| e.clone());
+            let target = self.deep_visible_entry(id, pos).cloned();
             let Some(e) = target else { return false };
             if e.kind == naygo_core::fs_model::EntryKind::Directory {
                 if self.ctrl_down {
@@ -200,11 +271,7 @@ impl WorkspaceCtrl {
 
         // En modo deep: resolver la entrada desde deep_items (fuente de filas en ese modo).
         if self.is_deep_active(id) {
-            let target = self
-                .deep_job
-                .as_ref()
-                .and_then(|d| d.items.get(pos))
-                .map(|(e, _depth)| e.clone());
+            let target = self.deep_visible_entry(id, pos).cloned();
             let Some(e) = target else { return false };
             if e.kind != naygo_core::fs_model::EntryKind::Directory {
                 return false;
@@ -358,8 +425,8 @@ impl WorkspaceCtrl {
         // Carpeta objetivo: el ítem enfocado si es carpeta; si no, la carpeta del panel.
         let target = self
             .ws
-            .active_files()
-            .and_then(|f| f.focused_view_entry())
+            .active_id()
+            .and_then(|id| self.focused_entry_of(id))
             .filter(|e| e.kind == EntryKind::Directory)
             .map(|e| e.path.clone())
             .or_else(|| self.ws.active_files().map(|f| f.current_dir.clone()));
@@ -914,6 +981,13 @@ impl WorkspaceCtrl {
     /// el camino que navega ya repuebla el panel con su listado normal.
     pub(super) fn cancel_deep_if_navigating(&mut self, id: PaneId) {
         if self.is_deep_active(id) {
+            if self
+                .rename_active
+                .as_ref()
+                .is_some_and(|rename| rename.pane == id)
+            {
+                self.rename_cancel();
+            }
             if let Some(d) = self.deep_job.take() {
                 d.token.cancel();
             }
@@ -923,6 +997,83 @@ impl WorkspaceCtrl {
     /// ¿El panel `id` está en vista profunda ahora mismo?
     pub fn is_deep_active(&self, id: PaneId) -> bool {
         self.deep_job.as_ref().is_some_and(|d| d.pane == id)
+    }
+
+    /// Una sola fuente de verdad para el elemento enfocado, también en vista profunda.
+    pub(super) fn focused_entry_of(&self, id: PaneId) -> Option<&naygo_core::fs_model::Entry> {
+        if self.is_deep_active(id) {
+            return self
+                .deep_focused_position(id)
+                .and_then(|pos| self.deep_visible_entry(id, pos));
+        }
+        self.ws
+            .pane(id)
+            .and_then(|pane| pane.files.as_ref())
+            .and_then(|files| files.focused_view_entry())
+    }
+
+    /// Mismo filtro y orden que `rows_of`; se consulta solo al activar una fila.
+    pub(super) fn deep_visible_entry(
+        &self,
+        id: PaneId,
+        pos: usize,
+    ) -> Option<&naygo_core::fs_model::Entry> {
+        let index = *self.deep_view_indices(id)?.get(pos)?;
+        self.deep_job
+            .as_ref()?
+            .items
+            .get(index)
+            .map(|(entry, _)| entry)
+    }
+
+    /// Nunca deducir el cursor profundo del índice o la selección de la vista normal.
+    pub(super) fn deep_focused_position(&self, id: PaneId) -> Option<usize> {
+        let job = self.deep_job.as_ref().filter(|job| job.pane == id)?;
+        let path = job.focused_path.as_ref()?;
+        self.deep_position_of(id, path)
+    }
+
+    pub(crate) fn deep_position_of(&self, id: PaneId, path: &std::path::Path) -> Option<usize> {
+        let job = self.deep_job.as_ref().filter(|job| job.pane == id)?;
+        self.deep_view_indices(id)?
+            .iter()
+            .position(|&index| job.items[index].0.path == path)
+    }
+
+    pub(crate) fn deep_visible_count(&self, id: PaneId) -> usize {
+        self.deep_view_indices(id).map_or(0, |view| view.len())
+    }
+
+    pub(super) fn deep_focus_at(&mut self, id: PaneId, pos: usize) -> bool {
+        let Some(path) = self
+            .deep_visible_entry(id, pos)
+            .map(|entry| entry.path.clone())
+        else {
+            return false;
+        };
+        let Some(job) = self.deep_job.as_mut().filter(|job| job.pane == id) else {
+            return false;
+        };
+        if job.focused_path.as_ref() == Some(&path) {
+            return false;
+        }
+        job.focused_path = Some(path);
+        true
+    }
+
+    pub(super) fn deep_move_focus(&mut self, id: PaneId, delta: isize) -> bool {
+        let count = self.deep_visible_count(id);
+        if count == 0 {
+            return false;
+        }
+        let pos = match self.deep_focused_position(id) {
+            _ if delta == -isize::MAX => 0,
+            _ if delta == isize::MAX => count - 1,
+            Some(current) => current.saturating_add_signed(delta).min(count - 1),
+            None if delta < 0 => count - 1,
+            None => 0,
+        };
+        self.deep_focus_at(id, pos)
     }
 
     /// Activa la vista profunda en el panel `id` sobre su carpeta actual. Cancela cualquier
@@ -937,6 +1088,19 @@ impl WorkspaceCtrl {
             .filter(|d| d.is_dir());
         let Some(dir) = dir else { return };
         self.deep_cancel();
+        if self
+            .rename_active
+            .as_ref()
+            .is_some_and(|rename| rename.pane == id)
+        {
+            self.rename_cancel();
+        }
+        self.close_context_menu();
+        if let Some(files) = self.ws.pane_mut(id).and_then(|pane| pane.files.as_mut()) {
+            files.clear_selection();
+            files.focused = None;
+            files.presentation_changed();
+        }
         let token = naygo_core::CancellationToken::new();
         let (rx, _handle) =
             naygo_core::deep_listing::spawn_deep_listing(dir.clone(), token.clone());
@@ -945,7 +1109,17 @@ impl WorkspaceCtrl {
             root: dir,
             rx,
             token,
-            items: Vec::new(),
+            items: DeepItems::default(),
+            deep_sort: None,
+            deep_view: Default::default(),
+            replacement_items: None,
+            focused_path: None,
+            selected_paths: Default::default(),
+            selection_anchor: None,
+            selection_revision: 0,
+            footer_cache: None,
+            suppress_native_double: false,
+            last_pointer_path: None,
             dirs_scanned: 0,
             done: false,
             cancelled: false,
@@ -956,9 +1130,48 @@ impl WorkspaceCtrl {
     /// Apaga la vista profunda: cancela el worker y repuebla el panel con su listado normal.
     pub fn deep_cancel(&mut self) {
         if let Some(d) = self.deep_job.take() {
+            if self
+                .rename_active
+                .as_ref()
+                .is_some_and(|rename| rename.pane == d.pane)
+            {
+                self.rename_cancel();
+            }
             d.token.cancel();
             self.start_listing(d.pane, d.root);
         }
+    }
+
+    /// Reinicia solo el worker profundo; jamás hace I/O en el hilo de UI ni cambia de panel.
+    pub(super) fn restart_deep_listing(&mut self, focused_path: Option<std::path::PathBuf>) {
+        let Some(old) = self.deep_job.take() else {
+            return;
+        };
+        old.token.cancel();
+        let token = naygo_core::CancellationToken::new();
+        let (rx, _handle) =
+            naygo_core::deep_listing::spawn_deep_listing(old.root.clone(), token.clone());
+        self.deep_job = Some(DeepJob {
+            pane: old.pane,
+            root: old.root,
+            rx,
+            token,
+            items: old.items,
+            deep_sort: old.deep_sort,
+            deep_view: Default::default(),
+            replacement_items: Some(Vec::new()),
+            focused_path,
+            selected_paths: old.selected_paths,
+            selection_anchor: old.selection_anchor,
+            selection_revision: old.selection_revision.wrapping_add(1),
+            footer_cache: None,
+            suppress_native_double: false,
+            last_pointer_path: None,
+            dirs_scanned: 0,
+            done: false,
+            cancelled: false,
+            partial: false,
+        });
     }
 
     /// Alterna la vista profunda en el panel `id` (para el toggle de la barra).
@@ -978,12 +1191,19 @@ impl WorkspaceCtrl {
         let Some(d) = self.deep_job.as_mut() else {
             return false;
         };
+        if d.done || d.cancelled {
+            return false;
+        }
         let mut changed = false;
         loop {
             match d.rx.try_recv() {
                 Ok(naygo_core::deep_listing::DeepMsg::Entry(de)) => {
-                    d.items.push((de.entry, de.depth));
-                    changed = true;
+                    if let Some(replacement) = d.replacement_items.as_mut() {
+                        replacement.push((de.entry, de.depth));
+                    } else {
+                        d.items.push((de.entry, de.depth));
+                        changed = true;
+                    }
                 }
                 Ok(naygo_core::deep_listing::DeepMsg::Progress { dirs_scanned }) => {
                     d.dirs_scanned = dirs_scanned;
@@ -991,16 +1211,52 @@ impl WorkspaceCtrl {
                 Ok(naygo_core::deep_listing::DeepMsg::Done { partial }) => {
                     d.done = true;
                     d.partial = partial;
+                    if let Some(mut entries) = d.replacement_items.take() {
+                        if !partial {
+                            let positions: std::collections::HashMap<_, _> = d
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (entry, _))| (&entry.path, index))
+                                .collect();
+                            entries.sort_by_cached_key(|(entry, _)| {
+                                positions.get(&entry.path).copied().unwrap_or(usize::MAX)
+                            });
+                            d.items = entries.into();
+                        }
+                    } else if let Some(spec) = d.deep_sort {
+                        // Una ordenación elegida durante el recorrido inicial incluye también
+                        // las entradas que llegaron después del clic.
+                        super::deep_view::sort_siblings(&mut d.items, &d.root, spec);
+                    }
+                    if !partial && !d.selected_paths.is_empty() {
+                        // Durante el streaming jamás se entrega un subconjunto. Solo al cerrar
+                        // un recorrido completo se retiran marcas de rutas que ya no existen.
+                        let found: std::collections::HashSet<_> = d
+                            .items
+                            .iter()
+                            .filter(|(entry, _)| d.selected_paths.contains(&entry.path))
+                            .map(|(entry, _)| entry.path.clone())
+                            .collect();
+                        d.selected_paths.retain(|path| found.contains(path));
+                        d.selection_revision = d.selection_revision.wrapping_add(1);
+                    }
                     changed = true;
                     break;
                 }
                 Ok(naygo_core::deep_listing::DeepMsg::Cancelled) => {
+                    d.replacement_items = None;
                     d.cancelled = true;
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    d.replacement_items = None;
+                    // Sin mensaje terminal no se puede garantizar que se hayan visto todos los
+                    // hermanos; no habilitar operaciones que dependen de un recorrido completo.
                     d.done = true;
+                    d.partial = true;
+                    changed = true;
                     break;
                 }
             }

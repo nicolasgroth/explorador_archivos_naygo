@@ -50,6 +50,11 @@ export component ToolbarPath inherits Rectangle {
     in property <int> session;
     in property <int> caret: -1;
     in property <int> caret-revision;
+    in property <bool> focus-blocked: false;
+    property <int> focus-revision: 0;
+    changed focus-blocked => {
+        if !root.focus-blocked && root.editing { root.focus-revision += 1; }
+    }
     in property <[string]> suggestions;
     in property <string> error;
     in property <bool> validating;
@@ -94,6 +99,8 @@ export component ToolbarPath inherits Rectangle {
         }
         if root.editing: PathEditor {
             text <=> root.draft; session: root.session; caret: root.caret;
+            focus-revision: root.focus-revision;
+            allow-refocus: root.editing && !root.focus-blocked;
             caret-revision: root.caret-revision; suggestion-index: root.suggestion-index;
             error: root.validating ? "" : root.error;
             focus-changed(focused) => { root.input-focused = focused; }

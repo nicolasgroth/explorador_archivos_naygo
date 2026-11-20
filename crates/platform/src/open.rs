@@ -41,6 +41,48 @@ pub enum Terminal {
     Wsl,
 }
 
+/// Una acción explícita sobre una carpeta capturada por la interfaz.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderAction {
+    Explorer,
+    Terminal(Terminal),
+}
+
+/// Ejecutar solo en un worker: tanto metadata como el Shell pueden bloquear. No se
+/// canonicaliza ni se sustituye la ruta. La comprobación no es atómica con el lanzamiento.
+pub fn open_folder_action(dir: &Path, action: FolderAction) -> Result<(), ShellError> {
+    let metadata = std::fs::metadata(dir)
+        .map_err(|error| ShellError::Failed(format!("{}: {error}", dir.display())))?;
+    if !metadata.is_dir() {
+        return Err(ShellError::Failed(format!(
+            "{}: not a directory",
+            dir.display()
+        )));
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+        };
+        // Este worker es un hilo nuevo: si COM falla, no ejecutar extensiones Shell sin STA.
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr.is_err() {
+            return Err(ShellError::Failed(format!("COM: {hr:?}")));
+        }
+        let result = match action {
+            FolderAction::Explorer => open_default(dir),
+            FolderAction::Terminal(term) => open_terminal(dir, term),
+        };
+        unsafe { CoUninitialize() };
+        result
+    }
+    #[cfg(not(windows))]
+    match action {
+        FolderAction::Explorer => open_default(dir),
+        FolderAction::Terminal(term) => open_terminal(dir, term),
+    }
+}
+
 impl Terminal {
     /// El ejecutable que lanza esta terminal.
     #[cfg(windows)]

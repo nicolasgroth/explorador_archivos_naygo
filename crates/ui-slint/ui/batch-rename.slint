@@ -178,16 +178,25 @@ export component BatchRename inherits Rectangle {
                     }
                     ListView {
                         for r in root.vm.rows: Rectangle {
-                            height: 24px;
+                            height: root.vm.show-parent ? 40px : 24px;
                             HorizontalLayout {
                                 padding-left: 6px;
                                 spacing: 4px;
-                                Text {
-                                    text: r.old-name;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
+                                VerticalLayout {
                                     horizontal-stretch: 1;
-                                    overflow: elide;
+                                    Text {
+                                        text: r.old-name;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    if root.vm.show-parent: Text {
+                                        text: r.parent;
+                                        color: Theme.text-dim;
+                                        font-size: 10px;
+                                        overflow: elide;
+                                        accessible-label: r.parent;
+                                    }
                                 }
                                 Text { text: "→"; color: Theme.text-dim; width: 20px; vertical-alignment: center; }
                                 // Color por estado: Ok=acento, SinCambio=atenuado, Inválido/Colisión=error.

@@ -336,6 +336,9 @@ export component FavoritesPanel inherits Rectangle {
         width: 100%;
         height: 100%;
         background: #000000aa;
+        // El LineEdit se monta con el modal: esperar al siguiente tick evita enfocar un
+        // componente aún inexistente y permite escribir inmediatamente tras el menú.
+        Timer { interval: 0ms; running: true; triggered => { self.running = false; name-input.focus(); } }
         TouchArea { clicked => { root.name-modal-open = false; } }
         Rectangle {
             width: 280px;

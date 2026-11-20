@@ -16,6 +16,44 @@ use naygo_core::workspace::PaneId;
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
+fn start_listing_file_export(
+    ctrl: &Rc<std::cell::RefCell<crate::workspace_ctrl::WorkspaceCtrl>>,
+    separator: char,
+) -> bool {
+    let intent = ctrl.borrow().capture_export_intent();
+    let Some(intent) = intent else {
+        ctrl.borrow_mut().reject_listing_export();
+        return false;
+    };
+    let name = ctrl
+        .borrow()
+        .active_dir()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "naygo-listado".to_string());
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name(format!("{name}.csv"))
+        .save_file()
+    {
+        let mut controller = ctrl.borrow_mut();
+        if !controller.export_intent_is_current(&intent) {
+            controller.reject_listing_export();
+            return false;
+        }
+        controller.start_listing_export(
+            separator,
+            crate::workspace_ctrl::listing_export::ExportDestination::File(path),
+        )
+    } else {
+        ctrl.borrow_mut().close_context_menu();
+        false
+    }
+}
+
 /// Registra los callbacks del menú contextual, carpetas nuevas, missing, búsqueda y toolbar.
 pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
     let WireCtx {
@@ -26,95 +64,24 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
         area_of,
         ..
     } = ctx;
-    // --- Menú contextual (clic derecho): acciones propias + nativo ---
+    // La captura es incremental y el CSV se genera en worker tanto en vista normal como profunda.
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
         ui.on_ctx_export_clipboard(move || {
-            ctrl.borrow_mut().ctx_export_listing_clipboard();
-            sync_rows();
-        });
-    }
-    {
-        let ctrl = ctrl.clone();
-        let sync_rows = sync_rows.clone();
-        ui.on_ctx_export_clipboard_comma(move || {
-            ctrl.borrow_mut().ctx_export_listing_clipboard_comma();
-            sync_rows();
-        });
-    }
-    {
-        let ctrl = ctrl.clone();
-        let sync_rows = sync_rows.clone();
-        ui.on_ctx_export_file(move || {
-            let (bytes, default_name) = {
-                let mut c = ctrl.borrow_mut();
-                let bytes = c.export_listing_file_bytes(';');
-                let default_name = c
-                    .active_dir()
-                    .and_then(|path| {
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                    })
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| "naygo-listado".to_string());
-                c.close_context_menu();
-                (bytes, default_name)
-            };
-            if let Some(bytes) = bytes {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name(format!("{default_name}.csv"))
-                    .save_file()
-                {
-                    // La escritura corre fuera del hilo UI; el diálogo del sistema ya terminó.
-                    std::thread::spawn(move || {
-                        if let Err(error) = std::fs::write(&path, bytes) {
-                            crate::logging::log_line(&format!(
-                                "exportar listado: no se pudo escribir {}: {error}",
-                                path.display()
-                            ));
-                        }
-                    });
+            let started = ctrl.borrow_mut().start_listing_export(
+                ';',
+                crate::workspace_ctrl::listing_export::ExportDestination::Clipboard,
+            );
+            if started {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_listing_export_clipboard(true);
+                    ui.set_listing_export_active(true);
                 }
             }
-            sync_rows();
-        });
-    }
-    {
-        let ctrl = ctrl.clone();
-        let sync_rows = sync_rows.clone();
-        ui.on_ctx_export_file_comma(move || {
-            let (bytes, default_name) = {
-                let mut c = ctrl.borrow_mut();
-                let bytes = c.export_listing_file_bytes(',');
-                let default_name = c
-                    .active_dir()
-                    .and_then(|path| {
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                    })
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| "naygo-listado".to_string());
-                c.close_context_menu();
-                (bytes, default_name)
-            };
-            if let Some(bytes) = bytes {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name(format!("{default_name}.csv"))
-                    .save_file()
-                {
-                    std::thread::spawn(move || {
-                        if let Err(error) = std::fs::write(&path, bytes) {
-                            crate::logging::log_line(&format!(
-                                "exportar listado: no se pudo escribir {}: {error}",
-                                path.display()
-                            ));
-                        }
-                    });
-                }
-            }
+            start_timer();
             sync_rows();
         });
     }
@@ -122,8 +89,79 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
-        ui.on_row_context(move |id, _pos, x, y| {
-            ctrl.borrow_mut().open_context_menu(PaneId(id as u64), x, y);
+        let ui_weak = ui.as_weak();
+        ui.on_ctx_export_clipboard_comma(move || {
+            let started = ctrl.borrow_mut().start_listing_export(
+                ',',
+                crate::workspace_ctrl::listing_export::ExportDestination::Clipboard,
+            );
+            if started {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_listing_export_clipboard(true);
+                    ui.set_listing_export_active(true);
+                }
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_ctx_export_file(move || {
+            if start_listing_file_export(&ctrl, ';') {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_listing_export_clipboard(false);
+                    ui.set_listing_export_active(true);
+                }
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_ctx_export_file_comma(move || {
+            if start_listing_file_export(&ctrl, ',') {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_listing_export_clipboard(false);
+                    ui.set_listing_export_active(true);
+                }
+            }
+            start_timer();
+            sync_rows();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let start_timer = start_timer.clone();
+        ui.on_listing_export_cancel(move || {
+            ctrl.borrow_mut().cancel_listing_export();
+            start_timer();
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_row_context(move |id, pos, x, y| {
+            if let Ok(pos) = usize::try_from(pos) {
+                ctrl.borrow_mut()
+                    .open_row_context_menu(PaneId(id as u64), pos, x, y);
+            }
+            let deep_notice = ctrl.borrow_mut().take_deep_selection_notice();
+            if deep_notice {
+                let message = ctrl.borrow().config.t("slint.deep.selection_unavailable");
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(message.into());
+                }
+            }
             sync_rows();
             // El menú contextual necesita que el event loop siga vivo para resaltar sus ítems al
             // pasar el mouse: rearmar el timer al abrirlo (igual criterio que con los modales).
@@ -607,8 +645,8 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
             let (targets, x, y) = {
                 let c = ctrl.borrow();
                 match &c.context_menu {
-                    Some(cm) => (cm.targets.clone(), cm.x, cm.y),
-                    None => return,
+                    Some(cm) if c.active_id() == Some(cm.pane) => (cm.targets.clone(), cm.x, cm.y),
+                    _ => return,
                 }
             };
             ctrl.borrow_mut().close_context_menu();
@@ -618,8 +656,22 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
                 let pos = ui.window().position();
                 let sx = pos.x + x as i32;
                 let sy = pos.y + y as i32;
-                let _ =
-                    naygo_platform::context_menu::show_native_context_menu(hwnd, &targets, sx, sy);
+                if let Err(error) =
+                    naygo_platform::context_menu::show_native_context_menu(hwnd, &targets, sx, sy)
+                {
+                    use naygo_platform::context_menu::ShellError;
+                    crate::logging::log_line(&format!("menú Shell falló: {error:?}"));
+                    let key = match error {
+                        ShellError::NoItems | ShellError::IncompleteSelection => {
+                            "shell.context.incomplete"
+                        }
+                        ShellError::DifferentParents => "shell.context.different_parents",
+                        ShellError::NotSupported | ShellError::Failed(_) => "shell.error",
+                    };
+                    ui.invoke_show_toast(ctrl.borrow().config.t(key).into());
+                }
+            } else {
+                ui.invoke_show_toast(ctrl.borrow().config.t("shell.error").into());
             }
         });
     }
@@ -656,11 +708,18 @@ pub(crate) fn wire_ctx_menu(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
+        let ui_weak = ui.as_weak();
         ui.on_ctx_transform_text(move || {
+            ctrl.borrow_mut().text_transform_open();
+            let notice = ctrl.borrow_mut().take_deep_selection_notice();
             ctrl.borrow_mut().close_context_menu();
-            if ctrl.borrow_mut().text_transform_open() {
-                start_timer();
+            if notice {
+                let message = ctrl.borrow().config.t("slint.deep.selection_unavailable");
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(message.into());
+                }
             }
+            start_timer();
             sync_rows();
         });
     }

@@ -109,6 +109,10 @@ pub struct OpPlan {
     /// compatibilidad con journals 0.5.x; `#[serde(default)]` permite leer planes anteriores.
     #[serde(default)]
     pub pre_delete: Vec<PathBuf>,
+    /// Sólo los planes completos de Move pueden publicar un directorio como unidad.
+    /// Los planes de reintento y reanudación pueden contener sólo algunos descendientes.
+    #[serde(default)]
+    pub allow_directory_rename: bool,
 }
 
 /// Progreso emitido por el motor mientras trabaja.

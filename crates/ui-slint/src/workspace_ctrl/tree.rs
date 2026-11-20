@@ -234,8 +234,15 @@ impl WorkspaceCtrl {
             });
             if let Some(p) = next.cloned() {
                 self.tree_expand(id, p);
-            } else {
-                // Ningún ancestro pendiente existe aún (esperando que cargue un padre): no-op.
+            } else if !self
+                .tree_listings
+                .keys()
+                .chain(self.pending_tree_listings.iter())
+                .any(|(pane, path)| *pane == id && chain.contains(path))
+            {
+                // Un ancestro que terminó sin ese hijo no podrá revelarlo. El panel de archivos
+                // conserva su ruta y estado; el árbol deja de pedir ticks por esa rama.
+                self.reveal_targets.remove(&id);
             }
         }
     }

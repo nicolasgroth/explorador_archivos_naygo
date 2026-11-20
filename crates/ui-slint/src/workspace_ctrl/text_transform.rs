@@ -30,12 +30,20 @@ pub struct TextTransformState {
 
 impl WorkspaceCtrl {
     pub fn text_transform_open(&mut self) -> bool {
-        let paths = self.selected_paths();
+        if self.retired_text_transform.is_some() {
+            self.pending_listing_error = Some(self.config.t("text_transform.waiting_cancel"));
+            return false;
+        }
+        let paths = self.operation_sources();
         if paths.is_empty() {
             return false;
         }
-        if let Some(old) = self.text_transform.take() {
-            old.token.cancel();
+        if self.text_transform.is_some() {
+            self.text_transform_close();
+            if self.retired_text_transform.is_some() {
+                self.pending_listing_error = Some(self.config.t("text_transform.waiting_cancel"));
+                return false;
+            }
         }
         let token = naygo_core::CancellationToken::new();
         let worker_token = token.clone();
@@ -158,12 +166,33 @@ impl WorkspaceCtrl {
     pub fn text_transform_close(&mut self) {
         if let Some(state) = self.text_transform.take() {
             state.token.cancel();
+            if state.job_rx.is_some() {
+                // La cancelación es cooperativa: conservar el canal hasta que el worker haya
+                // terminado y pueda reconciliarse la vista, incluso si estaba reemplazando un archivo.
+                self.retired_text_transform = Some(state);
+            }
         }
     }
 
     pub fn pump_text_transform(&mut self) -> bool {
+        let mut finished_paths = None;
+        if let Some(state) = self.retired_text_transform.as_mut() {
+            let done = state.job_rx.as_ref().is_none_or(|rx| loop {
+                match rx.try_recv() {
+                    Ok(TextJobMsg::Progress(_)) => {}
+                    Ok(TextJobMsg::Done(_) | TextJobMsg::Cancelled)
+                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => break true,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break false,
+                }
+            });
+            if done {
+                finished_paths = self.retired_text_transform.take().map(|state| state.paths);
+            }
+        }
+        let retired_done = self.retired_text_transform.is_none();
         let Some(state) = self.text_transform.as_mut() else {
-            return true;
+            self.refresh_deep_after_text_transform(finished_paths.as_deref());
+            return retired_done;
         };
         if let Some(rx) = state.diagnosis_rx.as_ref() {
             match rx.try_recv() {
@@ -206,9 +235,24 @@ impl WorkspaceCtrl {
             }
             if job_done {
                 state.job_rx = None;
+                finished_paths = Some(state.paths.clone());
             }
         }
-        state.diagnosis_rx.is_none() && job_done
+        let done = state.diagnosis_rx.is_none() && job_done && retired_done;
+        self.refresh_deep_after_text_transform(finished_paths.as_deref());
+        done
+    }
+
+    fn refresh_deep_after_text_transform(&mut self, paths: Option<&[PathBuf]>) {
+        let Some(job) = self.deep_job.as_ref() else {
+            return;
+        };
+        if paths.is_some_and(|paths| paths.iter().any(|path| path.starts_with(&job.root))) {
+            // Un watcher de la raíz no garantiza avisos de subcarpetas. Releer en worker
+            // después del terminal, también si el usuario cerró y canceló el diálogo.
+            let focus = job.focused_path.clone();
+            self.restart_deep_listing(focus);
+        }
     }
 
     pub fn text_transform_vm(&self) -> TextTransformVm {
@@ -290,5 +334,66 @@ fn ending_key(ending: LineEnding) -> &'static str {
         LineEnding::Cr => "text_transform.mac_classic",
         LineEnding::Mixed => "text_transform.mixed",
         LineEnding::None => "text_transform.no_endings",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelacion_al_cerrar_conserva_worker_hasta_reconciliar_vista() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let file = root.path().join("archivo.txt");
+        std::fs::write(&file, b"texto").unwrap();
+        let mut ctrl = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+        let pane = ctrl.active_id().unwrap();
+        ctrl.deep_start(pane);
+        for _ in 0..4000 {
+            ctrl.deep_poll();
+            if ctrl.deep_job.as_ref().is_some_and(|job| job.done) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ctrl.deep_job.as_ref().unwrap().done);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let token = naygo_core::CancellationToken::new();
+        ctrl.text_transform = Some(TextTransformState {
+            paths: vec![file],
+            options: TransformOptions {
+                line_ending: LineEnding::Lf,
+                encoding: TargetEncoding::Preserve,
+                final_newline: FinalNewline::Preserve,
+                trim_trailing_whitespace: false,
+            },
+            diagnosis: None,
+            diagnosis_error: None,
+            diagnosis_rx: None,
+            job_rx: Some(rx),
+            token: token.clone(),
+            completed: 0,
+            failed: 0,
+            finished: false,
+        });
+        ctrl.text_transform_close();
+        assert!(token.is_cancelled());
+        assert!(
+            !ctrl.pump_text_transform(),
+            "espera el terminal sin bloquear"
+        );
+        assert!(!ctrl.text_transform_open(), "no acumula workers cancelados");
+        assert!(
+            ctrl.pending_listing_error.is_some(),
+            "el usuario recibe un aviso"
+        );
+        tx.send(TextJobMsg::Cancelled).unwrap();
+        assert!(ctrl.pump_text_transform());
+        assert!(ctrl.retired_text_transform.is_none());
+        assert!(
+            !ctrl.deep_job.as_ref().unwrap().done,
+            "reinició el recorrido en worker"
+        );
     }
 }

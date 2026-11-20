@@ -116,6 +116,20 @@ pub(crate) fn wire_nav_keys(ui: &AppWindow, ctx: &WireCtx) {
             if ctrl.borrow_mut().on_key(text.as_str(), c, s, a) {
                 start_timer();
             }
+            let creation_wait_notice = ctrl.borrow_mut().take_creation_wait_notice();
+            if creation_wait_notice {
+                let message = ctrl.borrow().config.t("newfolder.waiting_for_result");
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(message.into());
+                }
+            }
+            let deep_notice = ctrl.borrow_mut().take_deep_selection_notice();
+            if deep_notice {
+                let message = ctrl.borrow().config.t("slint.deep.selection_unavailable");
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(message.into());
+                }
+            }
             // ¿La tecla pidió abrir la paleta de comandos (Ctrl+P)? Construir los comandos vigentes,
             // mostrar todos (query vacía) y abrir el overlay. El LineEdit toma el foco en `init`.
             if ctrl.borrow_mut().take_open_palette_request() {

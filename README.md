@@ -37,6 +37,23 @@ separa avances locales por bloque de mejoras pendientes, sin anunciarlas como ya
 [Code signing policy (política de firma de código)](docs/POLITICA-DE-FIRMA.md) describe el estado de
 la solicitud OSS y el procedimiento previsto para firmar las descargas.
 
+## Novedades de 0.5.6
+
+- **Vista profunda** con filtros por columna, orden por carpetas, selección múltiple y
+  exportación a CSV o al portapapeles. El teclado y las operaciones siguen las rutas de las
+  filas visibles aunque cambie el orden.
+- **Navegación y foco** más estables. El árbol conserva el desplazamiento cuando se expanden
+  otras ramas. El panel recupera el teclado tras crear o borrar y al cerrar las confirmaciones
+  de Operaciones.
+- **Renombrado en el lugar.** F2 y el renombrado por lotes conservan posición, foco y selección.
+  Los elementos nuevos quedan al final por defecto. F5 o un nuevo orden por columna reordena el listado.
+- **Arrastre y selección múltiple.** Puedes mover archivos y carpetas a otra carpeta del mismo
+  panel y devolverlos con Ctrl+Z cuando el destino estaba libre y en el mismo volumen. El menú
+  de Windows conserva el lote al hacer clic derecho sobre una selección.
+
+Los cambios completos y el alcance de las pruebas están en el [changelog](CHANGELOG.md) y el
+[estado local](docs/ESTADO-ACTUAL.md).
+
 ## Objetivos
 
 - **Rápido ante todo.** Navegar entre carpetas se siente instantáneo, incluso con decenas de
@@ -171,6 +188,9 @@ de pago.
 ## Descargar
 
 **[⬇ Descargar Naygo (portable)](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip)** — siempre apunta a la última versión publicada. También está el [instalador](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-setup.exe).
+
+El código de esta rama está en la versión 0.5.6. Los enlaces de descarga corresponden a la
+última publicación de GitHub Releases.
 
 ## Instalación
 

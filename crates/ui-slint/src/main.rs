@@ -59,6 +59,7 @@ mod sync;
 mod theme_apply;
 mod tick;
 mod tray;
+mod tree_rows_model;
 mod vm_builders;
 mod watch;
 mod win_helpers;
@@ -545,6 +546,7 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     ctrl.borrow_mut().start_startup_load(waker.clone());
+    ctrl.borrow_mut().set_folder_shell_waker(waker.clone());
     ctrl.borrow_mut().icons.set_waker(waker.clone());
     let pack_io = Rc::new(RefCell::new(packs::PackIo::new(waker.clone())));
     let pack_result: packs::PackOutcomeCallback = Rc::new(RefCell::new(None));

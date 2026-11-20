@@ -246,7 +246,7 @@ pub struct Settings {
     /// Duración del resaltado de archivos recién aparecidos (watcher).
     #[serde(default = "default_highlight_duration")]
     pub highlight_duration: HighlightDuration,
-    /// Si los archivos nuevos se agrupan al final del listado (resaltados) en vez de
+    /// Si los archivos nuevos se agregan al final hasta reordenar explícitamente, en vez de
     /// insertarse ya ordenados.
     #[serde(default = "default_new_items_at_end")]
     pub new_items_at_end: bool,
@@ -557,9 +557,8 @@ fn default_highlight_duration() -> HighlightDuration {
     HighlightDuration::UntilInteract
 }
 
-/// Default de `new_items_at_end`: false.
 fn default_new_items_at_end() -> bool {
-    false
+    true
 }
 
 /// Default de `size_no_subdirs`: false (recursivo).
@@ -643,7 +642,7 @@ impl Default for Settings {
             paste_image_fmt: crate::clipboard::ImageFmt::Png,
             paste_jpg_quality: 90,
             highlight_duration: HighlightDuration::UntilInteract,
-            new_items_at_end: false,
+            new_items_at_end: default_new_items_at_end(),
             size_no_subdirs: false,
             tray_enabled: true,
             close_to_tray: true,

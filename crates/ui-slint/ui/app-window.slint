@@ -14,6 +14,7 @@ import { SavedQueryDialog } from "saved-query-dialog.slint";
 import { ComparisonPointsDialog } from "comparison-points-dialog.slint";
 import { RecipeDialog } from "recipe-dialog.slint";
 import { PointRowVm } from "types.slint";
+import { DropViewport } from "types.slint";
 import { QueryDraftVm } from "types.slint";
 import { ColumnMenu } from "column-menu.slint";
 import { TreePanel } from "tree-panel.slint";
@@ -25,6 +26,7 @@ import { PreviewPanel } from "preview-panel.slint";
 import { BasketPanel } from "basket-panel.slint";
 import { SyncDialog } from "sync-dialog.slint";
 import { TextTransformDialog } from "text-transform-dialog.slint";
+import { ListingExportDialog } from "listing-export-dialog.slint";
 import { OpDialogs } from "op-dialogs.slint";
 import { MessageModal } from "message-modal.slint";
 import { OpsPanel } from "ops-panel.slint";
@@ -483,6 +485,7 @@ export component AppWindow inherits Window {
     callback toggle-deep(int);            // (pane-id) alterna la vista profunda del panel
     callback row-drag-out(int);           // inicia el arrastre OLE de los archivos seleccionados
     callback drop-target-row(int, int);   // fila bajo el cursor OLE (D-1: subcarpeta destino)
+    callback drop-viewport-changed(int, DropViewport);
     callback scroll-position-changed(int, int); // (pane-id, primera fila visible)
     callback rubber-band(int, int, int);  // (pane, from, to) selección por rectángulo (6F)
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
@@ -505,6 +508,17 @@ export component AppWindow inherits Window {
     // --- Rename inline (6D): la fila `rename-pos` del panel `rename-pane` muestra un editor. ---
     in-out property <int> rename-pane: -1;
     in-out property <int> rename-pos: -1;
+    in-out property <bool> rename-seeded: false;
+    in-out property <bool> rename-repositioning: false;
+    changed rename-repositioning => {
+        if root.rename-repositioning { rename-reposition-timer.running = true; }
+    }
+    rename-reposition-timer := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => { self.running = false; root.rename-repositioning = false; }
+    }
+    in-out property <int> rename-selection-revision: 0;
     in property <string> rename-text;          // texto inicial del editor (lo fija Rust)
     // Texto VIVO del editor de rename (bidireccional con el panel): Rust lo siembra con el
     // nombre original al abrir; el editor lo edita. Si el delegate se re-monta, el editor
@@ -582,6 +596,7 @@ export component AppWindow inherits Window {
     callback tree-context(int, string, length, length); // menú de la carpeta elegida en el árbol
     callback tree-link-toggle(int);      // común ↔ dedicado al último Files activo
     callback tree-key(int, string);      // (pane-id, dir) navegación por teclado del árbol
+    callback tree-shortcut(int, string, bool, bool, bool) -> bool;
     callback nav-navigate(string);       // favorito/reciente → navegar Files activo
     callback fav-remove(string);         // quitar favorito por ruta
     callback fav-pin-current();          // anclar la carpeta del Files activo
@@ -638,6 +653,9 @@ export component AppWindow inherits Window {
     // La zona es el CENTRO (apilar como pestaña): la UI lo pinta como una pestaña, no como
     // un relleno de borde, para que se entienda que va a agrupar en tabs.
     in property <bool> drop-is-tab;
+    in property <bool> listing-export-active;
+    in property <bool> listing-export-clipboard;
+    callback listing-export-cancel();
     // Selector numérico de panel destino (overlay 1..9):
     in property <[PickVm]> picks;        // candidatos con su rect + número (vacío = sin selector)
     callback pick-resolve(int);          // elige el panel número N (clic)
@@ -847,6 +865,13 @@ export component AppWindow inherits Window {
     callback help-close();
     // Modal para nombrar la plantilla al guardar la disposición actual.
     property <bool> layout-save-open: false;
+    // Overlays que toman o pueden tomar foco dentro de esta ventana. Es independiente de
+    // `modal-open`: solo coordina el teclado, no cambia los TouchArea ni los diálogos nativos.
+    property <bool> workspace-focus-blocked: root.palette-open || root.layout-save-open
+        || root.spaces-visible || root.query-visible || root.recipe-visible || root.points-visible
+        || root.delivery-visible || root.destination-radar-open || root.retry-visible
+        || root.op-file-list-open || root.sync-vm.active || root.text-transform-vm.active
+        || root.batch.active || root.help-open || root.column-menu.active || root.listing-export-active;
     property <string> layout-save-name: "";
 
     // Tira de unidades de disco de la toolbar (6-fix): label = letra, icon = ícono de disco,
@@ -1417,6 +1442,8 @@ export component AppWindow inherits Window {
                         height: 100%;
                         pane-id: p.id;
                         active: p.active;
+                        new-folder-open: root.new-folder-vm.active;
+                        focus-blocked: root.workspace-focus-blocked;
                         drag-over: p.drag-over;
                         drag-client-y: p.drag-client-y;
                         comparison-active: p.comparison-active;
@@ -1481,6 +1508,9 @@ export component AppWindow inherits Window {
                         rename-pos: root.rename-pane == p.id ? root.rename-pos : -1;
                         rename-text: root.rename-pane == p.id ? root.rename-text : "";
                         rename-draft <=> root.rename-draft;
+                        rename-seeded <=> root.rename-seeded;
+                        rename-repositioning: root.rename-repositioning;
+                        rename-selection-revision: root.rename-selection-revision;
                         rename-cursor: root.rename-cursor;
                         rename-edited(t) => { root.rename-edited(t); }
                         rename-session: root.rename-session;
@@ -1511,6 +1541,7 @@ export component AppWindow inherits Window {
                         comparison-transfer(id, move-files) => { root.comparison-transfer(id, move-files); }
                         comparison-toggle-link(id) => { root.comparison-toggle-link(id); }
                         drop-target-row(id, row) => { root.drop-target-row(id, row); }
+                        drop-viewport-changed(id, rect) => { root.drop-viewport-changed(id, rect); }
                         scroll-position-changed(id, pos) => { root.scroll-position-changed(id, pos); }
                         rubber-band(id, from, to) => { root.rubber-band(id, from, to); }
                         row-context(id, pos, cx, cy) => { root.row-context(id, pos, cx, cy); }
@@ -1535,6 +1566,9 @@ export component AppWindow inherits Window {
                         width: 100%;
                         height: 100%;
                         active: p.active;
+                        new-folder-open: root.new-folder-vm.active;
+                        focus-blocked: root.workspace-focus-blocked;
+                        modal-open: root.op-dialog.kind > 0 || root.message.kind > 0;
                         rows: p.tree-rows;
                         row-h: root.settings-vm.row-h;
                         linked: p.tree-linked;
@@ -1547,6 +1581,7 @@ export component AppWindow inherits Window {
                         toggle-link() => { root.tree-link-toggle(p.id); }
                         hover-tip(t, x, y) => { root.hovered-tip = t; root.hovered-tip-x = x; root.hovered-tip-y = y; }
                         tree-key(k) => { root.tree-key(p.id, k); }
+                        shortcut(t, c, s, a) => { root.tree-shortcut(p.id, t, c, s, a) }
                         key(t, c, s, a) => { root.key(t, c, s, a); }
                         focus-pane() => { root.activate(p.id); }
                     }
@@ -1619,6 +1654,10 @@ export component AppWindow inherits Window {
                     if p.purpose == 6: OpsPanel {
                         width: 100%;
                         height: 100%;
+                        active: p.active;
+                        focus-blocked: root.workspace-focus-blocked || root.new-folder-vm.active
+                            || root.op-dialog.kind > 0 || root.message.kind > 0;
+                        focus-pane() => { root.activate(p.id); }
                         running-rows: root.op-running-rows;
                         queued-rows: root.op-queued-rows;
                         history-rows: root.op-history-rows;
@@ -1638,6 +1677,8 @@ export component AppWindow inherits Window {
                     if p.purpose == 7: BasketPanel {
                         show-labels: !root.settings-vm.icon-only;
                         width: 100%; height: 100%; active: p.active; rows: p.basket-rows;
+                        focus-blocked: root.workspace-focus-blocked || root.new-folder-vm.active
+                            || root.op-dialog.kind > 0 || root.message.kind > 0;
                         focused-row: root.basket-focused-row;
                         selected-count: root.basket-selected-count;
                         copy-icon: root.basket-copy-icon; move-icon: root.basket-move-icon;
@@ -1802,6 +1843,8 @@ export component AppWindow inherits Window {
     if root.edit-toolbar && root.edit-pane >= 0: ToolbarPath {
         x: 6px; y: 2px; width: max(0px, root.width - 12px); height: root.top-bar-h - 4px;
         editing: true; confirmed: root.edit-base; favorite: root.toolbar-path-favorite;
+        focus-blocked: root.workspace-focus-blocked || root.new-folder-vm.active
+            || root.op-dialog.kind > 0 || root.message.kind > 0;
         draft <=> root.edit-text; session: root.edit-session;
         caret: root.edit-caret; caret-revision: root.edit-caret-revision;
         suggestions: root.edit-suggestions; error: root.edit-error; validating: root.edit-validating;
@@ -2656,6 +2699,11 @@ export component AppWindow inherits Window {
         paste-cancel() => { root.paste-cancel(); }
     }
 
+    ListingExportDialog {
+        width: parent.width; height: parent.height;
+        active: root.listing-export-active; clipboard: root.listing-export-clipboard;
+        cancel => { root.listing-export-cancel(); }
+    }
     MessageModal {
         vm: root.message;
         external-drop: root.drop-confirmation-external;
@@ -2669,6 +2717,7 @@ export component AppWindow inherits Window {
 
     // Popup con la lista completa de archivos de una op (lo abre "Ver N archivos" del historial).
     OpFileListModal {
+        focus-suspended: root.retry-visible;
         can-retry: root.op-file-can-retry;
         retry => { root.op-file-list-open = false; root.op-retry(root.op-file-id); }
         open: root.op-file-list-open;

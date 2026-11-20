@@ -546,6 +546,7 @@ pub fn execute(
             .collect(),
         total_bytes: plan.total_bytes,
         total_files: plan.entries.iter().filter(|e| !e.is_dir()).count(),
+        allow_directory_rename: false,
         pre_delete: Vec::new(),
     };
     let (_conflict_tx, conflict_rx) = channel();

@@ -67,6 +67,20 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
     }
     {
         let ctrl = ctrl.clone();
+        ui.on_drop_viewport_changed(move |id, viewport| {
+            let pane = PaneId(id as u64);
+            if let Ok(mut controller) = ctrl.try_borrow_mut() {
+                controller.set_drop_viewport(pane, viewport);
+            } else {
+                let ctrl = ctrl.clone();
+                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                    ctrl.borrow_mut().set_drop_viewport(pane, viewport);
+                });
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
         let start_timer = start_timer.clone();
         let sync_layout = sync_layout.clone();
@@ -171,7 +185,28 @@ pub(crate) fn wire_listing(ui: &AppWindow, ctx: &WireCtx) {
             // incorrecto. No podemos deshacer ese row-clicked, pero limpiar aquí evita que el
             // estado sucio se propague y deja la selección coherente para el siguiente gesto.
             ctrl.borrow_mut().clear_modifiers();
-            let paths = ctrl.borrow().selected_paths_of(PaneId(id as u64));
+            let pane = PaneId(id as u64);
+            let (paths, deep_rejected) = {
+                let c = ctrl.borrow();
+                if c.is_deep_active(pane) {
+                    match c.deep_complete_selection(pane) {
+                        Some(paths) => (paths, false),
+                        None => (Vec::new(), true),
+                    }
+                } else {
+                    (c.selected_paths_of(pane), false)
+                }
+            };
+            if deep_rejected {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_show_toast(
+                        ctrl.borrow()
+                            .config
+                            .t("slint.deep.selection_unavailable")
+                            .into(),
+                    );
+                }
+            }
             if paths.is_empty() {
                 return;
             }

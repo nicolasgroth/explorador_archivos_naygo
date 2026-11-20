@@ -1,0 +1,38 @@
+// Naygo — avance y cancelación de exportación de vista profunda.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+export component ListingExportDialog inherits Rectangle {
+    in property <bool> active;
+    in property <bool> clipboard;
+    callback cancel();
+    visible: root.active;
+    background: #000000aa;
+    changed active => { if (root.active) { export-focus.focus(); } }
+    TouchArea { }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 360px; height: 110px;
+        background: Theme.row-bg; border-color: Theme.selection-bg;
+        border-width: 1px; border-radius: 8px;
+        VerticalLayout {
+            padding: 16px; spacing: 12px;
+            Text { text: (root.clipboard ? Tr.ctx-export-clipboard : Tr.ctx-export-file) + " · " + Tr.ops-in-progress; color: Theme.text; }
+            Rectangle {
+                height: 30px; background: Theme.selection-bg; border-radius: 4px;
+                Text { text: Tr.ops-cancel; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.cancel(); } }
+            }
+        }
+    }
+    export-focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { root.cancel(); }
+            accept
+        }
+    }
+}

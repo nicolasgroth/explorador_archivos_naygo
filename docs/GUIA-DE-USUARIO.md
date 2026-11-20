@@ -149,6 +149,12 @@ puedes cerrarlos sin que Naygo elimine automáticamente ninguno.
 - El árbol comienza con accesos a las carpetas conocidas de Windows y a las cuentas de
   **OneDrive/Dropbox** detectadas. Cada acceso navega su carpeta física real —también si fue
   reubicada a otra unidad— y al marcar un panel de archivos el árbol revela esa ubicación.
+  Si las filas cambian mientras la ruta activa sigue siendo la misma, el árbol evita volver a
+  centrarla automáticamente; al navegar a otra ruta intenta mostrarla.
+  Si un proveedor ya no muestra un tramo de la ruta al terminar de listar, el árbol deja de
+  esperarlo y el panel conserva la carpeta solicitada y su aviso, desde donde puedes reintentar.
+- El menú contextual de la zona vacía utiliza la ruta del panel incluso si la carpeta deja de
+  estar disponible. Las acciones pueden informar un error si ya no es posible operar en ella.
 - **Arrastra la barra de título** de un panel sobre otro para reacomodar (los bordes
   dividen; el centro apila como pestaña).
 - **Arrastra las barras divisorias** para redimensionar: mientras arrastras verás una
@@ -261,6 +267,12 @@ espacio libre/total del disco de su unidad. Se muestra u oculta y se da formato 
 - **Alt+←** / **Alt+→**: atrás / adelante en el historial (como un navegador).
 - **F5**: refresca el panel activo. El botón local refresca su panel sin cambiar el foco;
   el botón global refresca todos los paneles, ramas abiertas y unidades.
+- Tras renombrar uno o varios elementos, cada uno conserva su posición y sus marcas en la
+  lista. El teclado sigue en la fila enfocada. **F5** u ordenar por una columna integra los
+  nombres nuevos en el orden de la vista.
+- Los elementos nuevos se agregan al final en el orden en que Naygo los detecta. Siguen ahí
+  cuando desaparece el resaltado, hasta que actualices u ordenes la lista. Puedes desactivar
+  **Archivos nuevos al final del listado** en **Configuración → Avanzado**.
 - **Tab**: cambia el panel de archivos activo.
 - **Tipeo rápido (typeahead):** escribe las primeras letras de un nombre y el foco
   salta a ese ítem. Si haces una pausa (~½ segundo), empieza una búsqueda nueva.
@@ -324,9 +336,49 @@ por defecto 50).
 escalonadas) activa un modo que muestra, en una sola lista, todo el contenido de la
 carpeta actual y de sus subcarpetas, a cualquier profundidad. Cada fila se sangra
 según su nivel para ver de dónde viene. Los resultados aparecen mientras se recorre el
-árbol (streaming) y puedes cancelar con **Esc** o volviendo a pulsar el botón. El orden
-y los filtros de columna funcionan sobre toda la lista. El doble clic en una carpeta
+árbol (streaming) y puedes cancelar volviendo a pulsar el botón. La visibilidad de ocultos y
+archivos de sistema se aplica a la lista. El doble clic en una carpeta
 sale de la vista profunda y navega a ella; en un archivo, lo abre.
+
+El encabezado ordena las entradas dentro de cada carpeta y mantiene las ramas juntas.
+El orden de la vista profunda se elige por separado del listado normal. Los filtros de
+columna se comparten entre ambos modos y también se aplican al exportar.
+
+Puedes seleccionar con clic, Ctrl+clic, Shift+clic, rectángulo o teclado, y usar Ctrl+A para
+marcar las filas visibles. Se puede copiar, cortar, borrar, duplicar, transferir a otra carpeta
+o panel y agregar a la Bandeja temporal. El clic derecho conserva el lote si pulsas sobre una
+fila marcada; «Más opciones de Windows…» exige que todos los elementos compartan padre Shell.
+Si una marca queda oculta o el lote contiene una carpeta junto a un descendiente, la acción se
+rechaza completa: vuelve a seleccionar los elementos que necesitas. Durante un relistado se
+espera a que las rutas seleccionadas reaparezcan; un recorrido incompleto no habilita un subconjunto.
+Al crear una carpeta, Enter espera su creación y el nuevo listado; si eliges otra fila durante
+ese proceso, se respeta tu elección.
+
+La compresión propia crea el ZIP en la carpeta raíz del panel. Si eliges elementos de carpetas
+distintas, conserva dentro del ZIP sus rutas relativas a esa raíz; si comparten carpeta, conserva
+el formato habitual con sus nombres. En la selección entre carpetas se rechazan enlaces simbólicos
+y errores al recorrer una carpeta, para no crear un ZIP incompleto. «Extraer aquí» usa
+la carpeta que contiene el ZIP. El arrastre puede comenzar desde filas profundas. Un arrastre
+interno de Naygo puede soltarse sobre una carpeta profunda, con confirmación; si la fila cambia
+antes de soltar, se rechaza para evitar elegir otra carpeta. También puedes soltar un arrastre
+externo sobre una carpeta profunda: si no se puede identificar con seguridad la fila bajo el
+puntero, se rechaza el destino. Si cambias de carpeta durante la preparación, Naygo pide elegir
+destino nuevamente aunque hayas vuelto a la carpeta inicial. El renombrado en lote admite elementos de distintas
+carpetas cuando el recorrido profundo terminó sin errores; comprueba nombres ocupados en cada
+directorio. La transformación de texto admite selecciones de distintas carpetas. La exportación
+de listado a CSV o al portapapeles usa la selección o, si está vacía, todas las filas visibles;
+en vista profunda requiere que el recorrido termine sin errores. En ambas vistas la captura y
+generación son cancelables; si el listado cambia antes de terminar la captura, vuelve a intentarlo. Al
+exportar a archivo, cancelar antes de terminar conserva el destino anterior.
+
+Puedes enfocar con clic, flechas, Inicio, Fin o avance de página, abrir con Enter o doble clic,
+y renombrar con F2. Las flechas conservan el foco y la selección por ruta aunque el recorrido
+cambie el orden de las filas. Las actualizaciones conservan la identidad de los elementos mientras
+el recorrido crece y los contadores del pie siguen la selección visible. Tras renombrar, la vista
+conserva las filas y verifica el resultado en segundo plano. Los cambios pequeños de selección conservan las filas
+existentes cuando el contenido de la vista no ha cambiado.
+Si al encadenar con flechas el siguiente elemento está dentro de la carpeta recién renombrada,
+el editor se cierra para evitar editar una ruta anterior; espera a que reaparezca y usa F2.
 
 **Menú de historial en Atrás / Adelante:** junto a los botones **Atrás** y **Adelante**
 de la barra de herramientas hay un pequeño triángulo **▾**. Al pulsarlo se despliega la
@@ -377,7 +429,8 @@ se expanden y contraen). Para **organizarlos** usa el
 **panel de Favoritos** (agrégalo desde *Panel ▾*): con **clic derecho** sobre una fila
 puedes crear un **Nuevo grupo**, **Renombrar** un grupo, **Eliminar**, o **Mover a…** otro
 grupo (o a la raíz). La estrella **★** de la barra de ruta sigue anclando la carpeta actual
-a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
+a la raíz de favoritos; luego la reorganizas en grupos desde el panel. Al crear o renombrar
+un grupo, o cambiar el alias de un favorito, puedes escribir inmediatamente y confirmar con Enter.
 
 ---
 
@@ -395,6 +448,11 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 
 ## 5. Operaciones de archivo
 
+El botón «Cancelar todo» del panel Operaciones vuelve a recibir el teclado al cerrar su
+confirmación si el panel sigue activo. Si cambiaste de panel, se respeta el nuevo foco.
+En el historial de Operaciones, Tab permite llegar a «Ver archivos» y Enter o espacio abre el
+detalle; al cerrarlo, el foco vuelve al enlace si sigue siendo la misma operación.
+
 | Atajo | Acción |
 |-------|--------|
 | **Ctrl+C / Ctrl+X / Ctrl+V** | Copiar / cortar / pegar |
@@ -408,6 +466,9 @@ a la raíz de favoritos; luego la reorganizas en grupos desde el panel.
 | **Ctrl+N / Ctrl+Shift+N** | Nueva carpeta / nuevo archivo |
 | **Ctrl+Z** | Deshacer la última operación |
 
+Si un diálogo interrumpe la Bandeja temporal, al cerrarlo se recupera el foco de su lista o del
+botón de acciones que lo tenía, siempre que la Bandeja siga siendo el panel activo.
+
 Toda operación larga es **cancelable** y queda en el **Historial de acciones** con
 opción de deshacer. Pegar un **texto** o una **imagen** del portapapeles crea un
 archivo (formato y nombre configurables en *Configuración → Pegado / Avanzado*).
@@ -417,6 +478,18 @@ este cierre en **Configuración → Operaciones**; los paneles abiertos manualme
 que necesitan revisión permanecen visibles.
 Renombrar nunca reemplaza otro archivo: si un proceso externo crea el nuevo nombre mientras
 Naygo ejecuta la operación, el renombre falla y conserva ambos archivos.
+Si aparece un diálogo mientras editas un nombre con F2, el borrador permanece pendiente y el
+editor activo recupera el teclado al cerrar el diálogo. Enter o un clic fuera confirman; Escape cancela.
+Si el panel donde está el editor se cierra con una edición aún pendiente, esa edición se cancela.
+Si un diálogo deja activo otro panel, puedes navegar en él; al pedir F2 vuelves al renombrado
+pendiente para confirmarlo o cancelarlo antes de empezar otro.
+F2 dentro del editor alterna la selección entre nombre, extensión y nombre completo sin borrar lo
+que escribiste. Si el panel navega a otra carpeta, la edición pendiente se cancela; refrescar la
+misma carpeta no la cancela.
+Si cambia el orden de la lista durante F2, el editor sigue al archivo original. Mientras un
+refresco parcial aún no muestra ese archivo, el panel conserva temporalmente las filas anteriores;
+al terminar la edición se actualizan. Si encadenas con flechas justo cuando falta el archivo en el
+listado, se intenta confirmar la edición y no se inicia otra hasta que elijas una fila.
 Si un borrado por lote no puede enviar todos los orígenes a la Papelera, el historial conserva el
 deshacer de los que sí se reciclaron e identifica por separado los que fallaron.
 Si una operación falla antes de producir su resumen, el historial muestra el error en sus detalles;
@@ -434,6 +507,9 @@ El enlace de detalle distingue archivos y carpetas cuando el plan conoce su tipo
 indica «elementos» sin asumir que todos sean archivos.
 Los resúmenes grandes no construyen listas completas de nombres que no se muestran.
 Naygo solo registra como recuperable un elemento cuya identidad en la Papelera pudo confirmar.
+En la vista **Papelera de reciclaje**, Windows muestra el nombre del elemento. Si abres la
+carpeta interna `$Recycle.Bin`, puedes ver nombres de almacenamiento como `$R…`. Al restaurar
+desde el historial de Naygo, el destino usa el nombre y la ruta originales.
 Si el origen desapareció pero esa identidad no se pudo confirmar, el historial lo indica: revisa
 la Papelera antes de actuar. Windows puede pedir confirmación si solo ofrece borrado permanente.
 Antes de reciclar, Naygo consulta el nombre largo para poder restaurarlo; si Windows no permite
@@ -448,16 +524,34 @@ separador punto y coma o coma. Si hay selección exporta solo esa selección; si
 vista filtrada completa. Usa las columnas visibles en su orden actual, agrega la ruta completa
 y los archivos CSV incluyen BOM UTF-8 para abrir correctamente en Excel.
 
+**Clic derecho con selección múltiple:** al hacer clic derecho sobre un elemento seleccionado,
+el menú conserva todo el lote. Si haces clic derecho sobre un elemento que no estaba seleccionado,
+el menú usa solo ese elemento. **Más opciones de Windows…** entrega el lote al Shell cuando todos
+los elementos siguen disponibles y pertenecen a una misma carpeta del Shell; si no, muestra un
+aviso en vez de operar sobre una parte. Las opciones visibles dependen de Windows y de las
+extensiones instaladas.
+
 **Abrir terminal aquí:** clic derecho → *Abrir PowerShell / CMD / Windows Terminal
 aquí* (abre en la carpeta seleccionada o, si no hay, la del panel). Desde la
 **barra de herramientas**, el botón **Terminal** abre el mismo combo
 (PowerShell / CMD y, si están instalados, Windows Terminal y WSL) en la carpeta
 del panel con foco.
+La solicitud conserva la carpeta elegida aunque cambies de panel, y se procesa en segundo plano.
+Si la carpeta no está disponible se informa el error. Solo se admite una solicitud de terminal o
+Explorador a la vez: si una está esperando al sistema, vuelve a intentar cuando termine.
 
 **Menú de carpeta (zona vacía):** clic derecho en el **espacio vacío** de un panel
 (donde no hay archivos) abre un menú de la *carpeta*: *Abrir en Explorador de
 Windows*, *Nueva carpeta…*, *Pegar* y las terminales. Un clic en esa zona también
 le da el **foco** al panel, así las acciones de la toolbar usan su carpeta.
+El submenú **Abrir** aparece al pasar el puntero por esa opción; se abre hacia la izquierda si
+está cerca del borde derecho. Al cerrar una confirmación de operación o un aviso, el panel activo
+recupera el teclado cuando no hay otro de esos diálogos abierto.
+La paleta y los diálogos de destinos, consultas, espacios, recetas, comparaciones, entregas y
+reintentos también devuelven el teclado al panel activo al cerrarse. El detalle de una operación
+se puede cerrar con Escape y recupera el foco tras cerrar un reintento superpuesto.
+Si estabas editando una ruta en el panel o en la barra superior, al cerrar el diálogo vuelve el
+foco al editor y se conserva lo escrito y la posición del cursor.
 
 **Nueva(s) carpeta(s):** el botón **Carpeta** de la toolbar (o *Nueva carpeta…* del
 menú de carpeta) abre un cuadro donde puedes crear **varias a la vez**: una carpeta
@@ -466,6 +560,20 @@ líneas inválidas se avisan y se omiten; las válidas se crean.
 `Enter` agrega otra línea y dos `Enter` seguidos confirman la creación; `Ctrl+Enter` confirma de
 inmediato. Al volver al panel, un clic o doble clic usa los modificadores de ese gesto, para que
 Ctrl no quede activo por haber cerrado el cuadro.
+
+En el árbol de carpetas, el atajo configurado para **Nueva carpeta** (por defecto `Ctrl+N`)
+usa la carpeta señalada por el cursor del árbol. También puedes abrir el menú contextual de una
+carpeta del árbol y elegir *Nueva carpeta…*. Al cerrar el cuadro, el foco vuelve al panel activo;
+tras completarse la creación, la carpeta creada se selecciona si el panel aún muestra su destino.
+Mientras la creación y su refresco están pendientes, Enter no abre automáticamente la fila que
+estaba enfocada antes y no queda en cola: presiónalo de nuevo al terminar. Puedes seleccionar
+deliberadamente otra fila con mouse, flechas o tipeo. Esa elección se conserva cuando llega el
+resultado de la creación y ante sus avisos de actualización tardíos. Si Enter se bloquea durante
+la espera, Naygo muestra un aviso breve.
+Al abrir el cuadro desde el panel de archivos, Naygo no espera una comprobación de disco; si el
+destino dejó de existir o no es una carpeta, el resultado de la operación informa el error.
+Al crear desde el menú del árbol o breadcrumb se conserva la carpeta elegida, incluso si deja de
+estar disponible; Naygo no reemplaza ese destino por la carpeta de otro panel.
 
 **Panel de Operaciones:** muestra las copias y movimientos en curso. Aparece solo al
 iniciar una operación (también se puede agregar a mano desde el menú **Panel ▾**).
@@ -486,6 +594,8 @@ Tiene tres zonas:
 
 Cómo se muestra el progreso (panel, ventana modal o ambos) también depende de
 *Configuración → Avanzado → progreso de operaciones* (ver §9).
+Si aparece un diálogo mientras usas un botón de Operaciones, el botón recupera el teclado al
+cerrarlo cuando la misma operación continúa visible y el panel sigue activo.
 
 **Pausar y reanudar:** una copia o movimiento en curso se puede **pausar** con el botón
 del panel de Operaciones (se detiene sin perder lo ya copiado) y **reanudar** desde
@@ -497,6 +607,11 @@ panel a otro. Dentro del **mismo disco** la operación **mueve**; hacia **otro d
 **fuerza mover**. (Arrastrar archivos **fuera** de Naygo, al Explorador de Windows,
 sigue funcionando como antes.) Naygo comprueba los conflictos en segundo plano; si no puede
 consultar el destino, cancela la acción y muestra un aviso para que puedas volver a intentarlo.
+
+También puedes soltar sobre una fila de **subcarpeta del mismo panel**, incluso si
+arrastraste otra carpeta. Naygo muestra la ruta destino antes de mover o copiar.
+Para devolver al lugar original archivos y carpetas movidos a un destino libre del mismo
+volumen, usa **Deshacer** en Historial o presiona **Ctrl+Z**.
 
 También puedes arrastrar archivos directamente desde una ventana de **7-Zip**, **WinRAR** u
 otra aplicación que entregue contenido virtual. Naygo lo prepara en segundo plano y lo copia
@@ -530,8 +645,9 @@ rutas durante la sesión: no duplica el contenido ni se persiste al cerrar Naygo
 menú contextual. El diagnóstico distingue Windows CRLF, Unix/macOS LF, Mac clásico CR y
 mezclas. Como destino puedes conservar o convertir la codificación entre UTF-8, UTF-8 con
 BOM y UTF-16 LE/BE, asegurar o quitar el salto final y limpiar espacios al final de cada
-línea. El reemplazo es transaccional y cancelable; los binarios, textos inválidos y archivos
-mayores a 128 MiB se rechazan para evitar corrupción o picos de memoria.
+línea. El reemplazo es transaccional y cancelable; cancelar no revierte los archivos ya
+transformados y esta operación no se puede deshacer con Ctrl+Z. Los binarios, textos inválidos
+y archivos mayores a 128 MiB se rechazan para evitar corrupción o picos de memoria.
 
 **Cuando algo ya existe en el destino:**
 
@@ -593,6 +709,10 @@ Renombra varios archivos a la vez con una vista previa en vivo.
 La tabla **Antes → Después** colorea cada fila: verde = se renombra, atenuado = sin
 cambio, rojo = inválido o colisión. **Aplicar** se habilita solo si no hay problemas;
 es **una sola operación deshacible**.
+
+En vista profunda, si el lote abarca varias carpetas, la columna «Antes» muestra la carpeta
+relativa de cada elemento. El contador sigue el orden del lote y las colisiones se comprueban
+en la carpeta de cada destino. Se requiere un recorrido profundo completo y sin errores.
 
 ---
 

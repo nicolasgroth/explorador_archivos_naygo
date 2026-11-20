@@ -117,7 +117,13 @@ pub struct DropPayload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturedDropDestination {
     pub pane_id: u64,
+    /// Carpeta del panel al soltar; permite detectar navegación durante la preparación OLE.
+    pub panel_path: PathBuf,
+    /// Visita capturada, incluso si el panel sale y regresa a la misma ruta.
+    pub navigation_revision: u64,
     pub path: PathBuf,
+    /// La carpeta fue identificada como fila de una vista profunda activa.
+    pub deep_folder: bool,
 }
 
 /// Solicita al hilo UI resolver el punto antes de pedir datos al proveedor. El timeout no
@@ -180,7 +186,10 @@ mod destination_timing_tests {
         assert_eq!((probe.screen_x, probe.screen_y), (20, 30));
         let expected = CapturedDropDestination {
             pane_id: 42,
+            panel_path: PathBuf::from(r"C:\destination"),
+            navigation_revision: 1,
             path: PathBuf::from(r"C:\destination"),
+            deep_folder: false,
         };
         probe
             .destination_probe
@@ -993,12 +1002,10 @@ mod windows_impl {
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            // Tras un Drop el SO NO envía DragLeave: limpiamos el resaltado del panel al
-            // ENTRAR al método, así los early-returns de abajo (dataobject nulo, GetData
-            // fallido) no dejan el borde resaltado pegado.
+            // El hover debe permanecer disponible hasta capturar el destino en UI. Tras ello
+            // se limpia explícitamente, incluso en las salidas tempranas anteriores al probe.
             let accepted_kind = self.accepted_kind.swap(ACCEPT_NONE, Ordering::Relaxed);
             let allowed = self.allowed_effects.swap(0, Ordering::Relaxed);
-            self.emit_leave();
 
             // Punto del cursor al soltar, en coordenadas de PANTALLA (píxeles físicos). La UI lo
             // usa para enrutar el drop al panel bajo el cursor.
@@ -1014,6 +1021,7 @@ mod windows_impl {
             }
 
             if allowed & DROPEFFECT_COPY.0 == 0 {
+                self.emit_leave();
                 return Ok(());
             }
 
@@ -1024,10 +1032,14 @@ mod windows_impl {
             // Tomar el IDataObject (puede venir nulo en casos raros).
             let data = match pdataobj.as_ref() {
                 Some(d) => d,
-                None => return Ok(()),
+                None => {
+                    self.emit_leave();
+                    return Ok(());
+                }
             };
 
             if accepted_kind != ACCEPT_HDROP && accepted_kind != ACCEPT_VIRTUAL {
+                self.emit_leave();
                 return Ok(());
             }
             let captured_destination = if internal_source {
@@ -1037,7 +1049,10 @@ mod windows_impl {
                 let result = if self.bypass_destination_probe {
                     Some(super::CapturedDropDestination {
                         pane_id: 1,
+                        panel_path: std::env::temp_dir(),
+                        navigation_revision: 0,
                         path: std::env::temp_dir(),
+                        deep_folder: false,
                     })
                 } else {
                     super::request_drop_destination(&self.tx, &self.waker, screen_x, screen_y)
@@ -1045,6 +1060,7 @@ mod windows_impl {
                 #[cfg(not(test))]
                 let result =
                     super::request_drop_destination(&self.tx, &self.waker, screen_x, screen_y);
+                self.emit_leave();
                 match result {
                     Some(destination) => Some(destination),
                     None => {
@@ -1057,6 +1073,9 @@ mod windows_impl {
                     }
                 }
             };
+            if internal_source {
+                self.emit_leave();
+            }
 
             // Camino de rutas reales. Explorer/escritorio entregan rutas persistentes y siguen
             // directo al planificador. 7-Zip, en cambio, entrega un `CF_HDROP` a un archivo
@@ -1972,6 +1991,76 @@ mod windows_impl {
             assert!(waited.is_ok(), "la espera COM no completó: {waited:?}");
             assert_eq!(rx.recv().unwrap().unwrap(), vec![expected]);
             worker.join().unwrap();
+        }
+
+        #[test]
+        fn drop_externo_captura_antes_de_limpiar_hover() {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.txt");
+            std::fs::write(&source, b"original").unwrap();
+            let destination = super::super::CapturedDropDestination {
+                pane_id: 7,
+                panel_path: temp.path().to_path_buf(),
+                navigation_revision: 1,
+                path: temp.path().join("folder"),
+                deep_folder: true,
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (hover_tx, hover_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let object = crate::dnd::test_file_data_object(vec![source]);
+                let target: IDropTarget = NaygoDropTarget {
+                    tx,
+                    drag_tx: hover_tx,
+                    waker: Arc::new(|| {}),
+                    accepted_kind: AtomicU8::new(ACCEPT_NONE),
+                    allowed_effects: AtomicU32::new(0),
+                    bypass_destination_probe: false,
+                }
+                .into();
+                let point = POINTL { x: 10, y: 10 };
+                let mut effect = DROPEFFECT_COPY;
+                unsafe {
+                    target
+                        .DragEnter(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                        .unwrap();
+                    target
+                        .Drop(&object, MODIFIERKEYS_FLAGS(0), point, &mut effect)
+                        .unwrap();
+                }
+                effect
+            });
+            assert!(matches!(
+                hover_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap(),
+                super::super::DragHover::Over { .. }
+            ));
+            let mut probe = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+            assert!(
+                hover_rx.try_recv().is_err(),
+                "el hover debe sobrevivir hasta el probe"
+            );
+            probe
+                .destination_probe
+                .take()
+                .unwrap()
+                .send(Some(destination.clone()))
+                .unwrap();
+            assert!(matches!(
+                hover_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap(),
+                super::super::DragHover::Leave
+            ));
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .preparation
+                .is_some());
+            let payload = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+            assert_eq!(payload.captured_destination, Some(destination));
+            assert_eq!(worker.join().unwrap(), DROPEFFECT_COPY);
         }
 
         #[test]

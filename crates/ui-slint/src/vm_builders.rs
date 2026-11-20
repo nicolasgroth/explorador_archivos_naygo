@@ -18,6 +18,7 @@ use std::rc::Rc;
 pub(crate) fn show_rename_editor(ui: &AppWindow, request: &workspace_ctrl::RenameRequest) {
     ui.set_rename_pane(-1);
     ui.set_rename_pos(-1);
+    ui.set_rename_seeded(false);
     ui.set_rename_text(request.name.clone().into());
     // El draft arranca igual al nombre original; de ahí en adelante lo edita el usuario
     // (sobrevive re-montajes del delegate, a diferencia de `rename-text`).
@@ -532,6 +533,7 @@ pub(crate) fn to_row_data(r: bridge::PlainRow) -> RowData {
         name: SharedString::from(r.name.as_str()),
         cells: ModelRc::from(Rc::new(VecModel::from(cells))),
         is_dir: r.is_dir,
+        drop_folder: r.drop_folder.into(),
         selected: r.selected,
         focused: r.focused,
         cut: r.cut,

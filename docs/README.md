@@ -4,17 +4,18 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-La distribución local **0.5.4 de avance**, compilada e instalada el 2026-11-02, incluye mejoras de
-paneles, seguridad del arrastre OLE y recuentos del historial. Los artefactos no están firmados ni
-publicados. El arrastre de carpetas desde 7-Zip permanece experimental; la aceptación visual y los
-materiales 3MF avanzados siguen pendientes. Ver hashes y estado en [estado actual](ESTADO-ACTUAL.md).
+Para identificar la instalación y la distribución local vigentes, sus hashes y límites de validación,
+consulta [estado actual](ESTADO-ACTUAL.md). Los hashes de distribución identifican los paquetes
+locales sin firma. La aceptación visual, la matriz de interoperabilidad OLE y los materiales 3MF avanzados
+siguen pendientes; las pruebas concretas ya realizadas se detallan en el estado y el backlog.
+Para la siguiente secuencia de foco y aceptación, ver [plan de foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
 
 Registro histórico: la instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre
 (EXE SHA-256 `868a69dec0f6f79d0e91e54326eb9762cd745921467dd45a72fd5a4000bd2b5a`).
 La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hashes se registran en
 [`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup
-y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 sí se hizo la prueba
-interactiva de 7-Zip descrita arriba, en un binario experimental separado.
+y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 se hizo una prueba
+interactiva de 7-Zip, en un binario experimental separado; su alcance consta en el backlog.
 La instalación que se comprobó el 2026-11-01 es 0.5.4 del build anterior, no la distribución
 recién generada; ver los hashes en [estado actual](ESTADO-ACTUAL.md).
 La comparación W-07 controlada del 20 de octubre dio medianas 100k de 261,7 ms para el binario

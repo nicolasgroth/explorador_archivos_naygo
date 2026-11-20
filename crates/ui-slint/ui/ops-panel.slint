@@ -278,6 +278,36 @@ component OpKindChip inherits Rectangle {
 // (solo texto, fondo únicamente en hover), 2=solo-ícono (para Cancelar; `label` se ignora, sirve de
 // tooltip fuera). Emite `pressed` al hacer clic. Mantiene todas las properties previas.
 export component OpButton inherits Rectangle {
+    // Las filas recicladas del modelo conservan el componente, pero cambian de operación.
+    in property <bool> owner-active: false;
+    in property <bool> focus-blocked: false;
+    in property <int> operation-id: -1;
+    property <int> focused-operation-id: -1;
+    property <bool> restore-after-modal: false;
+    callback focus-owner();
+    changed operation-id => { root.restore-after-modal = false; }
+    changed focus-blocked => {
+        if root.focus-blocked {
+            if root.owner-active && button-focus.has-focus && root.focused-operation-id == root.operation-id {
+                root.restore-after-modal = true;
+            }
+        } else if root.owner-active && root.restore-after-modal {
+            restore-timer.running = true;
+        }
+    }
+    changed owner-active => { if !root.owner-active { root.restore-after-modal = false; } }
+    restore-timer := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.owner-active && !root.focus-blocked && root.restore-after-modal
+                && root.focused-operation-id == root.operation-id {
+                root.restore-after-modal = false;
+                button-focus.focus();
+            }
+        }
+    }
     in property <string> label;
     in property <bool> danger: false;
     in property <int> variant: 0;
@@ -298,7 +328,15 @@ export component OpButton inherits Rectangle {
         : root.show-skip ? Tr.ops-skip
         : "";
     accessible-enabled: true;
-    accessible-action-default => { root.pressed(); }
+    accessible-action-default => { root.activate(); }
+    function activate() {
+        if !root.focus-blocked {
+            root.focused-operation-id = root.operation-id;
+            root.focus-owner();
+            button-focus.focus();
+            root.pressed();
+        }
+    }
     forward-focus: button-focus;
 
     height: 30px;
@@ -332,14 +370,26 @@ export component OpButton inherits Rectangle {
         }
     }
     button-focus := FocusScope {
+        changed has-focus => {
+            if self.has-focus {
+                root.focused-operation-id = root.operation-id;
+                root.focus-owner();
+            } else if root.owner-active && root.focus-blocked && root.focused-operation-id == root.operation-id {
+                root.restore-after-modal = true;
+            }
+        }
         key-pressed(ev) => {
-            if ev.text == Key.Return || ev.text == " " { root.pressed(); return accept; }
+            if (ev.text == Key.Return || ev.text == " ") && root.owner-active && !root.focus-blocked
+                && root.focused-operation-id == root.operation-id {
+                root.pressed();
+                return accept;
+            }
             reject
         }
     }
     btn-touch := TouchArea {
         mouse-cursor: pointer;
-        clicked => { button-focus.focus(); root.pressed(); }
+        clicked => { root.activate(); }
     }
 }
 
@@ -449,6 +499,9 @@ component DataCell inherits Rectangle {
 component OpCard inherits Rectangle {
     in property <OpRowVm> op;
     in property <bool> animations-enabled: false;
+    in property <bool> owner-active;
+    in property <bool> focus-blocked;
+    callback focus-owner();
     callback pause(int);
     callback resume(int);
     callback skip(int);
@@ -551,6 +604,10 @@ component OpCard inherits Rectangle {
         HorizontalLayout {
             spacing: 8px;
             OpButton {
+                owner-active: root.owner-active;
+                focus-blocked: root.focus-blocked;
+                operation-id: root.op.index;
+                focus-owner => { root.focus-owner(); }
                 variant: 0;
                 label: root.op.paused ? Tr.ops-resume : Tr.ops-pause;
                 show-pause: !root.op.paused;
@@ -564,6 +621,10 @@ component OpCard inherits Rectangle {
                 }
             }
             OpButton {
+                owner-active: root.owner-active;
+                focus-blocked: root.focus-blocked;
+                operation-id: root.op.index;
+                focus-owner => { root.focus-owner(); }
                 variant: 1;
                 label: Tr.ops-skip;
                 show-skip: true;
@@ -571,6 +632,10 @@ component OpCard inherits Rectangle {
             }
             Rectangle { horizontal-stretch: 1; }
             cancel-btn := OpButton {
+                owner-active: root.owner-active;
+                focus-blocked: root.focus-blocked;
+                operation-id: root.op.index;
+                focus-owner => { root.focus-owner(); }
                 variant: 2;
                 danger: true;
                 show-cancel: true;
@@ -585,6 +650,9 @@ component OpCard inherits Rectangle {
 // p. ej. "1.234 archivos · 5,6 GB"). Lleva el botón Cancelar para abortar el ESCANEO.
 component PlanningCard inherits Rectangle {
     in property <OpRowVm> op;
+    in property <bool> owner-active;
+    in property <bool> focus-blocked;
+    callback focus-owner();
     callback cancel(int);
 
     background: Theme.row-bg;
@@ -640,6 +708,10 @@ component PlanningCard inherits Rectangle {
             spacing: 8px;
             Rectangle { horizontal-stretch: 1; }
             OpButton {
+                owner-active: root.owner-active;
+                focus-blocked: root.focus-blocked;
+                operation-id: root.op.index;
+                focus-owner => { root.focus-owner(); }
                 variant: 2;
                 danger: true;
                 show-cancel: true;
@@ -652,6 +724,9 @@ component PlanningCard inherits Rectangle {
 // Fila compacta de una op EN COLA: chip de tipo pequeño + etiqueta + "en espera" + X cancelar.
 component QueuedRow inherits Rectangle {
     in property <OpRowVm> op;
+    in property <bool> owner-active;
+    in property <bool> focus-blocked;
+    callback focus-owner();
     callback cancel(int);
     height: 34px;
     background: Theme.row-bg;
@@ -681,6 +756,10 @@ component QueuedRow inherits Rectangle {
             horizontal-stretch: 1;
         }
         OpButton {
+            owner-active: root.owner-active;
+            focus-blocked: root.focus-blocked;
+            operation-id: root.op.index;
+            focus-owner => { root.focus-owner(); }
             variant: 2;
             danger: true;
             show-cancel: true;
@@ -689,11 +768,79 @@ component QueuedRow inherits Rectangle {
     }
 }
 
+// Enlace de historial: la identidad impide reabrir otra operación si el modelo cambia mientras
+// está el modal. Solo recupera foco si el panel continúa activo y terminó el último overlay.
+component HistoryLink inherits Rectangle {
+    in property <string> text;
+    in property <int> operation-id;
+    in property <bool> owner-active;
+    in property <bool> focus-blocked;
+    property <int> focus-id: -1;
+    property <bool> restore-after-modal: false;
+    callback focus-owner();
+    callback pressed();
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: true;
+    accessible-action-default => { root.focus-owner(); root.focus-id = root.operation-id; root.pressed(); }
+    forward-focus: link-focus;
+    changed operation-id => { root.focus-id = -1; root.restore-after-modal = false; }
+    changed owner-active => { if !root.owner-active { root.restore-after-modal = false; } }
+    changed focus-blocked => {
+        if root.focus-blocked {
+            if root.owner-active && link-focus.has-focus && root.focus-id == root.operation-id {
+                root.restore-after-modal = true;
+            }
+        } else if root.owner-active && root.restore-after-modal {
+            restore-timer.running = true;
+        }
+    }
+    restore-timer := Timer {
+        interval: 0ms; running: false;
+        triggered => {
+            self.running = false;
+            if root.owner-active && !root.focus-blocked && root.restore-after-modal && root.focus-id == root.operation-id {
+                root.restore-after-modal = false;
+                link-focus.focus();
+            }
+        }
+    }
+    link-focus := FocusScope {
+        changed has-focus => {
+            if self.has-focus { root.focus-id = root.operation-id; root.focus-owner(); }
+            else if root.owner-active && root.focus-blocked && root.focus-id == root.operation-id {
+                root.restore-after-modal = true;
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") && root.focus-id == root.operation-id {
+                root.pressed(); return accept;
+            }
+            reject
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        Text {
+            text: root.text;
+            color: link-touch.has-hover || link-focus.has-focus ? Theme.accent : Theme.text-dim;
+            font-size: 11px; font-weight: 600; vertical-alignment: center;
+        }
+    }
+    link-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.focus-owner(); root.focus-id = root.operation-id; link-focus.focus(); root.pressed(); }
+    }
+}
+
 // Fila de HISTORIAL: el `status` ya formateado + el detalle de QUÉ archivos se procesaron.
 // El detalle va en una segunda línea: si fueron 1-2 archivos, sus nombres inline; si fueron más,
 // un enlace "Ver N archivos" que abre el popup con la lista completa (callback `show-files`).
 component HistoryRow inherits Rectangle {
     in property <OpRowVm> op;
+    in property <bool> owner-active;
+    in property <bool> focus-blocked;
+    callback focus-pane();
     callback show-files(int);
     // Alto adaptable: 28px si no hay detalle, 44px si hay segunda línea (nombres o enlace).
     height: (root.op.files-summary != "" || root.op.has-file-list) ? 44px : 28px;
@@ -747,27 +894,19 @@ component HistoryRow inherits Rectangle {
             font-size: 11px;
             overflow: elide;
         }
-        if root.op.has-file-list: Rectangle {
+        if root.op.has-file-list: HistoryLink {
             horizontal-stretch: 1;
             height: 16px;
-            HorizontalLayout {
-                alignment: start;
-                link := Text {
+            owner-active: root.owner-active;
+            focus-blocked: root.focus-blocked;
+            operation-id: root.op.index;
+            focus-owner => { root.focus-pane(); }
+            pressed => { root.show-files(root.op.index); }
                     // "Ver N archivos": compone Tr + el conteo (no se traduce el número).
-                    text: root.op.has-errors ? Tr.retry-review : Tr.ops-view-files
+            text: root.op.has-errors ? Tr.retry-review : Tr.ops-view-files
                         + (root.op.known-files > 0 ? " " + root.op.known-files + " " + (root.op.known-files == 1 ? Tr.ops-file-singular : Tr.ops-files-word) : "")
                         + (root.op.known-directories > 0 ? (root.op.known-files > 0 ? " · " : " ") + root.op.known-directories + " " + (root.op.known-directories == 1 ? Tr.ops-folder-singular : Tr.ops-folders-word) : "")
                         + (root.op.unknown-entries > 0 ? (root.op.known-files > 0 || root.op.known-directories > 0 ? " · " : " ") + root.op.unknown-entries + " " + (root.op.unknown-entries == 1 ? Tr.ops-entry-singular : Tr.ops-entries-word) : "");
-                    color: link-touch.has-hover ? Theme.accent : Theme.text-dim;
-                    font-size: 11px;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                }
-            }
-            link-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.show-files(root.op.index); }
-            }
         }
     }
 }
@@ -781,6 +920,9 @@ component SectionHeader inherits Text {
 }
 
 export component OpsPanel inherits Rectangle {
+    in property <bool> active: false;
+    in property <bool> focus-blocked: false;
+    callback focus-pane();
     property <bool> failures-only: false;
     // Tres modelos ya separados por zona en Rust (evita filas-fantasma y espaciados sobrantes):
     // EN CURSO (kind==0), EN COLA (kind==1) e HISTORIAL (kind==2).
@@ -846,6 +988,9 @@ export component OpsPanel inherits Rectangle {
             // "Cancelar todo": visible solo cuando hay ALGO activo (calculando / en curso / en cola).
             // La confirmación la abre Rust (modal MessageModal de 2 botones) antes de cancelar.
             if (root.planning-count + root.running-count + root.queued-count) > 0: OpButton {
+                owner-active: root.active;
+                focus-blocked: root.focus-blocked;
+                focus-owner => { root.focus-pane(); }
                 variant: 2;
                 danger: true;
                 show-cancel: true;
@@ -862,6 +1007,9 @@ export component OpsPanel inherits Rectangle {
                 if root.planning-count > 0: SectionHeader { text: Tr.ops-calculating; }
                 for r in root.planning-rows: PlanningCard {
                     op: r;
+                    owner-active: root.active;
+                    focus-blocked: root.focus-blocked;
+                    focus-owner => { root.focus-pane(); }
                     cancel(i) => { root.cancel(i); }
                 }
 
@@ -869,6 +1017,9 @@ export component OpsPanel inherits Rectangle {
                 if root.running-count > 0: SectionHeader { text: Tr.ops-in-progress; }
                 for r in root.running-rows: OpCard {
                     op: r;
+                    owner-active: root.active;
+                    focus-blocked: root.focus-blocked;
+                    focus-owner => { root.focus-pane(); }
                     animations-enabled: root.animations-enabled;
                     pause(i) => { root.pause(i); }
                     resume(i) => { root.resume(i); }
@@ -880,6 +1031,9 @@ export component OpsPanel inherits Rectangle {
                 if root.queued-count > 0: SectionHeader { text: Tr.ops-queued; }
                 for r in root.queued-rows: QueuedRow {
                     op: r;
+                    owner-active: root.active;
+                    focus-blocked: root.focus-blocked;
+                    focus-owner => { root.focus-pane(); }
                     cancel(i) => { root.cancel(i); }
                 }
 
@@ -893,6 +1047,8 @@ export component OpsPanel inherits Rectangle {
                     visible: !root.failures-only || r.has-errors;
                     history-row := HistoryRow {
                         width: parent.width; op: r;
+                        owner-active: root.active; focus-blocked: root.focus-blocked;
+                        focus-pane => { root.focus-pane(); }
                         show-files(i) => { root.show-files(i); }
                     }
                 }

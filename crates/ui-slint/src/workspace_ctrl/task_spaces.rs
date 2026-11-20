@@ -477,6 +477,7 @@ impl WorkspaceCtrl {
         }
         self.listings.clear();
         self.pending_file_listings.clear();
+        self.automatic_listings.clear();
         self.tree_listings.clear();
         self.pending_tree_listings.clear();
         self.trees.clear();
@@ -502,6 +503,7 @@ impl WorkspaceCtrl {
         self.visit_changes_revision = self.visit_changes_revision.wrapping_add(1);
         self.pending_recents.clear();
         self.last_listing_dirs.clear();
+        self.drop_viewports.clear();
         self.missing_cache.clear();
         self.missing_probe = None;
         self.ejected_panes.clear();
@@ -516,6 +518,7 @@ impl WorkspaceCtrl {
         self.pending_drop = None;
         self.drag_over_pane = None;
         self.drag_over_row = None;
+        self.drag_over_deep_folder = None;
         self.maximized_pane = None;
         self.basket_import_rx = None;
         self.basket_staging.clear();
@@ -529,6 +532,8 @@ impl WorkspaceCtrl {
         self.recipes.references = space.resolved.saved_recipes.clone();
         self.basket.clear();
         self.basket.add(space.resolved.basket.iter().cloned());
+        self.pending_created_activation.clear();
+        self.creation_selection.clear();
         self.ws = workspace;
         self.operations_placement = space.resolved.workspace.operations_placement.clone();
         self.automatic_operations_pane = None;

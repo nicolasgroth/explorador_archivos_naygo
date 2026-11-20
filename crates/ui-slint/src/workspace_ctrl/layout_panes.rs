@@ -53,13 +53,71 @@ impl WorkspaceCtrl {
         &self,
         x: f32,
         y: f32,
+        client_y: f32,
     ) -> Option<naygo_platform::drop_target::CapturedDropDestination> {
         let id = self.pane_at(x, y)?;
         let files = self.ws.pane(id)?.files.as_ref()?;
+        let deep_folder = self.is_deep_active(id);
+        let path = if deep_folder {
+            // No usar hover de otro punto/panel ni inferir destino durante un relistado.
+            if self.drag_over_pane != Some(id) || self.drag_over_client_y != Some(client_y) {
+                return None;
+            }
+            self.deep_hover_folder(id)?
+        } else {
+            files.current_dir.clone()
+        };
         Some(naygo_platform::drop_target::CapturedDropDestination {
             pane_id: id.0,
-            path: files.current_dir.clone(),
+            panel_path: files.current_dir.clone(),
+            navigation_revision: files.navigation_revision,
+            path,
+            deep_folder,
         })
+    }
+
+    /// Revalida la identidad capturada tras la preparación asíncrona, sin I/O en UI.
+    pub fn external_destination_still_open(
+        &self,
+        destination: &naygo_platform::drop_target::CapturedDropDestination,
+    ) -> bool {
+        let id = PaneId(destination.pane_id);
+        let Some(files) = self.ws.pane(id).and_then(|pane| pane.files.as_ref()) else {
+            return false;
+        };
+        if files.current_dir != destination.panel_path
+            || files.navigation_revision != destination.navigation_revision
+        {
+            return false;
+        }
+        if !destination.deep_folder {
+            return true;
+        }
+        self.is_deep_active(id)
+            && self
+                .deep_job
+                .as_ref()
+                .is_some_and(|job| job.replacement_items.is_none())
+            && self
+                .deep_position_of(id, &destination.path)
+                .and_then(|position| self.deep_visible_entry(id, position))
+                .is_some_and(|entry| entry.is_dir())
+    }
+
+    /// La fila debe ser la misma carpeta que fue acreditada durante el hover.
+    pub(super) fn deep_hover_folder(&self, target: PaneId) -> Option<PathBuf> {
+        if self.deep_job.as_ref()?.replacement_items.is_some() {
+            return None;
+        }
+        self.drag_over_deep_folder
+            .as_ref()
+            .and_then(|(pane, pos, path)| {
+                (*pane == target && self.drag_over_row == Some((*pane, *pos)))
+                    .then(|| self.deep_visible_entry(*pane, *pos))
+                    .flatten()
+                    .filter(|entry| entry.is_dir() && entry.path == *path)
+                    .map(|entry| entry.path.clone())
+            })
     }
 
     /// El hover externo solo marca paneles que aceptan el destino capturado.
@@ -84,11 +142,16 @@ impl WorkspaceCtrl {
     /// Devuelve `true` cuando Slint debe refrescar los `PaneVm`.
     pub fn set_drag_over_at(&mut self, pane: Option<PaneId>, client_y: Option<f32>) -> bool {
         let changed = self.drag_over_pane != pane || self.drag_over_client_y != client_y;
-        if self.drag_over_pane != pane {
+        if self.drag_over_pane != pane
+            || (self.drag_over_client_y != client_y
+                && pane.is_some_and(|id| self.is_deep_active(id)))
+        {
             self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
         }
         if pane.is_none() {
             self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
         }
         self.drag_over_pane = pane;
         self.drag_over_client_y = client_y;
@@ -117,6 +180,19 @@ impl WorkspaceCtrl {
     pub fn set_drag_over_row(&mut self, pane: PaneId, row: i32) {
         self.drag_over_row =
             (self.drag_over_pane == Some(pane) && row >= 0).then_some((pane, row as usize));
+        self.drag_over_deep_folder = self.drag_over_row.and_then(|(id, pos)| {
+            self.is_deep_active(id)
+                .then(|| self.deep_visible_entry(id, pos))
+                .flatten()
+                .filter(|entry| entry.is_dir())
+                .map(|entry| (id, pos, entry.path.clone()))
+        });
+    }
+
+    pub(crate) fn set_drop_viewport(&mut self, pane: PaneId, viewport: crate::DropViewport) {
+        if self.ws.pane(pane).is_some_and(|p| p.files.is_some()) {
+            self.drop_viewports.insert(pane, viewport);
+        }
     }
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
@@ -254,6 +330,9 @@ impl WorkspaceCtrl {
     }
 
     pub fn set_active(&mut self, id: PaneId) {
+        if self.ws.active_id() != Some(id) {
+            self.close_context_menu();
+        }
         if self.maximized_pane.is_some_and(|solo| solo != id) {
             self.maximized_pane = None;
         }
@@ -606,6 +685,8 @@ impl WorkspaceCtrl {
     /// workspace. Se comparte entre el cierre normal y el de una pestaña para que el cierre
     /// de una pareja enlazada no deje workers ni estado visual huérfanos.
     fn release_pane_resources(&mut self, id: PaneId) {
+        self.pending_created_activation.remove(&id);
+        self.creation_selection.remove(&id);
         if let Some(cancel) = &self.missing_probe_cancel {
             cancel.cancel();
         }
@@ -617,6 +698,8 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.pending_file_listings.remove(&id);
+        self.automatic_listings.remove(&id);
+        self.drop_viewports.remove(&id);
         self.trees.remove(&id);
         self.reveal_targets.remove(&id);
         // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
@@ -647,6 +730,16 @@ impl WorkspaceCtrl {
         let targets = self.close_targets(id);
         if targets.is_empty() || self.ws.panes().len() <= targets.len() {
             return;
+        }
+        // La sesión pertenece al panel: al cerrarlo no queda editor que pueda confirmarla
+        // ni cancelarla. Invalidarla antes de desmontarlo evita commits tardíos y que la
+        // guarda global de teclado bloquee los paneles restantes. No se toca el filesystem.
+        if self
+            .rename_active
+            .as_ref()
+            .is_some_and(|rename| targets.contains(&rename.pane))
+        {
+            self.rename_cancel();
         }
         let operations = targets.iter().copied().find(|target| {
             self.ws
@@ -926,7 +1019,8 @@ impl WorkspaceCtrl {
             .pane(origin)
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone());
-        if self.selected_paths().is_empty() {
+        let sources = self.operation_sources();
+        if sources.is_empty() {
             return false;
         }
         use naygo_core::destination_radar::{
@@ -1010,7 +1104,7 @@ impl WorkspaceCtrl {
         }
         self.destination_radar = Some(DestinationRadar {
             move_files,
-            sources: self.selected_paths(),
+            sources,
             candidates,
             origin: DestinationRadarOrigin::FilesSelection,
             drop_staging: None,

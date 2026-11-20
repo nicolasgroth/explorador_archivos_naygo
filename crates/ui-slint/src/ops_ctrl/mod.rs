@@ -277,7 +277,7 @@ pub struct OpsCtrl {
     pending_clipboard_writes: VecDeque<PendingClipboardWrite>,
     pending_clipboard_errors: VecDeque<String>,
     /// Notificaciones terminales, no snapshots del historial: se consumen una sola vez.
-    completed_changes: Vec<(OpRequest, bool)>,
+    completed_changes: Vec<(OpRequest, bool, Option<PathBuf>)>,
 }
 
 /// Escritura exclusivamente en worker. `create_new` arbitra colisiones concurrentes;
@@ -399,6 +399,7 @@ impl OpsCtrl {
                             false,
                         ),
                         true,
+                        None,
                     ));
                 }
                 self.paste_write_rx = None;
@@ -426,8 +427,33 @@ impl OpsCtrl {
         self.pending_paste_error.take()
     }
 
-    pub fn take_completed_changes(&mut self) -> Vec<(OpRequest, bool)> {
+    pub fn take_completed_changes(&mut self) -> Vec<(OpRequest, bool, Option<PathBuf>)> {
         std::mem::take(&mut self.completed_changes)
+    }
+
+    /// Mientras el motor puede cambiar nombres, el resultado será la fuente de identidad.
+    pub(crate) fn rename_running_in(&self, dir: &std::path::Path) -> bool {
+        self.active_ops.iter().any(|op| {
+            op.rx.is_some()
+                && op.request.as_ref().is_some_and(|req| {
+                    matches!(req.kind, OpKind::Rename { .. } | OpKind::BatchRename { .. })
+                        && req.sources.iter().any(|path| path.parent() == Some(dir))
+                })
+        })
+    }
+
+    /// Incluye solicitudes en cola y terminales aún no reconciliados, sin esperar a workers.
+    pub(crate) fn has_unreconciled_folder_creation(&self, dir: &std::path::Path) -> bool {
+        let matches = |req: &OpRequest| {
+            matches!(req.kind, OpKind::CreateDir { .. }) && req.dest_dir.as_deref() == Some(dir)
+        };
+        self.active_ops
+            .iter()
+            .any(|op| op.summary.is_none() && op.request.as_ref().is_some_and(matches))
+            || self
+                .completed_changes
+                .iter()
+                .any(|(req, _, _)| matches(req))
     }
 
     /// Reserva el próximo id estable de operación (monótono, único en la sesión).
@@ -469,9 +495,14 @@ impl OpsCtrl {
 
     /// Encola una escritura de texto del clipboard desde el hilo de UI.
     pub fn write_clipboard_text(&mut self, text: &str) -> bool {
+        self.write_clipboard_owned(text.to_string())
+    }
+
+    /// Recibe el resultado de un worker sin duplicar un CSV grande en el hilo de UI.
+    pub(crate) fn write_clipboard_owned(&mut self, text: String) -> bool {
         match self
             .clipboard_io_handle()
-            .and_then(|io| io.write_text(text.to_string()))
+            .and_then(|io| io.write_text(text))
         {
             Ok(pending) => {
                 self.pending_clipboard_writes.push_back(pending);
@@ -1166,7 +1197,43 @@ impl OpsCtrl {
             }
             if let Some(summary) = finished {
                 if let Some(req) = self.active_ops[i].request.clone() {
-                    self.completed_changes.push((req, summary.count_done() > 0));
+                    if matches!(req.kind, OpKind::BatchRename { .. }) {
+                        // Reconciliar cada resultado real en orden de ejecución: una operación
+                        // cancelada o fallida puede haber renombrado solo parte del lote.
+                        for item in &summary.items {
+                            if let (Some(source), naygo_core::ops::OpOutcome::Done) =
+                                (&item.src, &item.outcome)
+                            {
+                                let Some(name) =
+                                    item.dest.file_name().and_then(|name| name.to_str())
+                                else {
+                                    continue;
+                                };
+                                self.completed_changes.push((
+                                    naygo_core::ops::rename(source.clone(), name.to_owned()),
+                                    true,
+                                    Some(item.dest.clone()),
+                                ));
+                            }
+                        }
+                    }
+                    // En Rename el destino resuelto puede cambiar por conflicto. No inferirlo
+                    // desde el nombre solicitado: el motor informa el destino realmente usado.
+                    let actual = if matches!(req.kind, OpKind::Rename { .. }) {
+                        req.sources
+                            .first()
+                            .and_then(|source| {
+                                summary.items.iter().find(|item| {
+                                    item.src.as_ref() == Some(source)
+                                        && matches!(item.outcome, naygo_core::ops::OpOutcome::Done)
+                                })
+                            })
+                            .map(|item| item.dest.clone())
+                    } else {
+                        None
+                    };
+                    self.completed_changes
+                        .push((req, summary.count_done() > 0, actual));
                 }
                 // Registrar el deshacer si corresponde. NO se hace `.take()` del request: se CONSERVA
                 // en la op terminada para que el popup "Archivos de la operación" pueda mostrar el
@@ -2168,12 +2235,11 @@ impl OpsCtrl {
                 // Comprimir la selección en `dir/<buf>.zip`. La extensión `.zip` se asegura aquí
                 // (el usuario puede haberla borrado del campo).
                 //
-                // PÉRDIDA DE DATOS: `compress_zip` crea el `.zip` con `File::create`, que TRUNCA un
-                // archivo del mismo nombre sin avisar ni mandarlo a la papelera. Por eso el nombre se
-                // DESAMBIGUA aquí ANTES de armar la op: si `dir/<nombre>.zip` ya existe (p. ej. una
+                // El nombre se desambigua ANTES de armar la op: si `dir/<nombre>.zip` ya existe (p. ej. una
                 // compresión anterior de la misma carpeta), se usa el primer "(N)" libre ("proyecto
                 // (2).zip") y el `.zip` original del usuario queda INTACTO. Sin modal extra, mismo
-                // criterio que KeepBoth al extraer. El `dest_name` ya único fluye al worker y al undo
+                // criterio que KeepBoth al extraer. El worker usa creación exclusiva para rechazar
+                // una carrera con otro proceso. El `dest_name` fluye al worker y al undo
                 // (su `TrashCreated` apunta al `.zip` realmente creado, no al nombre pedido).
                 let dest_name =
                     naygo_core::archive_ops::unique_zip_name(&dir, &ensure_zip_ext(&buf));
@@ -2659,7 +2725,18 @@ mod tests {
             false,
         );
         drain(&mut c);
-        assert!(!file.exists(), "IFileOperation recibió la ruta original");
+        let was_recycled = !file.exists();
+        if was_recycled {
+            // La prueba usa la Papelera real. Restaurar sólo su fixture al directorio temporal
+            // único permite que TempDir la limpie y evita acumular entradas con cada ejecución.
+            naygo_platform::trash::restore_from_trash(&[naygo_platform::trash::TrashReceipt {
+                original: file.clone(),
+                trashed_path: None,
+            }])
+            .unwrap();
+        }
+        assert!(was_recycled, "IFileOperation recibió la ruta original");
+        assert_eq!(std::fs::read(&file).unwrap(), b"descartar");
         let summary = c
             .active_ops
             .last()
@@ -2925,7 +3002,7 @@ mod tests {
         assert_eq!(changes.len(), 2);
         let mut contents: Vec<_> = changes
             .into_iter()
-            .map(|(req, ok)| {
+            .map(|(req, ok, _)| {
                 assert!(ok);
                 let OpKind::CreateFile { name } = req.kind else {
                     panic!("expected file")
@@ -4331,6 +4408,7 @@ mod tests {
             ],
             total_bytes: 10,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let map = size_map_of(&plan);

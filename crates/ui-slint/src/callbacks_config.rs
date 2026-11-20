@@ -340,7 +340,24 @@ pub(crate) fn wire_config(
     cfg_setter!(on_set_ops_display, i32, set_ops_display);
     cfg_setter!(on_set_paste_image_fmt, i32, set_paste_image_fmt);
     cfg_setter!(on_set_low_power_mode, i32, set_low_power_mode);
-    cfg_setter!(on_set_new_items_at_end, bool, set_new_items_at_end);
+    {
+        let ctrl = ctrl.clone();
+        let refresh = refresh_config_vm.clone();
+        let sync_rows = ctx.sync_rows.clone();
+        cfg_win.on_set_new_items_at_end(move |enabled| {
+            {
+                let mut c = ctrl.borrow_mut();
+                c.config.set_new_items_at_end(enabled);
+                for pane in c.ws.panes_mut() {
+                    if let Some(files) = pane.files.as_mut() {
+                        files.set_group_new_at_end(enabled);
+                    }
+                }
+            }
+            sync_rows();
+            refresh();
+        });
+    }
     cfg_setter!(on_set_tray_enabled, bool, set_tray_enabled);
     cfg_setter!(on_set_close_to_tray, bool, set_close_to_tray);
     // Hotkey global: activar/desactivar re-arma el registro real en caliente. Si el SO rechaza la
@@ -516,8 +533,15 @@ pub(crate) fn wire_config(
     {
         let ctrl = ctrl.clone();
         let refresh = refresh_config_vm.clone();
+        let cfg_weak = cfg_win.as_weak();
         cfg_win.on_browse_home(move || {
-            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            let Some(config_window) = cfg_weak.upgrade() else {
+                return;
+            };
+            let parent = config_window.window().window_handle();
+            // El diálogo debe bloquear y devolver el foco a Configuración. Mantener vivo
+            // el handle durante la llamada modal sin retener un préstamo del controlador.
+            if let Some(path) = rfd::FileDialog::new().set_parent(&parent).pick_folder() {
                 ctrl.borrow_mut()
                     .config
                     .set_home_dir(path.to_string_lossy().to_string());

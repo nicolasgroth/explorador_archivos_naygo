@@ -89,6 +89,28 @@ pub(crate) fn wire_history(
         let ctrl = ctrl.clone();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        ui.on_tree_shortcut(move |id, text, control, shift, alt| {
+            let tree = PaneId(id as u64);
+            let recognized = {
+                let c = ctrl.borrow();
+                c.ws.active_id() == Some(tree)
+                    && crate::keys::chord_from(text.as_str(), control, shift, alt)
+                        .and_then(|chord| c.config.keymap.action_for(&chord))
+                        == Some(naygo_core::keymap::Action::NewDir)
+            };
+            if !recognized {
+                return false;
+            }
+            ctrl.borrow_mut().on_key(text.as_str(), control, shift, alt);
+            start_timer();
+            sync_layout();
+            true
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_layout = sync_layout.clone();
+        let start_timer = start_timer.clone();
         ui.on_tree_key(move |id, key| {
             ctrl.borrow_mut().tree_key(PaneId(id as u64), key.as_str());
             start_timer();

@@ -7,6 +7,8 @@ export struct RowData {
     // Celdas de las columnas visibles distintas de Name, en orden visual (6C).
     cells: [string],
     is-dir: bool,
+    // Identidad de la carpeta pintada. Una fila reutilizada no debe redirigir un drop.
+    drop-folder: string,
     selected: bool,
     focused: bool,
     cut: bool,
@@ -28,6 +30,12 @@ export struct RowData {
     // Profundidad en la vista profunda (recursiva): 0 = nivel raíz, >0 sangra la fila.
     // En vista normal/búsqueda es 0 (sin efecto).
     depth: int,
+}
+
+// Geometría cliente de la lista, en píxeles lógicos. Vive independientemente del hover OLE.
+export struct DropViewport {
+    left: float, top: float, width: float, height: float,
+    scroll-y: float, row-height: float,
 }
 
 // Una columna visible de la tabla (6C): qué es, su etiqueta, ancho y alineación.
@@ -88,6 +96,7 @@ export struct LayoutRow {
 export struct BatchRowVm {
     old-name: string,
     new-name: string,
+    parent: string,
     status: int,
 }
 
@@ -95,6 +104,7 @@ export struct BatchRowVm {
 // `rows` es el preview en vivo; `can-apply` habilita el botón Aplicar.
 export struct BatchRenameVm {
     active: bool,
+    show-parent: bool,
     template: string,
     find: string,
     replace: string,
@@ -217,6 +227,8 @@ export struct MessageVm {
 // Estado del menú contextual (clic derecho). Posición en coords de la ventana.
 export struct ContextMenuVm {
     active: bool,
+    deep-mode: bool,
+    single-target: bool,
     x: length,
     y: length,
     has-native: bool,

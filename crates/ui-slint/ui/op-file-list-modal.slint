@@ -64,8 +64,24 @@ export component OpFileListModal inherits Rectangle {
     in property <bool> can-retry;
     callback retry();
     property <bool> failures-only: false;
-    changed open => { root.failures-only = false; }
+    changed open => {
+        root.failures-only = false;
+        if root.open { initial-focus.running = true; }
+    }
     in property <bool> open;
+    // El reintento se muestra por encima y conserva su propio foco.
+    in property <bool> focus-suspended: false;
+    changed focus-suspended => {
+        if !root.focus-suspended && root.open { initial-focus.running = true; }
+    }
+    initial-focus := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.open && !root.focus-suspended { fl-focus.focus(); }
+        }
+    }
     in property <string> op-label;      // etiqueta de la op (subtítulo), p. ej. "Mover → D:\x"
     in property <[OpFileVm]> rows;
     in property <OpFileContextVm> context;  // contexto del encabezado (tipo/origen/destino/stats)

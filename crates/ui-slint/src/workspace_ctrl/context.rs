@@ -5,11 +5,125 @@
 use super::*;
 
 impl WorkspaceCtrl {
+    pub(crate) fn take_creation_wait_notice(&mut self) -> bool {
+        std::mem::take(&mut self.creation_wait_notice)
+    }
+    pub(crate) fn take_deep_selection_notice(&mut self) -> bool {
+        std::mem::take(&mut self.deep_selection_notice)
+    }
+    /// Una elección explícita prevalece sobre resultados y avisos tardíos de esa creación.
+    pub(super) fn mark_explicit_creation_selection(&mut self, id: PaneId) {
+        self.pending_created_activation.remove(&id);
+        if let Some(state) = self.creation_selection.get_mut(&id) {
+            state.overridden = true;
+        }
+    }
+
+    pub(super) fn sync_explicit_creation_selection(&mut self, id: PaneId) {
+        if self
+            .creation_selection
+            .get(&id)
+            .is_some_and(|state| state.overridden)
+        {
+            if let Some(files) = self.ws.pane_mut(id).and_then(|pane| pane.files.as_mut()) {
+                files.update_pending_context_after_selection();
+            }
+        }
+    }
+    /// Bloquea solo activación implícita durante una creación; nunca espera al filesystem.
+    pub(super) fn block_pending_created_activation(&mut self, id: PaneId) -> bool {
+        let Some(dir) = self.pending_created_activation.get(&id) else {
+            return false;
+        };
+        let current = self
+            .ws
+            .pane(id)
+            .and_then(|p| p.files.as_ref())
+            .is_some_and(|files| files.current_dir == *dir);
+        let blocked = current
+            && (self.ops.has_unreconciled_folder_creation(dir)
+                || self.listings.contains_key(&id)
+                || self.pending_file_listings.contains_key(&id)
+                || self
+                    .deep_job
+                    .as_ref()
+                    .is_some_and(|job| job.pane == id && !job.done && !job.cancelled));
+        if !blocked {
+            self.pending_created_activation.remove(&id);
+        }
+        blocked
+    }
     // --- Menú contextual (clic derecho) ---
 
-    /// Abre el menú contextual en (x,y) sobre la fila `pos` del panel `id`. Si la fila no
-    /// estaba seleccionada, la selecciona (Explorer hace lo mismo). El objetivo del menú es
-    /// la selección actual.
+    /// Un clic derecho sobre una fila seleccionada conserva el lote; sobre otra lo reemplaza.
+    /// La posición se valida contra el modelo actual sin hacer I/O ni detectar doble clic.
+    pub fn open_row_context_menu(&mut self, pane: PaneId, pos: usize, x: f32, y: f32) {
+        if self.is_deep_active(pane) {
+            let Some(entry) = self.deep_visible_entry(pane, pos).cloned() else {
+                return;
+            };
+            self.close_context_menu();
+            self.last_click = None;
+            self.set_active(pane);
+            let selected = self
+                .deep_job
+                .as_ref()
+                .is_some_and(|job| job.selected_paths.contains(&entry.path));
+            if selected {
+                self.deep_focus_at(pane, pos);
+            } else {
+                self.deep_select_at(pane, pos, false, false);
+            }
+            let Some(targets) = self.deep_complete_selection(pane) else {
+                self.deep_selection_notice = true;
+                return;
+            };
+            let target_is_folder = targets.len() == 1 && entry.is_dir();
+            let folder_fallback = if targets.len() == 1 {
+                entry.path.parent().map(std::path::Path::to_path_buf)
+            } else {
+                self.ws
+                    .pane(pane)
+                    .and_then(|p| p.files.as_ref())
+                    .map(|f| f.current_dir.clone())
+            };
+            self.context_menu = Some(ContextMenuState {
+                identity: std::rc::Rc::new(()),
+                pane,
+                x,
+                y,
+                targets,
+                folder_mode: false,
+                target_is_folder,
+                folder_fallback,
+                show_open_here: false,
+            });
+            return;
+        }
+        let valid = self
+            .ws
+            .pane(pane)
+            .and_then(|p| p.files.as_ref())
+            .is_some_and(|files| files.view_entry_at(pos).is_some());
+        if !valid {
+            return;
+        }
+        self.last_click = None;
+        self.set_active(pane);
+        if let Some(files) = self.ws.pane_mut(pane).and_then(|p| p.files.as_mut()) {
+            if files.is_selected(pos) {
+                files.focused = Some(pos);
+                files.presentation_changed();
+            } else {
+                files.select_single(pos);
+            }
+        }
+        self.mark_explicit_creation_selection(pane);
+        self.sync_explicit_creation_selection(pane);
+        self.open_context_menu(pane, x, y);
+    }
+
+    /// Abre el menú sobre la selección actual del panel indicado.
     pub fn open_context_menu(&mut self, pane: PaneId, x: f32, y: f32) {
         // Activar el panel del clic derecho: el menú (Copiar/Cortar/…) opera sobre ese panel, no
         // sobre el que estaba activo. Sin esto, clic derecho en un panel inactivo copiaba/cortaba
@@ -30,11 +144,14 @@ impl WorkspaceCtrl {
                 .map(|e| e.kind == naygo_core::fs_model::EntryKind::Directory)
                 .unwrap_or(false);
         self.context_menu = Some(ContextMenuState {
+            identity: std::rc::Rc::new(()),
+            pane,
             x,
             y,
             targets,
             folder_mode: false,
             target_is_folder,
+            folder_fallback: self.ws.active_files().map(|f| f.current_dir.clone()),
             show_open_here: false,
         });
     }
@@ -50,13 +167,18 @@ impl WorkspaceCtrl {
             .filter(|p| p.purpose == PanePurpose::Files)
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone());
-        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+        // La ruta pertenece al estado del panel; consultarla aquí puede congelar la UI en
+        // unidades remotas. Cada acción es responsable de manejar una carpeta desaparecida.
+        if let Some(dir) = dir {
             self.context_menu = Some(ContextMenuState {
+                identity: std::rc::Rc::new(()),
+                pane: id,
                 x,
                 y,
                 targets: vec![dir],
                 folder_mode: true,
                 target_is_folder: true,
+                folder_fallback: None,
                 show_open_here: false,
             });
         }
@@ -67,11 +189,14 @@ impl WorkspaceCtrl {
     pub fn open_path_folder_context_menu(&mut self, id: PaneId, dir: PathBuf, x: f32, y: f32) {
         self.set_active(id);
         self.context_menu = Some(ContextMenuState {
+            identity: std::rc::Rc::new(()),
+            pane: id,
             x,
             y,
             targets: vec![dir],
             folder_mode: true,
             target_is_folder: true,
+            folder_fallback: None,
             show_open_here: true,
         });
     }
@@ -79,8 +204,7 @@ impl WorkspaceCtrl {
     /// Abrir el Explorador de Windows en la carpeta objetivo del menú (modo carpeta).
     pub fn ctx_open_explorer(&mut self) {
         if let Some(dir) = self.terminal_dir() {
-            let result = naygo_platform::open::open_default(&dir);
-            self.report_shell_result(result);
+            self.start_folder_shell(dir, naygo_platform::open::FolderAction::Explorer);
         }
         self.close_context_menu();
     }
@@ -107,7 +231,15 @@ impl WorkspaceCtrl {
         // El editor modal toma el foco y puede tragarse el key-release que debería limpiar Ctrl.
         // El siguiente doble clic debe decidirse por el modificador de su propio gesto.
         self.clear_modifiers();
-        if let Some(dir) = self.terminal_dir() {
+        // El menú en modo carpeta ya capturó su destino (árbol, breadcrumb o panel). No usar
+        // terminal_dir(): consultaba disco en UI y podía caer silenciosamente a otro panel.
+        let dir = self
+            .context_menu
+            .as_ref()
+            .filter(|menu| menu.folder_mode)
+            .and_then(|menu| menu.targets.first())
+            .cloned();
+        if let Some(dir) = dir {
             self.new_folder = Some(NewFolderState {
                 dir,
                 text: String::new(),
@@ -122,12 +254,22 @@ impl WorkspaceCtrl {
     pub fn new_folder_open_active(&mut self) {
         // Igual que los demás overlays, no heredar un Ctrl/Shift cuyo release pudo perderse.
         self.clear_modifiers();
-        if let Some(dir) = self
-            .ws
-            .active_files()
-            .map(|f| f.current_dir.clone())
-            .filter(|d| d.is_dir())
-        {
+        // El árbol usa su cursor, que puede diferir de la carpeta del último panel Files.
+        // La existencia se valida en el worker de operaciones, sin consultar disco en UI.
+        if let Some(tree) = self.ws.active_id().filter(|id| {
+            self.ws
+                .pane(*id)
+                .is_some_and(|p| p.purpose == PanePurpose::Tree)
+        }) {
+            if let Some(dir) = self.tree_cursor_of(tree) {
+                self.new_folder = Some(NewFolderState {
+                    dir,
+                    text: String::new(),
+                });
+            }
+            return;
+        }
+        if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
             self.new_folder = Some(NewFolderState {
                 dir,
                 text: String::new(),
@@ -208,11 +350,63 @@ impl WorkspaceCtrl {
         // Ctrl+Enter cierra el modal antes de que el panel reciba key-release.
         self.clear_modifiers();
         let specs = naygo_core::ops::parse_new_folders(&text);
+        let has_valid_spec = specs
+            .iter()
+            .any(|spec| matches!(spec, naygo_core::ops::FolderSpec::Valid(_)));
+        // Acotar la memoria extra de seguimiento incluso ante un modal con miles de líneas.
+        // Si se supera el límite, conservar la elección ante cualquier llegada de esa carpeta.
+        const MAX_TRACKED_TARGETS: usize = 4096;
+        let mut targets = HashSet::new();
+        let mut overflow = false;
+        for spec in &specs {
+            if let naygo_core::ops::FolderSpec::Valid(rel) = spec {
+                if let Some(first) = std::path::Path::new(rel).components().next() {
+                    let target = dir.join(first);
+                    if targets.len() < MAX_TRACKED_TARGETS || targets.contains(&target) {
+                        targets.insert(target);
+                    } else {
+                        overflow = true;
+                    }
+                }
+            }
+        }
+        let origin = self.ws.active_id().filter(|id| {
+            self.ws
+                .pane(*id)
+                .and_then(|pane| pane.files.as_ref())
+                .is_some_and(|files| files.current_dir == dir)
+        });
         let label = self.config.t("op.new_folder");
         for spec in specs {
             if let naygo_core::ops::FolderSpec::Valid(rel) = spec {
                 let req = naygo_core::ops::create(dir.clone(), rel, true);
                 self.ops.start_op(req, label.clone(), true);
+            }
+        }
+        // El relist o un watcher puede restaurar el foco anterior antes de la confirmación.
+        // Proteger Enter hasta reconciliar y terminar el listado, solo si se inició una op.
+        if let Some(id) =
+            origin.filter(|_| has_valid_spec && self.ops.has_unreconciled_folder_creation(&dir))
+        {
+            self.pending_created_activation.insert(id, dir.clone());
+            self.creation_selection.insert(
+                id,
+                CreationSelection {
+                    dir,
+                    targets,
+                    overflow,
+                    overridden: false,
+                },
+            );
+            if let Some(files) = self.ws.pane_mut(id).and_then(|pane| pane.files.as_mut()) {
+                files.focused = None;
+                files.clear_selection();
+            }
+            if let Some(job) = self.deep_job.as_mut().filter(|job| job.pane == id) {
+                job.focused_path = None;
+                job.selected_paths.clear();
+                job.selection_anchor = None;
+                job.selection_revision = job.selection_revision.wrapping_add(1);
             }
         }
         self.new_folder = None;
@@ -228,6 +422,7 @@ impl WorkspaceCtrl {
     pub fn context_targets(&self) -> Vec<PathBuf> {
         self.context_menu
             .as_ref()
+            .filter(|menu| self.ws.active_id() == Some(menu.pane))
             .map(|c| c.targets.clone())
             .unwrap_or_default()
     }
@@ -261,26 +456,26 @@ impl WorkspaceCtrl {
         self.close_context_menu();
     }
 
-    /// Carpeta destino para "abrir terminal aquí": si el primer objetivo del menú es una carpeta,
-    /// se usa esa; si no (es un archivo, o no hay objetivo), la carpeta del panel activo.
+    /// Resuelve exclusivamente desde el estado capturado, sin filesystem ni fallback cruzado.
     pub(super) fn terminal_dir(&self) -> Option<PathBuf> {
-        if let Some(p) = self.context_targets().first() {
-            if p.is_dir() {
-                return Some(p.clone());
-            }
+        if let Some(menu) = &self.context_menu {
+            return if menu.folder_mode || menu.target_is_folder {
+                menu.targets.first().cloned()
+            } else {
+                menu.folder_fallback.clone()
+            };
         }
-        self.ws
-            .active_files()
-            .map(|f| f.current_dir.clone())
-            .filter(|d| d.is_dir())
+        self.ws.active_files().map(|f| f.current_dir.clone())
     }
 
     /// Abre una terminal (`term_int`: 0=PowerShell, 1=CMD, 2=Windows Terminal) en la carpeta
     /// seleccionada o, si no hay, en la del panel activo. Cierra el menú contextual.
     pub fn ctx_open_terminal(&mut self, term_int: i32) {
         if let Some(dir) = self.terminal_dir() {
-            let result = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
-            self.report_shell_result(result);
+            self.start_folder_shell(
+                dir,
+                naygo_platform::open::FolderAction::Terminal(term_from_int(term_int)),
+            );
         }
         self.close_context_menu();
     }
@@ -288,14 +483,71 @@ impl WorkspaceCtrl {
     /// Abre una terminal (`term_int`: 0=PowerShell, 1=CMD, 2=Windows Terminal, 3=WSL) en la
     /// carpeta del panel ACTIVO. Lo usa el combo de terminales de la toolbar.
     pub fn terminal_active(&mut self, term_int: i32) {
-        if let Some(dir) = self
-            .ws
-            .active_files()
-            .map(|f| f.current_dir.clone())
-            .filter(|d| d.is_dir())
-        {
-            let result = naygo_platform::open::open_terminal(&dir, term_from_int(term_int));
-            self.report_shell_result(result);
+        if let Some(dir) = self.ws.active_files().map(|f| f.current_dir.clone()) {
+            self.start_folder_shell(
+                dir,
+                naygo_platform::open::FolderAction::Terminal(term_from_int(term_int)),
+            );
+        }
+    }
+
+    pub(crate) fn set_folder_shell_waker(&mut self, waker: naygo_platform::dir_watch::Waker) {
+        self.folder_shell_waker = Some(waker);
+    }
+
+    /// Una plaza sin cola: no acumular hilos si un proveedor de red o Shell queda bloqueado.
+    fn start_folder_shell(&mut self, dir: PathBuf, action: naygo_platform::open::FolderAction) {
+        self.pump_folder_shell();
+        if self.folder_shell_rx.is_some() {
+            self.pending_shell_error = Some(self.config.t("path.edit.busy"));
+            if let Some(waker) = &self.folder_shell_waker {
+                waker();
+            }
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let waker = self.folder_shell_waker.clone();
+        let started = std::thread::Builder::new()
+            .name("naygo-folder-shell".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    naygo_platform::open::open_folder_action(&dir, action)
+                })
+                .unwrap_or_else(|_| {
+                    Err(naygo_platform::open::ShellError::Failed(
+                        "Shell worker failed".into(),
+                    ))
+                });
+                let _ = tx.send(result);
+                if let Some(waker) = waker {
+                    waker();
+                }
+            });
+        match started {
+            Ok(_) => self.folder_shell_rx = Some(rx),
+            Err(error) => {
+                self.pending_shell_error = Some(error.to_string());
+                if let Some(waker) = &self.folder_shell_waker {
+                    waker();
+                }
+            }
+        }
+    }
+
+    pub(super) fn pump_folder_shell(&mut self) {
+        let Some(rx) = &self.folder_shell_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.folder_shell_rx = None;
+                self.report_shell_result(result);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.folder_shell_rx = None;
+                self.pending_shell_error = Some("Shell worker disconnected".into());
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
         }
     }
 
@@ -346,6 +598,7 @@ impl WorkspaceCtrl {
 
     /// Construye el CSV desde el estado YA CARGADO del panel: selección si existe, o toda la
     /// vista filtrada. Usa las columnas visibles en su orden actual y agrega la ruta completa.
+    #[cfg(test)]
     pub fn export_listing_csv(&self, separator: char) -> Option<String> {
         let pane = self.ws.active_files()?;
         let columns: Vec<naygo_core::columns::ColumnKind> = pane
@@ -391,7 +644,7 @@ impl WorkspaceCtrl {
                             *kind,
                             self.config.settings.size_format,
                             self.config.settings.date_format,
-                            crate::logging::tz_offset_secs(),
+                            self.tz_offset_secs(),
                         )
                     })
                     .collect();
@@ -402,28 +655,6 @@ impl WorkspaceCtrl {
         Some(naygo_core::listing_export::to_csv(
             &headers, &rows, separator,
         ))
-    }
-
-    pub fn ctx_export_listing_clipboard(&mut self) {
-        if let Some(csv) = self.export_listing_csv(';') {
-            let _ = self.ops.write_clipboard_text(&csv);
-        }
-        self.close_context_menu();
-    }
-
-    pub fn ctx_export_listing_clipboard_comma(&mut self) {
-        if let Some(csv) = self.export_listing_csv(',') {
-            let _ = self.ops.write_clipboard_text(&csv);
-        }
-        self.close_context_menu();
-    }
-
-    pub fn export_listing_file_bytes(&self, separator: char) -> Option<Vec<u8>> {
-        let csv = self.export_listing_csv(separator)?;
-        let mut bytes = Vec::with_capacity(csv.len() + 3);
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-        bytes.extend_from_slice(csv.as_bytes());
-        Some(bytes)
     }
 
     /// Abre la carpeta objetivo del menú contextual en OTRO panel. Reusa `request_action`:

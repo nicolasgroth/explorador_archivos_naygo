@@ -316,6 +316,7 @@ impl WorkspaceCtrl {
             || self.column_menu.is_some() // menú/editor de columna (clic derecho en header)
             || self.sync_assistant.is_some() // asistente de sincronización
             || self.text_transform.is_some() // transformación de texto
+            || self.listing_export.is_some() // exportación profunda cancelable
             || self.delivery.open
             || self.task_spaces.open
             || self.retry.open
@@ -326,6 +327,9 @@ impl WorkspaceCtrl {
 
     /// Tecla sobre el panel activo (reusa el keymap). Devuelve true si navegó.
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        // El aviso pertenece solo a esta tecla; nunca reaparecerá por una acción anterior.
+        self.creation_wait_notice = false;
+        self.deep_selection_notice = false;
         self.ctrl_down = ctrl;
         self.shift_down = shift;
         // Un menú contextual es una capa transitoria: Esc debe cerrarlo antes de que la misma
@@ -352,14 +356,20 @@ impl WorkspaceCtrl {
         {
             return false;
         }
-        // Con el editor de rename inline abierto, las teclas son del editor (Enter/Esc/flechas
+        // Con el editor de rename inline en el panel activo, las teclas son del editor (Enter/Esc/flechas
         // las maneja el .slint; el resto es tipeo). El FilePanel ya NO reenvía teclas durante
         // el rename (file-panel.slint, handler `key-pressed`); esta guarda es la red de
         // seguridad en Rust por si aparece otro camino de entrada: sin ella, una tecla filtrada
         // gatillaría typeahead/atajos con el editor abierto (ese fue el bug del "_" que
         // reseteaba el texto: la tecla filtrada movía la selección y el sync re-montaba el
         // editor con el nombre original).
-        if self.rename_active.is_some() {
+        // Si otro panel pasa a ser activo durante un overlay, su teclado no debe quedar
+        // bloqueado por la sesión suspendida. F2 vuelve a esa sesión sin reemplazarla.
+        if self
+            .rename_active
+            .as_ref()
+            .is_some_and(|rename| self.ws.active_id() == Some(rename.pane))
+        {
             return false;
         }
         // Si el selector de panel está activo, el teclado lo controla: 1..9 elige, Esc
@@ -375,15 +385,36 @@ impl WorkspaceCtrl {
             }
             return false;
         }
+        let tree_active = self
+            .ws
+            .active_id()
+            .and_then(|id| self.ws.pane(id))
+            .is_some_and(|pane| pane.purpose == PanePurpose::Tree);
+        let deep_active = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
         let Some(chord) = crate::keys::chord_from(text, ctrl, shift, alt) else {
             // Typeahead/filtro visual: SÍ hubo cambios (buffer, salto de foco, tinte) → true,
             // para que el callback despierte el timer y el sync empuje la selección y el
             // auto-scroll (`focused-row`) a la primera coincidencia.
-            return self.typeahead(text);
+            return if tree_active || deep_active {
+                false
+            } else {
+                self.typeahead(text)
+            };
         };
         let Some(action) = self.config.keymap.action_for(&chord) else {
-            return self.typeahead(text);
+            return if tree_active || deep_active {
+                false
+            } else {
+                self.typeahead(text)
+            };
         };
+        // El árbol solo reenvía atajos globales o creación; nunca opera sobre un Files anterior.
+        if tree_active && !matches!(action, Action::NewDir | Action::SwitchPane) {
+            return false;
+        }
         // OJO: aquí YA NO se limpia el typeahead. El filtro visual persiste hasta Esc o
         // navegar (decisión de diseño); las acciones por atajo (flechas, copiar, etc.)
         // conviven con el marcado activo. La limpieza ocurre en `clear_filter` (Esc) y en
@@ -436,6 +467,130 @@ impl WorkspaceCtrl {
     /// acción que el teclado sin duplicar el ruteo (ver `execute_palette_command`). Devuelve
     /// `true` si algo cambió y la UI debe refrescar (igual semántica que `on_key`).
     pub fn run_action(&mut self, action: Action) -> bool {
+        if let Some(id) = self.ws.active_id().filter(|id| self.is_deep_active(*id)) {
+            match action {
+                Action::MoveUp => return self.deep_select_move(id, -1, false, false),
+                Action::MoveDown => return self.deep_select_move(id, 1, false, false),
+                Action::FocusPageUp => {
+                    return self.deep_select_move(id, -(PAGE_ROWS as isize), false, false)
+                }
+                Action::FocusPageDown => {
+                    return self.deep_select_move(id, PAGE_ROWS as isize, false, false)
+                }
+                Action::FocusHome => return self.deep_select_move(id, -isize::MAX, false, false),
+                Action::FocusEnd => return self.deep_select_move(id, isize::MAX, false, false),
+                Action::ExtendUp => return self.deep_select_move(id, -1, true, false),
+                Action::ExtendDown => return self.deep_select_move(id, 1, true, false),
+                Action::ExtendPageUp => {
+                    return self.deep_select_move(id, -(PAGE_ROWS as isize), true, false)
+                }
+                Action::ExtendPageDown => {
+                    return self.deep_select_move(id, PAGE_ROWS as isize, true, false)
+                }
+                Action::ExtendHome => return self.deep_select_move(id, -isize::MAX, true, false),
+                Action::ExtendEnd => return self.deep_select_move(id, isize::MAX, true, false),
+                Action::FocusUpKeep => return self.deep_select_move(id, -1, false, true),
+                Action::FocusDownKeep => return self.deep_select_move(id, 1, false, true),
+                Action::SelectAll => return self.deep_select_all(id),
+                Action::ToggleSelect | Action::ToggleFocused => {
+                    return self
+                        .deep_focused_position(id)
+                        .is_some_and(|pos| self.deep_select_at(id, pos, true, false))
+                }
+                Action::OpenFocusedOtherPane => {
+                    if self.block_pending_created_activation(id) {
+                        self.creation_wait_notice = true;
+                        return false;
+                    }
+                    let Some(target) = self
+                        .deep_focused_position(id)
+                        .and_then(|pos| self.deep_visible_entry(id, pos))
+                        .cloned()
+                    else {
+                        return false;
+                    };
+                    if target.kind == EntryKind::Directory {
+                        return self.request_action(
+                            PaneAction::OpenDir(target.path),
+                            id,
+                            self.last_area,
+                        );
+                    }
+                    if naygo_platform::open::can_run_as_administrator(&target.path) {
+                        let result = naygo_platform::open::run_as_administrator(&target.path);
+                        self.report_shell_result(result);
+                    }
+                    return false;
+                }
+                Action::RunAsAdministrator => {
+                    let Some(target) = self
+                        .deep_focused_position(id)
+                        .and_then(|pos| self.deep_visible_entry(id, pos))
+                        .cloned()
+                    else {
+                        return false;
+                    };
+                    if naygo_platform::open::can_run_as_administrator(&target.path) {
+                        let result = naygo_platform::open::run_as_administrator(&target.path);
+                        self.report_shell_result(result);
+                    }
+                    return false;
+                }
+                Action::Activate => {
+                    if self.block_pending_created_activation(id) {
+                        self.creation_wait_notice = true;
+                        return false;
+                    }
+                    let Some(pos) = self.deep_focused_position(id) else {
+                        return false;
+                    };
+                    self.ctrl_down = false;
+                    return self.on_row_double_clicked(id, pos);
+                }
+                _ => {}
+            }
+        }
+        // Sin selección propia de vista profunda, jamás interpretar el foco de la lista
+        // normal como si identificara una fila profunda. El doble clic sí usa índice visible.
+        if self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id))
+            && matches!(action, Action::Open | Action::OpenWith)
+        {
+            self.deep_selection_notice = true;
+            return false;
+        }
+        // Solo una selección explícita cancela la protección; los refrescos no expresan intención.
+        if matches!(
+            action,
+            Action::MoveUp
+                | Action::MoveDown
+                | Action::FocusPageDown
+                | Action::FocusPageUp
+                | Action::FocusHome
+                | Action::FocusEnd
+                | Action::ExtendUp
+                | Action::ExtendDown
+                | Action::ExtendPageDown
+                | Action::ExtendPageUp
+                | Action::ExtendHome
+                | Action::ExtendEnd
+                | Action::FocusUpKeep
+                | Action::FocusDownKeep
+                | Action::ToggleSelect
+                | Action::ToggleFocused
+                | Action::SelectAll
+        ) {
+            if let Some(id) = self.ws.active_id().filter(|id| {
+                self.ws
+                    .pane(*id)
+                    .and_then(|pane| pane.files.as_ref())
+                    .is_some_and(|files| files.view_len() > 0)
+            }) {
+                self.mark_explicit_creation_selection(id);
+            }
+        }
         if self
             .ws
             .active_id()
@@ -662,6 +817,10 @@ impl WorkspaceCtrl {
             Action::CopyToOther => return self.op_to_other(false),
             Action::MoveToOther => return self.op_to_other(true),
             Action::Activate => {
+                if active.is_some_and(|id| self.block_pending_created_activation(id)) {
+                    self.creation_wait_notice = true;
+                    return false;
+                }
                 if let (Some(id), Some(pos)) =
                     (active, self.ws.active_files().and_then(|f| f.focused))
                 {
@@ -672,6 +831,10 @@ impl WorkspaceCtrl {
             // lanza elevado. Así conservamos el atajo Commander existente sin sumar otro chord.
             // (`request_action`): 1 otro panel → directo; 2+ → selector; 0 → divide y usa el nuevo.
             Action::OpenFocusedOtherPane => {
+                if active.is_some_and(|id| self.block_pending_created_activation(id)) {
+                    self.creation_wait_notice = true;
+                    return false;
+                }
                 let Some(origin) = active else {
                     return false;
                 };
@@ -1221,6 +1384,10 @@ impl WorkspaceCtrl {
             CommandPayload::FocusEntry(view_idx) => {
                 if let Some(f) = self.ws.active_files_mut() {
                     f.select_single(view_idx);
+                    if let Some(id) = self.ws.active_id() {
+                        self.mark_explicit_creation_selection(id);
+                        self.sync_explicit_creation_selection(id);
+                    }
                     true
                 } else {
                     false
@@ -1336,6 +1503,9 @@ impl WorkspaceCtrl {
             };
             if naygo_core::text_match::contains_folded(&e.name, &needle) {
                 f.select_single(pos as usize);
+                if let Some(id) = self.ws.active_id() {
+                    self.sync_explicit_creation_selection(id);
+                }
                 return true;
             }
         }
@@ -1374,6 +1544,7 @@ impl WorkspaceCtrl {
         // (prefijo incluido: es un "contiene" al inicio). Pedido del usuario: si los matches
         // están más abajo, el foco va a la primera aparición. Las coincidencias siguientes
         // se recorren con ↓/↑ (ver `jump_filter_match`). Case/acento-insensible.
+        let mut selected_by_typing = false;
         if let Some(f) = self.ws.active_files_mut() {
             let needle = naygo_core::text_match::fold_for_match(&self.typeahead);
             let view = f.view_indices();
@@ -1385,6 +1556,13 @@ impl WorkspaceCtrl {
             });
             if let Some(pos) = target {
                 f.select_single(pos);
+                selected_by_typing = true;
+            }
+        }
+        if selected_by_typing {
+            if let Some(id) = self.ws.active_id() {
+                self.mark_explicit_creation_selection(id);
+                self.sync_explicit_creation_selection(id);
             }
         }
         true

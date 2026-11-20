@@ -18,6 +18,7 @@ pub struct PlainRow {
     /// Mantenerlas paralelas a `columns` hace trivial el índice en Slint (`cells[ci]`).
     pub cells: Vec<String>,
     pub is_dir: bool,
+    pub drop_folder: String,
     pub selected: bool,
     pub focused: bool,
     /// El ítem está marcado como "cortado" (Ctrl+X): se pinta atenuado hasta pegar.
@@ -163,6 +164,11 @@ pub fn rows_from_view_positions(
                 name: e.name.clone(),
                 cells,
                 is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
+                drop_folder: if e.is_dir() {
+                    e.path.to_string_lossy().into_owned()
+                } else {
+                    String::new()
+                },
                 selected: selected.contains(&pos),
                 focused: f.focused == Some(pos),
                 cut: is_cut(&e.path),
@@ -220,12 +226,11 @@ pub fn column_kind_from_int(i: i32) -> naygo_core::columns::ColumnKind {
 /// Columnas visibles del panel con su etiqueta i18n y alineación. `label_of` traduce la clave.
 pub fn columns_info(
     f: &FilePaneState,
+    sort: Option<naygo_core::fs_model::SortSpec>,
     label_of: &dyn Fn(naygo_core::columns::ColumnKind) -> String,
 ) -> Vec<ColumnInfo> {
     use naygo_core::columns::ColumnKind;
     // Clave de orden activa del panel → para marcar la columna ordenada con ▲/▼.
-    let sort_key = f.sort.key;
-    let sort_asc = f.sort.ascending;
     f.table
         .visible_columns()
         .map(|c| ColumnInfo {
@@ -233,15 +238,9 @@ pub fn columns_info(
             label: label_of(c.kind),
             width: c.width,
             align_right: c.kind == ColumnKind::Size,
-            sort_dir: if naygo_core::columns::sort_key_of(c.kind) == sort_key {
-                if sort_asc {
-                    1
-                } else {
-                    2
-                }
-            } else {
-                0
-            },
+            sort_dir: sort
+                .filter(|sort| naygo_core::columns::sort_key_of(c.kind) == sort.key)
+                .map_or(0, |sort| if sort.ascending { 1 } else { 2 }),
             has_filter: f.table.filters.contains_key(&c.kind),
         })
         .collect()
@@ -1164,7 +1163,7 @@ mod tests {
             },
         );
         let label_of = |k: ColumnKind| format!("{k:?}");
-        let cols = columns_info(&f, &label_of);
+        let cols = columns_info(&f, Some(f.sort), &label_of);
         let size = cols.iter().find(|c| c.kind == 2).unwrap();
         assert_eq!(size.sort_dir, 2, "Size ordenada descendente → ▼");
         let ext = cols.iter().find(|c| c.kind == 1).unwrap();

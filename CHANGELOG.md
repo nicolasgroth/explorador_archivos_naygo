@@ -7,6 +7,121 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.5.6] — 2026-11-20
+
+### Usabilidad
+- El árbol deja de esperar una carpeta ausente cuando terminan los listados de sus ramas,
+  preservando la ruta y el aviso del panel de archivos.
+- Arrastrar un archivo o carpeta a una subcarpeta del mismo panel usa la fila que está bajo el
+  punto de soltado. Con un destino libre en el mismo volumen, Deshacer puede devolver la
+  carpeta completa y los archivos del mismo lote a sus ubicaciones originales.
+- Los botones de las operaciones recuperan el foco al cerrar un diálogo si su operación y
+  el panel siguen activos. El selector de carpeta de inicio vuelve a Configuración.
+- Al expandir o contraer una rama del árbol, se conserva la posición de las carpetas visibles
+  que permanecen en el listado. Un arrastre externo pide confirmar otro destino si el panel
+  salió de la carpeta durante la preparación, aunque después vuelva a ella.
+- La vista profunda aplica filtros de columna y ordena cada carpeta por separado. Las filas
+  visibles son las mismas al navegar con teclado, seleccionar, arrastrar y exportar.
+- F2 y el renombrado por lotes conservan la posición, el foco y la selección de los elementos
+  renombrados. En el listado normal, F5 u ordenar por una columna aplica el orden actual.
+- Los archivos nuevos se agregan al final por defecto y conservan esa posición al vencer el
+  resaltado. La opción «Archivos nuevos al final del listado» sigue disponible en Avanzado.
+- El enlace de detalle de archivos del historial de Operaciones se puede enfocar con Tab y abrir
+  con Enter o espacio. Recupera el foco al cerrar el detalle si sigue siendo la misma operación.
+- En vista profunda, cambios acotados de foco y selección actualizan las marcas afectadas sin
+  reconstruir todas las filas; cambios de contenido o presentación usan la reconciliación completa.
+- El botón «Cancelar todo» del panel Operaciones recupera el foco al cerrar su confirmación,
+  siempre que ese panel continúe activo; espera a que se cierren los demás overlays.
+- La vista profunda reutiliza los contadores del pie mientras no cambien sus entradas,
+  selección o visibilidad, evitando recorrer el listado repetidamente.
+- La vista profunda evita recorrer todas las entradas para detectar si cambió el contenido de
+  sus filas, conservando la invalidación cuando se modifica o reemplaza el recorrido.
+- La navegación por flechas en vista profunda evita recorrer varias veces el listado para mover
+  y seleccionar una fila; conserva la identidad por ruta y el comportamiento de los rangos.
+- Los arrastres externos pueden dirigirse a una carpeta de vista profunda. El destino se captura
+  antes de preparar los archivos y se comprueba nuevamente; una fila o panel cambiado no se usa
+  como destino supuesto.
+- La compresión de vista profunda admite selecciones de distintas carpetas y conserva sus rutas
+  relativas a la raíz del panel. El destino ZIP se crea exclusivamente para no sobrescribir un
+  archivo creado por otro proceso después de escoger el nombre.
+- La exportación del listado normal también prepara la instantánea en fragmentos y genera el
+  CSV en un worker cancelable, conservando el orden y el formato de la vista. Si cambia el menú,
+  la selección o el listado durante la preparación, evita guardar un resultado distinto.
+- La vista profunda exporta a CSV o portapapeles las filas seleccionadas, o las visibles si no
+  hay selección. La captura es incremental y el CSV se genera en un worker cancelable; el
+  archivo se reemplaza solo al completar la escritura temporal.
+- La transformación de texto admite lotes seleccionados en vista profunda, incluso entre
+  carpetas. La vista se vuelve a recorrer al terminar o al concluir una cancelación.
+- La vista profunda admite renombrar en lote elementos de distintas carpetas tras completar el
+  recorrido. La vista previa identifica cada carpeta y comprueba colisiones por ruta; el foco y
+  las marcas siguen los destinos realmente renombrados, incluso ante una operación parcial.
+- En vista profunda se puede soltar un arrastre interno de Naygo sobre una carpeta; la ruta
+  se comprueba al soltar y se conserva el flujo de confirmación y conflictos.
+- La vista profunda admite selección múltiple por clic, Ctrl, Shift, teclado y rectángulo,
+  con marcas ancladas a rutas y conteo propio. Copiar, cortar, borrar, duplicar, transferir,
+  agregar a Bandeja, comprimir elementos de una carpeta y extraer un ZIP usan el lote profundo.
+  El menú contextual conserva las rutas y las acciones no compatibles se ocultan. Una selección
+  incompleta por filtros o que contiene una carpeta y su descendiente se rechaza completa.
+- El Inspector, la vista previa y el cálculo de tamaño usan el foco profundo; un cambio de panel
+  cierra el menú contextual para impedir que una acción reutilice rutas de otro panel.
+- Al crear carpetas en vista profunda, Enter espera el resultado y el nuevo recorrido; una
+  selección explícita posterior conserva prioridad sobre el foco automático.
+- F2 renombra la fila enfocada en vista profunda. El editor sigue la ruta al cambiar las filas;
+  al terminar, un worker vuelve a recorrer la carpeta para reflejar también los descendientes.
+- En vista profunda, un clic o las flechas sitúan un cursor propio, seguido por el desplazamiento;
+  Inicio, Fin y avance de página lo mueven y Enter abre el elemento enfocado. Su identidad se
+  conserva por ruta al cambiar el orden; los elementos filtrados no se pueden abrir con Enter.
+- El cuadro para crear o renombrar grupos y cambiar alias en Favoritos enfoca el campo de
+  nombre al abrirse, permitiendo escribir y confirmar con Enter sin hacer clic adicional.
+- En vista profunda se bloquea el destino de arrastre si no se acredita la fila; el doble clic
+  y el clic central resuelven la fila visible, incluso con ocultos.
+- La Bandeja temporal recupera el foco de su lista o botón de acciones al cerrar los diálogos,
+  siempre que siga siendo el panel activo y no quede otro overlay abierto.
+- Durante F2 en una lista normal, el editor sigue la ruta del archivo si cambian el orden o las
+  filas. Si un listado parcial aún no contiene esa ruta, conserva temporalmente la vista y el
+  borrador; al terminar la edición actualiza las filas pendientes.
+- F2 repetido conserva el borrador y selecciona nombre, extensión o todo sobre el texto actual.
+- Al volver a un F2 suspendido en una pestaña agrupada, Naygo muestra la pestaña y conserva el
+  borrador. Si el panel navega a otra carpeta, cancela la edición; refrescar la misma la conserva.
+- Si cambia el panel activo mientras F2 está suspendido por un diálogo, el otro panel acepta
+  navegación; solicitar otro F2 devuelve el foco al editor pendiente sin reemplazar el borrador.
+- Al cerrar el panel que contiene un renombrado F2 pendiente, se cancela esa edición y el teclado
+  vuelve a quedar disponible para los demás paneles, sin confirmar un nombre tardíamente.
+- Un diálogo superpuesto ya no confirma por pérdida de foco un renombrado en línea; al cerrarlo,
+  el editor activo recupera el teclado. Enter y el clic deliberado fuera siguen confirmando.
+- Un clic derecho sobre un elemento seleccionado conserva la selección múltiple completa;
+  sobre un elemento no seleccionado la reemplaza por ese elemento. «Más opciones de Windows…»
+  rechaza el lote con un aviso si faltan elementos o si pertenecen a carpetas Shell distintas,
+  evitando ofrecer comandos sobre un subconjunto o una carpeta equivocada.
+- Si se abre y cierra un diálogo sobre un editor de ruta, el editor del panel o de la barra
+  superior recupera el foco sin reemplazar el texto ni mover la posición del cursor.
+- La paleta, reintento y otros diálogos de la ventana coordinan el foco con los paneles: al cerrar
+  el último, vuelve el teclado al panel activo. El detalle de operación también recibe Escape al abrir.
+- Al cerrar confirmaciones de operaciones o avisos, el panel activo de archivos o árbol vuelve a
+  recibir el teclado cuando no queda otro de esos diálogos abierto.
+- El submenú contextual «Abrir» recibe clics al pasar el puntero y se despliega hacia la izquierda
+  si falta espacio a la derecha.
+- Abrir terminal o Explorador valida y solicita la carpeta capturada en segundo plano. Si la ruta
+  ya no existe se informa el error sin escoger otra; una sola solicitud puede estar en curso.
+- Abrir el menú contextual de la zona vacía ya no consulta el disco en la interfaz; la ruta
+  del panel se conserva aunque la carpeta haya desaparecido.
+- El árbol deja de recentrar la carpeta activa cuando cambia su índice sin cambiar la ruta;
+  la navegación a otra ruta sigue revelándola. La validación nativa del caso OneDrive está pendiente.
+- Al cerrar el cuadro de carpetas, el foco de teclado vuelve al panel de archivos o árbol activo.
+  El atajo configurable de creación en el árbol usa la carpeta de su cursor, y se evita activar la
+  fila anterior inmediatamente después de solicitar la creación. Aceptación instalada pendiente.
+- Durante la creación y el refresco, Enter no activa una fila restaurada automáticamente. Una
+  selección explícita permite continuar trabajando; Enter no queda en cola y un aviso indica la espera.
+- Una selección explícita se conserva frente a resultados de la última creación y a los avisos del
+  watcher asociados. Se siguen resaltando las carpetas y las llegadas externas no relacionadas
+  conservan su comportamiento habitual. El seguimiento se acota a 4.096 destinos; si se excede,
+  se protege conservadoramente la selección ante las llegadas hasta navegar o iniciar otra creación.
+- Abrir el diálogo desde un panel Files ya no consulta el disco en la UI. El worker comprueba la
+  carpeta base antes de crear y vuelve a observar la cancelación al retornar de esa consulta; el
+  filesystem puede cambiar entre la comprobación y la escritura.
+- Crear desde el menú contextual de árbol o breadcrumb conserva el destino capturado aunque este
+  haya desaparecido: no redirige la operación al panel de archivos activo.
+
 ## [0.5.5] (build local instalada el 2026-11-08)
 
 ### Windows

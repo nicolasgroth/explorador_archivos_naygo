@@ -52,6 +52,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 }],
                 total_bytes: 0,
                 total_files: 1,
+                allow_directory_rename: false,
                 pre_delete: Vec::new(),
             })
         }
@@ -83,6 +84,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                 }],
                 total_bytes: 0,
                 total_files: if is_dir { 0 } else { 1 },
+                allow_directory_rename: false,
                 pre_delete: Vec::new(),
             })
         }
@@ -93,6 +95,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
             steps: Vec::new(),
             total_bytes: 0,
             total_files: 0,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         }),
     }
@@ -128,14 +131,20 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
     let key = crate::path_identity::key;
     let mut steps: Vec<OpStep> = Vec::with_capacity(pending.len());
     let mut freed = std::collections::HashSet::new();
+    let mut reserved = std::collections::HashSet::new();
     loop {
         let mut progressed = false;
         pending.retain(|(from, to)| {
             // Puede correr si el destino está libre, lo liberó un paso ya agendado,
             // o es el propio origen (cambio solo de mayúsculas).
-            let runnable = !to.exists() || freed.contains(&key(to)) || key(from) == key(to);
+            let destination_key = key(to);
+            let runnable = !reserved.contains(&destination_key)
+                && (!to.exists()
+                    || freed.contains(&destination_key)
+                    || key(from) == destination_key);
             if runnable {
                 freed.insert(key(from));
+                reserved.insert(destination_key);
                 steps.push(OpStep {
                     from: Some(from.clone()),
                     to: to.clone(),
@@ -165,6 +174,7 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
         steps,
         total_bytes: 0,
         total_files: n,
+        allow_directory_rename: false,
         pre_delete: Vec::new(),
     })
 }
@@ -215,6 +225,7 @@ pub(super) fn plan_duplicate_with(
         steps,
         total_bytes,
         total_files,
+        allow_directory_rename: false,
         pre_delete: Vec::new(),
     })
 }
@@ -271,6 +282,7 @@ pub(super) fn plan_transfer_with(
     let mut steps = Vec::new();
     let mut total_bytes = 0u64;
     let mut total_files = 0usize;
+    let is_move = matches!(&req.kind, OpKind::Move);
     for src in &req.sources {
         if cancelled() {
             break;
@@ -291,13 +303,14 @@ pub(super) fn plan_transfer_with(
             &mut total_files,
             sink,
             cancelled,
-            matches!(&req.kind, OpKind::Move),
+            is_move,
         )?;
     }
     Ok(OpPlan {
         steps,
         total_bytes,
         total_files,
+        allow_directory_rename: is_move && !cancelled(),
         pre_delete: Vec::new(),
     })
 }
@@ -328,6 +341,7 @@ pub fn plan_delete_with(
         total_bytes,
         // Para borrado la unidad útil es "elementos": archivos + carpetas.
         total_files: total_items,
+        allow_directory_rename: false,
         pre_delete: Vec::new(),
     })
 }
@@ -802,6 +816,37 @@ mod tests {
         assert!(matches!(plan(&r), Err(PlanError::InvalidName(_))));
         let r = req(OpKind::BatchRename { new_names: vec![] }, vec![f], None);
         assert!(matches!(plan(&r), Err(PlanError::MissingDest)));
+    }
+
+    #[test]
+    fn batch_rename_reserva_destinos_por_ruta_completa() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
+        let first = a.join("first.txt");
+        let second = a.join("second.txt");
+        let third = b.join("third.txt");
+        for path in [&first, &second, &third] {
+            fs::write(path, b"x").unwrap();
+        }
+        let same_parent = req(
+            OpKind::BatchRename {
+                new_names: vec!["igual.txt".into(), "igual.txt".into()],
+            },
+            vec![first.clone(), second],
+            None,
+        );
+        assert!(matches!(plan(&same_parent), Err(PlanError::InvalidName(_))));
+        let different_parents = req(
+            OpKind::BatchRename {
+                new_names: vec!["igual.txt".into(), "igual.txt".into()],
+            },
+            vec![first, third],
+            None,
+        );
+        assert_eq!(plan(&different_parents).unwrap().steps.len(), 2);
     }
 
     #[test]

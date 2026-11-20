@@ -171,10 +171,63 @@ pub fn run_plan_with_no_replace_rename(
         }
     }
     let mut step_item_indices = Vec::with_capacity(plan.steps.len());
+    let mut local_trees = if plan.allow_directory_rename
+        && matches!(kind, OpKind::Move)
+        && plan.pre_delete.is_empty()
+    {
+        local_move_trees(plan)
+    } else {
+        Vec::new()
+    };
+    let mut moved_through = 0;
 
     for (idx, step) in execution_plan.steps.iter().enumerate() {
+        if idx < moved_through {
+            continue;
+        }
         if token.is_cancelled() {
             break;
+        }
+        if let Some(tree) = local_trees.pop_if(|tree| tree.start == idx) {
+            let root = &plan.steps[tree.end - 1];
+            let from = root.from.as_deref().expect("el árbol tiene origen");
+            token.wait_if_paused();
+            if token.is_cancelled() {
+                break;
+            }
+            // Un destino libre permite mover la carpeta como unidad. Un choque o un
+            // cambio de volumen mantiene el comportamiento normal, paso a paso.
+            if std::fs::symlink_metadata(from).is_ok_and(|metadata| metadata.is_dir())
+                && no_replace_rename.rename_noreplace(from, &root.to).is_ok()
+            {
+                moved_through = tree.end;
+                for child in &plan.steps[tree.clone()] {
+                    summary.bytes_done += child.bytes;
+                    files_done += usize::from(!child.is_dir);
+                }
+                let receipt = summary.items.len();
+                summary.items.push(OpItem {
+                    dest: root.to.clone(),
+                    outcome: OpOutcome::Done,
+                    src: root.from.clone(),
+                });
+                step_item_indices.resize(tree.end, Some(receipt));
+                if !barrier_hit {
+                    journal_cursor = tree.end;
+                    if let Some(w) = journal.as_deref_mut() {
+                        w.record(journal_cursor, std::time::Instant::now());
+                        w.flush();
+                    }
+                }
+                let _ = tx.send(OpMsg::Progress(OpProgress {
+                    bytes_done: summary.bytes_done,
+                    bytes_total: plan.total_bytes,
+                    files_done,
+                    files_total: plan.total_files,
+                    current: root.to.clone(),
+                }));
+                continue;
+            }
         }
         let original_step = &plan.steps[idx];
         let staged = replacements.iter().any(|replacement| {
@@ -403,6 +456,40 @@ pub fn run_plan_with_no_replace_rename(
 
     summary.elapsed_secs = start.elapsed().as_secs_f64();
     summary
+}
+
+/// Localiza los bloques en postorden que mueven una carpeta hacia una subcarpeta de su
+/// propio panel. Validar el mapeo relativo deja otros planes y reemplazos en el motor normal.
+fn local_move_trees(plan: &OpPlan) -> Vec<std::ops::Range<usize>> {
+    let mut trees = Vec::new();
+    let mut end = plan.steps.len();
+    while end > 0 {
+        let root = &plan.steps[end - 1];
+        let Some(from) = root.from.as_deref().filter(|from| {
+            root.is_dir
+                && from.file_name() == root.to.file_name()
+                && from
+                    .parent()
+                    .is_some_and(|parent| root.to.parent().and_then(Path::parent) == Some(parent))
+        }) else {
+            end -= 1;
+            continue;
+        };
+        let start = plan.steps[..end - 1]
+            .iter()
+            .rposition(|step| {
+                let from_relative = step
+                    .from
+                    .as_deref()
+                    .and_then(|path| path.strip_prefix(from).ok());
+                let to_relative = step.to.strip_prefix(&root.to).ok();
+                from_relative.is_none() || from_relative != to_relative
+            })
+            .map_or(0, |index| index + 1);
+        trees.push(start..end);
+        end = start;
+    }
+    trees
 }
 
 /// Árbol de reemplazo en staging del mismo volumen; su journal nace antes de crear el directorio.
@@ -1458,8 +1545,8 @@ fn exec_step(
             let outcome = exec_rename(step, no_replace_rename);
             (step.to.clone(), outcome, 0, true)
         }
-        OpKind::CreateDir { .. } => {
-            let outcome = exec_create_dir(&step.to);
+        OpKind::CreateDir { name } => {
+            let outcome = exec_create_dir(&step.to, name, token);
             (step.to.clone(), outcome, 0, false)
         }
         OpKind::CreateFile { .. } => {
@@ -2045,8 +2132,57 @@ fn exec_rename(step: &OpStep, no_replace_rename: &dyn NoReplaceRename) -> OpOutc
     }
 }
 
-/// Crea una carpeta vacía (incluyendo padres faltantes).
-fn exec_create_dir(to: &Path) -> OpOutcome {
+/// Recupera el directorio base del plan sin canonicalizar ni consultar el filesystem.
+fn creation_base<'a>(to: &'a Path, name: &str) -> Option<&'a Path> {
+    let parts = super::names::relative_components(name)?;
+    let mut base = to;
+    for _ in parts {
+        base = base.parent()?;
+    }
+    // Una ruta relativa sin directorio explícito tiene como base el directorio de trabajo.
+    Some(if base.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        base
+    })
+}
+
+/// Crea la jerarquía relativa en el worker, sin recrear deliberadamente el destino base si ya
+/// falta. La comprobación y la creación no son atómicas ante cambios concurrentes del filesystem.
+fn exec_create_dir(to: &Path, name: &str, token: &CancellationToken) -> OpOutcome {
+    exec_create_dir_with_probe(to, name, token, |base| {
+        let metadata = std::fs::metadata(base)?;
+        if metadata.is_dir() {
+            Ok(())
+        } else {
+            Err(std::io::Error::from(std::io::ErrorKind::NotADirectory))
+        }
+    })
+}
+
+/// La consulta puede quedar bloqueada en el SO. Al retornar, observar cancelación antes de
+/// cualquier creación; el cierre de esta ventana no hace atómica la operación del filesystem.
+fn exec_create_dir_with_probe(
+    to: &Path,
+    name: &str,
+    token: &CancellationToken,
+    probe: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> OpOutcome {
+    let Some(base) = creation_base(to, name) else {
+        return OpOutcome::Failed(
+            std::io::Error::from(std::io::ErrorKind::InvalidInput).to_string(),
+        );
+    };
+    if token.is_cancelled() {
+        return OpOutcome::Skipped;
+    }
+    let result = probe(base);
+    if token.is_cancelled() {
+        return OpOutcome::Skipped;
+    }
+    if let Err(error) = result {
+        return OpOutcome::Failed(error.to_string());
+    }
     match std::fs::create_dir_all(to) {
         Ok(()) => OpOutcome::Done,
         Err(e) => OpOutcome::Failed(e.to_string()),
@@ -2154,6 +2290,79 @@ mod tests {
         );
         let anidada = dir.path().join("a").join("b").join("c");
         assert!(anidada.is_dir(), "la cadena anidada debe existir en disco");
+    }
+
+    #[test]
+    fn create_dir_does_not_recreate_a_missing_base() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        let req = OpRequest {
+            kind: OpKind::CreateDir {
+                name: "child".into(),
+            },
+            sources: vec![],
+            dest_dir: Some(missing.clone()),
+            conflict: ConflictPolicy::Ask,
+        };
+        let (_, summary) = run(req);
+        assert!(summary
+            .items
+            .iter()
+            .any(|item| matches!(item.outcome, OpOutcome::Failed(_))));
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn create_dir_relative_target_uses_current_directory_as_base() {
+        assert_eq!(
+            super::creation_base(Path::new("child"), "child"),
+            Some(Path::new("."))
+        );
+    }
+
+    #[test]
+    fn create_dir_cancellation_during_base_probe_prevents_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("child");
+        let token = CancellationToken::new();
+        let outcome = super::exec_create_dir_with_probe(&child, "child", &token, |_| {
+            token.cancel();
+            Ok(())
+        });
+        assert_eq!(outcome, OpOutcome::Skipped);
+        assert!(!child.exists());
+    }
+
+    #[test]
+    fn create_dir_cancelled_before_base_probe_does_not_probe() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let outcome =
+            super::exec_create_dir_with_probe(Path::new("child"), "child", &token, |_| {
+                panic!("no debe consultar el filesystem con la operación cancelada")
+            });
+        assert_eq!(outcome, OpOutcome::Skipped);
+    }
+
+    #[test]
+    fn create_dir_rejects_a_file_as_base_without_changing_it() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"unchanged").unwrap();
+        let req = OpRequest {
+            kind: OpKind::CreateDir {
+                name: "child".into(),
+            },
+            sources: vec![],
+            dest_dir: Some(file.clone()),
+            conflict: ConflictPolicy::Ask,
+        };
+        let (_, summary) = run(req);
+        assert!(summary
+            .items
+            .iter()
+            .any(|item| matches!(item.outcome, OpOutcome::Failed(_))));
+        assert_eq!(fs::read(file).unwrap(), b"unchanged");
     }
 
     #[test]
@@ -2994,6 +3203,7 @@ mod tests {
             total_bytes: 17,
             total_files: 1,
             // El origen entero, marcado (erróneamente) para borrar antes de copiar.
+            allow_directory_rename: false,
             pre_delete: vec![origen.clone()],
         };
 
@@ -3048,6 +3258,7 @@ mod tests {
             }],
             total_bytes: 1,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: vec![ancestro.clone()],
         };
 
@@ -3106,6 +3317,7 @@ mod tests {
             ],
             total_bytes: 17,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: vec![origen_otra_grafia],
         };
 
@@ -3366,6 +3578,10 @@ mod tests {
         assert!(moved.join("sub").join("vacio").is_dir());
         assert!(!src.exists(), "las carpetas de origen vacías se retiran");
         assert_eq!(summary.count_failed(), 0);
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(summary.items[0].src.as_ref(), Some(&src));
+        assert_eq!(summary.items[0].dest, moved);
+        assert_eq!(summary.bytes_done, 8);
     }
 
     #[test]
@@ -3381,6 +3597,8 @@ mod tests {
             b"destino",
         )
         .unwrap();
+        fs::write(dest.join("origen").join("ajeno.txt"), b"ajeno").unwrap();
+        fs::write(src.join("libre.txt"), b"libre").unwrap();
         let req = OpRequest {
             kind: OpKind::Move,
             sources: vec![src.clone()],
@@ -3400,6 +3618,8 @@ mod tests {
             fs::read(dest.join("origen").join("sub").join("igual.txt")).unwrap(),
             b"destino"
         );
+        assert_eq!(fs::read(dest.join("origen/libre.txt")).unwrap(), b"libre");
+        assert_eq!(fs::read(dest.join("origen/ajeno.txt")).unwrap(), b"ajeno");
     }
 
     #[test]
@@ -3494,6 +3714,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
             total_bytes: 9,
             total_files: 3,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let cfg = dir.path();

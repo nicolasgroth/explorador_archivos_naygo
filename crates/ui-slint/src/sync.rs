@@ -17,7 +17,7 @@ use naygo_core::workspace::layout::{Rect, SplitDir};
 use naygo_core::workspace::{PaneId, PanePurpose};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Los dos closures de sincronización que consume el resto del cableado de la UI.
@@ -32,6 +32,91 @@ struct AppliedRowsSource {
     revision: u64,
     entry_count: usize,
     view_indices: std::sync::Arc<[usize]>,
+}
+
+/// Instantánea pequeña de presentación; selecciones grandes usan la reconciliación completa.
+#[derive(Clone)]
+struct DeepPresentation {
+    context: u64,
+    focused: Option<std::path::PathBuf>,
+    selected: HashSet<std::path::PathBuf>,
+    row_count: usize,
+}
+
+fn deep_presentation(
+    ctrl: &WorkspaceCtrl,
+    id: PaneId,
+    now: std::time::Instant,
+) -> Option<DeepPresentation> {
+    let job = ctrl.deep_job.as_ref().filter(|job| job.pane == id)?;
+    if job.selected_paths.len() > 32 {
+        return None;
+    }
+    Some(DeepPresentation {
+        context: ctrl.deep_rows_context_signature(id, now)?,
+        focused: job.focused_path.clone(),
+        selected: job.selected_paths.clone(),
+        row_count: 0,
+    })
+}
+
+/// Solo actualiza marcas sobre el modelo ya aplicado; cualquier duda vuelve al camino completo.
+fn apply_deep_presentation(
+    ctrl: &WorkspaceCtrl,
+    id: PaneId,
+    model: &VecModel<RowData>,
+    old: &DeepPresentation,
+    new: &DeepPresentation,
+) -> bool {
+    if old.context != new.context || old.row_count != model.row_count() {
+        return false;
+    }
+    let mut changed: HashSet<&std::path::PathBuf> =
+        old.selected.symmetric_difference(&new.selected).collect();
+    if old.focused != new.focused {
+        changed.extend(old.focused.iter());
+        changed.extend(new.focused.iter());
+    }
+    if changed.is_empty() {
+        return true;
+    }
+    // Para cambios amplios conviene la reconciliación completa; para pocos elementos, comparar
+    // rutas evita calcular un hash de cada entrada de un listado grande.
+    if changed.len() > 8 {
+        return false;
+    }
+    let changed: Vec<_> = changed.into_iter().collect();
+    let Some(job) = ctrl.deep_job.as_ref().filter(|job| job.pane == id) else {
+        return false;
+    };
+    let vis = ctrl.visibility_flags();
+    let mut updates = Vec::new();
+    for (position, (entry, _)) in job
+        .items
+        .iter()
+        .filter(|(entry, _)| {
+            naygo_core::filter::is_visible(
+                entry,
+                vis.show_hidden,
+                vis.show_system,
+                vis.hide_dotfiles,
+            )
+        })
+        .enumerate()
+    {
+        if changed.iter().any(|path| **path == entry.path) {
+            let Some(mut row) = model.row_data(position) else {
+                return false;
+            };
+            row.selected = new.selected.contains(&entry.path);
+            row.focused = new.focused.as_ref() == Some(&entry.path);
+            updates.push((position, row));
+        }
+    }
+    for (position, row) in updates {
+        model.set_row_data(position, row);
+    }
+    true
 }
 
 fn applied_rows_source(
@@ -123,6 +208,7 @@ fn apply_rows_incremental_by<T: Clone + 'static>(
 fn row_data_eq(left: &RowData, right: &RowData) -> bool {
     left.name == right.name
         && left.is_dir == right.is_dir
+        && left.drop_folder == right.drop_folder
         && left.selected == right.selected
         && left.focused == right.focused
         && left.cut == right.cut
@@ -154,6 +240,8 @@ pub(crate) fn build_sync(
         let last_row_sig = last_row_sig.clone();
         let row_sources = Rc::new(RefCell::new(HashMap::<u64, AppliedRowsSource>::new()));
         let row_sources = row_sources.clone();
+        let deep_presentations = Rc::new(RefCell::new(HashMap::<u64, DeepPresentation>::new()));
+        let deferred_rename_rows = Rc::new(RefCell::new(HashSet::<u64>::new()));
         let search_model = Rc::new(VecModel::<SearchHitVm>::default());
         let points_model = Rc::new(VecModel::<PointRowVm>::default());
         move || {
@@ -180,6 +268,94 @@ pub(crate) fn build_sync(
                 && ctrl.borrow().path_of(PaneId(edit_id as u64)) != ui.get_edit_base().as_str();
             if stale_edit {
                 ui.invoke_path_edit_cancel(edit_id);
+            }
+            // El cierre del panel invalida la sesión en el controlador. Retirar el editor
+            // huérfano antes de prestar `ctrl` evita que su callback tardío choque con el sync
+            // y permite iniciar otra edición normalmente.
+            let stale_rename = ui.get_rename_pane() >= 0 && ctrl.borrow().rename_active.is_none();
+            if stale_rename {
+                ui.set_rename_pane(-1);
+                ui.set_rename_pos(-1);
+            }
+            // La fila editada puede haber diferido una actualización de metadatos. Al
+            // terminar o cambiar de sesión, invalidar su firma una vez para reconciliarla.
+            let active_rename_pane = ctrl.borrow().rename_active.as_ref().map(|r| r.pane.0);
+            let finished: Vec<u64> = {
+                let mut pending = deferred_rename_rows.borrow_mut();
+                let done: Vec<_> = pending
+                    .iter()
+                    .copied()
+                    .filter(|id| Some(*id) != active_rename_pane)
+                    .collect();
+                pending.retain(|id| Some(*id) == active_rename_pane);
+                done
+            };
+            for id in finished {
+                last_row_sig.borrow_mut().remove(&id);
+                row_sources.borrow_mut().remove(&id);
+                deep_presentations.borrow_mut().remove(&id);
+            }
+            // El índice es presentación, no identidad. Antes de mutar el modelo, resolver
+            // la ruta anclada en la vista actual. Si un listado parcial aún no la contiene,
+            // conservar las filas existentes hasta que aparezca o termine la edición.
+            let rename_view = {
+                let c = ctrl.borrow();
+                let m = models.borrow();
+                c.rename_active.as_ref().and_then(|rename| {
+                    if ui.get_rename_pane() != rename.pane.0 as i32
+                        || !m.pane_ids.contains(&rename.pane)
+                    {
+                        return None;
+                    }
+                    let displayed_count = m.per_pane.get(&rename.pane)?.rows.row_count();
+                    if c.is_deep_active(rename.pane) {
+                        return Some((
+                            rename.pane,
+                            rename.pos,
+                            c.deep_position_of(rename.pane, &rename.source),
+                            c.deep_visible_count(rename.pane),
+                            displayed_count,
+                        ));
+                    }
+                    let files = c.ws.pane(rename.pane)?.files.as_ref()?;
+                    let pos = if files
+                        .view_entry_at(rename.pos)
+                        .is_some_and(|entry| entry.path == rename.source)
+                    {
+                        Some(rename.pos)
+                    } else {
+                        files.view_indices_shared().iter().position(|&index| {
+                            files
+                                .entries
+                                .get(index)
+                                .is_some_and(|entry| entry.path == rename.source)
+                        })
+                    };
+                    Some((
+                        rename.pane,
+                        rename.pos,
+                        pos,
+                        files.view_len(),
+                        displayed_count,
+                    ))
+                })
+            };
+            let mut hold_rename_rows = None;
+            if let Some((pane, old_pos, pos, current_count, displayed_count)) = rename_view {
+                if let Some(pos) = pos {
+                    if pos != old_pos || current_count != displayed_count {
+                        // Invalidar el editor anterior antes de que Slint lo desmonte; el
+                        // guard de UI también evita callbacks mientras `ctrl` está prestado.
+                        let session = ctrl.borrow_mut().reposition_rename(pos);
+                        if let Some(session) = session {
+                            ui.set_rename_repositioning(true);
+                            ui.set_rename_session(session as i32);
+                            ui.set_rename_pos(pos as i32);
+                        }
+                    }
+                } else {
+                    hold_rename_rows = Some(pane);
+                }
             }
             // `borrow_mut` porque `rows_of` necesita mutar el IconCache (decodifica on-demand).
             let mut c = ctrl.borrow_mut();
@@ -284,21 +460,28 @@ pub(crate) fn build_sync(
                             c.rows_signature(id, hl_secs, hl_now)
                         };
                         let mut sigs = last_row_sig.borrow_mut();
-                        let rows_unchanged = match sig {
-                            Some(s) => {
-                                if sigs.get(&id.0) == Some(&s) {
-                                    true // misma firma: filas idénticas, no reconstruir
-                                } else {
-                                    sigs.insert(id.0, s);
+                        let rows_unchanged = if hold_rename_rows == Some(id) {
+                            sigs.remove(&id.0);
+                            row_sources.borrow_mut().remove(&id.0);
+                            deep_presentations.borrow_mut().remove(&id.0);
+                            true
+                        } else {
+                            match sig {
+                                Some(s) => {
+                                    if sigs.get(&id.0) == Some(&s) {
+                                        true // misma firma: filas idénticas, no reconstruir
+                                    } else {
+                                        sigs.insert(id.0, s);
+                                        false
+                                    }
+                                }
+                                None => {
+                                    // Sin cache este tick: limpiar la firma guardada para que el
+                                    // PRÓXIMO tick (ya sin fresh) reconstruya y vuelva a sembrarla.
+                                    sigs.remove(&id.0);
+                                    row_sources.borrow_mut().remove(&id.0);
                                     false
                                 }
-                            }
-                            None => {
-                                // Sin cache este tick: limpiar la firma guardada para que el
-                                // PRÓXIMO tick (ya sin fresh) reconstruya y vuelva a sembrarla.
-                                sigs.remove(&id.0);
-                                row_sources.borrow_mut().remove(&id.0);
-                                false
                             }
                         };
                         drop(sigs);
@@ -313,6 +496,20 @@ pub(crate) fn build_sync(
                             .collect();
                         if !rows_unchanged {
                             let pm = m.models_for(id);
+                            let next_deep = if c
+                                .rename_active
+                                .as_ref()
+                                .is_none_or(|rename| rename.pane != id)
+                            {
+                                deep_presentation(&c, id, hl_now)
+                            } else {
+                                None
+                            };
+                            let deep_updated = next_deep.as_ref().is_some_and(|next| {
+                                deep_presentations.borrow().get(&id.0).is_some_and(|old| {
+                                    apply_deep_presentation(&c, id, &pm.rows, old, next)
+                                })
+                            });
                             // Los eventos Modified estables pueden recalcular solo las filas
                             // afectadas. Altas, bajas, reordenamientos y demás cambios mantienen
                             // la reconciliación completa/incremental de abajo.
@@ -373,7 +570,9 @@ pub(crate) fn build_sync(
                                     .filter(|positions| positions.len() <= pm.rows.row_count() / 4)
                             });
 
-                            if let Some((view, plain_rows)) = appended_rows {
+                            if deep_updated {
+                                // Ya se actualizaron solo las marcas afectadas.
+                            } else if let Some((view, plain_rows)) = appended_rows {
                                 let rows: Vec<RowData> = {
                                     let _metric = crate::metrics::span("ui.rows_convert");
                                     plain_rows.into_iter().map(to_row_data).collect()
@@ -486,8 +685,20 @@ pub(crate) fn build_sync(
                                         .filter(|r| r.pane == id)
                                         .map(|r| r.pos);
                                     for (i, row) in rows.into_iter().enumerate() {
+                                        // Solo congelar si sigue siendo la misma fila: tras
+                                        // un reordenamiento con igual longitud, la posición
+                                        // nueva puede contener todavía otro nombre en el modelo.
                                         if rename_row == Some(i) {
-                                            continue;
+                                            if let Some(old) = pm.rows.row_data(i) {
+                                                if old.name == row.name {
+                                                    if !row_data_eq(&old, &row) {
+                                                        deferred_rename_rows
+                                                            .borrow_mut()
+                                                            .insert(id.0);
+                                                    }
+                                                    continue;
+                                                }
+                                            }
                                         }
                                         if pm
                                             .rows
@@ -519,6 +730,12 @@ pub(crate) fn build_sync(
                                     row_sources.borrow_mut().remove(&id.0);
                                 }
                             }
+                            if let Some(mut next) = next_deep {
+                                next.row_count = pm.rows.row_count();
+                                deep_presentations.borrow_mut().insert(id.0, next);
+                            } else {
+                                deep_presentations.borrow_mut().remove(&id.0);
+                            }
                             set_vec_if_changed(&pm.columns, cols);
                             set_vec_if_changed(&pm.col_menu, col_menu);
                         } else {
@@ -530,7 +747,7 @@ pub(crate) fn build_sync(
                     Some(PanePurpose::Tree) => {
                         let rows: Vec<TreeRow> =
                             c.tree_rows(id).into_iter().map(to_tree_row).collect();
-                        m.models_for(id).tree.set_vec(rows);
+                        m.models_for(id).tree.reconcile(rows);
                     }
                     Some(PanePurpose::Favorites) => {
                         m.models_for(id).favs.set_vec(favs.clone());
@@ -937,26 +1154,35 @@ pub(crate) fn build_sync(
             ui.set_clipboard_history_rows(ModelRc::from(Rc::new(VecModel::from(clipboard_rows))));
             // Menú contextual: posición + si hay menú nativo disponible (hay HWND).
             let ctx = match &c.context_menu {
-                Some(cm) => ContextMenuVm {
+                Some(cm) if c.active_id() == Some(cm.pane) => ContextMenuVm {
                     active: true,
+                    deep_mode: c.active_id().is_some_and(|id| c.is_deep_active(id)),
+                    single_target: cm.targets.len() == 1,
                     x: cm.x,
                     y: cm.y,
                     has_native: naygo_hwnd(&ui).is_some(),
                     has_wt: c.windows_terminal_available(),
                     folder_mode: cm.folder_mode,
                     is_single_zip: c.sel_is_single_zip(),
-                    has_selection: !c.selected_paths().is_empty(),
+                    has_selection: if c.active_id().is_some_and(|id| c.is_deep_active(id)) {
+                        !cm.targets.is_empty()
+                    } else {
+                        !c.selected_paths().is_empty()
+                    },
                     // Carpeta objetivo (habilita el submenú "Abrir ▸"): flag YA cacheado al abrir
                     // el menú (evita un `stat` por tick, costoso en shares de red lentos).
                     target_is_folder: cm.target_is_folder,
                     show_open_here: cm.show_open_here,
-                    target_is_executable: cm
-                        .targets
-                        .first()
-                        .is_some_and(|p| naygo_platform::open::can_run_as_administrator(p)),
+                    target_is_executable: cm.targets.len() == 1
+                        && cm
+                            .targets
+                            .first()
+                            .is_some_and(|p| naygo_platform::open::can_run_as_administrator(p)),
                 },
-                None => ContextMenuVm {
+                _ => ContextMenuVm {
                     active: false,
+                    deep_mode: false,
+                    single_target: false,
                     x: 0.0,
                     y: 0.0,
                     has_native: false,
@@ -1092,11 +1318,30 @@ pub(crate) fn build_sync(
                 Some(b) => {
                     use naygo_core::batch_rename::{CaseTransform, RowStatus};
                     let rows_src = c.batch_preview();
+                    let first_parent = b
+                        .items
+                        .first()
+                        .and_then(|item| item.path.parent())
+                        .map(naygo_core::path_identity::key);
+                    let show_parent = b.items.iter().any(|item| {
+                        item.path.parent().map(naygo_core::path_identity::key) != first_parent
+                    });
                     let rows: Vec<BatchRowVm> = rows_src
                         .iter()
                         .map(|r| BatchRowVm {
                             old_name: SharedString::from(r.old_name.as_str()),
                             new_name: SharedString::from(r.new_name.as_str()),
+                            parent: if show_parent {
+                                let parent = r.path.parent().unwrap_or(&b.base_dir);
+                                let relative = parent.strip_prefix(&b.base_dir).unwrap_or(parent);
+                                SharedString::from(if relative.as_os_str().is_empty() {
+                                    ".".to_string()
+                                } else {
+                                    relative.display().to_string()
+                                })
+                            } else {
+                                SharedString::new()
+                            },
                             status: match r.status {
                                 RowStatus::Ok => 0,
                                 RowStatus::Unchanged => 1,
@@ -1108,6 +1353,7 @@ pub(crate) fn build_sync(
                         .collect();
                     BatchRenameVm {
                         active: true,
+                        show_parent,
                         template: SharedString::from(b.spec.template.as_str()),
                         find: SharedString::from(b.spec.find.as_str()),
                         replace: SharedString::from(b.spec.replace.as_str()),
@@ -1128,6 +1374,7 @@ pub(crate) fn build_sync(
                 }
                 None => BatchRenameVm {
                     active: false,
+                    show_parent: false,
                     template: SharedString::new(),
                     find: SharedString::new(),
                     replace: SharedString::new(),
@@ -1489,6 +1736,904 @@ pub(crate) fn build_apply_device_change(
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "medición sintética manual; no es una prueba de rendimiento en CI"]
+    fn benchmark_marcas_parciales_vista_profunda() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::keymap::Action;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+        let id = c.active_id().unwrap();
+        c.deep_start(id);
+        let job = c.deep_job.as_mut().unwrap();
+        *job.items = (0..100_000)
+            .map(|i| {
+                let name = format!("archivo-{i:06}.txt");
+                (
+                    Entry {
+                        path: root.path().join(&name),
+                        name,
+                        kind: EntryKind::File,
+                        size: Some(64),
+                        modified: None,
+                        created: None,
+                        hidden: false,
+                        system: false,
+                    },
+                    0,
+                )
+            })
+            .collect();
+        let path = job.items[99_950].0.path.clone();
+        job.focused_path = Some(path.clone());
+        job.selected_paths.insert(path);
+        job.selection_revision += 1;
+        let rows = c
+            .rows_of(id, 0, std::time::Instant::now())
+            .into_iter()
+            .map(to_row_data)
+            .collect::<Vec<_>>();
+        let model = VecModel::from(rows);
+        let mut previous = deep_presentation(&c, id, std::time::Instant::now()).unwrap();
+        previous.row_count = model.row_count();
+        let mut samples = Vec::new();
+        for _ in 0..21 {
+            assert!(c.run_action(Action::MoveDown));
+            let mut next = deep_presentation(&c, id, std::time::Instant::now()).unwrap();
+            next.row_count = model.row_count();
+            let t = std::time::Instant::now();
+            assert!(apply_deep_presentation(&c, id, &model, &previous, &next));
+            samples.push(t.elapsed().as_secs_f64() * 1000.0);
+            previous = next;
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        println!("deep-partial n=100000 apply_ms={samples:?}");
+        assert_eq!(model.iter().filter(|row| row.selected).count(), 1);
+    }
+
+    #[test]
+    fn conflict_during_inline_rename_survives_real_sync_and_controller() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::ops::ConflictAction;
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+            Key, Platform, WindowAdapter, WindowEvent,
+        };
+        use std::time::{Duration, SystemTime};
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+        fn pump(adapter: &MinimalSoftwareWindow) {
+            for _ in 0..5 {
+                slint::platform::update_timers_and_animations();
+                adapter.draw_if_needed(|renderer| {
+                    let mut pixels = vec![slint::Rgb8Pixel::default(); 1280 * 800];
+                    renderer.render(&mut pixels, 1280);
+                });
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
+        ui.set_splits(ModelRc::from(models.borrow().splits.clone()));
+        ui.set_settings_vm(crate::vm_builders::build_settings_vm(&ctrl.borrow().config));
+        let area_of: Rc<dyn Fn() -> Rect> = Rc::new(|| Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 800.0,
+        });
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            area_of.clone(),
+        );
+        let ctx = crate::wire::WireCtx {
+            ctrl: ctrl.clone(),
+            sync_rows: sync.sync_rows.clone(),
+            sync_layout: sync.sync_layout.clone(),
+            start_timer: Rc::new(|| {}),
+            area_of,
+            palette_cmds: Rc::new(RefCell::new(Vec::new())),
+            palette_cmd_indices: Rc::new(RefCell::new(Vec::new())),
+            pending_eject: Rc::new(RefCell::new(None)),
+            pending_eject_panes: Rc::new(RefCell::new(Vec::new())),
+            pending_undo: Rc::new(RefCell::new(None)),
+        };
+        crate::callbacks_rename::wire_rename(&ui, &ctx);
+        (sync.sync_layout)();
+        let id = ctrl.borrow().active_id().unwrap();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries = vec![Entry {
+                name: "file.txt".into(),
+                path: root.join("file.txt"),
+                kind: EntryKind::File,
+                size: Some(1),
+                modified: Some(SystemTime::UNIX_EPOCH),
+                created: None,
+                hidden: false,
+                system: false,
+            }];
+            files.entries_changed();
+            files.select_single(0);
+        }
+        (sync.sync_rows)();
+        ui.show().unwrap();
+        adapter.set_size(slint::PhysicalSize::new(1280, 800));
+        pump(&adapter);
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        // F2 cicla la selección, pero no puede reemplazar el borrador por el nombre original.
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::F2.into(),
+        });
+        pump(&adapter);
+        assert_eq!(
+            ui.get_rename_draft().as_str(),
+            "x.txt",
+            "F2 conserva el nombre editado"
+        );
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "log".into() });
+        pump(&adapter);
+        assert_eq!(
+            ui.get_rename_draft().as_str(),
+            "x.log",
+            "F2 selecciona la extensión del borrador"
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Home.into(),
+        });
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::RightArrow.into(),
+        });
+        pump(&adapter);
+        // Ejecutar el worker real sobre datos temporales, mientras el editor está activo.
+        let source_dir = temp.path().join("worker-source");
+        let dest_dir = temp.path().join("worker-dest");
+        std::fs::create_dir(&source_dir).unwrap();
+        std::fs::create_dir(&dest_dir).unwrap();
+        std::fs::write(source_dir.join("conflict.txt"), b"incoming").unwrap();
+        std::fs::write(dest_dir.join("conflict.txt"), b"existing").unwrap();
+        ctrl.borrow_mut().ops.start_op(
+            naygo_core::ops::transfer(
+                false,
+                vec![source_dir.join("conflict.txt")],
+                dest_dir.clone(),
+            ),
+            "test".into(),
+            false,
+        );
+        let mut conflict_id = None;
+        for _ in 0..5000 {
+            let mut c = ctrl.borrow_mut();
+            c.ops.pump_ops();
+            if let Some(crate::ops_ctrl::OpDialog::Conflict { op_id, .. }) =
+                c.ops.pending_dialog.as_ref()
+            {
+                conflict_id = Some(*op_id);
+                break;
+            }
+            drop(c);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let conflict_id = conflict_id.expect("el worker debe producir un conflicto real");
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(
+            ui.get_op_dialog().kind,
+            2,
+            "el conflicto del worker llega a la ventana"
+        );
+        assert!(
+            ctrl.borrow().rename_active.is_some(),
+            "el conflicto no confirma la sesión"
+        );
+        assert_eq!(ui.get_rename_draft().as_str(), "x.log");
+        ctrl.borrow_mut()
+            .ops
+            .resolve_conflict(conflict_id, ConflictAction::Skip, false);
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_op_dialog().kind, 0);
+        for _ in 0..5000 {
+            let mut c = ctrl.borrow_mut();
+            c.ops.pump_ops();
+            if c.ops.active_ops.iter().all(|op| op.summary.is_some()) {
+                break;
+            }
+            drop(c);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            ctrl.borrow()
+                .ops
+                .active_ops
+                .iter()
+                .all(|op| op.summary.is_some()),
+            "el worker debe terminar tras omitir el conflicto"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("conflict.txt")).unwrap(),
+            b"existing"
+        );
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "xy.log");
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        assert!(
+            ctrl.borrow().rename_active.is_none(),
+            "Escape cancela la sesión real"
+        );
+        assert_eq!(ui.get_rename_pane(), -1);
+        assert!(ctrl.borrow().ws.pane(id).is_some());
+
+        // Un cierre desde el controlador invalida primero la sesión; el sync debe retirar
+        // las propiedades de UI sin que el callback de pérdida de foco vuelva a prestar ctrl.
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ctrl.borrow_mut().rename_cancel();
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_rename_pane(), -1);
+        assert_eq!(ui.get_rename_pos(), -1);
+
+        // Un cambio de panel mientras el conflicto tiene el foco conserva F2 suspendido.
+        // La ventana real debe llevar las flechas al segundo panel y F2 de vuelta al borrador.
+        crate::callbacks_nav::wire_nav_keys(&ui, &ctx);
+        let second;
+        {
+            let mut c = ctrl.borrow_mut();
+            c.add_pane_split_dir(naygo_core::workspace::layout::SplitDir::Horizontal, false);
+            second = c.active_id().unwrap();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries = ["a.txt", "b.txt"]
+                .into_iter()
+                .map(|name| Entry {
+                    name: name.into(),
+                    path: root.join(name),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                })
+                .collect();
+            files.entries_changed();
+            files.select_single(0);
+            c.set_active(id);
+        }
+        (sync.sync_layout)();
+        pump(&adapter);
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        ctrl.borrow_mut().ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+            sources: vec![],
+            permanent: false,
+        });
+        (sync.sync_rows)();
+        pump(&adapter);
+        ctrl.borrow_mut().set_active(second);
+        (sync.sync_rows)();
+        pump(&adapter);
+        ctrl.borrow_mut().ops.pending_dialog = None;
+        (sync.sync_rows)();
+        pump(&adapter);
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::DownArrow.into(),
+        });
+        pump(&adapter);
+        assert_eq!(ctrl.borrow().ws.active_files().unwrap().focused, Some(1));
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::F2.into(),
+        });
+        pump(&adapter);
+        assert_eq!(ctrl.borrow().active_id(), Some(id));
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "xy.txt");
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        assert!(ctrl.borrow().rename_active.is_none());
+
+        // Al ocultar y volver a crear una pestaña, el estado de selección pertenece a la
+        // sesión y no al FilePanel desmontado: no se debe seleccionar el borrador otra vez.
+        {
+            let mut c = ctrl.borrow_mut();
+            c.stack_into(second, id);
+            c.set_active_tab(id);
+        }
+        (sync.sync_layout)();
+        pump(&adapter);
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        ctrl.borrow_mut().ops.pending_dialog = Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+            sources: vec![],
+            permanent: false,
+        });
+        (sync.sync_rows)();
+        pump(&adapter);
+        ctrl.borrow_mut().set_active_tab(second);
+        (sync.sync_layout)();
+        pump(&adapter);
+        ctrl.borrow_mut().ops.pending_dialog = None;
+        (sync.sync_rows)();
+        pump(&adapter);
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::F2.into(),
+        });
+        pump(&adapter);
+        assert_eq!(ctrl.borrow().active_id(), Some(id));
+        assert!(ctrl
+            .borrow()
+            .tab_groups()
+            .iter()
+            .any(|(members, active)| members.get(*active) == Some(&id)));
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
+        pump(&adapter);
+        assert_eq!(
+            ui.get_rename_draft().as_str(),
+            "x.txty",
+            "la selección inicial no reemplaza el borrador al recrear la pestaña"
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        assert!(ctrl.borrow().rename_active.is_none());
+
+        // Una llegada que se ordena antes del archivo editado no debe mover el editor
+        // a esa nueva fila ni perder su borrador.
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+        pump(&adapter);
+        let old_session = ui.get_rename_session();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.push(Entry {
+                name: "a.txt".into(),
+                path: root.join("a.txt"),
+                kind: EntryKind::File,
+                size: Some(1),
+                modified: Some(SystemTime::UNIX_EPOCH),
+                created: None,
+                hidden: false,
+                system: false,
+            });
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(
+            ui.get_rename_pos(),
+            1,
+            "el editor sigue al archivo original"
+        );
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        assert_ne!(ui.get_rename_session(), old_session);
+        ui.invoke_rename_commit(id.0 as i32, old_session, 0, "wrong.txt".into());
+        assert!(
+            ctrl.borrow().rename_active.is_some(),
+            "un editor viejo no cierra la sesión"
+        );
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txty");
+
+        // Durante un listado parcial sin la fuente se conserva la vista previa; al volver
+        // la ruta, se reconcilian los cambios y el editor vuelve a seguirla.
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.retain(|entry| entry.name != "file.txt");
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            2
+        );
+        assert_eq!(ui.get_rename_pos(), 1);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "z".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyz");
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            for name in ["b.txt", "file.txt"] {
+                files.entries.push(Entry {
+                    name: name.into(),
+                    path: root.join(name),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+            }
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_rename_pos(), 2);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyz");
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            3
+        );
+
+        // Igual longitud: el destino del editor tenía otra fila en el modelo anterior.
+        // Debe actualizarse la identidad subyacente sin descartar el borrador.
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.retain(|entry| entry.name == "file.txt");
+            for name in ["y.txt", "z.txt"] {
+                files.entries.push(Entry {
+                    name: name.into(),
+                    path: root.join(name),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+            }
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_rename_pos(), 0);
+        assert_eq!(
+            models
+                .borrow()
+                .per_pane
+                .get(&id)
+                .unwrap()
+                .rows
+                .row_data(0)
+                .unwrap()
+                .name,
+            "file.txt"
+        );
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "w".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyzw");
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.retain(|entry| entry.name == "file.txt");
+            for name in ["a.txt", "b.txt"] {
+                files.entries.push(Entry {
+                    name: name.into(),
+                    path: root.join(name),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+            }
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_rename_pos(), 2);
+        assert_eq!(
+            models
+                .borrow()
+                .per_pane
+                .get(&id)
+                .unwrap()
+                .rows
+                .row_data(2)
+                .unwrap()
+                .name,
+            "file.txt"
+        );
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyzw");
+        let cells_before: Vec<String> = models
+            .borrow()
+            .per_pane
+            .get(&id)
+            .unwrap()
+            .rows
+            .row_data(2)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files
+                .entries
+                .iter_mut()
+                .find(|e| e.name == "file.txt")
+                .unwrap()
+                .size = Some(99999);
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        let cells_during: Vec<String> = models
+            .borrow()
+            .per_pane
+            .get(&id)
+            .unwrap()
+            .rows
+            .row_data(2)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            cells_during, cells_before,
+            "la fila editada conserva su delegate"
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        let cells_after: Vec<String> = models
+            .borrow()
+            .per_pane
+            .get(&id)
+            .unwrap()
+            .rows
+            .row_data(2)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_ne!(
+            cells_after, cells_before,
+            "se actualizan los metadatos diferidos al cancelar"
+        );
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.select_single(2);
+        }
+
+        // Cancelar mientras falta la fuente libera la vista retenida inmediatamente.
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.retain(|entry| entry.name != "file.txt");
+            files.entries_changed();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            3
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            2
+        );
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
+            files.entries.push(Entry {
+                name: "file.txt".into(),
+                path: root.join("file.txt"),
+                kind: EntryKind::File,
+                size: Some(1),
+                modified: Some(SystemTime::UNIX_EPOCH),
+                created: None,
+                hidden: false,
+                system: false,
+            });
+            files.entries_changed();
+            files.select_single(2);
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+
+        // Una navegación externa del panel invalida el editor antes de sincronizar filas.
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "z".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "z.txt");
+        let dest = root.join("dest");
+        std::fs::create_dir(&dest).unwrap();
+        ctrl.borrow_mut().open_in_pane(id, dest);
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert!(ctrl.borrow().rename_active.is_none());
+        assert_eq!(ui.get_rename_pane(), -1);
+        assert_eq!(ui.get_rename_pos(), -1);
+
+        // El editor profundo sigue la ruta si llegan filas y conserva el borrador si la fuente
+        // desaparece transitoriamente. El modelo y los callbacks son los de la ventana real.
+        {
+            let mut c = ctrl.borrow_mut();
+            let current =
+                c.ws.pane(id)
+                    .unwrap()
+                    .files
+                    .as_ref()
+                    .unwrap()
+                    .current_dir
+                    .clone();
+            c.deep_start(id);
+            *c.deep_job.as_mut().unwrap().items = vec![(
+                Entry {
+                    name: "profundo.txt".into(),
+                    path: current.join("profundo.txt"),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: None,
+                    created: None,
+                    hidden: false,
+                    system: false,
+                },
+                1,
+            )];
+            c.run_action(naygo_core::keymap::Action::MoveDown);
+        }
+        (sync.sync_rows)();
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().expect("editor profundo");
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: "borrador".into(),
+        });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "borrador.txt");
+        let old_session = ui.get_rename_session();
+        {
+            let mut c = ctrl.borrow_mut();
+            let job = c.deep_job.as_mut().unwrap();
+            let mut new_entry = job.items[0].0.clone();
+            new_entry.name = "antes.txt".into();
+            new_entry.path = new_entry.path.with_file_name("antes.txt");
+            job.items.insert(0, (new_entry, 1));
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(ui.get_rename_pos(), 1);
+        assert_ne!(ui.get_rename_session(), old_session);
+        assert_eq!(ui.get_rename_draft().as_str(), "borrador.txt");
+        {
+            let mut c = ctrl.borrow_mut();
+            c.deep_job.as_mut().unwrap().items.remove(1);
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            2
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        pump(&adapter);
+        assert!(ctrl.borrow().rename_active.is_none());
+        assert_eq!(
+            models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
+            1
+        );
+        {
+            let mut c = ctrl.borrow_mut();
+            let job = c.deep_job.as_mut().unwrap();
+            let mut second = job.items[0].0.clone();
+            second.name = "otro.txt".into();
+            second.path = second.path.with_file_name("otro.txt");
+            job.items.push((second, 1));
+            assert!(c.run_action(naygo_core::keymap::Action::SelectAll));
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert!(
+            models
+                .borrow()
+                .per_pane
+                .get(&id)
+                .unwrap()
+                .rows
+                .row_data(0)
+                .unwrap()
+                .selected
+        );
+        assert!(
+            models
+                .borrow()
+                .per_pane
+                .get(&id)
+                .unwrap()
+                .rows
+                .row_data(1)
+                .unwrap()
+                .selected
+        );
+        ctrl.borrow_mut().open_row_context_menu(id, 0, 20.0, 20.0);
+        (sync.sync_rows)();
+        let menu = ui.get_ctx_menu();
+        assert!(menu.active && menu.deep_mode && !menu.single_target && menu.has_selection);
+        assert_eq!(ctrl.borrow().context_targets().len(), 2);
+        // Con el mismo recorrido, una flecha solo cambia marcas; si cambia el orden,
+        // la ruta parcial debe rechazarse para que la sincronización reconstruya las filas.
+        ctrl.borrow_mut().close_context_menu();
+        let mut previous =
+            deep_presentation(&ctrl.borrow(), id, std::time::Instant::now()).unwrap();
+        previous.row_count = models.borrow().per_pane.get(&id).unwrap().rows.row_count();
+        let mut broad = previous.clone();
+        for n in 0..9 {
+            broad.selected.insert(root.join(format!("distinto-{n}")));
+        }
+        assert!(
+            !apply_deep_presentation(
+                &ctrl.borrow(),
+                id,
+                &models.borrow().per_pane.get(&id).unwrap().rows,
+                &previous,
+                &broad
+            ),
+            "un cambio amplio usa reconciliación completa"
+        );
+        assert!(ctrl
+            .borrow_mut()
+            .run_action(naygo_core::keymap::Action::MoveUp));
+        let current = deep_presentation(&ctrl.borrow(), id, std::time::Instant::now()).unwrap();
+        {
+            let m = models.borrow();
+            let rows = &m.per_pane.get(&id).unwrap().rows;
+            assert!(apply_deep_presentation(
+                &ctrl.borrow(),
+                id,
+                rows,
+                &previous,
+                &current
+            ));
+            assert_eq!(rows.iter().filter(|row| row.selected).count(), 1);
+            assert_eq!(rows.iter().filter(|row| row.focused).count(), 1);
+        }
+        ctrl.borrow_mut()
+            .deep_job
+            .as_mut()
+            .unwrap()
+            .items
+            .swap(0, 1);
+        let changed = deep_presentation(&ctrl.borrow(), id, std::time::Instant::now()).unwrap();
+        assert!(!apply_deep_presentation(
+            &ctrl.borrow(),
+            id,
+            &models.borrow().per_pane.get(&id).unwrap().rows,
+            &previous,
+            &changed
+        ));
+        (sync.sync_rows)();
+        {
+            let mut c = ctrl.borrow_mut();
+            c.close_context_menu();
+            let job = c.deep_job.as_mut().unwrap();
+            let root = job.root.clone();
+            job.items[0].0.name = "igual.txt".into();
+            job.items[0].0.path = root.join("igual.txt");
+            job.items[1].0.name = "igual.txt".into();
+            job.items[1].0.path = root.join("carpeta").join("igual.txt");
+            job.done = true;
+            job.partial = false;
+            job.cancelled = false;
+            assert!(c.run_action(naygo_core::keymap::Action::SelectAll));
+            c.batch_open();
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        let batch = ui.get_batch();
+        assert!(batch.show_parent);
+        assert_eq!(batch.rows.row_data(0).unwrap().parent.as_str(), ".");
+        assert_eq!(batch.rows.row_data(1).unwrap().parent.as_str(), "carpeta");
+    }
+
     fn to_vec(model: &VecModel<i32>) -> Vec<i32> {
         model.iter().collect()
     }
@@ -1552,6 +2697,7 @@ mod tests {
             name: SharedString::from("archivo.txt"),
             cells: ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from(cell)]))),
             is_dir: false,
+            drop_folder: SharedString::new(),
             selected: false,
             focused: false,
             cut: false,
@@ -1567,6 +2713,12 @@ mod tests {
 
         assert!(row_data_eq(&make_row("1 KiB"), &make_row("1 KiB")));
         assert!(!row_data_eq(&make_row("1 KiB"), &make_row("2 KiB")));
+        let mut folder = make_row("Carpeta");
+        folder.is_dir = true;
+        folder.drop_folder = "C:/a/destino".into();
+        let mut other = folder.clone();
+        other.drop_folder = "C:/b/destino".into();
+        assert!(!row_data_eq(&folder, &other));
     }
 
     #[test]

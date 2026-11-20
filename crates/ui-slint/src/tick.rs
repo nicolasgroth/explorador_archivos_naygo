@@ -14,10 +14,12 @@ use crate::workspace_ctrl::WorkspaceCtrl;
 use crate::*;
 use naygo_core::workspace::layout::Rect;
 use naygo_core::workspace::PaneId;
-use slint::{ModelRc, SharedString, TimerMode, VecModel};
+use slint::{Model, ModelRc, SharedString, TimerMode, VecModel};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+pub(crate) const TOP_BAR_H: f32 = 34.0;
 
 /// Dependencias que el tick necesita del arranque de `main` (canales, handles y flags
 /// compartidos). Agruparlas evita una firma de 15 parámetros sueltos.
@@ -275,7 +277,6 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 // `content` empieza en y=TOP_BAR_H, x=0), así que en X no hay offset lateral.
                 // ScreenToClient ya quitó el marco del SO: NO restar nada más por ese lado.
                 // TOP_BAR_H = 34px lógicos (alto de la barra superior de Naygo).
-                const TOP_BAR_H: f32 = 34.0;
                 // HOVER del arrastre (resaltar el panel bajo el cursor: borde + título). Drenar
                 // ANTES del drop. `Over{screen}` → coords de contenido (MISMA fórmula que el
                 // drop) → `pane_at` (paneles Files o Bandeja) → `set_drag_over`. `Leave` (salir o
@@ -348,9 +349,11 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                             let scale = ui.window().scale_factor().max(0.01);
                             let cx = x as f32 / scale;
                             let cy = y as f32 / scale - TOP_BAR_H;
-                            ctrl.try_borrow()
-                                .ok()?
-                                .capture_external_drop_destination(cx, cy)
+                            ctrl.try_borrow().ok()?.capture_external_drop_destination(
+                                cx,
+                                cy,
+                                y as f32 / scale,
+                            )
                         });
                         let _ = response.try_send(destination);
                         continue;
@@ -405,11 +408,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                             .captured_destination
                             .as_ref()
                             .is_some_and(|destination| {
-                                ctrl.borrow()
-                                    .ws
-                                    .pane(PaneId(destination.pane_id))
-                                    .and_then(|pane| pane.files.as_ref())
-                                    .is_some_and(|files| files.current_dir == destination.path)
+                                ctrl.borrow().external_destination_still_open(destination)
                             });
                     let routed = if !payload.internal_source
                         && payload.captured_destination.is_none()
@@ -467,8 +466,8 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                             if let Some(hwnd) = naygo_hwnd(&ui) {
                                 naygo_platform::window::bring_to_front(hwnd);
                             }
-                            // Punto del drop en coords de CLIENTE (físicas) vía Win32. Si no hay
-                            // Si no se puede convertir, no se selecciona un destino implícito.
+                            // Convertir el punto del drop a coords físicas del cliente Win32.
+                            // Si falla la conversión, no hay destino implícito.
                             let client = naygo_hwnd(&ui).and_then(|hwnd| {
                                 naygo_platform::window::screen_to_client(
                                     hwnd,
@@ -480,9 +479,15 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                                 let scale = ui.window().scale_factor().max(0.01);
                                 let cx = client_x as f32 / scale;
                                 let cy = client_y as f32 / scale - TOP_BAR_H;
+                                let target = ctrl.borrow().pane_at(cx, cy);
+                                let rendered = ui.get_panes().iter().find(|pane| {
+                                    target == Some(PaneId(pane.id as u64)) && pane.purpose == 0
+                                });
                                 routed = ctrl.borrow_mut().drop_at_from_ole(
                                     cx,
                                     cy,
+                                    client_y as f32 / scale,
+                                    rendered.as_ref().map(|pane| &pane.rows),
                                     payload.move_,       // move_hint (Shift del OLE)
                                     payload.copy_forced, // copy_forced (Ctrl del OLE)
                                     payload.internal_source,
@@ -884,6 +889,10 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                 }
                 let sync_done = ctrl.borrow_mut().pump_sync();
                 let text_transform_done = ctrl.borrow_mut().pump_text_transform();
+                let listing_export_done = ctrl.borrow_mut().pump_listing_export();
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_listing_export_active(!listing_export_done);
+                }
                 // Extraer el error en una sentencia separada. Un `if let` sobre `borrow_mut()`
                 // mantiene vivo el préstamo mutable durante TODO el cuerpo, por lo que leer la
                 // configuración para el toast provocaba `RefCell already mutably borrowed`.
@@ -1003,6 +1012,7 @@ pub(crate) fn build_start_timer(deps: TickDeps) -> Rc<dyn Fn()> {
                     && ops_done
                     && sync_done
                     && text_transform_done
+                    && listing_export_done
                     && size_done
                     && meta_done
                     && zone_unblock_done

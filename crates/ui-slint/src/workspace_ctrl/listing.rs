@@ -89,6 +89,12 @@ impl WorkspaceCtrl {
     /// el scroll del listado siga a la fila enfocada al navegar por teclado (la ListView ya no es
     /// interactiva y no auto-scrollea sola, ver C1).
     pub fn focused_view_of(&self, id: PaneId) -> i32 {
+        if self.is_deep_active(id) {
+            return self
+                .deep_focused_position(id)
+                .map(|pos| pos as i32)
+                .unwrap_or(-1);
+        }
         self.ws
             .pane(id)
             .and_then(|p| p.files.as_ref())
@@ -359,10 +365,23 @@ impl WorkspaceCtrl {
 
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
     pub fn start_listing(&mut self, id: PaneId, dir: std::path::PathBuf) {
+        let cambia_carpeta = self.last_listing_dirs.get(&id) != Some(&dir);
+        // Un editor anclado a otra carpeta no puede seguir sobre la vista nueva. Cancelar
+        // antes de publicar filas invalida callbacks tardíos; refrescar la misma carpeta
+        // conserva la sesión. No hace I/O ni confirma el borrador.
+        if cambia_carpeta
+            && self
+                .rename_active
+                .as_ref()
+                .is_some_and(|rename| rename.pane == id)
+        {
+            self.rename_cancel();
+        }
         if let Some(l) = self.listings.remove(&id) {
             l.cancel();
         }
         self.pending_file_listings.remove(&id);
+        self.automatic_listings.remove(&id);
         // Una comparación describe exactamente los snapshots cargados; navegar o refrescar uno
         // de sus lados la invalida para no dejar marcas obsoletas sobre nombres nuevos.
         if self.comparison.remove(&id).is_some() {
@@ -383,7 +402,10 @@ impl WorkspaceCtrl {
         // persiste hasta Esc o navegar). Un refresh de la MISMA carpeta (F5) lo conserva.
         // La referencia es `last_listing_dirs` (lo último PEDIDO para el panel), NO
         // `f.current_dir`: hay caminos que la mutan antes de llamar aquí (navigate_pane_to).
-        let cambia_carpeta = self.last_listing_dirs.get(&id) != Some(&dir);
+        if cambia_carpeta {
+            self.pending_created_activation.remove(&id);
+            self.creation_selection.remove(&id);
+        }
         self.dirty_listings.remove(&id);
         if !cambia_carpeta {
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
@@ -392,6 +414,9 @@ impl WorkspaceCtrl {
         }
         if cambia_carpeta {
             self.clear_filter();
+            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.reset_display_order();
+            }
             // El caché de índices de matching (text_match) guarda nombres de ESTA carpeta;
             // navegar lo invalida para no arrastrar nombres viejos ni crecer sin límite.
             naygo_core::text_match::clear_index_cache();
@@ -423,6 +448,20 @@ impl WorkspaceCtrl {
         }
         // Recalcular el estado "carpeta no encontrada" tras navegar (sale del tick de render).
         self.refresh_missing_cache_for(id);
+    }
+
+    pub(super) fn reconcile_listing(&mut self, id: PaneId, dir: PathBuf) {
+        if self.ops.rename_running_in(&dir) {
+            return;
+        }
+        if self.listings.contains_key(&id) || self.pending_file_listings.contains_key(&id) {
+            self.dirty_listings.insert(id);
+            return;
+        }
+        self.start_listing(id, dir);
+        if self.listings.contains_key(&id) || self.pending_file_listings.contains_key(&id) {
+            self.automatic_listings.insert(id, Vec::new());
+        }
     }
 
     /// Marca el panel `id` como "soltado por expulsión" (cambia el texto del aviso).
@@ -506,14 +545,56 @@ impl WorkspaceCtrl {
             return String::new();
         }
         // Paso 1: extraer datos crudos del panel (borrow inmutable acotado a este bloque).
-        let Some((data_no_disk, root)) = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .map(footer_inputs_of)
+        let deep = self.is_deep_active(id);
+        let Some((mut data_no_disk, root)) =
+            self.ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|files| {
+                    if deep {
+                        (
+                            naygo_core::footer::FooterData::default(),
+                            footer_disk_root_of(files),
+                        )
+                    } else {
+                        footer_inputs_of(files)
+                    }
+                })
         else {
             return String::new();
         };
+        let deep_view = self.deep_view_indices(id);
+        if let (Some(view), Some(job)) = (deep_view, self.deep_job.as_mut()) {
+            if let Some(cache) = job.footer_cache.as_ref().filter(|cache| {
+                std::sync::Arc::ptr_eq(&cache.view, &view)
+                    && cache.selection_revision == job.selection_revision
+            }) {
+                data_no_disk = cache.data.clone();
+            } else {
+                data_no_disk.sel_count = 0;
+                data_no_disk.marked_bytes = 0;
+                data_no_disk.total_count = 0;
+                data_no_disk.dir_count = 0;
+                for &index in view.iter() {
+                    let (entry, _) = &job.items[index];
+                    data_no_disk.total_count += 1;
+                    data_no_disk.dir_count += usize::from(entry.is_dir());
+                    if job.selected_paths.contains(&entry.path) {
+                        data_no_disk.sel_count += 1;
+                        data_no_disk.marked_bytes = data_no_disk
+                            .marked_bytes
+                            .saturating_add(entry.size.unwrap_or(0));
+                    }
+                }
+                data_no_disk.file_count = data_no_disk.total_count - data_no_disk.dir_count;
+                data_no_disk.item_count = data_no_disk.total_count;
+                job.footer_cache = Some(DeepFooterCache {
+                    view,
+                    selection_revision: job.selection_revision,
+                    data: data_no_disk.clone(),
+                });
+            }
+        }
         // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por clave de volumen/ruta. Si
         // falta, se solicita a un worker y este tick conserva una respuesta inmediata.
         let disk = match root {
@@ -663,7 +744,25 @@ impl WorkspaceCtrl {
                 )
             );
             let batch_was_empty = batch.is_empty();
-            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            if let Some(snapshot) = self.automatic_listings.get_mut(&id) {
+                snapshot.extend(batch);
+                if done {
+                    let snapshot = self.automatic_listings.remove(&id).unwrap_or_default();
+                    if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        if succeeded
+                            && !self.dirty_listings.contains(&id)
+                            && !self.ops.rename_running_in(&f.current_dir)
+                        {
+                            f.preserve_context_for_listing();
+                            f.group_new_at_end = group_new_at_end;
+                            f.reconcile_entries(snapshot);
+                            f.apply_pending_nav_context();
+                        } else if !self.dirty_listings.contains(&id) {
+                            f.apply_pending_nav_context();
+                        }
+                    }
+                }
+            } else if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.set_visibility(vis);
                 f.group_new_at_end = group_new_at_end;
                 if !batch_was_empty {
@@ -703,7 +802,7 @@ impl WorkspaceCtrl {
                 }
             }
             if done {
-                if succeeded {
+                if succeeded && !self.dirty_listings.contains(&id) {
                     self.record_listing_changes(id);
                 } else if failed {
                     if let Some(outcome) = terminal.as_ref() {
@@ -743,7 +842,7 @@ impl WorkspaceCtrl {
                 }
                 if self.dirty_listings.remove(&id) {
                     if let Some(dir) = self.pane_current_dir(id) {
-                        self.start_listing(id, dir);
+                        self.reconcile_listing(id, dir);
                     }
                 }
             }
@@ -837,7 +936,6 @@ impl WorkspaceCtrl {
     ) -> Vec<PlainRow> {
         let date_format = self.config.settings.date_format;
         let size_format = self.config.settings.size_format;
-        let vis = self.visibility_flags();
         let tz = naygo_platform::time::local_utc_offset_secs();
         // Aguja del filtro visual por tipeo (ya plegada): SOLO para el panel activo
         // (None para los demás paneles o sin filtro → todo filter_match = false).
@@ -845,7 +943,7 @@ impl WorkspaceCtrl {
 
         // Vista profunda activa: construir filas desde deep_items con depth real.
         // Las columnas visibles (orden/formato) se leen del FilePaneState normal.
-        if self.is_deep_active(id) {
+        if let Some(view) = self.deep_view_indices(id) {
             // Extraer los datos que necesitamos antes de los préstamos disjuntos.
             let cell_kinds: Vec<naygo_core::columns::ColumnKind> = self
                 .ws
@@ -867,16 +965,10 @@ impl WorkspaceCtrl {
                 } = self;
                 let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
                     deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
-                deep_items
-                    .iter()
-                    .filter(|(e, _)| {
-                        naygo_core::filter::is_visible(
-                            e,
-                            vis.show_hidden,
-                            vis.show_system,
-                            vis.hide_dotfiles,
-                        )
-                    })
+                let focused = deep_job.as_ref().and_then(|job| job.focused_path.as_ref());
+                let selected = deep_job.as_ref().map(|job| &job.selected_paths);
+                view.iter()
+                    .map(|&index| &deep_items[index])
                     .map(|(e, depth)| {
                         let cells = cell_kinds
                             .iter()
@@ -899,8 +991,13 @@ impl WorkspaceCtrl {
                             name: e.name.clone(),
                             cells,
                             is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
-                            selected: false,
-                            focused: false,
+                            drop_folder: if e.is_dir() {
+                                e.path.to_string_lossy().into_owned()
+                            } else {
+                                String::new()
+                            },
+                            selected: selected.is_some_and(|paths| paths.contains(&e.path)),
+                            focused: focused == Some(&e.path),
                             cut: ops.is_cut(&e.path),
                             highlight: false,
                             compare_state: 0,
@@ -1177,7 +1274,7 @@ impl WorkspaceCtrl {
         highlight_secs: u64,
         now: std::time::Instant,
     ) -> Option<u64> {
-        self.rows_signature_impl(id, highlight_secs, now, true)
+        self.rows_signature_impl(id, highlight_secs, now, true, true)
     }
 
     /// Firma global sin la revisión de entradas. El sync la combina con deltas explícitos del
@@ -1191,7 +1288,15 @@ impl WorkspaceCtrl {
         if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
             return None;
         }
-        self.rows_signature_impl(id, highlight_secs, now, false)
+        self.rows_signature_impl(id, highlight_secs, now, false, true)
+    }
+
+    /// Contexto de filas profundas sin foco ni selección, para aplicar solo esos cambios.
+    pub(crate) fn deep_rows_context_signature(&self, id: PaneId, now: Instant) -> Option<u64> {
+        if !self.is_deep_active(id) {
+            return None;
+        }
+        self.rows_signature_impl(id, 0, now, true, false)
     }
 
     fn rows_signature_impl(
@@ -1200,6 +1305,7 @@ impl WorkspaceCtrl {
         highlight_secs: u64,
         now: std::time::Instant,
         include_entries_revision: bool,
+        include_deep_selection: bool,
     ) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let f = self.ws.pane(id).and_then(|p| p.files.as_ref())?;
@@ -1250,26 +1356,25 @@ impl WorkspaceCtrl {
         // --- Vista profunda: otra fuente de filas (deep_items con depth). ---
         if self.is_deep_active(id) {
             1u8.hash(&mut h); // marca "modo profundo" (distinto de la vista normal)
-            let items = self
-                .deep_job
+            if include_deep_selection {
+                self.deep_job
+                    .as_ref()
+                    .and_then(|job| job.focused_path.as_ref())
+                    .hash(&mut h);
+                self.deep_job
+                    .as_ref()
+                    .map(|job| job.selection_revision)
+                    .hash(&mut h);
+            }
+            // La colección incrementa su revisión antes de cualquier acceso mutable y cada
+            // recorrido tiene identidad propia. La visibilidad ya forma parte de la firma.
+            self.deep_job
                 .as_ref()
-                .map(|d| d.items.as_slice())
-                .unwrap_or(&[]);
-            items.len().hash(&mut h);
-            // Contenido de cada item visible (mismo razonamiento que la vista normal). La
-            // visibilidad se aplica aquí igual que en `rows_of`.
-            let vis = self.visibility_flags();
-            for (e, depth) in items {
-                if !naygo_core::filter::is_visible(
-                    e,
-                    vis.show_hidden,
-                    vis.show_system,
-                    vis.hide_dotfiles,
-                ) {
-                    continue;
-                }
-                depth.hash(&mut h);
-                hash_entry_for_row(e, &mut h);
+                .map(|d| d.items.signature())
+                .hash(&mut h);
+            for (kind, filter) in &f.table.filters {
+                kind.hash(&mut h);
+                filter.hash(&mut h);
             }
         } else {
             0u8.hash(&mut h); // marca "vista normal"
@@ -1286,15 +1391,6 @@ impl WorkspaceCtrl {
                 filter.hash(&mut h);
             }
             f.group_new_at_end.hash(&mut h);
-            if f.group_new_at_end {
-                let mut highlighted_acc = 0u64;
-                for path in &f.highlighted {
-                    let mut ph = std::collections::hash_map::DefaultHasher::new();
-                    path.hash(&mut ph);
-                    highlighted_acc ^= ph.finish();
-                }
-                highlighted_acc.hash(&mut h);
-            }
         }
 
         // --- Resaltado "fresco": si hay alguna fila vigente, NO cachear (el fundido cambia cada
@@ -1323,15 +1419,8 @@ impl WorkspaceCtrl {
             return false;
         };
         if self.is_deep_active(id) {
-            let items = self
-                .deep_job
-                .as_ref()
-                .map(|d| d.items.as_slice())
-                .unwrap_or(&[]);
-            return items.iter().any(|(e, _)| {
-                self.watchers
-                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
-            });
+            // Las filas profundas no muestran resaltado de watcher (rows_of usa false).
+            return false;
         }
         f.view_indices().iter().any(|&real| {
             f.entries.get(real).is_some_and(|e| {
@@ -1371,23 +1460,7 @@ impl WorkspaceCtrl {
         // secas): así, hacer clic en el propio panel de Vista previa (o en el Inspector) no
         // vacía la previsualización — el archivo seleccionado se conserva. Fallback al panel
         // activo si todavía no hay un Files recordado.
-        let files_pane = self
-            .last_active_files
-            .and_then(|id| self.ws.pane(id))
-            .and_then(|p| p.files.as_ref())
-            .or_else(|| self.ws.active_files());
-        let focused_file = if self.search_context {
-            self.search_selected_entry()
-                .filter(|e| e.kind != EntryKind::Directory)
-                .map(|e| e.path.clone())
-        } else {
-            self.basket_selected_path().or_else(|| {
-                files_pane
-                    .and_then(|f| f.focused_view_entry())
-                    .filter(|e| e.kind != EntryKind::Directory)
-                    .map(|e| e.path.clone())
-            })
-        };
+        let focused_file = self.metadata_target();
         self.preview.set_wanted(focused_file, now);
         self.preview
             .set_economical(self.config.settings.preview_economical, now);
@@ -1457,7 +1530,119 @@ impl WorkspaceCtrl {
         }
         let mut dirs = std::collections::HashSet::new();
         let mut created = std::collections::HashMap::<PathBuf, Vec<PathBuf>>::new();
-        for (req, success) in changes {
+        let mut renames = std::collections::HashMap::<PathBuf, Vec<(PathBuf, PathBuf)>>::new();
+        let mut deep_refresh = false;
+        let mut invalidate_deep_rename = false;
+        let mut deep_renames = Vec::<(PathBuf, PathBuf)>::new();
+        let mut deep_focus = self
+            .deep_job
+            .as_ref()
+            .and_then(|job| job.focused_path.clone());
+        for (req, success, actual_destination) in changes {
+            if let (OpKind::Rename { .. }, true, Some(source), Some(destination)) = (
+                &req.kind,
+                success,
+                req.sources.first(),
+                actual_destination.as_ref(),
+            ) {
+                if let Some(parent) = source.parent() {
+                    if destination.parent() == Some(parent) {
+                        renames
+                            .entry(parent.to_owned())
+                            .or_default()
+                            .push((source.clone(), destination.clone()));
+                    }
+                }
+            }
+            if let Some(job) = self.deep_job.as_ref() {
+                let source_under_root = req
+                    .sources
+                    .iter()
+                    .any(|source| source.starts_with(&job.root));
+                let dest_under_root = req
+                    .dest_dir
+                    .as_ref()
+                    .is_some_and(|dest| dest.starts_with(&job.root));
+                if (matches!(
+                    req.kind,
+                    OpKind::Copy
+                        | OpKind::Move
+                        | OpKind::Compress { .. }
+                        | OpKind::Extract
+                        | OpKind::CreateDir { .. }
+                        | OpKind::CreateFile { .. }
+                ) && dest_under_root)
+                    || (matches!(req.kind, OpKind::Move | OpKind::Duplicate) && source_under_root)
+                {
+                    deep_refresh = true;
+                    if success && matches!(req.kind, OpKind::Move) {
+                        if deep_focus.as_ref().is_some_and(|focus| {
+                            req.sources.iter().any(|source| focus.starts_with(source))
+                        }) {
+                            deep_focus = None;
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane
+                                    && req
+                                        .sources
+                                        .iter()
+                                        .any(|source| active.source.starts_with(source))
+                            });
+                    }
+                }
+            }
+            if let (Some(job), OpKind::Delete { .. }) = (self.deep_job.as_ref(), &req.kind) {
+                if req
+                    .sources
+                    .iter()
+                    .any(|source| source.starts_with(&job.root))
+                {
+                    deep_refresh = true;
+                    if success {
+                        if deep_focus.as_ref().is_some_and(|focus| {
+                            req.sources.iter().any(|source| focus.starts_with(source))
+                        }) {
+                            deep_focus = None;
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane
+                                    && req
+                                        .sources
+                                        .iter()
+                                        .any(|source| active.source.starts_with(source))
+                            });
+                    }
+                }
+            }
+            if let (Some(job), OpKind::Rename { .. }, Some(source)) =
+                (self.deep_job.as_ref(), &req.kind, req.sources.first())
+            {
+                if source.starts_with(&job.root) {
+                    deep_refresh = true;
+                    if success {
+                        if let Some(destination) = actual_destination.as_ref() {
+                            deep_renames.push((source.clone(), destination.clone()));
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane && active.source.starts_with(source)
+                            });
+                        if let Some(focus) = deep_focus.as_ref() {
+                            if let Ok(suffix) = focus.strip_prefix(source) {
+                                deep_focus = actual_destination.as_ref().map(|dest| {
+                                    if suffix.as_os_str().is_empty() {
+                                        dest.clone()
+                                    } else {
+                                        dest.join(suffix)
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             for source in &req.sources {
                 if let Some(parent) = source.parent() {
                     dirs.insert(parent.to_path_buf());
@@ -1478,6 +1663,73 @@ impl WorkspaceCtrl {
                 dirs.insert(dir);
             }
         }
+        if deep_refresh {
+            if let Some(job) = self.deep_job.as_mut() {
+                // Los cambios vienen en orden real de ejecución; también trasladar marcas
+                // descendientes de una carpeta renombrada sin inventar éxitos parciales.
+                for (source, destination) in &deep_renames {
+                    // Una carpeta puede trasladar descendientes ya visibles. Mantener la posición
+                    // también mientras el nuevo recorrido resuelve metadata y entradas faltantes.
+                    job.items.retain(|(entry, _)| {
+                        !entry.path.starts_with(destination) || entry.path.starts_with(source)
+                    });
+                    for (entry, _) in job.items.iter_mut() {
+                        if let Ok(suffix) = entry.path.strip_prefix(source) {
+                            if suffix.as_os_str().is_empty() {
+                                entry.path = destination.clone();
+                                entry.name = destination
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            } else {
+                                entry.path = destination.join(suffix);
+                            }
+                        }
+                    }
+                    job.selected_paths = job
+                        .selected_paths
+                        .drain()
+                        .map(|path| {
+                            path.strip_prefix(source)
+                                .map_or_else(|_| path.clone(), |suffix| destination.join(suffix))
+                        })
+                        .collect();
+                    if let Some(anchor) = job.selection_anchor.as_ref() {
+                        if let Ok(suffix) = anchor.strip_prefix(source) {
+                            job.selection_anchor = Some(destination.join(suffix));
+                        }
+                    }
+                }
+                if !deep_renames.is_empty() {
+                    job.selection_revision = job.selection_revision.wrapping_add(1);
+                }
+            }
+            if let Some(job) = self.deep_job.as_mut() {
+                if let Some(state) = self.creation_selection.get(&job.pane).filter(|state| {
+                    !state.overridden
+                        && self.pending_created_activation.get(&job.pane) == Some(&state.dir)
+                        && state.dir == job.root
+                }) {
+                    if let Some(paths) = created.get(&state.dir) {
+                        for path in paths.iter().filter(|path| state.protects(path)) {
+                            job.selected_paths.insert(path.clone());
+                            if deep_focus.is_none() {
+                                deep_focus = Some(path.clone());
+                                job.selection_anchor = Some(path.clone());
+                            }
+                        }
+                        job.selection_revision = job.selection_revision.wrapping_add(1);
+                    }
+                }
+            }
+            if invalidate_deep_rename {
+                // Una ruta editada bajo la carpeta movida dejó de identificar su entrada original.
+                self.rename_cancel();
+            }
+            // La vista recursiva es una instantánea: los watchers del directorio raíz no
+            // garantizan eventos de subcarpetas. Relistar en worker tras el resultado real.
+            self.restart_deep_listing(deep_focus);
+        }
         let panes: Vec<_> = self
             .ws
             .panes()
@@ -1490,12 +1742,37 @@ impl WorkspaceCtrl {
             })
             .collect();
         for (id, dir) in panes {
-            if let Some(paths) = created.get(&dir) {
+            if let Some(moves) = renames.get(&dir) {
+                // Un lote encadenado puede reutilizar un origen. Desechar los avisos de la
+                // generación anterior evita que vuelvan a aplicar el cambio al archivo nuevo.
+                // El registro siguiente solicita su propio snapshot y cubre el intervalo.
+                self.watchers.unwatch(id.0);
                 if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
-                    f.reveal_after_listing(paths.clone());
+                    f.preserve_context_for_listing();
+                    for (source, destination) in moves {
+                        f.rename_entry(source, destination);
+                    }
+                    f.entries_changed();
+                    f.apply_pending_nav_context();
                 }
             }
-            self.start_listing(id, dir.clone());
+            if let Some(paths) = created.get(&dir) {
+                let intended: Vec<_> = paths
+                    .iter()
+                    .filter(|path| {
+                        !self.creation_selection.get(&id).is_some_and(|state| {
+                            state.overridden && state.dir == dir && state.protects(path)
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                if !intended.is_empty() {
+                    if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        f.reveal_after_listing(intended);
+                    }
+                }
+            }
+            self.reconcile_listing(id, dir.clone());
             self.sync_trees_for_files(id, dir);
         }
         for dir in dirs {
@@ -1516,6 +1793,11 @@ impl WorkspaceCtrl {
         // F5 re-lista en el mismo sitio: cancela el deep para no mezclar filas.
         self.cancel_deep_if_navigating(active);
         self.watchers.unwatch(active.0);
+        if let Some(f) = self.ws.pane_mut(active).and_then(|p| p.files.as_mut()) {
+            f.preserve_context_for_listing();
+            f.reset_display_order();
+            f.apply_pending_nav_context();
+        }
         self.start_listing(active, dir);
         true
     }

@@ -12,6 +12,7 @@ import { Theme } from "theme.slint";
 component MenuRow inherits Rectangle {
     in property <string> label;
     callback clicked();
+    callback hover-changed(bool);
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
@@ -24,7 +25,10 @@ component MenuRow inherits Rectangle {
         vertical-alignment: center;
         x: 10px;
     }
-    t := TouchArea { clicked => { root.clicked(); } }
+    t := TouchArea {
+        changed has-hover => { root.hover-changed(self.has-hover); }
+        clicked => { root.clicked(); }
+    }
 }
 
 export component ContextMenu inherits Rectangle {
@@ -60,13 +64,30 @@ export component ContextMenu inherits Rectangle {
     callback transform-text();
     callback dismiss();
 
+    property <bool> submenu-open: false;
+    function submenu-hover(hovered: bool) {
+        if hovered {
+            close-submenu.running = false;
+            root.submenu-open = true;
+        } else if root.submenu-open {
+            close-submenu.running = false;
+            close-submenu.running = true;
+        }
+    }
+    close-submenu := Timer {
+        interval: 250ms;
+        running: false;
+        triggered => { self.running = false; root.submenu-open = false; }
+    }
+    changed vm => { if !root.vm.active { root.submenu-open = false; close-submenu.running = false; } }
+
     visible: root.vm.active;
     // Velo a pantalla completa: clic fuera cierra.
     veil := TouchArea {
         clicked => { root.dismiss(); }
     }
     // Tarjeta del menú posicionada en el clic (acotada para no salirse por la derecha/abajo).
-    Rectangle {
+    menu-card := Rectangle {
         x: min(root.vm.x, root.width - self.width - 4px);
         y: min(root.vm.y, root.height - self.height - 4px);
         width: 210px;
@@ -80,13 +101,11 @@ export component ContextMenu inherits Rectangle {
             padding: 4px;
             spacing: 1px;
             // --- Submenú "Abrir ▸" (solo cuando el target del menú es una carpeta) ---
-            // Un nivel de submenú: fila "Abrir ▸" + panel flotante a la derecha, visible mientras
-            // el mouse está sobre la fila O sobre el propio submenú (para poder desplazarse hacia
-            // él sin que se cierre). La tarjeta padre no tiene `clip`, así que el submenú flotante
-            // (hijo de la fila, `x: parent.width + …`) se dibuja fuera de sus límites sin recorte.
+            // El panel flotante vive como hermano de esta tarjeta para recibir eventos de puntero.
+            // Un cierre diferido permite cruzar de la fila al submenú sin perderlo.
             if root.vm.target-is-folder: Rectangle {
                 height: 26px;
-                background: open-row-touch.has-hover || open-sub.has-hover-sub ? Theme.hover-bg : transparent;
+                background: open-row-touch.has-hover || root.submenu-open ? Theme.hover-bg : transparent;
                 border-radius: Theme.radius-sm;
                 HorizontalLayout {
                     padding-left: 10px;
@@ -94,35 +113,7 @@ export component ContextMenu inherits Rectangle {
                     Text { text: Tr.ctx-open; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
                     Text { text: "▸"; color: Theme.text-dim; vertical-alignment: center; }
                 }
-                open-row-touch := TouchArea {}
-                // Submenú flotante a la derecha de la fila "Abrir ▸".
-                open-sub := Rectangle {
-                    property <bool> has-hover-sub: sub-touch.has-hover;
-                    visible: open-row-touch.has-hover || sub-touch.has-hover;
-                    // Pegado a la fila (sin hueco): un gap dejaría una banda sin hover entre la
-                    // fila y el submenú que lo cerraría al cruzarla despacio con el mouse.
-                    x: parent.width;
-                    y: 0;
-                    width: 230px;
-                    height: sub-items.preferred-height + 8px;
-                    background: Theme.surface-floating;
-                    border-color: Theme.divider;
-                    border-width: 1px;
-                    border-radius: Theme.radius-md;
-                    sub-touch := TouchArea {}
-                    sub-items := VerticalLayout {
-                        padding: 4px;
-                        spacing: 1px;
-                        // "Abrir (aquí)" solo cuando el target es una carpeta-FILA (modo archivo):
-                        // navegar el panel activo a ella. En folder-mode (zona vacía) el target es la
-                        // carpeta ACTUAL del panel, así que "abrir aquí" re-navegaría a sí misma
-                        // (no-op redundante); ahí se omite y quedan solo otro panel / nuevo / Explorador.
-                        if !root.vm.folder-mode || root.vm.show-open-here: MenuRow { label: Tr.ctx-open; clicked => { root.open-here(); } }
-                        MenuRow { label: Tr.ctx-open-other-pane; clicked => { root.open-other-pane(); } }
-                        MenuRow { label: Tr.ctx-open-new-pane; clicked => { root.open-new-pane(); } }
-                        MenuRow { label: Tr.ctx-explorer; clicked => { root.explorer(); } }
-                    }
-                }
+                open-row-touch := TouchArea { changed has-hover => { root.submenu-hover(self.has-hover); } }
             }
             if root.vm.target-is-folder: Rectangle { height: 1px; background: Theme.border; }
             // --- Modo CARPETA (clic derecho en zona vacía): acciones de la carpeta ---
@@ -141,16 +132,16 @@ export component ContextMenu inherits Rectangle {
             // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
             // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
             // "Abrir ▸" de arriba ya ofrece "Abrir" (evita dos filas "Abrir" con acciones distintas).
-            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            if !root.vm.folder-mode && !root.vm.target-is-folder && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
             // "Abrir con…" solo para archivos: las carpetas ya tienen su submenú "Abrir ▸" propio.
-            if !root.vm.folder-mode && !root.vm.target-is-folder: MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            if !root.vm.folder-mode && !root.vm.target-is-folder && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
             if root.vm.target-is-executable: MenuRow { label: Tr.ctx-run-as-administrator; clicked => { root.run-as-administrator(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
-            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
+            if !root.vm.folder-mode && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
             if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
             if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
@@ -177,6 +168,29 @@ export component ContextMenu inherits Rectangle {
                 label: Tr.ctx-more-windows;
                 clicked => { root.native(); }
             }
+        }
+    }
+    // Hermano de la tarjeta: Slint puede dibujar un hijo fuera del padre sin que esa zona
+    // participe en hit-testing. Aquí el área completa recibe hover y clics de verdad.
+    open-sub := Rectangle {
+        visible: root.vm.active && root.vm.target-is-folder && root.submenu-open;
+        x: menu-card.x + menu-card.width - 4px + self.width <= root.width
+            ? menu-card.x + menu-card.width - 4px : max(0px, menu-card.x + 4px - self.width);
+        y: max(0px, min(menu-card.y + 4px, root.height - self.height));
+        width: 230px;
+        height: sub-items.preferred-height + 8px;
+        background: Theme.surface-floating;
+        border-color: Theme.divider;
+        border-width: 1px;
+        border-radius: Theme.radius-md;
+        TouchArea { changed has-hover => { root.submenu-hover(self.has-hover); } }
+        sub-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            if !root.vm.folder-mode || root.vm.show-open-here: MenuRow { label: Tr.ctx-open; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-here(); } }
+            MenuRow { label: Tr.ctx-open-other-pane; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-other-pane(); } }
+            MenuRow { label: Tr.ctx-open-new-pane; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-new-pane(); } }
+            MenuRow { label: Tr.ctx-explorer; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.explorer(); } }
         }
     }
 }

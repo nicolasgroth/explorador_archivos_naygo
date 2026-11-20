@@ -3,6 +3,287 @@
 > Documento de arranque para nuevas sesiones. Todo lo acordado que aún no se implementa,
 > con contexto y punteros al código relevante. Actualizarlo al cerrar cada ítem.
 > Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
+> Plan vigente: [usabilidad y confiabilidad Windows](plans/2026-11-09-usabilidad-confiabilidad-windows.md).
+> Continuación priorizada de foco, aceptación y pendientes: [plan de foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
+> Cierre 0.5.6, 2026-11-20. La prueba de lectura en OneDrive real pasó con árbol común y dedicado,
+> refresco y regreso por historial. Corregida la espera del árbol cuando el listado termina sin
+> un ancestro. Se midió vista profunda a 10.000 y 100.000 entradas sintéticas en debug. Falta
+> aceptación visual y medición de la ventana Release, incluida la ruta con OneDrive desconectado.
+> La prueba de Papelera de la UI ahora restaura su fixture al directorio temporal al terminar.
+> Gate de 1.665 pruebas aprobadas y 12 ignoradas, Clippy y formato correctos. El instalador y el
+> portable 0.5.6 están verificados en `dist`, con hashes en [estado actual](ESTADO-ACTUAL.md).
+> Continuación 1 → 3 → 2. Los controles de Operaciones restauran por identidad y el selector de
+> carpeta de inicio tiene Configuración como propietaria. El modelo del árbol actualiza ramas
+> por ruta y la captura OLE invalida visitas anteriores, incluido el retorno a la misma carpeta.
+> La vista profunda incorpora filtros compartidos con el panel y orden explícito por hermanos.
+> Faltan aceptación nativa, reproducción en OneDrive y medición con árboles amplios.
+> Gate de ese corte: 1.662 aprobadas, 11 ignoradas, Clippy y formato. Paquetes 0.5.5 en
+> `dist`, hashes en estado actual.
+> Arrastre dentro del mismo panel. El evento Leave podía borrar el hover antes de entregar las
+> rutas. El drop interno usa la geometría de la lista y verifica la carpeta pintada contra la
+> fila actual. Un destino libre en el mismo volumen permite registrar el movimiento de la
+> carpeta completa para Deshacer. Queda pendiente la cobertura general de Deshacer al combinar
+> carpetas y moverlas entre volúmenes. La prueba nativa de Papelera restauró una fixture con su
+> nombre original. El Shell local expone por separado el identificador de almacenamiento `$R…`.
+> Pasaron 1.664 pruebas, Clippy y formato. Distribución 0.5.5 actualizada en `dist`, con
+> hashes en estado actual. Falta confirmar con mouse en la instalación.
+> Renombrado y orden del listado, 2026-11-20. El resultado confirmado reconcilia el nombre
+> en su fila y traslada el foco, la selección y el ancla de scroll. F5 y el orden por columna
+> aplican los nombres nuevos al orden. La configuración existente permite insertar archivos
+> nuevos en su posición ordenada. En configuraciones nuevas se agregan al final hasta el
+> próximo orden explícito. La expiración del resaltado no cambia la posición.
+> Gate con 1.660 aprobadas, 11 ignoradas, Clippy y formato correctos. Instalador y portable
+> 0.5.5 actualizados en `dist`, con hashes en estado actual. Falta aceptación interactiva.
+> Prioridad solicitada por Nicolás: el clic derecho reducía un lote seleccionado a una sola fila
+> antes de abrir «Más opciones de Windows…». Reproducido con UI Slint; corregido para conservar
+> la selección al pulsar sobre ella y reemplazarla al pulsar fuera, sin generar clic izquierdo ni
+> doble clic. Pruebas cubren fila obsoleta y panel inactivo. La preparación Shell valida todos los
+> PIDL y sus padres, sin entregar subconjuntos; errores informados en diez idiomas. Prueba Windows
+> obtiene un `IContextMenu` para dos archivos, sin invocar comandos. Nicolás confirmó tras instalar
+> la build que la selección múltiple y el menú ahora funcionan y muestran varias opciones; el hash
+> de la instalación no se midió y no se verificó un comprimido. Pendiente revisar costo en UI y
+> submenús de extensiones.
+> Gate: 1.613 aprobadas, 9 ignoradas, Clippy/formato correctos, pico 8,69 GiB y paridad de diez
+> idiomas. Build supervisado y paquetes verificados en `dist`; Nicolás reportó instalación y
+> prueba interactiva de menú. Hashes de distribución en estado actual.
+> Seguimiento Foco-1: corregida la confirmación por pérdida de foco ante overlays en el componente
+> F2. Prueba headless con diálogo de conflicto cubre borrador, foco, reconstrucción de filas,
+> Enter, clic fuera, Escape y encadenamiento. Test con ventana, controlador, sincronización y
+> callbacks reales pasa ante conflicto inyectado; no cubre el worker ni la prueba nativa. Sigue
+> pendiente el flujo extremo a extremo y los casos de pestañas y navegación detallados abajo.
+> Cambio de panel durante diálogo: la guarda de teclado se limita al panel de F2; un nuevo F2 en
+> otro panel vuelve al editor pendiente sin sustituir la sesión. Pruebas de controlador y ventana
+> headless cubren flechas, recuperación del borrador y Escape. La entrega anterior dejaba
+> pendientes aceptación nativa, pestañas agrupadas, navegación y el worker de conflicto.
+> Continuación: cubiertos pestaña agrupada y navegación externa (la sesión se cancela al cambiar
+> carpeta y se conserva al refrescar); F2 repetido conserva el borrador y selecciona sobre él.
+> Pruebas headless/controller incluyen Unicode y carpetas. La posición visual del editor aún puede
+> quedar desfasada si el listado se reordena; la operación conserva la ruta original. Pendientes
+> aceptación Windows y conflicto generado por worker real.
+> Continuación: en la lista normal F2 sigue la ruta al reordenar, protege la sesión ante callbacks
+> tardíos y conserva la vista si falta la fuente durante el listado. Al cancelar o confirmar se
+> reconcilian las filas diferidas; el encadenamiento no adivina vecinos si la fuente no está visible.
+> Prueba headless con ventana y controlador cubre inserción, mismo largo, ausencia/retorno, cursor,
+> cancelación y metadatos. Un worker real de copia sobre datos temporales produjo y resolvió un
+> conflicto en la ventana. Quedan pendientes aceptación Windows/Winit y el caso de vista profunda,
+> que usa una fuente de filas distinta y no está incluido en esta reconciliación.
+> Gate: 1.620 aprobadas, 9 ignoradas, Clippy y formato correctos; build supervisado y paquetes
+> verificados en `dist`. Pendiente aceptación nativa; detalles y hashes en estado actual.
+> Vista profunda: identificadas rutas que interpretaban la selección y el destino de arrastre
+> mediante la lista normal, y activación por índice sin filtrar ocultos. Se aplica una protección
+> provisional: selección, operaciones sobre ella y drops hacia la vista quedan deshabilitados;
+> doble clic y clic central resuelven la fila visible. Pendiente implementar selección y F2
+> propios con identidad estable, operaciones y arrastre acreditados, y aceptación Windows/Winit.
+> Continuación: cursor propio por ruta, clic, flechas, Inicio/Fin, avance de página y Enter;
+> una prueba de controlador cubre reordenamiento y el caso en que la fila enfocada se filtra.
+> La selección múltiple, F2, operaciones y drop siguen bloqueados y pendientes de implementación;
+> falta aceptación nativa y medición de rendimiento sobre listados profundos grandes.
+> Gate del cursor: 1.625 aprobadas, 9 ignoradas, Clippy y formato correctos. Release supervisado
+> y paquetes verificados en `dist`; aún sin instalación ni aceptación nativa. Hashes en estado actual.
+> Los filtros y orden de columna de la vista profunda necesitan revisión; la guía ya no promete
+> que estén aplicados a esa fuente de filas.
+> Continuación F2 profundo: editor anclado a ruta y reconciliación de filas al cambiar el orden;
+> un worker vuelve a listar tras el resultado real del rename, incluidos descendientes. Se usa
+> el destino informado por el motor y no el nombre supuesto. Pruebas dirigidas cubren archivo
+> ocupado, carpeta anidada, callback tardío, encadenar hacia un hijo y borrador al reordenar en
+> ventana headless. Pendientes aceptación Windows, selección múltiple, operaciones y drop.
+> Gate F2 profundo: 1.628 aprobadas, 9 ignoradas; Clippy/formato correctos. Release supervisado
+> y paquetes verificados en `dist`, sin instalación ni aceptación nativa; hashes en estado actual.
+> Continuación: selección profunda por ruta con Ctrl/Shift, rangos, rectángulo y Ctrl+A; copiar,
+> cortar, borrar, duplicar, transferir, agregar a Bandeja y Shell desde el menú contextual. ZIP
+> propio acepta fuentes de una misma carpeta; extracción usa el padre del ZIP. Se rechazan lotes
+> incompletos u origen+descendiente sin reducirlos, se conserva selección durante relistados y el
+> Inspector/preview/tamaño usan el foco profundo. Pruebas dirigidas cubren worker real, diálogo,
+> copia/movimiento, ZIP, reordenamiento, rutas ocultas y cambio de panel; falta aceptación nativa.
+> La creación de carpetas en vista profunda también protege Enter hasta reconciliar el resultado
+> y respeta una selección explícita posterior; prueba dirigida de ambas variantes aprobada.
+> Gate de esta entrega: 1.635 aprobadas, 9 ignoradas; Clippy/formato correctos. Build supervisado
+> y paquetes verificados en `dist`; pendiente aceptación nativa. Hashes en estado actual.
+> Avance: los arrastres internos admiten carpetas profundas acreditadas por posición y ruta;
+> se rechaza una fila cambiada y se usan el probe de conflictos y confirmación habituales.
+> Gate: 1.636 aprobadas, 9 ignoradas, Clippy/formato correctos; distribución supervisada
+> verificada en `dist`, pendiente aceptación Windows/OLE; hashes en estado actual.
+> Batch rename profundo de un mismo padre: recorrido completo y reconciliación por resultado real.
+> Gate: 1.637 aprobadas, 9 ignoradas, Clippy/formato correctos; distribución supervisada y ZIP
+> verificados en `dist`, pendiente aceptación nativa. Hashes en estado actual. Pendientes: destino profundo para
+> arrastres externos, compresión de carpetas distintas y exportación; matriz
+> OLE/Windows y medición de rendimiento. Transformación de texto en vista profunda implementada,
+> con reconciliación tras cierre y cancelación. Gate: 1.639 aprobadas, 9 ignoradas, Clippy/formato
+> correctos; distribución supervisada y ZIP verificados, pendiente aceptación nativa.
+> Exportación profunda con snapshot incremental, worker y cancelación implementada; requiere
+> recorrido completo. Gate: 1.643 aprobadas, 9 ignoradas, Clippy/formato correctos; distribución
+> supervisada y ZIP verificados. Pendientes aceptación nativa, prueba de portapapeles real y medir
+> rendimiento. Exportación normal incremental y cancelable implementada, con revisión de
+> identidad del menú y coherencia del listado. Gate: 1.646 aprobadas, 9 ignoradas, Clippy/formato
+> correctos; distribución supervisada y ZIP verificados. Pendientes aceptación nativa, prueba de
+> portapapeles real y medición de rendimiento en listados grandes. Hashes en estado actual.
+> Renombrado en lote entre carpetas distintas: implementado en la vista profunda, con vista previa
+> por carpeta y planificación de destinos por ruta completa. Gate: 1.650 aprobadas y 9 ignoradas;
+> Clippy/formato correctos. Build supervisado y ZIP verificados en `dist`; falta aceptación nativa
+> y medir rendimiento en listados grandes. Hashes y límites de validación en estado actual.
+> Compresión profunda entre carpetas: implementada con rutas relativas a la raíz y creación
+> exclusiva del ZIP; se rechazan enlaces simbólicos y errores de inventario en lotes mixtos.
+> Gate: 1.651 aprobadas, 9 ignoradas, Clippy/formato correctos; build supervisado y ZIP verificados
+> en `dist`. Falta aceptación nativa. Hashes y límites de validación en estado actual.
+> Destino externo en vista profunda: implementado, captura la carpeta acreditada por hover y
+> rechaza coordenadas/filas obsoletas. Gate: 1.653 aprobadas, 9 ignoradas, Clippy/formato correctos;
+> build supervisado y ZIP verificados en `dist`. Falta aceptación con orígenes OLE reales.
+> Navegación profunda: optimización de flechas implementada y empaquetada. Benchmark sintético debug de 100k
+> muestra menos costo de movimiento, pero filas, firma y pie aún recorren el listado; faltan
+> mediciones release/UI y optimizaciones con invalidación segura. Datos en `BENCHMARKS.md`.
+> Gate: 1.654 aprobadas, 10 ignoradas (incluye benchmark manual), Clippy/formato correctos;
+> build supervisado y ZIP verificados en `dist`; falta aceptación nativa. Hashes en estado actual.
+> Firma profunda por revisión: implementada y empaquetada; evita recorrer todo el listado en
+> cada firma y mantiene invalidación ante mutaciones. Benchmark sintético debug en `BENCHMARKS.md`;
+> filas y pie siguen pendientes de optimización y medición nativa.
+> Gate: 1.655 aprobadas, 10 ignoradas, Clippy/formato correctos; distribución supervisada y ZIP
+> verificados en `dist`. Falta aceptación nativa; hashes en estado actual.
+> Pie profundo: caché de contadores implementada y empaquetada; el primer cálculo y cambios de entradas,
+> selección o visibilidad aún recorren el listado. Benchmark sintético debug en `BENCHMARKS.md`;
+> siguen pendientes mediciones de UI real y actualización parcial de filas.
+> Gate: 1.656 aprobadas, 10 ignoradas, Clippy/formato correctos; distribución supervisada y ZIP
+> verificados en `dist`; falta aceptación nativa. Hashes en estado actual.
+> Operaciones: recuperación del foco de «Cancelar todo» implementada y empaquetada. Prueba Slint headless
+> con modal real, overlays superpuestos y cambio de panel aprobada; sigue pendiente aceptación
+> Windows y revisión de los otros controles.
+> Gate: 1.657 aprobadas, 10 ignoradas, Clippy/formato correctos; distribución supervisada y ZIP
+> verificados en `dist`. Hashes en estado actual.
+> Historial de Operaciones: enlace «Ver archivos» y recuperación por identidad implementados y empaquetados.
+> Prueba headless cubre Tab, Enter, espacio, cambio de operación y panel inactivo; falta aceptación
+> nativa y revisión de los demás controles del panel.
+> Gate repetido: 1.658 aprobadas, 11 ignoradas, Clippy/formato correctos; distribución supervisada
+> y ZIP verificados en `dist`. Hashes en estado actual.
+> Marcas parciales profundas: implementadas y empaquetadas; hasta ocho rutas afectadas con
+> contexto estable evitan reconstruir las filas. Cambios amplios o de contenido usan reconciliación
+> completa; falta aceptación nativa y medición de frame. Benchmark debug en `BENCHMARKS.md`.
+> Gate: 1.657 aprobadas, 11 ignoradas, Clippy/formato correctos; distribución supervisada y ZIP
+> verificados en `dist`. Hashes en estado actual.
+> Gate: 1.623 aprobadas, 9 ignoradas; Clippy y formato correctos. Build supervisado y paquetes
+> verificados en `dist`, sin instalación ni aceptación nativa; hashes en estado actual.
+> Foco-2, Favoritos: el cuadro de nombres recibe foco al abrirse; una prueba Slint headless
+> reproduce crear un grupo desde el menú y confirma texto, Enter y grupo padre. Pendiente
+> aceptación nativa y revisión del resto de controles y paneles auxiliares.
+> Gate: 1.624 aprobadas, 9 ignoradas, Clippy y formato correctos; build supervisado y paquetes
+> verificados en `dist`, sin instalación ni aceptación nativa. Hashes en estado actual.
+> Foco-2, Bandeja: reproducida la pérdida de flechas al cerrar un diálogo. La lista y los botones
+> de acciones recuperan su foco al cerrar el último overlay si el panel sigue activo; prueba Slint
+> cubre diálogo, paleta superpuesta, cambio de panel y Enter en botón. Aceptación nativa pendiente;
+> quedan por revisar Favoritos y los demás paneles auxiliares.
+> Gate: 1.621 aprobadas, 9 ignoradas, Clippy/formato correctos; build supervisado y paquetes
+> verificados en `dist`. Pendiente aceptación nativa; detalles y hashes en estado actual.
+> Gate: 1.619 aprobadas y 9 ignoradas, Clippy/formato correctos; build supervisado y paquetes
+> verificados en `dist`, sin aceptación nativa. Detalles y hashes en estado actual.
+> Gate: 1.617 aprobadas y 9 ignoradas, Clippy/formato correctos; build supervisado y paquetes
+> verificados en `dist`, sin prueba nativa. Detalles y hashes en estado actual.
+> Auditoría 2026-11-12: el controlador retenía F2 al cerrar su panel y bloqueaba teclas en otro;
+> se invalida la sesión y se retira el editor huérfano sin aplicar el borrador. Prueba de controlador
+> cubre teclado y callbacks tardíos; queda pendiente aceptación nativa y cambio de panel sin cierre.
+> Gate: 1.616 aprobadas y 9 ignoradas, Clippy/formato correctos; build supervisado y paquetes
+> verificados en `dist`, aún sin prueba nativa. Detalles y hashes en estado actual.
+> Gate: 1.614 aprobadas, 9 ignoradas, Clippy y formato correctos; build supervisado y paquetes
+> comprobados en `dist`. La nueva build aún no se ha instalado; hashes en estado actual.
+> Experimento headless 2026-11-11: un aviso sobre el editor F2 emitió commit de `x.txt` en la
+> sesión sintética; no se tocó filesystem y falta comprobar alcanzabilidad en la app real. El
+> diseño histórico confirma al perder foco; la corrección distingue diálogo superpuesto y clic
+> fuera. Ver evidencia, estimación provisional y criterios pendientes en el plan de foco.
+> - [ ] U0–U2: aceptación visual de creación/foco/Enter, árbol y OneDrive en Windows. La prueba
+>   de lectura 0.5.6 y la regresión de una rama ausente cubren el controlador y el filesystem.
+>   Nicolás confirmó que crear una carpeta y navegar con Enter y flechas ya funciona en su prueba.
+>   Reportó que tras confirmar borrar se pierde el teclado y que el submenú Abrir se cierra al
+>   mover el mouse. Se reprodujeron ambos con componentes Slint reales; hay correcciones y pruebas
+>   dirigidas para confirmar/cancelar, árbol, diálogos superpuestos y submenú en ambos bordes.
+>   Otros diálogos tienen gestores de foco propios y requieren revisión independiente; no se
+>   declara cerrado el patrón en todos los overlays. Aceptación nativa de estas correcciones pendiente.
+>   Gate final: 1.609 pruebas aprobadas, 9 ignoradas, Clippy/formato correctos, pico 11,05 GiB.
+>   Build supervisado y paquetes verificados en `dist`, sin instalar; hashes en `ESTADO-ACTUAL.md`.
+>   Continuación: reproducido que reintento pierde el foco al cerrar y que detalle de operación
+>   no recibía Escape al abrir. Los paneles respetan otros overlays y recuperan el teclado al
+>   cerrar el último; detalle toma foco y lo recupera tras reintento. Prueba Slint ejercita paleta,
+>   reintento, destinos, espacios, consultas, recetas, comparaciones, entregas, detalle y un cambio
+>   de panel; pendientes aceptación nativa, paneles auxiliares, diálogos nativos y recuperación
+>   de editores de ruta/rename tras superponerles un diálogo. No afirmar cobertura universal.
+>   Gate final: 1.609 aprobadas, 9 ignoradas, Clippy/formato correctos, pico 11,04 GiB; build
+>   supervisado y ZIP/setup verificados en `dist`, sin instalar. Hashes en `ESTADO-ACTUAL.md`.
+>   Continuación: se reprodujo la pérdida del foco en ambos editores de ruta al cerrar la paleta.
+>   Corregido mediante foco diferido sin reseleccionar: la prueba escribe antes/después del overlay
+>   con el cursor en medio y verifica texto exacto. Pasaron las pruebas existentes de editor de ruta
+>   y barra superior. Falta aceptación nativa y revisar rename, paneles auxiliares y diálogos nativos.
+>   Gate final del cambio de editores: 1.609 aprobadas, 9 ignoradas, Clippy/formato correctos,
+>   pico 11,12 GiB. Release supervisado detenido al bajar memoria libre a 7,66 GiB (mínimo 8 GiB).
+>   Tras liberar memoria se reintentó: build supervisado completado, ZIP/setup comprobados y
+>   actualizados en `dist`. No instalados; hashes en `ESTADO-ACTUAL.md`.
+>   U0 aprobado el 2026-11-10: la captura de la ventana instalada expiró dos veces y no se obtuvo
+>   un árbol accesible utilizable; no hubo interacción ni medición. Sigue pendiente la reproducción
+>   con sesión visual y datos aislados; detalle en el plan.
+>   Nicolás reportó que después de crear una carpeta Enter no le permite entrar hasta seleccionarla
+>   con el mouse. Confirmó además Enter multilínea, doble Enter y Ctrl+Enter. Falta aislar la causa
+>   y validar la interacción real; priorizar continuidad del teclado al abordar U1.
+>   La captura muestra la nueva carpeta resaltada y Nicolás indica que tampoco responden las
+>   flechas. Pidió además crear carpetas desde el árbol: existe una acción contextual por ruta,
+>   pero falta un acceso de teclado y validar destino/foco en el flujo completo.
+>   Avance 2026-11-10: corrección de foco y atajo del árbol implementados; prueba Slint y pruebas
+>   dirigidas aprobadas. Gate: 1.578 pruebas aprobadas, 9 ignoradas, Clippy/formato e i18n; pico
+>   10,80 GiB. Tras ajustar el enrutamiento de teclas no reconocidas del árbol se repitieron la
+>   prueba de interfaz y el gate final: 1.578 aprobadas, 9 ignoradas, Clippy y formato correctos,
+>   pico 10,88 GiB. Release supervisado y empaquetado verificados: ZIP y setup 0.5.5 en `dist`,
+>   no instalados; hashes en `ESTADO-ACTUAL.md`. Aceptación instalada y carreras con watcher/foco
+>   siguen pendientes. Ver detalle y límites en el plan.
+>   Reproducción posterior: un listado iniciado antes de crear restaura la fila antigua al terminar
+>   antes de reconciliar; Enter puede abrirla. La prueba falló sobre la build distribuida. Protección
+>   por panel implementada y probada con nueve casos dirigidos; gate del workspace aprobado con
+>   1.587 pruebas, 9 ignoradas, Clippy y formato correctos (pico 8,51 GiB). Build supervisado
+>   terminado, ZIP/setup verificados en `dist` y hashes en `ESTADO-ACTUAL.md`; aún no instalados.
+>   Aceptación nativa y otros intercalados de watcher siguen pendientes; esa distribución anterior
+>   aún no muestra feedback al bloquear Enter.
+>   Continuación: se reprodujo que el resultado de creación reemplazaba una selección explícita;
+>   corrección en curso de empaquetado. Las selecciones por mouse/teclado se conservan ante los
+>   resultados y avisos del watcher de esa creación; aviso de espera localizado agregado. Gate:
+>   1.595 pruebas aprobadas, 9 ignoradas, Clippy/formato y paridad de diez idiomas, pico 10,70 GiB.
+>   Se rastrean hasta 4.096 destinos; al excederlos se protege conservadoramente la selección ante
+>   llegadas de esa carpeta hasta navegar o iniciar otra creación. Build 2026-11-11 supervisado y
+>   paquetes verificados en `dist`; aún no instalados. Ver plan para límites y `ESTADO-ACTUAL.md`
+>   para hashes.
+>   Nuevo avance: se retira `is_dir` de la apertura desde Files y se comprueba el destino base en
+>   el worker antes de crear, observando cancelación al retornar. La comprobación y la escritura
+>   no son atómicas; una llamada de red bloqueada no se puede interrumpir. El menú de árbol o
+>   breadcrumb conserva el destino capturado si desaparece, sin fallback al panel Files. Pasaron
+>   11 pruebas dirigidas de núcleo, 19 de UI y el gate: 1.602 aprobadas, 9 ignoradas, Clippy y
+>   formato correctos, pico 7,43 GiB. Build supervisado completado, ZIP/setup verificados en
+>   `dist` y hashes en `ESTADO-ACTUAL.md`; no instalados ni aceptados en ventana nativa.
+>   Las terminales conservan consultas síncronas independientes. Actualización: abrir el menú
+>   contextual de zona vacía ya no consulta el disco; se conserva la ruta del panel. Una prueba
+>   verifica que, si la carpeta desapareció, el menú abre y crear informa el fallo en el worker
+>   sin recrear la base. La ejecución de terminal/Explorador sigue pendiente de rediseño.
+>   Gate de esta continuación: 1.604 pruebas aprobadas, 9 ignoradas, Clippy/formato correctos,
+>   pico 6,31 GiB. Build supervisado y paquetes verificados en `dist`; no instalados. Los hashes
+>   de esta distribución constan en `ESTADO-ACTUAL.md`.
+>   Intento posterior de aceptación: el inventario informó la instancia instalada detenida, pero
+>   tras iniciar portable con fixture sintética se detectó una instancia previa. El portable salió
+>   por instancia única y pudo enviarle esa ruta; no fue posible confirmar el estado porque el
+>   archivo de solicitud ya no existía. No hubo interacción posterior ni aceptación visual. Registrar
+>   el PID/proceso por sistema antes de cualquier nuevo intento aislado; detalle en estado actual.
+>   Diagnóstico adicional: `terminal_dir()` consulta `is_dir()` para el objetivo contextual y, si
+>   falla, intenta la carpeta Files activa; lo usan tanto abrir terminal como abrir en Explorador.
+>   Con un objetivo de árbol/breadcrumb desaparecido o lento puede bloquear o redirigir. Diseñar
+>   una captura explícita del destino y validación fuera de UI; probar errores, cierre/cambio de
+>   panel, cancelación/capacidad y ejecución Shell antes de corregir. No atribuirlo al flujo de
+>   creación ya separado ni afirmar que la llamada Shell sea interrumpible.
+>   Continuación: terminal y Explorador capturan destino del menú/panel sin I/O en UI; el worker
+>   comprueba directorio y ejecuta Shell con COM STA en Windows. Una sola solicitud en vuelo;
+>   si se ocupa la plaza se informa y no se encola. El worker despierta la UI al completar.
+>   Pruebas dirigidas cubren destino ausente, cambio de panel, capacidad y despertar. La llamada
+>   del SO no se puede cancelar mientras está bloqueada, ni es atómica con la validación previa;
+>   sigue pendiente aceptación nativa de terminales/Explorador y rutas remotas.
+>   Gate: 1.608 aprobadas, 9 ignoradas, Clippy/formato correctos, pico 10,92 GiB. Build
+>   supervisado y paquetes verificados en `dist`, sin instalar; hashes en `ESTADO-ACTUAL.md`.
+>   U2: prueba Slint sin ventana reproduce el recentrado al cambiar el índice de la misma ruta;
+>   corregido con revelado diferido por cambio de ruta. La prueba cubre inserción/eliminación,
+>   reemplazo completo de filas, cambio de altura, navegación y aparición tardía de la ruta.
+>   El caso real de OneDrive en otra unidad y la conservación de la misma fila visible en reconstrucciones
+>   arbitrarias siguen pendientes de aceptación; no se establece que esa fuera su causa.
+>   Gate final: 1.603 aprobadas, 9 ignoradas, Clippy/formato correctos, pico 10,99 GiB. Build
+>   supervisado y ZIP/setup verificados en `dist`, sin instalar; hashes en `ESTADO-ACTUAL.md`.
+> - [ ] U3–U4: auditar la carrera de destino OLE y completar la matriz Windows existente, incluyendo persistencia de confirmaciones y condiciones adversas; no duplicar cierres anteriores.
 > Integración OLE en validación: el indicador interno usa guard RAII durante DoDragDrop; no
 > autentica un origen externo concurrente malicioso. Para una entrega externa se consulta a UI
 > antes de GetData y se confirma la ruta capturada; si el panel cambió se pide elegir destino.

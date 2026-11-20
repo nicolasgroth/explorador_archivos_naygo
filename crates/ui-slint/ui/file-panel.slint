@@ -7,7 +7,7 @@
 // sobre cuál actuar; el panel activo lleva borde de acento.
 import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 import { PathEditor } from "path-editor.slint";
-import { RowData, PathSeg, ColumnVm, ColumnToggleVm } from "types.slint";
+import { RowData, PathSeg, ColumnVm, ColumnToggleVm, DropViewport } from "types.slint";
 import { Tr } from "i18n.slint";
 import { Theme } from "theme.slint";
 import { BreadcrumbBar } from "breadcrumb-bar.slint";
@@ -283,6 +283,11 @@ export component FilePanel inherits FocusScope {
     callback refresh-panel(int);
     in property <int> pane-id;
     in property <bool> active;
+    // El editor del modal captura el foco real; al cerrarse se devuelve al panel activo.
+    in property <bool> new-folder-open: false;
+    changed new-folder-open => {
+        if !root.new-folder-open { refocus-after-rename.running = true; }
+    }
     // Se está ARRASTRANDO un archivo sobre ESTE panel ahora mismo: borde marcado + path-bar
     // remarcada, para indicar dónde caerá el drop. Manda sobre `active` mientras dura el arrastre.
     in property <bool> drag-over: false;
@@ -293,11 +298,22 @@ export component FilePanel inherits FocusScope {
     // Reporta -1 para encabezado/zona vacía/archivo y el índice de vista cuando hay una fila.
     // Rust decide después si esa fila sigue siendo una carpeta y, solo entonces, la usa de destino.
     callback drop-target-row(int, int);
+    callback drop-viewport-changed(int, DropViewport);
     // Hay un MODAL de operación abierto (conflicto/eliminar/aviso, etc.). Mientras sea true se
     // DESMONTA el `body-touch` exterior (ver más abajo) para que NO robe hover/clic/arrastre al
     // velo del modal: sin esto el popup queda con el hover muerto hasta el primer clic, y arrastrar
     // resalta filas que no debería. Al cerrar el modal vuelve a false → el TouchArea se re-monta.
     in property <bool> modal-open: false;
+    // Otros overlays de la ventana también poseen el teclado, sin alterar body-touch.
+    in property <bool> focus-blocked: false;
+    property <int> path-focus-revision: 0;
+    changed focus-blocked => {
+        if !root.focus-blocked { refocus-after-rename.running = true; }
+    }
+    // Operaciones/avisos toman foco real; recuperarlo solo cuando ya no quede otro modal.
+    changed modal-open => {
+        if !root.modal-open { refocus-after-rename.running = true; }
+    }
     // Hay un arrastre OLE EN CURSO (DoDragDrop corriendo su bucle modal de Windows). Rust lo pone
     // en true al lanzar el arrastre y en false cuando termina (drop procesado o cancelado). Mientras
     // es true DESMONTAMOS el `body-touch` exterior — igual que con `modal-open` — por una razón de
@@ -348,6 +364,31 @@ export component FilePanel inherits FocusScope {
         let row = floor((root.drag-client-y - list.absolute-position.y - list.viewport-y) / root.row-h);
         root.drop-target-row(root.pane-id,
             row >= 0 && row < root.rows.length ? row : -1);
+    }
+    property <DropViewport> drop-viewport: {
+        left: list.absolute-position.x / 1px,
+        top: list.absolute-position.y / 1px,
+        width: list.visible-width / 1px,
+        height: list.visible-height / 1px,
+        scroll-y: list.viewport-y / 1px,
+        row-height: root.row-h / 1px,
+    };
+    property <DropViewport> published-drop-viewport;
+    // La primera geometría calculada puede coincidir con el valor inicial de un
+    // `changed`. Publicar cuando el layout ya tiene tamaño y difiere del enviado.
+    Timer {
+        interval: 0ms;
+        running: root.drop-viewport.width > 0 && root.drop-viewport.height > 0
+            && (root.drop-viewport.left != root.published-drop-viewport.left
+                || root.drop-viewport.top != root.published-drop-viewport.top
+                || root.drop-viewport.width != root.published-drop-viewport.width
+                || root.drop-viewport.height != root.published-drop-viewport.height
+                || root.drop-viewport.scroll-y != root.published-drop-viewport.scroll-y
+                || root.drop-viewport.row-height != root.published-drop-viewport.row-height);
+        triggered => {
+            root.published-drop-viewport = root.drop-viewport;
+            root.drop-viewport-changed(root.pane-id, root.published-drop-viewport);
+        }
     }
     // Al NAVEGAR (cambia la carpeta del panel), el viewport vuelve arriba y el próximo foco se
     // revela otra vez: si no, la carpeta nueva heredaría el offset de la anterior.
@@ -454,10 +495,12 @@ export component FilePanel inherits FocusScope {
     callback hover-tip(string, length, length);
     // --- Rename inline (6D): la fila `rename-pos` muestra un editor en la celda Name. ---
     in property <int> rename-pos: -1;        // posición de vista en edición (-1 = ninguna)
+    property <int> rename-resume-revision: 0;
     in property <string> rename-text;        // nombre inicial del editor
     in property <int> rename-session: 0;      // identidad estable; invalida callbacks tardíos
     in property <int> rename-selection-start: 0; // offsets UTF-8 para el ciclo de selección F2
     in property <int> rename-selection-end: 0;
+    in property <int> rename-selection-revision: 0;
     // Texto VIVO del editor de rename (bidireccional con la ventana). El editor edita ESTA
     // propiedad, no `rename-text`: si el delegate de la fila se re-monta (rebuild de filas
     // por watcher/listado), el editor vuelve con lo que el usuario ya tipeó y NO con el
@@ -472,7 +515,8 @@ export component FilePanel inherits FocusScope {
     // true una vez aplicada la selección inicial del ciclo F2 en ESTA sesión: un re-montaje
     // posterior solo retoma el foco, NO re-selecciona (re-seleccionar haría que la siguiente
     // tecla reemplace todo el draft).
-    property <bool> rename-seeded: false;
+    in-out property <bool> rename-seeded: false;
+    in property <bool> rename-repositioning: false;
     callback rename-commit(int, int, string);     // (sesión, pos, nombre) Enter → renombrar
     callback rename-chain(int, int, string, int); // (sesión, pos, nombre, dir) ↑/↓
     callback rename-cycle();                   // F2 dentro del editor: ciclar la selección
@@ -593,9 +637,8 @@ export component FilePanel inherits FocusScope {
     // propiedades/layout paniquea con "Recursion detected").
     changed rename-pos => {
         root.hover-row = -1;
-        // Sesión NUEVA (o cierre): la selección inicial del ciclo F2 vuelve a estar pendiente.
-        // (rename-cursor NO se resetea aquí: es `in` desde la ventana y Rust lo siembra al abrir.)
-        root.rename-seeded = false;
+        // La selección pertenece a la sesión, no al componente: al cambiar de pestaña el
+        // FilePanel puede desmontarse y volver sin que haya comenzado una sesión nueva.
         if (root.rename-pos == -1) {
             refocus-after-rename.running = true;
         }
@@ -605,7 +648,11 @@ export component FilePanel inherits FocusScope {
         running: false;
         triggered => {
             self.running = false;
-            if root.active && !root.editing && !root.toolbar-path-editing { root.focus(); }
+            if root.active && !root.toolbar-path-editing && !root.new-folder-open && !root.modal-open && !root.focus-blocked {
+                if root.rename-pos != -1 { root.rename-resume-revision += 1; }
+                else if root.editing { root.path-focus-revision += 1; }
+                else { root.focus(); }
+            }
         }
     }
 
@@ -623,8 +670,9 @@ export component FilePanel inherits FocusScope {
     // Cuando este panel pasa a ser el activo, tomar el foco de teclado para que las teclas
     // lleguen sin necesidad de un clic previo (p. ej. tras Tab o al arrancar).
     changed active => {
-        if (root.active && !root.editing) {
-            root.focus();
+        if (root.active && !root.editing && !root.toolbar-path-editing && !root.new-folder-open && !root.modal-open && !root.focus-blocked) {
+            if root.rename-pos != -1 { refocus-after-rename.running = true; }
+            else { root.focus(); }
         }
     }
 
@@ -867,6 +915,8 @@ export component FilePanel inherits FocusScope {
                     height: parent.height;
                     text <=> root.edit-text;
                     session: root.edit-session;
+                    focus-revision: root.path-focus-revision;
+                    allow-refocus: root.active && !root.new-folder-open && !root.modal-open && !root.focus-blocked;
                     caret: root.edit-caret;
                     caret-revision: root.edit-caret-revision;
                     suggestion-index: root.suggestion-index;
@@ -1066,6 +1116,45 @@ export component FilePanel inherits FocusScope {
                             // no admite hijos); ocupa exactamente el mismo espacio de layout.
                             if col.kind == 0 && root.rename-pos == i: Rectangle {
                                 horizontal-stretch: 1;
+                                property <int> resume-revision: root.rename-resume-revision;
+                                changed resume-revision => { resume-rename.running = true; }
+                                property <int> selection-revision: root.rename-selection-revision;
+                                changed selection-revision => { cycle-selection.running = true; }
+                                cycle-selection := Timer {
+                                    interval: 0ms;
+                                    running: false;
+                                    triggered => {
+                                        self.running = false;
+                                        if root.active && root.rename-pos == i
+                                            && rename-edit.session == root.rename-session
+                                            && !root.new-folder-open && !root.modal-open && !root.focus-blocked {
+                                            rename-edit.set-selection-offsets(root.rename-selection-start, root.rename-selection-end);
+                                        }
+                                    }
+                                }
+                                // Devolver foco sin resembrar texto ni selección: el mismo editor
+                                // conserva borrador y cursor. Un overlay nuevo cancela el intento.
+                                resume-rename := Timer {
+                                    interval: 0ms;
+                                    running: false;
+                                    triggered => {
+                                        self.running = false;
+                                        if root.active && root.rename-pos == i
+                                            && rename-edit.session == root.rename-session
+                                            && !root.new-folder-open && !root.modal-open && !root.focus-blocked {
+                                            rename-edit.focus();
+                                            if rename-edit.needs-first-focus {
+                                                rename-edit.needs-first-focus = false;
+                                                if !root.rename-seeded {
+                                                    root.rename-seeded = true;
+                                                    rename-edit.set-selection-offsets(root.rename-selection-start, root.rename-selection-end);
+                                                } else {
+                                                    rename-edit.set-selection-offsets(root.rename-cursor, root.rename-cursor);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 // El foco NO se puede tomar en `init`: este editor se monta DENTRO
                                 // de la evaluación de layout (el `if` se crea al resolver el
                                 // layout de la celda) y `focus()` consulta la geometría del ítem
@@ -1090,21 +1179,22 @@ export component FilePanel inherits FocusScope {
                                         // (primera vez) o draft recuperado (re-montaje). Nunca por
                                         // binding (eso reseteaba el cursor en cada tecla).
                                         rename-edit.text = root.rename-draft;
-                                        rename-edit.focus();
-                                        // La selección inicial (ciclo F2: nombre → ext → todo) SOLO
-                                        // se aplica en el PRIMER montaje de la sesión. Si el delegate
-                                        // se re-monta (rebuild de filas), el draft ya trae lo tipeado
-                                        // y re-seleccionar haría que la próxima tecla lo borre todo:
-                                        // se restaura solo la POSICIÓN DEL CURSOR guardada.
-                                        if (!root.rename-seeded) {
-                                            root.rename-seeded = true;
-                                            rename-edit.set-selection-offsets(
-                                                root.rename-selection-start,
-                                                root.rename-selection-end);
-                                        } else {
-                                            rename-edit.set-selection-offsets(
-                                                root.rename-cursor,
-                                                root.rename-cursor);
+                                        // Si hay un diálogo por encima, sembrar el borrador pero no
+                                        // quitarle el foco. Al cerrarlo, resume-rename aplicará la
+                                        // selección inicial o el cursor de reconstrucción una vez.
+                                        if root.active && !root.new-folder-open && !root.modal-open && !root.focus-blocked {
+                                            rename-edit.focus();
+                                            rename-edit.needs-first-focus = false;
+                                            if (!root.rename-seeded) {
+                                                root.rename-seeded = true;
+                                                rename-edit.set-selection-offsets(
+                                                    root.rename-selection-start,
+                                                    root.rename-selection-end);
+                                            } else {
+                                                rename-edit.set-selection-offsets(
+                                                    root.rename-cursor,
+                                                    root.rename-cursor);
+                                            }
                                         }
                                     }
                                 }
@@ -1127,13 +1217,14 @@ export component FilePanel inherits FocusScope {
                                 // Sesión de ESTE editor, capturada por el Timer al montarlo.
                                 // -1 = aún no inicializada: ningún callback puede pasar el guard.
                                 property <int> session: -1;
+                                property <bool> needs-first-focus: true;
                                 accepted => {
                                     root.rename-commit(self.session, i, self.text);
                                 }
                                 // Perder el foco confirma. La sesión viaja con el callback para que
                                 // Enter/Esc/chain puedan destruir este editor sin confirmar dos veces.
                                 changed has-focus => {
-                                    if (!self.has-focus) {
+                                    if (!self.has-focus && !root.new-folder-open && !root.modal-open && !root.focus-blocked && !root.rename-repositioning) {
                                         root.rename-commit(self.session, i, self.text);
                                     }
                                 }
@@ -1309,7 +1400,8 @@ export component FilePanel inherits FocusScope {
                         if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.right) {
                             root.activate(root.pane-id);
                             if (self.cur-row >= 0 && self.cur-row < root.rows.length) {
-                                root.row-clicked(root.pane-id, self.cur-row, false, false);
+                                // El controlador decide con la selección vigente: un clic derecho
+                                // no es un clic izquierdo ni debe activar su detector de doble clic.
                                 root.row-context(
                                     root.pane-id, self.cur-row,
                                     self.absolute-position.x + self.mouse-x,

@@ -13,14 +13,14 @@
 //! opacos del namespace del Shell. La secuencia completa es:
 //!
 //! 1. `SHParseDisplayName` — convierte cada ruta (`C:\...`) en un **PIDL
-//!    absoluto** (relativo a la raíz del escritorio). Si la ruta no existe o no
-//!    es parte del namespace, falla; esas rutas se descartan.
+//!    absoluto** (relativo a la raíz del escritorio). Si alguna ruta no resuelve,
+//!    se rechaza el lote completo antes de mostrar el menú.
 //! 2. `SHBindToParent` — dado un PIDL absoluto, obtiene la carpeta padre como
 //!    `IShellFolder` **y** el PIDL *hijo* (relativo a esa carpeta). El PIDL hijo
 //!    apunta dentro de la lista del padre: **no se libera**.
 //! 3. `IShellFolder::GetUIObjectOf` — pide al padre un `IContextMenu` para el
 //!    conjunto de hijos. (Todos los items deben compartir el mismo padre; aquí
-//!    usamos el padre del primer item y agrupamos sus hijos.)
+//!    comprobamos el PIDL del padre de cada item antes de agruparlos.)
 //! 4. `CreatePopupMenu` + `IContextMenu::QueryContextMenu` — el Shell rellena un
 //!    `HMENU` con sus verbos (Abrir, Copiar, Propiedades, extensiones de
 //!    terceros…), numerados en el rango `[CMD_MIN, CMD_MAX]`.
@@ -39,9 +39,8 @@
 //! ## Tolerancia
 //!
 //! El filesystem es hostil: rutas que desaparecen, discos de red caídos,
-//! permisos. Toda falla COM se mapea a `ShellError::Failed`; nunca hace panic. Si
-//! ninguna ruta resuelve a un PIDL, devuelve `NoItems` **antes** de mostrar
-//! cualquier menú (esto hace los tests no interactivos).
+//! permisos. Los errores se propagan sin mostrar un menú sobre una selección parcial.
+//! Las pruebas preparan PIDL y obtienen `IContextMenu` sin presentar ni ejecutar comandos.
 
 #[cfg(windows)]
 use std::path::PathBuf;
@@ -60,11 +59,91 @@ pub enum NativeMenuOutcome {
 pub enum ShellError {
     /// El menú nativo no está disponible en esta plataforma.
     NotSupported,
-    /// No hay items válidos para los que mostrar un menú (lista vacía o ninguna
-    /// ruta resolvió a un PIDL del Shell).
+    /// No se proporcionaron elementos.
     NoItems,
+    /// Algún elemento dejó de estar disponible; nunca operar sobre un subconjunto.
+    IncompleteSelection,
+    /// El menú de un único IShellFolder no admite elementos de padres diferentes.
+    DifferentParents,
     /// La operación COM/Shell falló; el mensaje describe el HRESULT.
     Failed(String),
+}
+
+/// PIDL absolutos poseídos durante todo el menú y liberados incluso si falla la preparación.
+#[cfg(windows)]
+struct ShellPidls(Vec<*mut windows::Win32::UI::Shell::Common::ITEMIDLIST>);
+
+#[cfg(windows)]
+impl Drop for ShellPidls {
+    fn drop(&mut self) {
+        for &pidl in &self.0 {
+            unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(pidl.cast())) };
+        }
+    }
+}
+
+#[cfg(windows)]
+impl ShellPidls {
+    /// Resuelve todas las rutas y contrasta los padres por identidad Shell, sin abrir menús.
+    fn resolve(paths: &[PathBuf]) -> Result<Self, ShellError> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::{
+            ILClone, ILFree, ILIsEqual, ILRemoveLastID, SHParseDisplayName,
+        };
+        if paths.is_empty() {
+            return Err(ShellError::NoItems);
+        }
+        let mut result = Self(Vec::with_capacity(paths.len()));
+        for path in paths {
+            let wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut pidl = std::ptr::null_mut();
+            let parsed =
+                unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None) };
+            if parsed.is_err() || pidl.is_null() {
+                if !pidl.is_null() {
+                    unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(pidl.cast())) };
+                }
+                return Err(ShellError::IncompleteSelection);
+            }
+            result.0.push(pidl);
+        }
+        // Clonar el PIDL absoluto para quitar su último segmento sin invalidar el hijo.
+        let parent_of =
+            |pidl| -> Result<*mut windows::Win32::UI::Shell::Common::ITEMIDLIST, ShellError> {
+                let parent = unsafe { ILClone(pidl) };
+                if parent.is_null() {
+                    return Err(ShellError::Failed("ILClone failed".into()));
+                }
+                if !unsafe { ILRemoveLastID(Some(parent)) }.as_bool() {
+                    unsafe { ILFree(Some(parent)) };
+                    return Err(ShellError::Failed("ILRemoveLastID failed".into()));
+                }
+                Ok(parent)
+            };
+        let first = parent_of(result.0[0])?;
+        for &pidl in result.0.iter().skip(1) {
+            let parent = match parent_of(pidl) {
+                Ok(parent) => parent,
+                Err(error) => {
+                    unsafe { ILFree(Some(first)) };
+                    return Err(error);
+                }
+            };
+            let same = unsafe { ILIsEqual(first, parent) }.as_bool();
+            unsafe { ILFree(Some(parent)) };
+            if !same {
+                unsafe { ILFree(Some(first)) };
+                return Err(ShellError::DifferentParents);
+            }
+        }
+        unsafe { ILFree(Some(first)) };
+        Ok(result)
+    }
 }
 
 #[cfg(windows)]
@@ -75,16 +154,12 @@ pub fn show_native_context_menu(
     y: i32,
 ) -> Result<NativeMenuOutcome, ShellError> {
     use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::{PCSTR, PCWSTR};
+    use windows::core::PCSTR;
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{
-        CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
-    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::Common::ITEMIDLIST;
     use windows::Win32::UI::Shell::{
-        IContextMenu, IShellFolder, SHBindToParent, SHParseDisplayName, CMF_NORMAL,
-        CMINVOKECOMMANDINFO,
+        IContextMenu, IShellFolder, SHBindToParent, CMF_NORMAL, CMINVOKECOMMANDINFO,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreatePopupMenu, DestroyMenu, TrackPopupMenuEx, SW_SHOWNORMAL, TPM_RETURNCMD,
@@ -111,51 +186,22 @@ pub fn show_native_context_menu(
         let needs_uninit = hr.is_ok();
 
         let result = (|| -> Result<NativeMenuOutcome, ShellError> {
-            // 1) Resolver cada ruta a un PIDL absoluto. Las que fallan se
-            //    descartan. Guardamos los PIDLs absolutos para liberarlos al
-            //    final (son propiedad nuestra: vienen de SHParseDisplayName).
-            let mut abs_pidls: Vec<*mut ITEMIDLIST> = Vec::with_capacity(paths.len());
-            for path in paths {
-                let wide: Vec<u16> = path
-                    .as_os_str()
-                    .encode_wide()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-                // SHParseDisplayName(pszname, pbc, ppidl, sfgaoin, psfgaoout).
-                if SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_ok()
-                    && !pidl.is_null()
-                {
-                    abs_pidls.push(pidl);
-                }
-            }
-
-            // Si ninguna ruta resolvió: NoItems, ANTES de mostrar menú alguno.
-            // Esto es lo que hace que los tests sean no interactivos.
-            if abs_pidls.is_empty() {
-                return Err(ShellError::NoItems);
-            }
-
-            // Helper que libera todos los PIDLs absolutos. Los PIDLs hijos
-            // (de SHBindToParent) NO se liberan: son internos a la lista del
-            // padre. Los interfaces COM se sueltan solos al salir de scope.
-            let free_abs = |pidls: &[*mut ITEMIDLIST]| {
-                for &p in pidls {
-                    CoTaskMemFree(Some(p as *const c_void));
-                }
-            };
+            // Resolver y validar el lote completo ANTES de ofrecer un comando.
+            let owned_pidls = ShellPidls::resolve(paths)?;
+            let abs_pidls = &owned_pidls.0;
 
             // 2) Obtener el padre (IShellFolder) y el PIDL hijo de cada item.
-            //    Todos los items deben compartir padre para un solo IContextMenu;
-            //    usamos el padre del primer item y recolectamos los hijos.
+            //    Ya se comprobó que todos comparten el mismo padre en el Shell.
             let mut child_last: *mut ITEMIDLIST = std::ptr::null_mut();
             let parent: IShellFolder = match SHBindToParent(abs_pidls[0], Some(&mut child_last)) {
                 Ok(p) => p,
                 Err(e) => {
-                    free_abs(&abs_pidls);
                     return Err(ShellError::Failed(e.to_string()));
                 }
             };
+            if child_last.is_null() {
+                return Err(ShellError::IncompleteSelection);
+            }
 
             // El primer hijo viene de SHBindToParent; los demás los obtenemos por
             // SHBindToParent también (cada uno apunta dentro de la lista de SU
@@ -164,13 +210,11 @@ pub fn show_native_context_menu(
             child_pidls.push(child_last as *const ITEMIDLIST);
             for &abs in abs_pidls.iter().skip(1) {
                 let mut last: *mut ITEMIDLIST = std::ptr::null_mut();
-                // Reutilizamos SHBindToParent solo por su PIDL hijo; descartamos
-                // el IShellFolder devuelto (asumimos mismo padre que el primero).
+                // Reutilizamos SHBindToParent por su PIDL hijo; ya validamos el padre.
                 match SHBindToParent::<IShellFolder>(abs, Some(&mut last)) {
                     Ok(_) if !last.is_null() => child_pidls.push(last as *const ITEMIDLIST),
-                    Ok(_) => {}
+                    Ok(_) => return Err(ShellError::IncompleteSelection),
                     Err(e) => {
-                        free_abs(&abs_pidls);
                         return Err(ShellError::Failed(e.to_string()));
                     }
                 }
@@ -181,7 +225,6 @@ pub fn show_native_context_menu(
             let context_menu: IContextMenu = match parent.GetUIObjectOf(hwnd, &child_pidls, None) {
                 Ok(cm) => cm,
                 Err(e) => {
-                    free_abs(&abs_pidls);
                     return Err(ShellError::Failed(e.to_string()));
                 }
             };
@@ -190,7 +233,6 @@ pub fn show_native_context_menu(
             let hmenu = match CreatePopupMenu() {
                 Ok(h) => h,
                 Err(e) => {
-                    free_abs(&abs_pidls);
                     return Err(ShellError::Failed(e.to_string()));
                 }
             };
@@ -201,7 +243,6 @@ pub fn show_native_context_menu(
                 .ok()
             {
                 let _ = DestroyMenu(hmenu);
-                free_abs(&abs_pidls);
                 return Err(ShellError::Failed(e.to_string()));
             }
 
@@ -225,7 +266,6 @@ pub fn show_native_context_menu(
                     Ok(()) => NativeMenuOutcome::Invoked,
                     Err(e) => {
                         let _ = DestroyMenu(hmenu);
-                        free_abs(&abs_pidls);
                         return Err(ShellError::Failed(e.to_string()));
                     }
                 }
@@ -235,7 +275,6 @@ pub fn show_native_context_menu(
 
             // 7) Limpieza: destruir el HMENU y liberar SOLO los PIDLs absolutos.
             let _ = DestroyMenu(hmenu);
-            free_abs(&abs_pidls);
             Ok(outcome)
         })();
 
@@ -286,8 +325,55 @@ mod tests {
         let r =
             show_native_context_menu(0, &[PathBuf::from("Z:\\no\\existe\\naygo-xyz-12345")], 0, 0);
         assert!(
-            matches!(r, Err(ShellError::NoItems)) || matches!(r, Err(ShellError::Failed(_))),
+            matches!(r, Err(ShellError::IncompleteSelection))
+                || matches!(r, Err(ShellError::Failed(_))),
             "fue {r:?}"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pidl_batch_requires_all_items_and_same_shell_parent() {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+        };
+        let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        assert!(init.is_ok(), "COM STA: {init:?}");
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("uno.txt");
+        let b = dir.path().join("dos ñ.txt");
+        let nested = dir.path().join("sub");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        std::fs::create_dir(&nested).unwrap();
+        let other = nested.join("otro.txt");
+        std::fs::write(&other, b"c").unwrap();
+        let all = ShellPidls::resolve(&[a.clone(), b.clone()]).unwrap();
+        assert_eq!(all.0.len(), 2, "el lote completo se entrega al Shell");
+        // Obtener el objeto real de Shell para ambos hijos sin mostrar ni ejecutar el menú.
+        unsafe {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::Shell::{IContextMenu, IShellFolder, SHBindToParent};
+            let mut first = std::ptr::null_mut();
+            let parent: IShellFolder = SHBindToParent(all.0[0], Some(&mut first)).unwrap();
+            let mut second = std::ptr::null_mut();
+            let _: IShellFolder = SHBindToParent(all.0[1], Some(&mut second)).unwrap();
+            assert!(!first.is_null() && !second.is_null());
+            let children = [first.cast_const(), second.cast_const()];
+            let context: IContextMenu = parent
+                .GetUIObjectOf(HWND(std::ptr::null_mut()), &children, None)
+                .unwrap();
+            drop(context);
+        }
+        drop(all);
+        assert!(matches!(
+            ShellPidls::resolve(&[a.clone(), dir.path().join("ausente")]),
+            Err(ShellError::IncompleteSelection)
+        ));
+        assert!(matches!(
+            ShellPidls::resolve(&[a, other]),
+            Err(ShellError::DifferentParents)
+        ));
+        unsafe { CoUninitialize() };
     }
 }

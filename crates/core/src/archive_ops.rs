@@ -99,7 +99,54 @@ pub fn compress_zip(
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
     for src in sources {
         let base = src.parent().unwrap_or(Path::new(""));
-        collect_entries(src, base, &mut entries)?;
+        collect_entries(src, base, &mut entries, token, false)?;
+    }
+    compress_zip_entries(&entries, dest_zip, on_progress, token)
+}
+
+/// Comprime las fuentes conservando su ruta relativa a `base`. Se rechazan fuentes fuera de
+/// esa raíz antes de crear el destino; el inventario se recorre en el worker y es cancelable.
+/// Rechaza enlaces y errores de inventario en lugar de entregar silenciosamente un ZIP parcial.
+pub fn compress_zip_relative(
+    sources: &[PathBuf],
+    base: &Path,
+    dest_zip: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+    token: &CancellationToken,
+) -> Result<Vec<ArchiveOpItem>, ArchiveError> {
+    let mut entries = Vec::new();
+    for src in sources {
+        token.wait_if_paused();
+        if token.is_cancelled() {
+            return Err(ArchiveError::Cancelled);
+        }
+        if src
+            .strip_prefix(base)
+            .ok()
+            .filter(|p| !p.as_os_str().is_empty())
+            .is_none()
+        {
+            return Err(ArchiveError::Zip("source outside archive root".into()));
+        }
+        let relative = src.strip_prefix(base).expect("source checked above");
+        let mut ancestor = base.to_path_buf();
+        for part in relative.components() {
+            let std::path::Component::Normal(name) = part else {
+                return Err(ArchiveError::Zip("invalid source path".into()));
+            };
+            ancestor.push(name);
+            let meta = std::fs::symlink_metadata(&ancestor)?;
+            if meta.file_type().is_symlink() {
+                return Err(ArchiveError::Zip(
+                    "symbolic links are not supported in multi-folder compression".into(),
+                ));
+            }
+        }
+        collect_entries(src, base, &mut entries, token, true)?;
+    }
+    let mut names = std::collections::HashSet::new();
+    if entries.iter().any(|(_, name)| !names.insert(name.clone())) {
+        return Err(ArchiveError::Zip("duplicate ZIP entry".into()));
     }
     compress_zip_entries(&entries, dest_zip, on_progress, token)
 }
@@ -130,7 +177,11 @@ pub fn compress_zip_entries(
         .map(|(p, _)| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
         .sum();
 
-    let file = std::fs::File::create(dest_zip)?;
+    // Cierra la carrera entre la elección del nombre y el worker: nunca truncar otro ZIP.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest_zip)?;
     let mut zipw = zip::ZipWriter::new(file);
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
@@ -223,7 +274,18 @@ fn collect_entries(
     path: &Path,
     base: &Path,
     out: &mut Vec<(PathBuf, String)>,
+    token: &CancellationToken,
+    strict: bool,
 ) -> Result<(), ArchiveError> {
+    token.wait_if_paused();
+    if token.is_cancelled() {
+        return Err(ArchiveError::Cancelled);
+    }
+    if strict && std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(ArchiveError::Zip(
+            "symbolic links are not supported in multi-folder compression".into(),
+        ));
+    }
     // Ruta interna en el zip = `path` relativa a `base`. Si `strip_prefix` falla (p. ej. un
     // source que es la raíz de un disco "C:\", sin parent → base ""), usamos el nombre del
     // archivo: nunca dejamos una ruta ABSOLUTA dentro del zip (quedaría malformado).
@@ -248,11 +310,27 @@ fn collect_entries(
     let internal = parts.join("/");
     if path.is_dir() {
         out.push((path.to_path_buf(), internal));
-        if let Ok(rd) = std::fs::read_dir(path) {
-            let mut children: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        let listing = match std::fs::read_dir(path) {
+            Ok(rd) => Some(rd),
+            Err(e) if strict => return Err(ArchiveError::Io(e)),
+            Err(_) => None,
+        };
+        if let Some(rd) = listing {
+            let mut children = Vec::new();
+            for entry in rd {
+                token.wait_if_paused();
+                if token.is_cancelled() {
+                    return Err(ArchiveError::Cancelled);
+                }
+                match entry {
+                    Ok(entry) => children.push(entry.path()),
+                    Err(e) if strict => return Err(ArchiveError::Io(e)),
+                    Err(_) => {}
+                }
+            }
             children.sort();
             for c in children {
-                collect_entries(&c, base, out)?;
+                collect_entries(&c, base, out, token, strict)?;
             }
         }
     } else {
@@ -493,6 +571,83 @@ mod tests {
 
     fn noop_progress() -> impl FnMut(u64, u64) {
         |_done, _total| {}
+    }
+
+    #[test]
+    fn compress_relative_conserva_rutas_y_no_sobrescribe() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        std::fs::write(a.join("igual.txt"), b"uno").unwrap();
+        std::fs::write(b.join("igual.txt"), b"dos").unwrap();
+        let sources = vec![a.join("igual.txt"), b.join("igual.txt")];
+        let zip = root.path().join("out.zip");
+        let token = CancellationToken::new();
+        compress_zip_relative(&sources, root.path(), &zip, &mut noop_progress(), &token).unwrap();
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip).unwrap()).unwrap();
+        let mut first = String::new();
+        archive
+            .by_name("a/igual.txt")
+            .unwrap()
+            .read_to_string(&mut first)
+            .unwrap();
+        let mut second = String::new();
+        archive
+            .by_name("b/igual.txt")
+            .unwrap()
+            .read_to_string(&mut second)
+            .unwrap();
+        assert_eq!((first.as_str(), second.as_str()), ("uno", "dos"));
+        drop(archive);
+        let original = std::fs::read(&zip).unwrap();
+        assert!(
+            compress_zip_relative(&sources, root.path(), &zip, &mut noop_progress(), &token)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&zip).unwrap(), original);
+        let outside = tempfile::tempdir().unwrap();
+        let rejected = root.path().join("rejected.zip");
+        assert!(compress_zip_relative(
+            &[outside.path().join("x")],
+            root.path(),
+            &rejected,
+            &mut noop_progress(),
+            &token
+        )
+        .is_err());
+        assert!(!rejected.exists());
+        assert!(compress_zip_relative(
+            &[sources[0].clone(), sources[0].clone()],
+            root.path(),
+            &rejected,
+            &mut noop_progress(),
+            &token
+        )
+        .is_err());
+        assert!(!rejected.exists());
+        assert!(compress_zip_relative(
+            &[root.path().join("no-existe")],
+            root.path(),
+            &rejected,
+            &mut noop_progress(),
+            &token
+        )
+        .is_err());
+        assert!(!rejected.exists());
+        token.cancel();
+        assert!(matches!(
+            compress_zip_relative(
+                &sources,
+                root.path(),
+                &rejected,
+                &mut noop_progress(),
+                &token
+            ),
+            Err(ArchiveError::Cancelled)
+        ));
+        assert!(!rejected.exists());
     }
 
     #[test]

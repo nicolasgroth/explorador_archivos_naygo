@@ -75,7 +75,29 @@ component SpecialFolderIcon inherits Rectangle {
 
 export component TreePanel inherits Rectangle {
     in property <bool> active;
+    in property <bool> new-folder-open: false;
+    in property <bool> modal-open: false;
+    in property <bool> focus-blocked: false;
+    changed focus-blocked => {
+        if !root.focus-blocked { restore-focus.running = true; }
+    }
+    changed modal-open => {
+        if !root.modal-open { restore-focus.running = true; }
+    }
+    changed new-folder-open => {
+        if !root.new-folder-open { restore-focus.running = true; }
+    }
+    restore-focus := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.active && !root.new-folder-open && !root.modal-open && !root.focus-blocked { fs.focus(); }
+        }
+    }
     in property <[TreeRow]> rows;
+    // Posición observable para validar el comportamiento real del viewport virtualizado.
+    out property <length> scroll-offset: fs.scroll-offset;
     in property <length> row-h: 22px;   // alto de fila (densidad configurable)
     in property <bool> linked;
     in property <string> link-label;
@@ -91,6 +113,7 @@ export component TreePanel inherits Rectangle {
     callback hover-tip(string, length, length);
     // Navegación por teclado del árbol (F6/teclado): "up"/"down"/"left"/"right"/"enter".
     callback tree-key(string);
+    callback shortcut(string, bool, bool, bool) -> bool;
     // Sólo Ctrl+Tab se delega al enrutador global: el árbol toma el foco real, por lo que sin
     // este puente el recorrido por todos los paneles se detenía al llegar a él.
     callback key(string, bool, bool, bool);
@@ -101,10 +124,11 @@ export component TreePanel inherits Rectangle {
 
     // Cuando el panel pasa a activo, tomar el foco para recibir las flechas sin un clic previo.
     changed active => {
-        if (root.active) { fs.focus(); }
+        if (root.active && !root.new-folder-open && !root.modal-open && !root.focus-blocked) { fs.focus(); }
     }
 
     fs := FocusScope {
+        out property <length> scroll-offset: list.viewport-y;
         key-pressed(ev) => {
             if (ev.text == Key.Tab && ev.modifiers.control) {
                 root.key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
@@ -115,6 +139,10 @@ export component TreePanel inherits Rectangle {
             if (ev.text == Key.LeftArrow) { root.tree-key("left"); return accept; }
             if (ev.text == Key.RightArrow) { root.tree-key("right"); return accept; }
             if (ev.text == Key.Return) { root.tree-key("enter"); return accept; }
+            // Solo consumir un atajo del árbol reconocido; los demás siguen su ruta normal.
+            if (root.shortcut(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt)) {
+                return accept;
+            }
             return reject;
         }
         // Estas propiedades viven en el FocusScope que contiene al ListView; el alias observa
@@ -122,18 +150,38 @@ export component TreePanel inherits Rectangle {
         property <int> requested-reveal-row: root.reveal-row;
         property <string> requested-reveal-key: root.reveal-key;
         property <length> list-visible-height: list.visible-height;
+        // El índice puede cambiar al expandir o reconstruir ramas sin que cambie la ruta.
+        // En ese caso conservar el desplazamiento; no volver a centrar por el índice nuevo.
+        property <bool> has-revealed: false;
+        property <string> last-revealed-key: "";
         function reveal-active-row() {
             if (self.requested-reveal-row >= 0 && list.visible-height > 0px) {
                 list.viewport-y = -clamp(
                     self.requested-reveal-row * root.row-h - (list.visible-height - root.row-h) / 2,
                     0px,
                     max(0px, root.rows.length * root.row-h - list.visible-height));
+                self.last-revealed-key = self.requested-reveal-key;
+                self.has-revealed = true;
             }
         }
-        changed requested-reveal-row => { self.reveal-active-row(); }
-        changed requested-reveal-key => { self.reveal-active-row(); }
-        // El primer cambio puede llegar antes del layout; se repite cuando ya hay viewport.
-        changed list-visible-height => { self.reveal-active-row(); }
+        // Diferir un tick para recibir conjuntamente la ruta y el índice. Una ruta nueva que
+        // aún no aparece en la lista queda pendiente hasta que el índice o el layout sean válidos.
+        reveal-timer := Timer {
+            interval: 0ms;
+            running: false;
+            triggered => { self.running = false; fs.reveal-active-row(); }
+        }
+        changed requested-reveal-row => {
+            if !self.has-revealed || self.requested-reveal-key != self.last-revealed-key {
+                reveal-timer.running = true;
+            }
+        }
+        changed requested-reveal-key => { reveal-timer.running = true; }
+        changed list-visible-height => {
+            if !self.has-revealed || self.requested-reveal-key != self.last-revealed-key {
+                reveal-timer.running = true;
+            }
+        }
     VerticalLayout {
         padding: Theme.space-sm;
         Rectangle {

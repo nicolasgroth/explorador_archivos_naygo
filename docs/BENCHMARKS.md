@@ -3,6 +3,71 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### Vista profunda 0.5.6 — orden y filtros, 2026-11-20
+
+Repetición de `benchmark_vista_profunda_navegacion_y_filas` en perfil de pruebas sin símbolos,
+con entradas sintéticas de una carpeta. La prueba cronometró dos órdenes explícitos por nombre,
+un filtro que conserva 1.000 filas y el movimiento del cursor. Cifras en milisegundos.
+
+| Entradas | Orden (media) | Aplicar filtro | Flecha abajo (mediana) | Construir filas (mediana) |
+| ---: | ---: | ---: | ---: | ---: |
+| 10.000 | 35,70 | 7,00 | 2,16 | 49,21 |
+| 100.000 | 356,69 | 62,27 | 23,80 | 492,05 |
+
+Una ejecución local del controlador. Queda por medir la ventana Release con Winit, árboles
+anidados reales y tiempo de presentación antes de decidir otras optimizaciones.
+
+### Vista profunda — marcas parciales, 2026-11-15
+
+`cargo test -p naygo-ui-slint --bin naygo --locked --offline
+benchmark_marcas_parciales_vista_profunda -- --ignored --nocapture --test-threads=1` mide
+20 aplicaciones al modelo en debug, con 100.000 entradas sintéticas y cambio de una selección.
+Mediana 54,05 ms; p95 por rango más cercano 57,03 ms. La prueba anterior de `rows_of` medía
+aproximadamente 500 ms solo para construir todas las filas; son etapas distintas y no permiten
+atribuir una reducción porcentual al frame completo. Esta ruta sigue recorriendo el listado para
+encontrar posiciones y solo se usa con hasta ocho rutas afectadas, contexto idéntico y sin F2;
+otros cambios usan la reconciliación completa. Falta medir release/Winit y datos reales.
+
+### Vista profunda — contadores del pie cacheados, 2026-11-15
+
+Con el mismo benchmark sintético debug y 100.000 entradas, la mediana de 20 lecturas del pie
+pasó de 187,0 ms a 0,0122 ms. La lectura que reconstruyó el resumen tardó 194,09 ms en la nueva
+ejecución: la mejora corresponde a lecturas repetidas sin cambios, no al recálculo tras cambios.
+La caché se invalida por entradas, selección o visibilidad; no incluye el estado de espacio de
+disco ni el texto del filtro. Es una ejecución en una máquina, sin renderizado ni release; no
+permite concluir latencia visual. La actualización parcial de filas sigue pendiente.
+
+### Vista profunda — firma por revisión, 2026-11-15
+
+Con el mismo benchmark sintético debug de 100.000 entradas descrito abajo, la mediana de 20
+muestras de `rows_signature` pasó de 239,12 ms a 0,0233 ms; p95 por rango más cercano:
+252,42 ms y 0,0289 ms. Es una ejecución por versión en la misma máquina, sin Winit ni frame
+completo; no equivale a latencia de release ni garantiza una mejora perceptible. La firma ahora
+usa identidad y revisión de la colección; pruebas cubren mutaciones y reemplazo. La mediana
+de cinco reconstrucciones de filas fue 525,58 ms y la del pie 187,0 ms en la última ejecución:
+ambos siguen pendientes de optimización y validación con interfaz real.
+
+### Vista profunda — controlador sintético debug, 2026-11-15
+
+`cargo test -p naygo-ui-slint --bin naygo --locked --offline
+benchmark_vista_profunda_navegacion_y_filas -- --ignored --nocapture --test-threads=1`
+construye entradas en memoria sin crear archivos y mide el controlador, sin Winit ni pintado.
+Una ronda calienta cada operación; se toman 20 muestras de flecha, firma y pie, y cinco de
+construcción de filas. Las mediciones son debug en una sola máquina, no latencia de release,
+ni tiempos extremo a extremo ni una garantía para otros equipos. Medianas en milisegundos:
+
+| 100.000 entradas | Antes | Después |
+| --- | ---: | ---: |
+| Flecha abajo, cerca del final | 59,70 | 28,84 |
+| Construir filas (`rows_of`) | 501,69 | 499,78 |
+| Firma de filas | 246,02 | 239,12 |
+| Pie del panel | 176,20 | 175,98 |
+
+El movimiento aislado bajó aproximadamente 52 % en esta ejecución, eliminando recorridos
+duplicados. Las otras mediciones no son mejoras atribuidas a este cambio; indican que persisten
+costos lineales más grandes. Faltan repeticiones controladas, release, frame UI completo y
+listados reales/locales/UNC antes de concluir sobre la experiencia del usuario.
+
 ### W-07 — colores básicos 3MF, 2026-10-31
 
 Con `scripts/build-release-guarded.ps1 -W07MeshPreviewMeasurement` se generó un 3MF sintético de

@@ -51,6 +51,7 @@ tiny-skia = "0.12"
 # la página, solo muestra el texto y el nº de páginas. Mantiene la app portable.
 pdf-extract = "0.10"
 lopdf.workspace = true
+tempfile.workspace = true
 
 [build-dependencies]
 slint-build = "1.16"
@@ -58,7 +59,6 @@ slint-build = "1.16"
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile.workspace = true
 # Fixture encoders only; these exact versions already belong to the runtime dependency graph.
 png = "0.18.1"
 gif = "0.14.2"

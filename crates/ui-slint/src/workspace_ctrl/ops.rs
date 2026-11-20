@@ -113,6 +113,11 @@ impl WorkspaceCtrl {
     /// nació el gesto, no el activo (si no, arrastrar desde un panel inactivo no movía nada y
     /// obligaba a un clic extra para activarlo primero). Vacío si `id` no es un panel Files.
     pub fn selected_paths_of(&self, id: PaneId) -> Vec<PathBuf> {
+        // La vista profunda usa otra fuente de filas; el foco/selección de FilePaneState
+        // pertenece a la lista normal y nunca debe convertirse en rutas operables aquí.
+        if self.is_deep_active(id) {
+            return Vec::new();
+        }
         if self
             .ws
             .pane(id)
@@ -142,7 +147,7 @@ impl WorkspaceCtrl {
 
     /// Copiar la selección al portapapeles (limpia el corte).
     pub fn op_copy(&mut self) {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if !paths.is_empty() {
             self.ops.set_copy(&paths);
         }
@@ -151,7 +156,7 @@ impl WorkspaceCtrl {
     /// Duplica la selección en su misma carpeta. La desambiguación y el recorrido del árbol se
     /// resuelven en el worker del core; este controlador no toca disco en el hilo UI.
     pub fn op_duplicate(&mut self) -> bool {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if paths.is_empty() {
             return false;
         }
@@ -169,7 +174,7 @@ impl WorkspaceCtrl {
 
     /// Cortar la selección (marca corte visual).
     pub fn op_cut(&mut self) {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if !paths.is_empty() {
             self.ops.set_cut(&paths);
         }
@@ -435,12 +440,15 @@ impl WorkspaceCtrl {
         self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, None)
     }
 
-    /// Un origen externo sin fila acreditada usa la carpeta del panel y exige confirmación.
+    /// El gesto interno resuelve el punto final con la geometría de la lista. OLE puede
+    /// notificar Leave antes de entregar las rutas, por lo que el hover ya no es un destino.
     #[allow(clippy::too_many_arguments)]
     pub fn drop_at_from_ole(
         &mut self,
         content_x: f32,
         content_y: f32,
+        client_y: f32,
+        rendered_rows: Option<&slint::ModelRc<crate::RowData>>,
         move_hint: bool,
         copy_forced: bool,
         internal_source: bool,
@@ -448,8 +456,29 @@ impl WorkspaceCtrl {
         staging: Option<naygo_platform::drop_target::StagedDrop>,
     ) -> bool {
         let was_idle = self.pending_drop.is_none();
+        if internal_source {
+            let Some(target) = self.pane_at(content_x, content_y) else {
+                return false;
+            };
+            if self.purpose_of(target) != Some(PanePurpose::Basket) {
+                let Some(dest_dir) = rendered_rows
+                    .and_then(|rows| self.internal_drop_folder(target, content_x, client_y, rows))
+                else {
+                    return false;
+                };
+                return self.queue_selected_external_drop(
+                    target,
+                    dest_dir,
+                    move_hint,
+                    copy_forced,
+                    paths,
+                    staging,
+                );
+            }
+        }
         if !internal_source {
             self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
         }
         let routed =
             self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, staging);
@@ -457,6 +486,50 @@ impl WorkspaceCtrl {
             self.pending_drop_external_confirmation = !internal_source;
         }
         routed
+    }
+
+    fn internal_drop_folder(
+        &self,
+        target: PaneId,
+        client_x: f32,
+        client_y: f32,
+        rendered_rows: &slint::ModelRc<crate::RowData>,
+    ) -> Option<PathBuf> {
+        use slint::Model;
+        let files = self.ws.pane(target)?.files.as_ref()?;
+        let viewport = self.drop_viewports.get(&target)?;
+        if viewport.row_height <= 0.0 || viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return None;
+        }
+        let inside = (viewport.left..viewport.left + viewport.width).contains(&client_x)
+            && (viewport.top..viewport.top + viewport.height).contains(&client_y);
+        let row = inside.then(|| {
+            ((client_y - viewport.top - viewport.scroll_y) / viewport.row_height).floor() as usize
+        });
+        let deep = self.is_deep_active(target);
+        let entry = if deep {
+            let job = self.deep_job.as_ref()?;
+            if job.replacement_items.is_some() {
+                return None;
+            }
+            self.deep_visible_entry(target, row?)
+        } else {
+            row.and_then(|index| files.view_entry_at(index))
+        };
+        let rendered = row.and_then(|index| rendered_rows.row_data(index));
+        let folder = entry.filter(|entry| entry.is_dir());
+        match (folder, rendered.as_ref()) {
+            (Some(entry), Some(painted))
+                if painted.drop_folder.as_str() == entry.path.to_string_lossy() =>
+            {
+                Some(entry.path.clone())
+            }
+            (None, Some(painted)) if !deep && !painted.is_dir && entry.is_some() => {
+                Some(files.current_dir.clone())
+            }
+            (None, None) if !deep && entry.is_none() => Some(files.current_dir.clone()),
+            _ => None,
+        }
     }
 
     /// Variante que enlaza el staging de un origen OLE virtual con el modal/cola/operación.
@@ -513,6 +586,23 @@ impl WorkspaceCtrl {
                 added
             ));
             return true;
+        }
+
+        // El hover captura identidad y posición; si el streaming cambió la fila no se adivina
+        // destino. Solo carpetas acreditadas, sin fallback silencioso a la raíz profunda.
+        if self.is_deep_active(target) {
+            let Some(dest_dir) = self.deep_hover_folder(target) else {
+                crate::logging::breadcrumb("drop_at: carpeta profunda no acreditada");
+                return false;
+            };
+            return self.queue_selected_external_drop(
+                target,
+                dest_dir,
+                move_hint,
+                copy_forced,
+                paths,
+                staging,
+            );
         }
 
         // El resto de destinos debe ser un panel Files con carpeta resoluble. D-1: si el
@@ -775,7 +865,7 @@ impl WorkspaceCtrl {
         let paths = {
             let contextual = self.context_targets();
             if contextual.is_empty() {
-                self.selected_paths()
+                self.operation_sources()
             } else {
                 contextual
             }
@@ -833,7 +923,7 @@ impl WorkspaceCtrl {
     /// para varios). Al confirmar el modal, `name_confirm` arma la op `Compress` y la lanza.
     /// No-op si no hay selección o no hay carpeta activa.
     pub fn op_compress_prompt(&mut self) {
-        let sources = self.selected_paths();
+        let sources = self.operation_sources();
         if sources.is_empty() {
             return;
         }
@@ -854,7 +944,16 @@ impl WorkspaceCtrl {
     /// Extrae el `.zip` seleccionado (el primero de la selección) dentro de `dest` (una carpeta).
     /// No-op si no hay selección.
     pub fn op_extract_to(&mut self, dest: std::path::PathBuf) {
-        let Some(zip) = self.selected_paths().into_iter().next() else {
+        let deep = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
+        let sources = self.operation_sources();
+        if deep && sources.len() != 1 {
+            self.deep_selection_notice = true;
+            return;
+        }
+        let Some(zip) = sources.into_iter().next() else {
             return;
         };
         let req = naygo_core::ops::OpRequest {
@@ -871,10 +970,24 @@ impl WorkspaceCtrl {
     /// "Extraer aquí": crea (a través del motor) una subcarpeta con el nombre del zip sin
     /// extensión dentro de la carpeta activa y extrae ahí. No-op si no hay selección/carpeta.
     pub fn op_extract_here(&mut self) {
-        let Some(zip) = self.selected_paths().into_iter().next() else {
+        let deep = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
+        let sources = self.operation_sources();
+        if deep && sources.len() != 1 {
+            self.deep_selection_notice = true;
+            return;
+        }
+        let Some(zip) = sources.into_iter().next() else {
             return;
         };
-        let Some(dir) = self.active_dir() else {
+        let dir = if deep {
+            zip.parent().map(std::path::Path::to_path_buf)
+        } else {
+            self.active_dir()
+        };
+        let Some(dir) = dir else {
             return;
         };
         let sub = zip
@@ -888,6 +1001,24 @@ impl WorkspaceCtrl {
     /// entradas "Extraer aquí" / "Extraer en…" del menú contextual). Compara la extensión sin
     /// importar mayúsculas; una carpeta o varios ítems → false.
     pub fn sel_is_single_zip(&self) -> bool {
+        if let Some(id) = self.ws.active_id().filter(|id| self.is_deep_active(*id)) {
+            let Some(sel) = self.deep_complete_selection(id) else {
+                return false;
+            };
+            if sel.len() != 1 {
+                return false;
+            }
+            let Some(pos) = self.deep_position_of(id, &sel[0]) else {
+                return false;
+            };
+            return self.deep_visible_entry(id, pos).is_some_and(|entry| {
+                !entry.is_dir()
+                    && entry
+                        .path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+            });
+        }
         let sel = self.selected_paths();
         if sel.len() != 1 {
             return false;
@@ -902,9 +1033,33 @@ impl WorkspaceCtrl {
     /// Rename inline (F2 / menú): pide a la UI abrir el editor en la celda Name de la fila
     /// enfocada. F2 repetido sobre el mismo archivo recorre nombre → extensión → todo.
     pub fn op_rename(&mut self) {
+        // Solo existe un borrador global en la ventana. Si otro panel pide F2 mientras
+        // permanece suspendido, volver a su dueño conserva texto, sesión y cursor en vez
+        // de reemplazarlo o confirmar un nombre sin intervención explícita.
+        if let Some(owner) = self.rename_active.as_ref().map(|request| request.pane) {
+            if self.ws.active_id() != Some(owner) && self.ws.pane(owner).is_some() {
+                self.set_active_tab(owner);
+                return;
+            }
+        }
         let Some(id) = self.active_files_id() else {
             return;
         };
+        if self.is_deep_active(id) {
+            let Some(pos) = self.deep_focused_position(id) else {
+                return;
+            };
+            let Some(entry) = self.deep_visible_entry(id, pos) else {
+                return;
+            };
+            let stage = self
+                .rename_active
+                .as_ref()
+                .filter(|r| r.pane == id && r.source == entry.path)
+                .map_or(0, |r| (r.stage + 1) % 3);
+            self.request_rename_at(id, pos, stage);
+            return;
+        }
         let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
             return;
         };
@@ -928,6 +1083,17 @@ impl WorkspaceCtrl {
         self.rename_requested.take()
     }
 
+    /// F2 dentro del editor conserva la sesión y calcula la selección sobre el borrador vivo.
+    pub fn rename_cycle_selection(&mut self, draft: &str) -> Option<(usize, usize)> {
+        let active = self.rename_active.as_mut()?;
+        active.stage = (active.stage + 1) % 3;
+        Some(if active.is_dir {
+            (0, draft.len())
+        } else {
+            naygo_core::rename::rename_selection_byte_offsets(draft, active.stage)
+        })
+    }
+
     /// Comprueba que un callback pertenece al editor que sigue activo. La UI lo consulta antes de
     /// cerrar sus propiedades: un callback tardío debe ser un no-op completo y no cerrar la sesión
     /// nueva aunque la operación de filesystem ya esté protegida.
@@ -937,20 +1103,35 @@ impl WorkspaceCtrl {
             .is_some_and(|active| active.pane == id && active.session == session)
     }
 
+    /// Reubica el editor al cambiar la vista. Una nueva identidad invalida notificaciones
+    /// tardías del editor desmontado, sin confirmar ni alterar el borrador de la ventana.
+    pub(crate) fn reposition_rename(&mut self, pos: usize) -> Option<u32> {
+        let active = self.rename_active.as_mut()?;
+        let session = self.next_rename_session;
+        self.next_rename_session = self.next_rename_session.wrapping_add(1).max(1);
+        active.session = session;
+        active.pos = pos;
+        Some(session)
+    }
+
     /// Crea una sesión de rename anclada a la ruta actual de la fila. Las carpetas se seleccionan
     /// completas aunque contengan puntos; para archivos se aplica el ciclo F2.
     fn request_rename_at(&mut self, id: PaneId, pos: usize, stage: u8) -> bool {
-        let Some(entry) = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .and_then(|f| f.view_entry_at(pos))
-        else {
+        let entry = if self.is_deep_active(id) {
+            self.deep_visible_entry(id, pos)
+        } else {
+            self.ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .and_then(|f| f.view_entry_at(pos))
+        };
+        let Some(entry) = entry else {
             return false;
         };
         let name = entry.name.clone();
         let source = entry.path.clone();
-        let selection = if entry.is_dir() {
+        let is_dir = entry.is_dir();
+        let selection = if is_dir {
             (0, name.len())
         } else {
             naygo_core::rename::rename_selection_byte_offsets(&name, stage)
@@ -963,6 +1144,7 @@ impl WorkspaceCtrl {
             pos,
             source,
             name,
+            is_dir,
             stage,
             selection,
         };
@@ -1022,28 +1204,55 @@ impl WorkspaceCtrl {
             if active.pane != id || active.session != session {
                 return None;
             }
+            if self.is_deep_active(id) {
+                self.deep_position_of(id, &active.source)
+            } else {
+                self.ws
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .and_then(|f| {
+                        f.view_indices().iter().position(|&real| {
+                            f.entries.get(real).is_some_and(|e| e.path == active.source)
+                        })
+                    })
+            }
+        };
+        let Some(current_pos) = current_pos else {
+            // Durante un listado parcial la fuente puede aún no estar visible. Confirmar
+            // el borrador solicitado es seguro, pero no adivinar la siguiente fila.
+            self.rename_commit(id, session, new_name);
+            return None;
+        };
+        let count = if self.is_deep_active(id) {
+            self.deep_visible_count(id)
+        } else {
             self.ws
                 .pane(id)
                 .and_then(|p| p.files.as_ref())
-                .and_then(|f| {
-                    f.view_indices().iter().position(|&real| {
-                        f.entries.get(real).is_some_and(|e| e.path == active.source)
-                    })
-                })
-                .unwrap_or(active.pos)
+                .map(|f| f.view_len())?
         };
-        self.rename_commit(id, session, new_name);
-        let count = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .map(|f| f.view_len())?;
         if count == 0 {
+            self.rename_commit(id, session, new_name);
             return None;
         }
         let next = (current_pos as i32 + dir).clamp(0, count as i32 - 1) as usize;
+        let invalidated_neighbor = self.is_deep_active(id)
+            && self.rename_active.as_ref().is_some_and(|active| {
+                active.is_dir
+                    && new_name.trim() != active.name
+                    && self.deep_visible_entry(id, next).is_some_and(|entry| {
+                        entry.path != active.source && entry.path.starts_with(&active.source)
+                    })
+            });
+        self.rename_commit(id, session, new_name);
+        if invalidated_neighbor {
+            // Un hijo de la carpeta renombrada aún tiene una ruta obsoleta durante el worker.
+            return None;
+        }
         // Mover el foco/selección a la fila nueva, para que el scroll la acompañe.
-        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+        if self.is_deep_active(id) {
+            self.deep_focus_at(id, next);
+        } else if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.select_single(next);
         }
         self.request_rename_at(id, next, 0).then_some(next)

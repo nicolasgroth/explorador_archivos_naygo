@@ -68,7 +68,7 @@ impl WorkspaceCtrl {
     }
 
     pub fn basket_add_selected(&mut self) -> usize {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         self.basket.add(paths)
     }
 

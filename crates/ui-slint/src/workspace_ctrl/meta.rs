@@ -247,11 +247,15 @@ impl WorkspaceCtrl {
                 .map(|e| e.path.clone());
         }
         self.basket_selected_path().or_else(|| {
-            self.last_active_files
-                .and_then(|id| self.ws.pane(id))
-                .and_then(|p| p.files.as_ref())
-                .or_else(|| self.ws.active_files())
-                .and_then(|f| f.focused_view_entry())
+            let id = self
+                .last_active_files
+                .filter(|id| self.ws.pane(*id).is_some_and(|pane| pane.files.is_some()))
+                .or_else(|| {
+                    self.ws
+                        .active_id()
+                        .filter(|id| self.ws.pane(*id).is_some_and(|pane| pane.files.is_some()))
+                })?;
+            self.focused_entry_of(id)
                 .filter(|e| e.kind != naygo_core::fs_model::EntryKind::Directory)
                 .map(|e| e.path.clone())
         })

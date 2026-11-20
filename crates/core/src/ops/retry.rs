@@ -89,6 +89,7 @@ impl RetryReview {
                 .collect(),
             total_bytes: self.sources.iter().map(|s| s.bytes).sum(),
             total_files: self.files.len(),
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         }
     }

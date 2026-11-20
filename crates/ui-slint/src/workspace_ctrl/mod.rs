@@ -135,9 +135,24 @@ pub struct RenameRequest {
     pub pos: usize,
     pub source: PathBuf,
     pub name: String,
+    pub is_dir: bool,
     pub stage: u8,
     /// Offsets UTF-8 (bytes), que es la unidad exigida por `LineEdit::set-selection-offsets`.
     pub selection: (usize, usize),
+}
+
+pub(super) struct CreationSelection {
+    pub dir: PathBuf,
+    pub targets: HashSet<PathBuf>,
+    /// Al exceder el límite, preservar la elección frente a cualquier llegada de la carpeta.
+    pub overflow: bool,
+    pub overridden: bool,
+}
+
+impl CreationSelection {
+    fn protects(&self, path: &std::path::Path) -> bool {
+        self.overflow || self.targets.contains(path)
+    }
 }
 
 pub struct WorkspaceCtrl {
@@ -171,6 +186,19 @@ pub struct WorkspaceCtrl {
     /// Última navegación pendiente por panel cuando no hay plaza; una tecla rápida reemplaza la
     /// ruta pendiente en vez de acumular un worker por cada destino intermedio.
     pub(crate) pending_file_listings: HashMap<PaneId, PathBuf>,
+    /// Snapshots automáticos de la carpeta visible. Se publican al completar la lectura para
+    /// que el streaming de reconciliación no reemplace filas existentes con una lista parcial.
+    automatic_listings: HashMap<PaneId, Vec<naygo_core::fs_model::Entry>>,
+    /// Protege Enter del foco anterior mientras se confirma y relista una creación solicitada.
+    /// Estado efímero por panel; nunca bloquea workers ni consultas de filesystem.
+    pub(super) pending_created_activation: HashMap<PaneId, PathBuf>,
+    /// Solicita un aviso breve cuando Enter no puede actuar por una creación aún pendiente.
+    pub(super) creation_wait_notice: bool,
+    pub(super) deep_selection_notice: bool,
+    pub(super) listing_export: Option<listing_export::ListingExport>,
+    /// Últimos destinos creados desde cada panel; evita que un resultado o watcher tardío
+    /// reemplace una selección explícita. Se descarta al navegar, cerrar o iniciar otra creación.
+    pub(super) creation_selection: HashMap<PaneId, CreationSelection>,
     file_listing_cursor: usize,
     /// Un evento durante el snapshot exige una reconciliación al terminar (sin perderlo).
     pub(super) dirty_listings: std::collections::HashSet<PaneId>,
@@ -241,6 +269,8 @@ pub struct WorkspaceCtrl {
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
     /// Modal/job de transformación de texto. El diagnóstico y la escritura corren en workers.
     pub text_transform: Option<text_transform::TextTransformState>,
+    /// Worker cancelado al cerrar el diálogo, conservado hasta su mensaje terminal.
+    pub(super) retired_text_transform: Option<text_transform::TextTransformState>,
     /// Selector de panel destino en curso (overlay 1..9), si lo hay.
     pub pending_pick: Option<PanePick>,
     /// Radar F-6 de destinos no limitado a paneles abiertos.
@@ -262,6 +292,11 @@ pub struct WorkspaceCtrl {
     /// hit-test de `body-touch`; `drop_at` la transforma a una carpeta destino si corresponde.
     /// `None` representa encabezado, zona vacía o un panel que no es Files.
     pub drag_over_row: Option<(PaneId, usize)>,
+    /// Identidad capturada de la carpeta profunda bajo el puntero; no se persiste.
+    pub drag_over_deep_folder: Option<(PaneId, usize, PathBuf)>,
+    /// Geometría publicada por cada lista. El drop interno usa el punto de soltado aunque
+    /// un Leave de OLE ya haya limpiado el hover. La geometría nunca se persiste.
+    pub(crate) drop_viewports: HashMap<PaneId, crate::DropViewport>,
     /// Drop intra-app (entre paneles) en espera de la preconsulta de conflicto o de confirmación.
     /// `drop_at` ya validó el destino; el worker decide si corresponde el modal de conflicto o el
     /// modal genérico "¿Copiar/Mover N a «destino»?". Al cancelar, `cancel_pending_drop`
@@ -375,6 +410,9 @@ pub struct WorkspaceCtrl {
     pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
     /// Error pendiente de una operación Shell; el tick lo convierte en toast localizado.
     pub pending_shell_error: Option<String>,
+    /// Una sola solicitud Shell de carpeta; una llamada del SO bloqueada conserva la plaza.
+    folder_shell_rx: Option<Receiver<Result<(), naygo_platform::open::ShellError>>>,
+    folder_shell_waker: Option<naygo_platform::dir_watch::Waker>,
     /// Error de listado (puede indicar resultados parciales). El tick lo muestra sin modal.
     pub pending_listing_error: Option<String>,
     /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
@@ -468,6 +506,10 @@ pub enum ToolbarMenuRequest {
 /// Estado del menú contextual abierto.
 #[derive(Clone, Debug)]
 pub struct ContextMenuState {
+    /// Identidad efímera para invalidar callbacks y diálogos nativos de un menú anterior.
+    pub identity: std::rc::Rc<()>,
+    /// Panel que originó el gesto; nunca reutilizar sus rutas al cambiar de panel.
+    pub pane: PaneId,
     pub x: f32,
     pub y: f32,
     pub targets: Vec<PathBuf>,
@@ -479,6 +521,8 @@ pub struct ContextMenuState {
     /// al abrir el menú (no en cada tick): `folder_mode`, o clic sobre una única fila que es un
     /// directorio. Cachearlo evita un `stat` por tick que en un share de red lento sería costoso.
     pub target_is_folder: bool,
+    /// Carpeta del panel cuando se abrió el menú sobre archivos; no sigue cambios posteriores.
+    pub folder_fallback: Option<PathBuf>,
     /// El menú se abrió sobre un breadcrumb/árbol y su carpeta puede diferir de la actual.
     pub show_open_here: bool,
 }
@@ -622,6 +666,68 @@ pub struct SearchRow {
     pub icon: slint::Image,
 }
 
+/// Colección del recorrido profundo con revisión de presentación. Toda referencia mutable
+/// invalida la firma antes de modificar datos; reemplazar la colección obtiene otra identidad.
+pub struct DeepItems {
+    entries: Vec<(naygo_core::fs_model::Entry, u32)>,
+    identity: u64,
+    revision: u64,
+}
+
+impl Default for DeepItems {
+    fn default() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            entries: Vec::new(),
+            identity: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            revision: 0,
+        }
+    }
+}
+
+impl DeepItems {
+    fn signature(&self) -> (u64, u64) {
+        (self.identity, self.revision)
+    }
+}
+
+impl std::ops::Deref for DeepItems {
+    type Target = Vec<(naygo_core::fs_model::Entry, u32)>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for DeepItems {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.revision = self.revision.wrapping_add(1);
+        &mut self.entries
+    }
+}
+
+impl From<Vec<(naygo_core::fs_model::Entry, u32)>> for DeepItems {
+    fn from(entries: Vec<(naygo_core::fs_model::Entry, u32)>) -> Self {
+        Self {
+            entries,
+            ..Self::default()
+        }
+    }
+}
+
+impl FromIterator<(naygo_core::fs_model::Entry, u32)> for DeepItems {
+    fn from_iter<T: IntoIterator<Item = (naygo_core::fs_model::Entry, u32)>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
+impl<'a> IntoIterator for &'a DeepItems {
+    type Item = &'a (naygo_core::fs_model::Entry, u32);
+    type IntoIter = std::slice::Iter<'a, (naygo_core::fs_model::Entry, u32)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
 /// Listado profundo (vista recursiva) en curso/terminado para un panel. Un solo job a la vez.
 /// Igual que SearchJob, pero las entradas se vuelcan en las filas NORMALES del panel (no en un
 /// overlay): cada una lleva su profundidad.
@@ -631,11 +737,33 @@ pub struct DeepJob {
     pub rx: std::sync::mpsc::Receiver<naygo_core::deep_listing::DeepMsg>,
     pub token: naygo_core::CancellationToken,
     /// Entradas acumuladas con su profundidad (orden de descubrimiento).
-    pub items: Vec<(naygo_core::fs_model::Entry, u32)>,
+    pub items: DeepItems,
+    /// Orden explícito de la vista profunda, independiente del listado normal.
+    deep_sort: Option<naygo_core::fs_model::SortSpec>,
+    deep_view: std::cell::RefCell<Option<deep_view::DeepView>>,
+    /// Snapshot automático en curso. Las filas visibles siguen disponibles hasta reconciliar.
+    replacement_items: Option<Vec<(naygo_core::fs_model::Entry, u32)>>,
+    /// Identidad del cursor profundo, independiente de la selección del listado normal.
+    pub focused_path: Option<PathBuf>,
+    /// Selección y ancla por identidad, independientes del orden de llegada del worker.
+    pub selected_paths: std::collections::HashSet<PathBuf>,
+    pub selection_anchor: Option<PathBuf>,
+    pub selection_revision: u64,
+    /// Contadores visibles del pie; se invalidan con entradas, selección o visibilidad.
+    footer_cache: Option<DeepFooterCache>,
+    /// Inhibe el doble clic nativo si el elemento bajo el puntero cambió entre pulsaciones.
+    pub suppress_native_double: bool,
+    pub last_pointer_path: Option<(PathBuf, std::time::Instant)>,
     pub dirs_scanned: usize,
     pub done: bool,
     pub cancelled: bool,
     pub partial: bool,
+}
+
+struct DeepFooterCache {
+    view: std::sync::Arc<[usize]>,
+    selection_revision: u64,
+    data: naygo_core::footer::FooterData,
 }
 
 /// Búsqueda recursiva en curso/terminada (overlay de resultados). Un solo job a la vez: una
@@ -670,35 +798,27 @@ pub struct SearchJob {
 pub struct BatchRenameState {
     pub spec: naygo_core::batch_rename::BatchSpec,
     pub items: Vec<naygo_core::batch_rename::BatchItem>,
-    pub existing: Vec<String>,
+    pub existing: Vec<PathBuf>,
+    pub base_dir: PathBuf,
     pub tz_offset_secs: i64,
 }
 
 // --- Submódulos por responsabilidad (O-12) ---
 // Cada uno aporta su propio `impl WorkspaceCtrl`. Rust permite varios `impl` del
 // mismo tipo repartidos en módulos del mismo crate.
-/// Mezcla en `hasher` los campos del Entry que determinan una fila, para la firma de la vista
-/// profunda. La vista normal usa revisiones y deltas del watcher.
-fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, hasher: &mut H) {
-    use std::hash::Hash;
-    e.name.hash(hasher);
-    e.path.hash(hasher);
-    std::mem::discriminant(&e.kind).hash(hasher);
-    e.size.hash(hasher);
-    e.modified.hash(hasher);
-    e.created.hash(hasher);
-}
-
 mod basket;
 mod columns;
 mod comparison_points;
 mod context;
+mod deep_selection;
+mod deep_view;
 mod delivery;
 mod drive_io;
 mod favorites;
 mod input;
 mod layout_panes;
 mod listing;
+pub(crate) mod listing_export;
 mod meta;
 mod navigation;
 mod ops;
@@ -797,8 +917,14 @@ impl WorkspaceCtrl {
             listings: HashMap::new(),
             listing_admission: naygo_core::listing::ListingAdmission::new(8),
             pending_file_listings: HashMap::new(),
+            automatic_listings: HashMap::new(),
             file_listing_cursor: 0,
             dirty_listings: std::collections::HashSet::new(),
+            pending_created_activation: HashMap::new(),
+            creation_wait_notice: false,
+            deep_selection_notice: false,
+            listing_export: None,
+            creation_selection: HashMap::new(),
             trees: HashMap::new(),
             drive_snapshot: Vec::new(),
             drive_refresh_rx: None,
@@ -833,6 +959,7 @@ impl WorkspaceCtrl {
             delivery_results: Default::default(),
             sync_assistant: None,
             text_transform: None,
+            retired_text_transform: None,
             pending_pick: None,
             destination_radar: None,
             last_area: Rect {
@@ -844,6 +971,8 @@ impl WorkspaceCtrl {
             drag_over_pane: None,
             drag_over_client_y: None,
             drag_over_row: None,
+            drag_over_deep_folder: None,
+            drop_viewports: HashMap::new(),
             pending_drop: None,
             drop_collision_rx: None,
             drop_collision_cancel: None,
@@ -887,6 +1016,8 @@ impl WorkspaceCtrl {
             open_config_requested: false,
             toolbar_menu_requested: None,
             pending_shell_error: None,
+            folder_shell_rx: None,
+            folder_shell_waker: None,
             pending_listing_error: None,
             comparison: HashMap::new(),
             comparison_pair: None,
@@ -1108,8 +1239,16 @@ impl WorkspaceCtrl {
 
     /// Aplica `op` al panel activo (helper para no repetir el match de préstamos).
     pub(super) fn with_active(&mut self, op: impl FnOnce(&mut FilePaneState)) {
+        let overridden = self.ws.active_id().is_some_and(|id| {
+            self.creation_selection
+                .get(&id)
+                .is_some_and(|state| state.overridden)
+        });
         if let Some(f) = self.ws.active_files_mut() {
             op(f);
+            if overridden {
+                f.update_pending_context_after_selection();
+            }
         }
     }
 
@@ -1124,6 +1263,7 @@ impl WorkspaceCtrl {
     }
 
     pub fn take_shell_error(&mut self) -> Option<String> {
+        self.pump_folder_shell();
         self.pending_shell_error.take()
     }
 
@@ -1172,20 +1312,7 @@ fn footer_inputs_of(
     let item_count = file_count + dir_count;
     // Windows obtiene la raíz de unidad (p. ej. `C:\`). En Linux se pasa la carpeta actual:
     // statvfs resuelve el montaje que la contiene, incluso si no es `/`.
-    #[cfg(windows)]
-    let root = files
-        .current_dir
-        .ancestors()
-        .last()
-        .map(std::path::Path::to_path_buf);
-    #[cfg(target_os = "linux")]
-    let root = Some(files.current_dir.clone());
-    #[cfg(not(any(windows, target_os = "linux")))]
-    let root = files
-        .current_dir
-        .ancestors()
-        .last()
-        .map(std::path::Path::to_path_buf);
+    let root = footer_disk_root_of(files);
     let data = naygo_core::footer::FooterData {
         sel_count,
         total_count,
@@ -1196,6 +1323,21 @@ fn footer_inputs_of(
         dir_count,
     };
     (data, root)
+}
+
+fn footer_disk_root_of(files: &FilePaneState) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(files.current_dir.clone())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        files
+            .current_dir
+            .ancestors()
+            .last()
+            .map(std::path::Path::to_path_buf)
+    }
 }
 
 /// Uso de disco de una unidad (total/libre), o `None` si no se puede leer (red caída,

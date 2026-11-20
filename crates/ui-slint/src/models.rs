@@ -8,6 +8,7 @@
 // estos modelos son ESTABLES y se mutan in situ (ver `sync.rs`). Extraídos de `main.rs` sin
 // cambio de comportamiento (refactor por tamaño de archivo).
 
+use crate::tree_rows_model::TreeRowsModel;
 use crate::*;
 use naygo_core::workspace::layout::Rect;
 use naygo_core::workspace::{PaneId, PanePurpose};
@@ -21,7 +22,7 @@ pub(crate) struct PaneModels {
     pub(crate) columns: Rc<VecModel<ColumnVm>>,
     /// TODAS las columnas (para el menú agregar/quitar) (6C).
     pub(crate) col_menu: Rc<VecModel<ColumnToggleVm>>,
-    pub(crate) tree: Rc<VecModel<TreeRow>>,
+    pub(crate) tree: Rc<TreeRowsModel>,
     pub(crate) favs: Rc<VecModel<NavRow>>,
     pub(crate) recents: Rc<VecModel<NavRow>>,
     pub(crate) frequent_dirs: Rc<VecModel<NavRow>>,
@@ -37,7 +38,7 @@ impl PaneModels {
             rows: Rc::new(VecModel::default()),
             columns: Rc::new(VecModel::default()),
             col_menu: Rc::new(VecModel::default()),
-            tree: Rc::new(VecModel::default()),
+            tree: Rc::new(TreeRowsModel::default()),
             favs: Rc::new(VecModel::default()),
             recents: Rc::new(VecModel::default()),
             frequent_dirs: Rc::new(VecModel::default()),

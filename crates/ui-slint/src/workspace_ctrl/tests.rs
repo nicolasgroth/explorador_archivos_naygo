@@ -159,6 +159,8 @@ fn drop_ole_externo_rapido_ignora_fila_sin_acreditar_y_confirma_ruta() {
     assert!(c.drop_at_from_ole(
         rect.x + rect.w / 2.0,
         rect.y + rect.h / 2.0,
+        0.0,
+        None,
         false,
         true,
         false,
@@ -244,6 +246,107 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     false
+}
+
+#[test]
+fn tree_reveal_termina_si_falta_un_ancestro_tras_listar() {
+    let root = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), config.path().to_path_buf());
+    assert!(drain(&mut c));
+    let tree = c.ws.add_pane(PanePurpose::Tree, PathBuf::new());
+    let mut roots = DirTree::default();
+    roots.roots.push(naygo_core::tree::TreeNode::folder(
+        root.path().to_path_buf(),
+    ));
+    c.trees.insert(tree, roots);
+    c.listing_admission = naygo_core::listing::ListingAdmission::new(1);
+    let slot = c.listing_admission.try_acquire().unwrap();
+    let missing = root.path().join("off-line").join("child");
+    assert!(c.navigate_tree_to(tree, missing.clone()));
+    assert_eq!(c.reveal_targets.get(&tree), Some(&missing));
+    assert!(
+        !c.pump_tree(),
+        "la rama en cola todavía puede entregar el ancestro"
+    );
+    drop(slot);
+    assert!(drain(&mut c));
+    for _ in 0..2000 {
+        if c.pump_tree() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!c.reveal_targets.contains_key(&tree));
+    assert!(c.pump_tree());
+    let files = c.ws.pane(c.active_files_id().unwrap()).unwrap();
+    assert_eq!(files.files.as_ref().unwrap().current_dir, missing);
+    assert!(c.pending_listing_error.is_some());
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "validación de lectura con una carpeta OneDrive real y perfil temporal"]
+fn onedrive_tree_navega_refresca_y_regresa_en_windows() {
+    let root = PathBuf::from(std::env::var_os("NAYGO_TEST_ONEDRIVE").unwrap());
+    let start = PathBuf::from(std::env::var_os("NAYGO_TEST_ONEDRIVE_START").unwrap());
+    assert!(root.is_dir() && start.is_dir() && start != root && start.starts_with(&root));
+    assert!(
+        naygo_platform::known_folders::known_folders()
+            .iter()
+            .any(|folder| {
+                naygo_core::path_identity::key(&folder.path)
+                    == naygo_core::path_identity::key(&root)
+            }),
+        "Windows debe registrar la raíz como acceso conocido"
+    );
+    let config = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(start.clone(), config.path().to_path_buf());
+    c.drive_snapshot = naygo_platform::drives::drives();
+    let files = c.active_files_id().unwrap();
+    c.add_pane_of(PanePurpose::Tree, area());
+    let tree =
+        c.ws.panes()
+            .iter()
+            .find(|pane| pane.purpose == PanePurpose::Tree)
+            .unwrap()
+            .id;
+    let drain_view = |c: &mut WorkspaceCtrl, target: &Path| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            let files_ready = c.pump_listings();
+            let tree_ready = c.pump_tree();
+            if files_ready && tree_ready {
+                let panel = c.ws.pane(files).unwrap().files.as_ref().unwrap();
+                assert!(panel.current_dir == target);
+                assert!(
+                    c.pending_listing_error.is_none(),
+                    "el listado debe terminar completo"
+                );
+                assert!(c.tree_cursor_of(tree).as_deref() == Some(target));
+                assert!(
+                    c.tree_reveal_row(tree) >= 0,
+                    "el destino debe aparecer en el árbol"
+                );
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("el listado o el árbol siguieron ocupados");
+    };
+    c.sync_trees_for_files(files, start.clone());
+    drain_view(&mut c, &start);
+    for linked in [false, true] {
+        if linked {
+            assert!(c.ws.link_tree(tree, files));
+        }
+        assert!(c.navigate_tree_to(tree, root.clone()));
+        drain_view(&mut c, &root);
+        c.refresh_all();
+        drain_view(&mut c, &root);
+        assert!(c.on_go_back());
+        drain_view(&mut c, &start);
+    }
 }
 
 #[test]
@@ -660,6 +763,176 @@ fn drain_text_transform(c: &mut WorkspaceCtrl) -> bool {
 }
 
 #[test]
+fn vista_profunda_orden_y_filtro_comparten_identidad_y_orden_de_exportacion() {
+    use super::listing_export::ExportDestination;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let keep_a = a.join("visible-z.txt");
+    let hidden_a = a.join("oculto.txt");
+    let keep_b = b.join("visible-a.txt");
+    for path in [&keep_a, &hidden_a, &keep_b] {
+        std::fs::write(path, b"contenido").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let first = c.deep_position_of(pane, &keep_a).unwrap();
+    let second = c.deep_position_of(pane, &hidden_a).unwrap();
+    assert!(c.deep_select_at(pane, first, false, false));
+    assert!(c.deep_select_at(pane, second, true, false));
+    c.sort_by_kind(pane, 0);
+    let ordered: Vec<_> = (0..c.deep_visible_count(pane))
+        .map(|pos| c.deep_visible_entry(pane, pos).unwrap().path.clone())
+        .collect();
+    assert_eq!(
+        ordered,
+        [&a, &hidden_a, &keep_a, &b, &keep_b]
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(c.deep_focused_position(pane), Some(1));
+    c.column_menu_open(pane, 0, 0.0, 0.0);
+    c.column_filter_set_text("visible");
+    c.column_filter_apply();
+    assert!(c.deep_focused_position(pane).is_none());
+    assert!(c.deep_complete_selection(pane).is_none());
+    let rows = c.rows_of(pane, 0, std::time::Instant::now());
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["visible-z.txt", "visible-a.txt"]
+    );
+    c.deep_select_at(pane, 1, false, false);
+    c.open_row_context_menu(pane, 1, 0.0, 0.0);
+    assert_eq!(c.context_targets(), vec![keep_b]);
+    c.deep_select_at(pane, 1, true, false);
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    let destination = output.path().join("visible.csv");
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let csv = std::fs::read_to_string(destination).unwrap();
+    assert!(csv.find("visible-z.txt").unwrap() < csv.find("visible-a.txt").unwrap());
+    assert!(!csv.contains("oculto.txt"));
+}
+
+#[test]
+fn vista_profunda_exporta_lote_sin_reemplazar_si_se_cancela() {
+    use super::listing_export::ExportDestination;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let one_dir = root.path().join("uno");
+    let two_dir = root.path().join("dos");
+    std::fs::create_dir(&one_dir).unwrap();
+    std::fs::create_dir(&two_dir).unwrap();
+    let one = one_dir.join("a;uno.txt");
+    let two = two_dir.join("b.txt");
+    let other = root.path().join("no-elegido.txt");
+    for p in [&one, &two, &other] {
+        std::fs::write(p, b"contenido").unwrap();
+    }
+    let destination = output.path().join("resultado.csv");
+    std::fs::write(&destination, b"anterior").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let p1 = c.deep_position_of(pane, &one).unwrap();
+    let p2 = c.deep_position_of(pane, &two).unwrap();
+    c.deep_select_at(pane, p1, false, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.open_row_context_menu(pane, p1, 0.0, 0.0);
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    c.cancel_listing_export();
+    assert!(c.pump_listing_export());
+    assert_eq!(std::fs::read(&destination).unwrap(), b"anterior");
+    c.open_row_context_menu(pane, p1, 0.0, 0.0);
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(c.listing_export.is_none());
+    let bytes = std::fs::read(&destination).unwrap();
+    assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+    let csv = std::str::from_utf8(&bytes[3..]).unwrap();
+    assert!(csv.contains("\"a;uno.txt\""));
+    assert!(csv.contains(&one.display().to_string()) && csv.contains(&two.display().to_string()));
+    assert!(!csv.contains("no-elegido.txt"));
+    assert!(csv.ends_with("\r\n"));
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        bytes,
+        "el menú de carpeta respeta la selección"
+    );
+    c.deep_select_at(pane, p1, true, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let all_bytes = std::fs::read(&destination).unwrap();
+    assert!(std::str::from_utf8(&all_bytes[3..])
+        .unwrap()
+        .contains("no-elegido.txt"));
+    c.open_path_folder_context_menu(pane, one_dir.clone(), 0.0, 0.0);
+    assert!(!c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(';', ExportDestination::File(destination.clone())));
+    c.deep_cancel();
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+    }
+    assert!(
+        c.listing_export.is_none(),
+        "un recorrido reemplazado invalida la instantánea"
+    );
+    assert!(c.pending_listing_error.is_some());
+    assert_eq!(std::fs::read(&destination).unwrap(), all_bytes);
+}
+
+#[test]
 fn exportar_listado_usa_vista_o_seleccion_y_columnas_visibles() {
     let cfg = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -674,9 +947,122 @@ fn exportar_listado_usa_vista_o_seleccion_y_columnas_visibles() {
     assert!(all.contains("\"a;uno.txt\""), "CSV escapa el separador");
     assert!(all.contains("b.txt"));
 
+    let output = tempfile::tempdir().unwrap();
+    let csv_path = output.path().join("listado.csv");
+    let pane = c.active_id().unwrap();
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(
+        ';',
+        super::listing_export::ExportDestination::File(csv_path.clone())
+    ));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let bytes = std::fs::read(&csv_path).unwrap();
+    assert_eq!(&bytes[..3], &[0xef, 0xbb, 0xbf]);
+    assert_eq!(std::str::from_utf8(&bytes[3..]).unwrap(), all);
+
     c.ws.active_files_mut().unwrap().select_single(0);
     let selected = c.export_listing_csv(';').unwrap();
     assert_eq!(selected.lines().count(), 2, "encabezado + una fila");
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(
+        ';',
+        super::listing_export::ExportDestination::File(csv_path.clone())
+    ));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let bytes = std::fs::read(&csv_path).unwrap();
+    assert_eq!(std::str::from_utf8(&bytes[3..]).unwrap(), selected);
+    let files = c.ws.active_files_mut().unwrap();
+    files.clear_selection();
+    c.typeahead = "b".to_string();
+    c.filter_hide_nonmatches = true;
+    c.sync_visual_filter();
+    let filtered = c.export_listing_csv(';').unwrap();
+    assert!(filtered.contains("b.txt") && !filtered.contains("a;uno.txt"));
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(
+        ';',
+        super::listing_export::ExportDestination::File(csv_path.clone())
+    ));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let bytes = std::fs::read(&csv_path).unwrap();
+    assert_eq!(std::str::from_utf8(&bytes[3..]).unwrap(), filtered);
+}
+
+#[test]
+fn exportacion_normal_respeta_orden_y_rechaza_cambios_en_dialogo_y_snapshot() {
+    use super::listing_export::ExportDestination;
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(work.path().join(name), b"x").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    let a = active_pos_of(&c, "a.txt").unwrap();
+    let b = active_pos_of(&c, "b.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(b);
+    c.ws.active_files_mut().unwrap().select_toggle(a);
+    let expected = c.export_listing_csv(',').unwrap();
+    let destination = output.path().join("orden.csv");
+    c.open_row_context_menu(pane, b, 0.0, 0.0);
+    let intent = c.capture_export_intent().unwrap();
+    assert!(c.export_intent_is_current(&intent));
+    c.open_row_context_menu(pane, b, 0.0, 0.0);
+    assert!(
+        !c.export_intent_is_current(&intent),
+        "un menú nuevo invalida el anterior"
+    );
+    assert!(c.start_listing_export(',', ExportDestination::File(destination.clone())));
+    for _ in 0..4000 {
+        if c.pump_listing_export() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let bytes = std::fs::read(&destination).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&bytes[3..]).unwrap(),
+        expected,
+        "mantiene orden de selección"
+    );
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    let intent = c.capture_export_intent().unwrap();
+    c.ws.active_files_mut().unwrap().select_single(a);
+    assert!(
+        !c.export_intent_is_current(&intent),
+        "cambia la selección mientras se elige archivo"
+    );
+    c.open_folder_context_menu(pane, 0.0, 0.0);
+    assert!(c.start_listing_export(',', ExportDestination::File(destination.clone())));
+    c.ws.active_files_mut().unwrap().entries_changed();
+    for _ in 0..100 {
+        if c.pump_listing_export() {
+            break;
+        }
+    }
+    assert!(c.listing_export.is_none());
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        bytes,
+        "una vista invalidada no reemplaza el archivo"
+    );
 }
 
 #[test]
@@ -737,6 +1123,74 @@ fn asistente_sync_planifica_en_worker_y_publica_preview() {
     assert_eq!(vm.rows.row_count(), 1);
     assert!(vm.can_apply);
     c.sync_close();
+}
+
+#[test]
+fn vista_profunda_transformar_texto_conserva_lote_y_relista() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let a_dir = work.path().join("a");
+    let b_dir = work.path().join("b");
+    std::fs::create_dir(&a_dir).unwrap();
+    std::fs::create_dir(&b_dir).unwrap();
+    let a = a_dir.join("uno.txt");
+    let b = b_dir.join("dos.txt");
+    let untouched = work.path().join("intacto.txt");
+    for path in [&a, &b, &untouched] {
+        std::fs::write(path, b"uno\r\ndos\r\n").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(work.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pa = c.deep_position_of(pane, &a).unwrap();
+    let pb = c.deep_position_of(pane, &b).unwrap();
+    let pc = c.deep_position_of(pane, &untouched).unwrap();
+    c.deep_select_at(pane, pa, false, false);
+    c.deep_select_at(pane, pb, true, false);
+    c.open_row_context_menu(pane, pa, 0.0, 0.0);
+    c.deep_select_at(pane, pc, false, false);
+    assert!(c.text_transform_open());
+    c.close_context_menu();
+    assert_eq!(c.text_transform.as_ref().unwrap().paths.len(), 2);
+    assert!(drain_text_transform(&mut c));
+    c.text_transform_set_line(1);
+    assert!(c.text_transform_apply());
+    assert!(drain_text_transform(&mut c));
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(&a).unwrap(), b"uno\ndos\n");
+    assert_eq!(std::fs::read(&b).unwrap(), b"uno\ndos\n");
+    assert_eq!(std::fs::read(&untouched).unwrap(), b"uno\r\ndos\r\n");
+    let entry = c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .find(|(entry, _)| entry.path == a)
+        .unwrap();
+    assert_eq!(entry.0.size, Some(8));
+    c.text_transform_close();
+    c.deep_job
+        .as_mut()
+        .unwrap()
+        .selected_paths
+        .insert(work.path().join("ausente.txt"));
+    assert!(!c.text_transform_open());
+    assert!(c.take_deep_selection_notice());
 }
 
 #[test]
@@ -2041,10 +2495,12 @@ fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
     // El centro de cada panel resuelve a ESE panel.
     let (ox, oy) = center(origin);
     let (dx, dy) = center(dest);
-    let captured = c.capture_external_drop_destination(dx, dy).unwrap();
+    let captured = c.capture_external_drop_destination(dx, dy, dy).unwrap();
     assert_eq!(captured.pane_id, dest.0);
     assert_eq!(captured.path, b.path());
-    assert!(c.capture_external_drop_destination(-50.0, -50.0).is_none());
+    assert!(c
+        .capture_external_drop_destination(-50.0, -50.0, -50.0)
+        .is_none());
     assert_eq!(
         c.pane_at(ox, oy),
         Some(origin),
@@ -2062,6 +2518,11 @@ fn pane_at_resuelve_el_panel_files_bajo_el_cursor() {
     assert!(!c.set_drag_over(Some(dest)), "mismo valor: no cambia");
     assert!(c.set_drag_over(None), "limpiar: cambia");
     assert_eq!(c.drag_over_pane(), None);
+    assert!(c.refresh_pane(dest));
+    assert!(c.external_destination_still_open(&captured));
+    assert!(c.navigate_pane_to(dest, a.path().to_path_buf()));
+    assert!(c.navigate_pane_to(dest, b.path().to_path_buf()));
+    assert!(!c.external_destination_still_open(&captured));
 }
 
 #[test]
@@ -2090,7 +2551,7 @@ fn captura_externa_rechaza_bandeja() {
         .unwrap();
     let (x, y) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
     assert_eq!(c.pane_at(x, y), Some(basket));
-    assert!(c.capture_external_drop_destination(x, y).is_none());
+    assert!(c.capture_external_drop_destination(x, y, y).is_none());
     assert_eq!(c.drop_hover_pane(x, y, false), None);
     assert_eq!(c.drop_hover_pane(x, y, true), Some(basket));
 }
@@ -2148,6 +2609,100 @@ fn drop_at_mismo_panel_sobre_subcarpeta_usa_la_carpeta_como_destino() {
     }
     assert!(work.path().join("archivo/documento.txt").exists());
     assert!(work.path().join("documento.txt").exists());
+}
+
+fn painted_drop_rows(c: &mut WorkspaceCtrl, pane: PaneId) -> slint::ModelRc<crate::RowData> {
+    let rows: Vec<_> = c
+        .rows_of(pane, 0, std::time::Instant::now())
+        .into_iter()
+        .map(crate::vm_builders::to_row_data)
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(rows))
+}
+
+#[test]
+fn ole_mueve_archivo_y_carpeta_en_mismo_panel_sin_hover_y_permite_deshacer() {
+    let cfg = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path();
+    let target = root.join("b-destino");
+    let dir = root.join("c-origen");
+    let file = root.join("documento.txt");
+    std::fs::create_dir(root.join("a-vecino")).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("hijo.txt"), b"hijo").unwrap();
+    std::fs::write(&file, b"documento").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.set_area(area());
+    let top = 100.0;
+    let row = active_pos_of(&c, "b-destino").unwrap();
+    let client_y = top + row as f32 * 22.0 - 22.0 + 11.0;
+    c.set_drop_viewport(
+        pane,
+        crate::DropViewport {
+            left: 0.0,
+            top,
+            width: 800.0,
+            height: 400.0,
+            scroll_y: -22.0,
+            row_height: 22.0,
+        },
+    );
+    c.set_drag_over(None);
+    let rows = painted_drop_rows(&mut c, pane);
+    assert!(c.drop_at_from_ole(
+        100.0,
+        client_y - crate::tick::TOP_BAR_H,
+        client_y,
+        Some(&rows),
+        false,
+        false,
+        true,
+        vec![file.clone(), dir.clone()],
+        None,
+    ));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        DropProbeEvent::Confirmation
+    );
+    let pending = c.pending_drop.as_ref().unwrap();
+    assert!(pending.is_move);
+    assert_eq!(pending.dest_dir, target);
+    assert!(c.confirm_pending_drop());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!file.exists() && !dir.exists());
+    assert_eq!(
+        std::fs::read(target.join("documento.txt")).unwrap(),
+        b"documento"
+    );
+    assert_eq!(
+        std::fs::read(target.join("c-origen/hijo.txt")).unwrap(),
+        b"hijo"
+    );
+    let undo = c.ops.undo_history.last().unwrap();
+    assert_eq!(
+        undo.actions.len(),
+        2,
+        "la carpeta se registró como una unidad"
+    );
+    assert!(c.op_undo_last());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(file).unwrap(), b"documento");
+    assert_eq!(std::fs::read(dir.join("hijo.txt")).unwrap(), b"hijo");
+    assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
 }
 
 /// D-1 no debe permitir una operación imposible: una carpeta nunca puede soltarse sobre sí
@@ -2366,6 +2921,187 @@ fn drop_at_no_ejecuta_hasta_confirmar_y_cancelar_descarta() {
 
 /// El batch-rename: abrir con la selección, editar el spec (plantilla + contador) y aplicar.
 /// La op renombra los archivos en disco (verificado tras drenar las ops).
+#[test]
+fn vista_profunda_batch_renombra_lote_y_reconcilia_resultados() {
+    use naygo_core::keymap::Action;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = root.path().join("sub");
+    let other = root.path().join("otro");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let a = folder.join("a.txt");
+    let b = folder.join("b.txt");
+    let occupied = folder.join("foto1.txt");
+    let outside = other.join("c.txt");
+    for path in [&a, &b, &occupied, &outside] {
+        std::fs::write(path, b"original").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pa = c.deep_position_of(pane, &a).unwrap();
+    let pb = c.deep_position_of(pane, &b).unwrap();
+    let pc = c.deep_position_of(pane, &outside).unwrap();
+    c.deep_select_at(pane, pa, false, false);
+    c.deep_select_at(pane, pc, true, false);
+    c.run_action(Action::BatchRename);
+    assert!(c.batch.is_some(), "el lote puede incluir padres distintos");
+    c.batch_close();
+    c.deep_select_at(pane, pa, false, false);
+    c.deep_select_at(pane, pb, true, false);
+    c.deep_poll();
+    assert!(
+        !c.deep_job.as_ref().unwrap().partial,
+        "un Done real sigue completo"
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    let job = c.deep_job.as_mut().unwrap();
+    job.rx = rx;
+    job.done = false;
+    c.deep_poll();
+    assert!(
+        c.deep_job.as_ref().unwrap().partial,
+        "desconexión sin Done es parcial"
+    );
+    c.run_action(Action::BatchRename);
+    assert!(c.batch.is_none() && c.take_deep_selection_notice());
+    c.deep_job.as_mut().unwrap().partial = false;
+    c.run_action(Action::BatchRename);
+    assert!(c.batch.is_some());
+    c.batch_set_template("foto{n}");
+    assert!(
+        !c.batch_can_apply(),
+        "detecta un nombre ocupado en el padre real"
+    );
+    c.batch_set_template("nuevo{n}");
+    assert!(c.batch_can_apply());
+    let preview = c.batch_preview();
+    let focused_destination = preview
+        .iter()
+        .find(|row| row.path == b)
+        .unwrap()
+        .new_name
+        .clone();
+    let focused_destination = folder.join(focused_destination);
+    c.batch_apply();
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    c.reconcile_completed_operations();
+    assert_eq!(c.deep_position_of(pane, &focused_destination), Some(pb));
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let job = c.deep_job.as_ref().unwrap();
+    assert_eq!(job.focused_path.as_ref(), Some(&focused_destination));
+    assert_eq!(c.deep_position_of(pane, &focused_destination), Some(pb));
+    assert_eq!(job.selected_paths.len(), 2);
+    for row in preview {
+        assert_eq!(
+            std::fs::read(folder.join(row.new_name)).unwrap(),
+            b"original"
+        );
+    }
+    assert!(!a.exists() && !b.exists());
+    assert!(occupied.exists() && outside.exists());
+}
+
+#[test]
+fn vista_profunda_batch_renombra_en_carpetas_distintas_y_aisla_colisiones() {
+    use naygo_core::batch_rename::RowStatus;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let a_dir = root.path().join("a");
+    let b_dir = root.path().join("b");
+    std::fs::create_dir(&a_dir).unwrap();
+    std::fs::create_dir(&b_dir).unwrap();
+    let a = a_dir.join("a.txt");
+    let b = b_dir.join("b.txt");
+    let occupied = a_dir.join("igual.txt");
+    for path in [&a, &b, &occupied] {
+        std::fs::write(path, b"original").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pa = c.deep_position_of(pane, &a).unwrap();
+    let pb = c.deep_position_of(pane, &b).unwrap();
+    c.deep_select_at(pane, pa, false, false);
+    c.deep_select_at(pane, pb, true, false);
+    c.batch_open();
+    c.batch_set_template("igual");
+    let rows = c.batch_preview();
+    assert_eq!(
+        rows.iter().find(|row| row.path == a).unwrap().status,
+        RowStatus::Collision
+    );
+    assert_eq!(
+        rows.iter().find(|row| row.path == b).unwrap().status,
+        RowStatus::Ok
+    );
+    assert!(!c.batch_can_apply());
+    c.batch_set_template("nuevo{n}");
+    assert!(c.batch_can_apply());
+    let rows = c.batch_preview();
+    let focus = b_dir.join(&rows.iter().find(|row| row.path == b).unwrap().new_name);
+    c.batch_apply();
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    c.reconcile_completed_operations();
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    for row in rows {
+        let destination = row.path.parent().unwrap().join(row.new_name);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert!(c
+            .deep_job
+            .as_ref()
+            .unwrap()
+            .selected_paths
+            .contains(&destination));
+    }
+    assert_eq!(
+        c.deep_job.as_ref().unwrap().focused_path.as_ref(),
+        Some(&focus)
+    );
+    assert!(!a.exists() && !b.exists());
+    assert_eq!(std::fs::read(occupied).unwrap(), b"original");
+}
+
 #[test]
 fn batch_rename_abre_edita_y_aplica() {
     let cfg = tempfile::tempdir().unwrap();
@@ -2821,9 +3557,13 @@ fn rename_inline_y_en_cadena() {
     assert!(!tmp.path().join("a.txt").exists());
     // Rename en cadena hacia abajo desde "b.txt": confirma (sin cambio) y devuelve la
     // posición avanzada con un nuevo pedido en etapa 0.
-    // Re-listar para reflejar el rename antes de seguir.
-    c.start_listing(id, tmp.path().to_path_buf());
+    // El resultado F2 conserva la fila y el cursor aunque el nombre nuevo ordene después.
+    c.reconcile_completed_operations();
     assert!(drain(&mut c));
+    let files = c.ws.active_files().unwrap();
+    assert_eq!(files.focused, Some(pos));
+    assert_eq!(files.selected, vec![pos]);
+    assert_eq!(files.focused_view_entry().unwrap().name, "renombrado.txt");
     let pos_b = active_pos_of(&c, "b.txt").expect("b.txt visible");
     c.ws.active_files_mut().unwrap().select_single(pos_b);
     c.op_rename();
@@ -2893,6 +3633,9 @@ fn f2_repetido_cicla_seleccion_y_carpeta_selecciona_todo() {
     let third = c.take_rename_request().unwrap();
     assert_eq!(third.stage, 2);
     assert_eq!(third.selection, (0, 12));
+    assert_eq!(c.rename_cycle_selection("niño.log"), Some((0, 5)));
+    assert_eq!(c.rename_cycle_selection("niño.log"), Some((6, 9)));
+    assert!(c.rename_session_is_active(third.pane, third.session));
     c.rename_cancel();
 
     let folder_pos = active_pos_of(&c, "carpeta.con.puntos").unwrap();
@@ -2900,6 +3643,7 @@ fn f2_repetido_cicla_seleccion_y_carpeta_selecciona_todo() {
     c.op_rename();
     let folder = c.take_rename_request().unwrap();
     assert_eq!(folder.selection, (0, folder.name.len()));
+    assert_eq!(c.rename_cycle_selection("nueva.carpeta"), Some((0, 13)));
 }
 
 /// 6F: rubber-band. select_rect_range selecciona el rango inclusivo de filas; aditivo (Ctrl)
@@ -3912,6 +4656,1311 @@ fn cancelar_selector() {
 }
 
 /// Vista profunda: activar sobre un árbol temporal, drenar hasta completar y cancelar.
+#[test]
+fn vista_profunda_metadata_y_tamano_usan_foco_profundo_no_lista_normal() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let normal = root.path().join("normal.txt");
+    let dir = root.path().join("sub");
+    std::fs::write(&normal, b"normal").unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    let nested = dir.join("interior.txt");
+    std::fs::write(&nested, b"profundo").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let normal_pos = active_pos_of(&c, "normal.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(normal_pos);
+    let file_pos = c.deep_position_of(pane, &nested).unwrap();
+    c.deep_select_at(pane, file_pos, false, false);
+    assert_eq!(c.metadata_target(), Some(nested));
+    assert_eq!(c.inspector_info().name, "interior.txt");
+    let dir_pos = c.deep_position_of(pane, &dir).unwrap();
+    c.deep_select_at(pane, dir_pos, false, false);
+    assert_eq!(c.metadata_target(), None);
+    assert_eq!(c.inspector_info().path, dir.display().to_string());
+    c.compute_size_active();
+    let job = c.size_job.as_ref().expect("worker de tamaño");
+    assert_eq!(job.target, dir);
+    job.token.cancel();
+}
+
+#[test]
+fn vista_profunda_doble_clic_no_abre_otra_fila_si_cambia_el_orden() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    let mk = |path: PathBuf| Entry {
+        name: path.file_name().unwrap().to_string_lossy().into(),
+        path,
+        kind: EntryKind::Directory,
+        size: None,
+        modified: None,
+        created: None,
+        hidden: false,
+        system: false,
+    };
+    *c.deep_job.as_mut().unwrap().items = vec![(mk(a), 0), (mk(b), 0)];
+    let now = std::time::Instant::now();
+    assert!(!c.on_row_clicked(pane, 0, false, false, now));
+    c.deep_job.as_mut().unwrap().items.swap(0, 1);
+    assert!(
+        !c.on_row_double_clicked_native(pane, 0, false, false),
+        "el evento nativo no debe usar la fila nueva"
+    );
+    assert!(!c.on_row_clicked(
+        pane,
+        0,
+        false,
+        false,
+        now + std::time::Duration::from_millis(40)
+    ));
+    assert!(!c.on_row_double_clicked_native(pane, 0, false, false));
+    assert!(c.is_deep_active(pane));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, root.path());
+}
+
+#[test]
+fn vista_profunda_comprime_lote_de_una_misma_carpeta() {
+    use std::io::Read;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = root.path().join("sub");
+    std::fs::create_dir(&dir).unwrap();
+    let a = dir.join("a.txt");
+    let b = dir.join("b.txt");
+    std::fs::write(&a, b"uno").unwrap();
+    std::fs::write(&b, b"dos").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let p1 = c.deep_position_of(pane, &a).unwrap();
+    let p2 = c.deep_position_of(pane, &b).unwrap();
+    c.deep_select_at(pane, p1, false, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.open_row_context_menu(pane, p1, 0.0, 0.0);
+    c.op_compress_prompt();
+    c.close_context_menu();
+    match &c.ops.pending_dialog {
+        Some(crate::ops_ctrl::OpDialog::NameInput {
+            purpose: crate::ops_ctrl::NamePurpose::Compress { sources },
+            ..
+        }) => {
+            assert_eq!(sources.len(), 2);
+            assert!(sources.contains(&a) && sources.contains(&b));
+        }
+        _ => panic!("debe ofrecer el lote completo"),
+    }
+    c.ops.name_changed("paquete".to_string());
+    let label = c.config.t("ops.kind_compress");
+    assert!(c.ops.name_confirm(&label));
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mut zip =
+        zip::ZipArchive::new(std::fs::File::open(root.path().join("paquete.zip")).unwrap())
+            .unwrap();
+    let mut first = String::new();
+    zip.by_name("a.txt")
+        .unwrap()
+        .read_to_string(&mut first)
+        .unwrap();
+    let mut second = String::new();
+    zip.by_name("b.txt")
+        .unwrap()
+        .read_to_string(&mut second)
+        .unwrap();
+    assert_eq!(first, "uno");
+    assert_eq!(second, "dos");
+    c.reconcile_completed_operations();
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(c
+        .deep_position_of(pane, &root.path().join("paquete.zip"))
+        .is_some());
+    drop(zip);
+    let nested_zip = dir.join("anidado.zip");
+    std::fs::copy(root.path().join("paquete.zip"), &nested_zip).unwrap();
+    c.restart_deep_listing(None);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pos = c.deep_position_of(pane, &nested_zip).unwrap();
+    c.deep_select_at(pane, pos, false, false);
+    assert!(c.sel_is_single_zip());
+    c.op_extract_here();
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read(dir.join("anidado").join("a.txt")).unwrap(),
+        b"uno"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("anidado").join("b.txt")).unwrap(),
+        b"dos"
+    );
+}
+
+#[test]
+fn vista_profunda_copia_lote_de_carpetas_distintas_al_otro_panel() {
+    let root = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let one = a.join("uno.txt");
+    let two = b.join("dos.txt");
+    std::fs::write(&one, b"uno").unwrap();
+    std::fs::write(&two, b"dos").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    let other = c.split_for_target().unwrap();
+    c.open_in_pane(other, dest.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.set_area(area());
+    c.ws.set_active(pane);
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let p1 = c.deep_position_of(pane, &one).unwrap();
+    let p2 = c.deep_position_of(pane, &two).unwrap();
+    c.deep_select_at(pane, p1, false, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.op_compress_prompt();
+    assert!(c.ops.pending_dialog.is_some());
+    c.ops.name_changed("mezcla".to_string());
+    assert!(c.ops.name_confirm(&c.config.t("ops.kind_compress")));
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mut zip =
+        zip::ZipArchive::new(std::fs::File::open(root.path().join("mezcla.zip")).unwrap()).unwrap();
+    assert!(zip.by_name("a/uno.txt").is_ok());
+    assert!(zip.by_name("b/dos.txt").is_ok());
+    drop(zip);
+    c.op_to_other(false);
+    let radar = c.destination_radar.as_ref().expect("destino explícito");
+    assert_eq!(radar.sources.len(), 2);
+    assert!(radar.sources.contains(&one) && radar.sources.contains(&two));
+    let dest_index = radar
+        .candidates
+        .iter()
+        .position(|candidate| candidate.path == dest.path())
+        .unwrap();
+    c.destination_radar_resolve(dest_index);
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(dest.path().join("uno.txt")).unwrap(), b"uno");
+    assert_eq!(std::fs::read(dest.path().join("dos.txt")).unwrap(), b"dos");
+    assert!(one.exists() && two.exists());
+    assert!(c.op_duplicate());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(a.join("uno - copia.txt")).unwrap(), b"uno");
+    assert_eq!(std::fs::read(b.join("dos - copia.txt")).unwrap(), b"dos");
+    c.reconcile_completed_operations();
+    assert!(
+        c.deep_complete_selection(pane).is_none(),
+        "no operar con selección parcialmente relistada"
+    );
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(c
+        .deep_position_of(pane, &a.join("uno - copia.txt"))
+        .is_some());
+    let restored = c.deep_complete_selection(pane).unwrap();
+    assert_eq!(restored.len(), 2);
+    assert!(restored.contains(&one) && restored.contains(&two));
+    let move_dest = dest.path().join("movidos");
+    std::fs::create_dir(&move_dest).unwrap();
+    let p1 = c.deep_position_of(pane, &one).unwrap();
+    let p2 = c.deep_position_of(pane, &two).unwrap();
+    c.deep_select_at(pane, p1, false, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.op_to_other(true);
+    c.destination_radar_resolve_path(move_dest.clone());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    c.reconcile_completed_operations();
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!one.exists() && !two.exists());
+    assert_eq!(std::fs::read(move_dest.join("uno.txt")).unwrap(), b"uno");
+    assert_eq!(std::fs::read(move_dest.join("dos.txt")).unwrap(), b"dos");
+    assert!(c.deep_position_of(pane, &one).is_none() && c.deep_position_of(pane, &two).is_none());
+}
+
+#[test]
+#[ignore = "medición sintética manual; no es una prueba de rendimiento en CI"]
+fn benchmark_vista_profunda_navegacion_y_filas() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    use naygo_core::keymap::Action;
+    use std::time::Instant;
+    for count in [10_000, 100_000] {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let pane = c.active_id().unwrap();
+        c.deep_start(pane);
+        while !c.deep_job.as_ref().unwrap().done {
+            c.deep_poll();
+            std::thread::yield_now();
+        }
+        let job = c.deep_job.as_mut().unwrap();
+        *job.items = (0..count)
+            .map(|i| {
+                let name = format!("archivo-{i:06}.txt");
+                (
+                    Entry {
+                        path: root.path().join(&name),
+                        name,
+                        kind: EntryKind::File,
+                        size: Some(64),
+                        modified: None,
+                        created: None,
+                        hidden: false,
+                        system: false,
+                    },
+                    1,
+                )
+            })
+            .collect();
+        let start = job.items[count - 50].0.path.clone();
+        job.focused_path = Some(start.clone());
+        job.selected_paths.insert(start);
+        // Una ronda de calentamiento; las muestras no incluyen la creación del corpus.
+        assert!(c.run_action(Action::MoveDown));
+        let mut moves = Vec::new();
+        for _ in 0..20 {
+            let t = Instant::now();
+            assert!(c.run_action(Action::MoveDown));
+            moves.push(t.elapsed().as_secs_f64() * 1_000.0);
+        }
+        let _ = c.rows_of(pane, 0, Instant::now());
+        let mut rows = Vec::new();
+        for _ in 0..5 {
+            let t = Instant::now();
+            let result = c.rows_of(pane, 0, Instant::now());
+            rows.push(t.elapsed().as_secs_f64() * 1_000.0);
+            assert_eq!(result.len(), count);
+        }
+        let mut signatures = Vec::new();
+        let mut footers = Vec::new();
+        for _ in 0..20 {
+            let t = Instant::now();
+            assert!(c.rows_signature(pane, 0, Instant::now()).is_some());
+            signatures.push(t.elapsed().as_secs_f64() * 1_000.0);
+            let t = Instant::now();
+            let _ = c.footer_text_of(pane);
+            footers.push(t.elapsed().as_secs_f64() * 1_000.0);
+        }
+        moves.sort_by(f64::total_cmp);
+        rows.sort_by(f64::total_cmp);
+        signatures.sort_by(f64::total_cmp);
+        footers.sort_by(f64::total_cmp);
+        let sort_start = Instant::now();
+        c.sort_by_kind(pane, 0);
+        c.sort_by_kind(pane, 0);
+        let sort_ms = sort_start.elapsed().as_secs_f64() * 500.0;
+        c.column_menu_open(pane, 0, 0.0, 0.0);
+        c.column_filter_set_text("archivo-000");
+        let filter_start = Instant::now();
+        c.column_filter_apply();
+        assert_eq!(c.deep_visible_count(pane), 1_000);
+        let filter_ms = filter_start.elapsed().as_secs_f64() * 1_000.0;
+        println!("deep-bench n={count} move_ms={moves:?} rows_ms={rows:?} signature_ms={signatures:?} footer_ms={footers:?} sort_mean_ms={sort_ms:.3} filter_ms={filter_ms:.3}");
+    }
+}
+
+#[test]
+fn vista_profunda_drop_externo_captura_y_valida_identidad() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let origin = tempfile::tempdir().unwrap();
+    let folder = root.path().join("carpeta");
+    let other = root.path().join("otra");
+    let source = origin.path().join("documento.txt");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(&source, b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.set_area(area());
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (_, rect) = c
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .unwrap();
+    let (x, y) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let client_y = y + 34.0;
+    assert!(c
+        .capture_external_drop_destination(x, y, client_y)
+        .is_none());
+    c.set_drag_over_at(Some(pane), Some(client_y));
+    let row = c.deep_position_of(pane, &folder).unwrap();
+    c.set_drag_over_row(pane, row as i32);
+    assert!(c
+        .capture_external_drop_destination(x, y, client_y + 1.0)
+        .is_none());
+    let captured = c.capture_external_drop_destination(x, y, client_y).unwrap();
+    assert_eq!(captured.path, folder);
+    assert_eq!(captured.panel_path, root.path());
+    assert!(captured.deep_folder);
+    let a = c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .position(|(e, _)| e.path == folder)
+        .unwrap();
+    let b = c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .position(|(e, _)| e.path == other)
+        .unwrap();
+    c.deep_job.as_mut().unwrap().items.swap(a, b);
+    assert!(c
+        .capture_external_drop_destination(x, y, client_y)
+        .is_none());
+    c.set_drag_over(None);
+    assert!(c.external_destination_still_open(&captured));
+    assert!(c.queue_selected_external_drop(
+        pane,
+        captured.path.clone(),
+        false,
+        true,
+        vec![source.clone()],
+        None
+    ));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
+    assert_eq!(c.pending_drop.as_ref().unwrap().dest_dir, folder);
+    assert!(c.confirm_pending_drop());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read(folder.join("documento.txt")).unwrap(),
+        b"contenido"
+    );
+    assert!(source.exists());
+    c.navigate_pane_to(pane, origin.path().to_path_buf());
+    assert!(!c.external_destination_still_open(&captured));
+}
+
+#[test]
+fn vista_profunda_drop_interno_acredita_carpeta_y_rechaza_fila_cambiada() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let origin = tempfile::tempdir().unwrap();
+    let folder = root.path().join("carpeta");
+    let other = root.path().join("otra");
+    let source = origin.path().join("documento.txt");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(&source, b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.set_area(area());
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let row = c.deep_position_of(pane, &folder).unwrap();
+    let (_, rect) = c
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .unwrap();
+    let (x, y) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let client_y = y + crate::tick::TOP_BAR_H;
+    let painted = painted_drop_rows(&mut c, pane);
+    assert!(!c.drop_at_from_ole(
+        x,
+        y,
+        client_y,
+        Some(&painted),
+        false,
+        true,
+        true,
+        vec![source.clone()],
+        None
+    ));
+    let top = client_y - (row as f32 + 0.5) * 22.0;
+    let viewport = crate::DropViewport {
+        left: rect.x,
+        top,
+        width: rect.w,
+        height: rect.h,
+        scroll_y: 0.0,
+        row_height: 22.0,
+    };
+    c.set_drop_viewport(pane, viewport);
+    assert!(!c.drop_at_from_ole(
+        x,
+        y,
+        client_y,
+        Some(&painted),
+        false,
+        true,
+        true,
+        vec![folder.clone()],
+        None
+    ));
+    let other_index = c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .position(|(e, _)| e.path == other)
+        .unwrap();
+    let folder_index = c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .position(|(e, _)| e.path == folder)
+        .unwrap();
+    c.deep_job
+        .as_mut()
+        .unwrap()
+        .items
+        .swap(other_index, folder_index);
+    assert!(!c.drop_at_from_ole(
+        x,
+        y,
+        client_y,
+        Some(&painted),
+        false,
+        true,
+        true,
+        vec![source.clone()],
+        None
+    ));
+    assert!(c.pending_drop.is_none());
+    let row = c.deep_position_of(pane, &folder).unwrap();
+    let client_y = top + (row as f32 + 0.5) * 22.0;
+    let painted = painted_drop_rows(&mut c, pane);
+    assert!(c.drop_at_from_ole(
+        x,
+        client_y - crate::tick::TOP_BAR_H,
+        client_y,
+        Some(&painted),
+        false,
+        true,
+        true,
+        vec![source.clone()],
+        None
+    ));
+    assert_eq!(
+        c.wait_drop_collision_probe_for_test(),
+        crate::workspace_ctrl::DropProbeEvent::Confirmation
+    );
+    assert_eq!(c.pending_drop.as_ref().unwrap().dest_dir, folder);
+    assert!(c.confirm_pending_drop());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read(folder.join("documento.txt")).unwrap(),
+        b"contenido"
+    );
+    assert!(source.exists());
+}
+
+#[test]
+fn vista_profunda_crear_carpeta_protege_enter_y_respeta_seleccion_explicita() {
+    use naygo_core::keymap::Action;
+    for override_selection in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let old = root.path().join("anterior");
+        let new = root.path().join("nueva");
+        std::fs::create_dir(&old).unwrap();
+        let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+        assert!(drain(&mut c));
+        let pane = c.active_id().unwrap();
+        c.deep_start(pane);
+        for _ in 0..4000 {
+            c.deep_poll();
+            if c.deep_job.as_ref().is_some_and(|job| job.done) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let old_pos = c.deep_position_of(pane, &old).unwrap();
+        c.deep_select_at(pane, old_pos, false, false);
+        c.new_folder_open_active();
+        c.new_folder_set_text("nueva");
+        c.new_folder_apply();
+        assert!(!c.run_action(Action::Activate));
+        assert!(c.take_creation_wait_notice());
+        if override_selection {
+            assert!(c.deep_select_at(pane, old_pos, false, false));
+        }
+        for _ in 0..4000 {
+            if c.ops.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        c.reconcile_completed_operations();
+        assert!(drain(&mut c));
+        for _ in 0..4000 {
+            c.deep_poll();
+            if c.deep_job.as_ref().is_some_and(|job| job.done) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let expected = if override_selection { &old } else { &new };
+        assert_eq!(
+            c.deep_job.as_ref().unwrap().focused_path.as_ref(),
+            Some(expected)
+        );
+        assert!(c.run_action(Action::Activate));
+        assert_eq!(c.ws.active_files().unwrap().current_dir, *expected);
+    }
+}
+
+#[test]
+fn vista_profunda_borra_lote_de_distintas_carpetas_y_conserva_navegacion() {
+    use naygo_core::keymap::Action;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let one = a.join("uno.txt");
+    let two = b.join("dos.txt");
+    let keep = root.path().join("conservar.txt");
+    std::fs::write(&one, b"uno").unwrap();
+    std::fs::write(&two, b"dos").unwrap();
+    std::fs::write(&keep, b"intacto").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let parent = c.deep_position_of(pane, &a).unwrap();
+    let p1 = c.deep_position_of(pane, &one).unwrap();
+    let p2 = c.deep_position_of(pane, &two).unwrap();
+    c.deep_select_at(pane, parent, false, false);
+    c.deep_select_at(pane, p1, true, false);
+    c.op_delete(true);
+    assert!(
+        c.ops.pending_dialog.is_none(),
+        "no reducir un lote con carpeta e hijo"
+    );
+    assert!(c.take_deep_selection_notice());
+    c.deep_select_at(pane, p1, false, false);
+    c.deep_select_at(pane, p2, true, false);
+    c.op_delete(true);
+    let sources = match &c.ops.pending_dialog {
+        Some(crate::ops_ctrl::OpDialog::ConfirmDelete {
+            sources,
+            permanent: true,
+        }) => sources,
+        _ => panic!("debe confirmar el lote"),
+    };
+    assert_eq!(sources.len(), 2);
+    assert!(sources.contains(&one) && sources.contains(&two));
+    assert!(c.ops.delete_confirm());
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    c.reconcile_completed_operations();
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|j| j.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!one.exists() && !two.exists());
+    assert_eq!(std::fs::read(&keep).unwrap(), b"intacto");
+    assert_eq!(c.active_id(), Some(pane));
+    assert!(c.run_action(Action::MoveDown));
+    assert!(c.focused_view_of(pane) >= 0);
+}
+
+#[test]
+fn vista_profunda_seleccion_por_ruta_reorden_y_filtro_no_entrega_subconjunto() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    use naygo_core::keymap::Action;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.config.settings.show_hidden = false;
+    c.deep_start(pane);
+    let mk = |name: &str, hidden| Entry {
+        name: name.into(),
+        path: root.path().join(name),
+        kind: EntryKind::File,
+        size: Some(1),
+        modified: None,
+        created: None,
+        hidden,
+        system: false,
+    };
+    *c.deep_job.as_mut().unwrap().items = vec![
+        (mk("a", false), 0),
+        (mk("b", false), 0),
+        (mk("c", false), 0),
+    ];
+    assert!(c.deep_select_at(pane, 0, false, false));
+    assert!(c.deep_select_at(pane, 2, true, false));
+    assert_eq!(
+        c.deep_complete_selection(pane).unwrap(),
+        vec![root.path().join("a"), root.path().join("c")]
+    );
+    c.deep_job.as_mut().unwrap().items.swap(0, 1);
+    assert_eq!(
+        c.deep_complete_selection(pane).unwrap(),
+        vec![root.path().join("a"), root.path().join("c")]
+    );
+    let rows = c.rows_of(pane, 0, std::time::Instant::now());
+    assert!(!rows[0].selected && rows[1].selected && rows[2].selected);
+    c.open_row_context_menu(pane, 1, 0.0, 0.0);
+    assert_eq!(
+        c.context_targets(),
+        vec![root.path().join("a"), root.path().join("c")]
+    );
+    assert_eq!(
+        c.operation_sources(),
+        c.context_targets(),
+        "el menú conserva el lote capturado"
+    );
+    assert_eq!(c.basket_add_selected(), 2);
+    assert!(
+        c.basket.items().contains(&root.path().join("a"))
+            && c.basket.items().contains(&root.path().join("c"))
+    );
+    let other = c.split_for_target().unwrap();
+    c.set_active(other);
+    assert!(
+        c.context_menu.is_none(),
+        "el menú no debe sobrevivir a un cambio de panel"
+    );
+    assert!(c.context_targets().is_empty());
+    c.set_active(pane);
+    c.deep_job.as_mut().unwrap().items[2].0.hidden = true;
+    assert!(
+        c.deep_complete_selection(pane).is_none(),
+        "no operar solo sobre a si c quedó oculto"
+    );
+    c.deep_select_at(pane, 0, true, false);
+    assert!(
+        c.deep_complete_selection(pane).is_none(),
+        "Ctrl no descarta una marca oculta silenciosamente"
+    );
+    c.deep_job.as_mut().unwrap().items[2].0.hidden = false;
+    assert!(c.run_action(Action::SelectAll));
+    assert_eq!(c.deep_complete_selection(pane).unwrap().len(), 3);
+    c.select_rect_range(pane, 0, 1, false);
+    assert_eq!(
+        c.deep_complete_selection(pane).unwrap(),
+        vec![root.path().join("b"), root.path().join("a")]
+    );
+    assert!(c.run_action(Action::FocusHome));
+    assert!(c.run_action(Action::ExtendDown));
+    assert_eq!(
+        c.deep_complete_selection(pane).unwrap(),
+        vec![root.path().join("b"), root.path().join("a")]
+    );
+    assert!(c.run_action(Action::FocusDownKeep));
+    assert_eq!(c.deep_complete_selection(pane).unwrap().len(), 2);
+    assert!(c.run_action(Action::ToggleFocused));
+    assert_eq!(c.deep_complete_selection(pane).unwrap().len(), 3);
+}
+
+#[test]
+fn vista_profunda_salir_invalida_sesion_f2_y_callback_tardio() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let source = root.path().join("archivo.txt");
+    std::fs::write(&source, b"original").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pos = c.deep_position_of(pane, &source).unwrap();
+    c.deep_focus_at(pane, pos);
+    c.op_rename();
+    let request = c.take_rename_request().unwrap();
+    c.deep_cancel();
+    assert!(!c.rename_session_is_active(pane, request.session));
+    assert!(!c.rename_commit(pane, request.session, "otro.txt"));
+    assert_eq!(std::fs::read(source).unwrap(), b"original");
+    assert!(!root.path().join("otro.txt").exists());
+}
+
+#[test]
+fn vista_profunda_f2_destino_ocupado_conserva_archivos_y_foco() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = root.path().join("sub");
+    std::fs::create_dir(&dir).unwrap();
+    let source = dir.join("origen.txt");
+    std::fs::write(&source, b"origen").unwrap();
+    std::fs::write(dir.join("ocupado.txt"), b"existente").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pos = c.deep_position_of(pane, &source).unwrap();
+    c.deep_focus_at(pane, pos);
+    c.op_rename();
+    let request = c.take_rename_request().unwrap();
+    assert!(c.rename_commit(pane, request.session, "ocupado.txt"));
+    let mut finished = false;
+    for _ in 0..4000 {
+        if c.ops.pump_ops() {
+            finished = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(finished, "el worker terminó");
+    c.reconcile_completed_operations();
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), b"origen");
+    assert_eq!(
+        std::fs::read(dir.join("ocupado.txt")).unwrap(),
+        b"existente"
+    );
+    assert_eq!(
+        c.deep_job.as_ref().unwrap().focused_path.as_deref(),
+        Some(source.as_path())
+    );
+}
+
+#[test]
+fn vista_profunda_f2_renombra_carpeta_anidada_y_relista_sus_hijos() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = root.path().join("padre").join("viejo");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("hijo.txt"), b"contenido").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let pos = c.deep_position_of(pane, &folder).expect("carpeta visible");
+    assert!(c.deep_focus_at(pane, pos));
+    let f2: slint::SharedString = slint::platform::Key::F2.into();
+    c.on_key(f2.as_str(), false, false, false);
+    let request = c.take_rename_request().expect("F2 profundo abre editor");
+    assert_eq!(request.source, folder);
+    assert_eq!(
+        c.deep_visible_entry(pane, pos + 1).unwrap().path,
+        folder.join("hijo.txt")
+    );
+    assert!(
+        c.rename_chain(pane, request.session, "nuevo", 1).is_none(),
+        "no abrir un hijo con ruta obsoleta"
+    );
+    assert!(c.take_rename_request().is_none());
+    let renamed = root.path().join("padre").join("nuevo");
+    for _ in 0..6000 {
+        c.ops.pump_ops();
+        c.reconcile_completed_operations();
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| {
+            job.done
+                && job
+                    .items
+                    .iter()
+                    .any(|(e, _)| e.path == renamed.join("hijo.txt"))
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read(renamed.join("hijo.txt")).unwrap(),
+        b"contenido"
+    );
+    assert!(!folder.exists());
+    assert!(c.is_deep_active(pane));
+    assert!(c
+        .deep_position_of(pane, &renamed.join("hijo.txt"))
+        .is_some());
+    assert!(c.deep_position_of(pane, &folder).is_none());
+    assert_eq!(
+        c.deep_job.as_ref().unwrap().focused_path.as_deref(),
+        Some(renamed.as_path())
+    );
+}
+
+#[test]
+fn pie_profundo_invalida_cache_por_entradas_seleccion_y_visibilidad() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.config.settings.footer_enabled = true;
+    c.config.settings.show_hidden = false;
+    c.deep_start(pane);
+    let mk = |name: &str, kind, hidden, size| Entry {
+        name: name.into(),
+        path: root.path().join(name),
+        kind,
+        size,
+        modified: None,
+        created: None,
+        hidden,
+        system: false,
+    };
+    *c.deep_job.as_mut().unwrap().items = vec![
+        (mk("archivo", EntryKind::File, false, Some(42)), 0),
+        (mk("carpeta", EntryKind::Directory, false, None), 0),
+        (mk("oculto", EntryKind::File, true, Some(100)), 0),
+    ];
+    c.footer_text_of(pane);
+    let cached = &c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .footer_cache
+        .as_ref()
+        .unwrap()
+        .data;
+    assert_eq!(
+        (
+            cached.total_count,
+            cached.file_count,
+            cached.dir_count,
+            cached.sel_count
+        ),
+        (2, 1, 1, 0)
+    );
+    assert!(c.deep_select_at(pane, 0, false, false));
+    c.footer_text_of(pane);
+    let cached = &c
+        .deep_job
+        .as_ref()
+        .unwrap()
+        .footer_cache
+        .as_ref()
+        .unwrap()
+        .data;
+    assert_eq!((cached.sel_count, cached.marked_bytes), (1, 42));
+    c.deep_job.as_mut().unwrap().items[0].0.size = Some(75);
+    c.footer_text_of(pane);
+    assert_eq!(
+        c.deep_job
+            .as_ref()
+            .unwrap()
+            .footer_cache
+            .as_ref()
+            .unwrap()
+            .data
+            .marked_bytes,
+        75
+    );
+    c.config.settings.show_hidden = true;
+    c.footer_text_of(pane);
+    assert_eq!(
+        c.deep_job
+            .as_ref()
+            .unwrap()
+            .footer_cache
+            .as_ref()
+            .unwrap()
+            .data
+            .total_count,
+        3
+    );
+    c.restart_deep_listing(None);
+    assert!(c.deep_job.as_ref().unwrap().footer_cache.is_none());
+}
+
+#[test]
+fn firma_profunda_invalida_mutaciones_reemplazos_y_visibilidad() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    let mk = |name: &str| Entry {
+        name: name.into(),
+        path: root.path().join(name),
+        kind: EntryKind::File,
+        size: Some(1),
+        modified: None,
+        created: None,
+        hidden: false,
+        system: false,
+    };
+    let now = std::time::Instant::now();
+    let sig = |ctrl: &WorkspaceCtrl| ctrl.rows_signature(pane, 0, now).unwrap();
+    let empty = sig(&c);
+    c.deep_job.as_mut().unwrap().items.push((mk("a"), 0));
+    let one = sig(&c);
+    assert_ne!(empty, one);
+    assert_eq!(one, sig(&c));
+    c.deep_job.as_mut().unwrap().items[0].0.size = Some(2);
+    let changed = sig(&c);
+    assert_ne!(one, changed);
+    c.deep_job.as_mut().unwrap().items.push((mk("b"), 1));
+    let two = sig(&c);
+    c.deep_job.as_mut().unwrap().items.swap(0, 1);
+    assert_ne!(two, sig(&c));
+    let before_visibility = sig(&c);
+    c.config.settings.show_hidden = !c.config.settings.show_hidden;
+    assert_ne!(before_visibility, sig(&c));
+    let before_replacement = sig(&c);
+    let same_items = c.deep_job.as_ref().unwrap().items.to_vec();
+    c.deep_job.as_mut().unwrap().items = same_items.into();
+    assert_ne!(before_replacement, sig(&c));
+}
+
+#[test]
+fn vista_profunda_flechas_conservan_seleccion_si_no_hay_filas_visibles() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.config.settings.show_hidden = false;
+    c.deep_start(pane);
+    let path = root.path().join("oculto");
+    let job = c.deep_job.as_mut().unwrap();
+    *job.items = vec![(
+        Entry {
+            name: "oculto".into(),
+            path: path.clone(),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            created: None,
+            hidden: true,
+            system: false,
+        },
+        0,
+    )];
+    job.focused_path = Some(path.clone());
+    job.selected_paths.insert(path.clone());
+    let revision = job.selection_revision;
+    assert!(!c.deep_select_move(pane, 1, false, false));
+    let job = c.deep_job.as_ref().unwrap();
+    assert_eq!(job.selection_revision, revision);
+    assert_eq!(job.selected_paths.len(), 1);
+    assert!(job.selected_paths.contains(&path));
+}
+
+#[test]
+fn vista_profunda_cursor_sigue_ruta_y_enter_abre_fila_visible() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    use naygo_core::keymap::Action;
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.config.settings.show_hidden = false;
+    c.deep_start(pane);
+    let mk = |path: std::path::PathBuf, hidden| Entry {
+        name: path.file_name().unwrap().to_string_lossy().to_string(),
+        path,
+        kind: EntryKind::Directory,
+        size: None,
+        modified: None,
+        created: None,
+        hidden,
+        system: false,
+    };
+    let hidden = mk(root.path().join("hidden"), true);
+    *c.deep_job.as_mut().unwrap().items = vec![
+        (hidden, 0),
+        (mk(a.clone(), false), 0),
+        (mk(b.clone(), false), 1),
+    ];
+    assert!(c.run_action(Action::FocusEnd));
+    assert_eq!(c.focused_view_of(pane), 1);
+    assert!(c.run_action(Action::FocusHome));
+    assert_eq!(c.focused_view_of(pane), 0);
+    assert!(c.run_action(Action::MoveDown));
+    assert_eq!(c.focused_view_of(pane), 1);
+    let before = c.rows_of(pane, 0, std::time::Instant::now());
+    assert!(before[1].focused);
+    assert!(c.selected_paths().is_empty());
+    c.deep_job.as_mut().unwrap().items[2].0.hidden = true;
+    assert_eq!(c.focused_view_of(pane), -1);
+    assert!(
+        !c.run_action(Action::Activate),
+        "una ruta filtrada no debe abrir otra fila"
+    );
+    c.deep_job.as_mut().unwrap().items[2].0.hidden = false;
+    c.deep_job.as_mut().unwrap().items.swap(1, 2);
+    assert_eq!(
+        c.focused_view_of(pane),
+        0,
+        "el foco conserva la ruta al reordenar"
+    );
+    assert!(c.rows_of(pane, 0, std::time::Instant::now())[0].focused);
+    c.set_area(area());
+    assert!(c.run_action(Action::OpenFocusedOtherPane));
+    assert!(c
+        .ws
+        .panes()
+        .iter()
+        .any(|p| p.id != pane && p.files.as_ref().is_some_and(|f| f.current_dir == b)));
+    assert!(c.is_deep_active(pane));
+    c.ws.set_active(pane);
+    assert!(c.run_action(Action::Activate));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, b);
+    assert!(!c.is_deep_active(pane));
+}
+
+#[test]
+fn vista_profunda_no_debe_operar_sobre_seleccion_normal_obsoleta() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("normal.txt"), b"original").unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.ws.active_files_mut().unwrap().select_single(0);
+    assert_eq!(c.selected_paths(), vec![root.path().join("normal.txt")]);
+    c.op_rename();
+    let previous = c.take_rename_request().unwrap();
+    c.deep_start(pane);
+    assert!(c.is_deep_active(pane));
+    assert!(!c.rename_session_is_active(pane, previous.session));
+    assert!(!c.rename_commit(pane, previous.session, "wrong.txt"));
+    assert!(
+        c.selected_paths().is_empty(),
+        "la selección normal no representa las filas profundas"
+    );
+    c.op_rename();
+    assert!(
+        c.take_rename_request().is_none(),
+        "F2 no debe elegir un archivo de la lista normal"
+    );
+    let f2: slint::SharedString = slint::platform::Key::F2.into();
+    c.on_key(f2.as_str(), false, false, false);
+    assert!(
+        c.take_rename_request().is_none(),
+        "sin cursor profundo F2 no debe elegir otro archivo"
+    );
+    c.on_row_clicked(pane, 0, false, false, std::time::Instant::now());
+    assert!(
+        c.ws.active_files().unwrap().focused.is_none(),
+        "el clic profundo no enfoca una fila normal"
+    );
+    c.op_delete(true);
+    assert!(
+        c.ops.pending_dialog.is_none(),
+        "Supr no debe ofrecer borrar una selección obsoleta"
+    );
+    c.open_row_context_menu(pane, 0, 0.0, 0.0);
+    assert!(c.context_menu.is_none());
+    c.set_area(area());
+    c.set_drag_over_row(pane, 0);
+    let (_, rect) = c
+        .pane_rects(area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .unwrap();
+    assert!(!c.drop_at_from_ole(
+        rect.x + rect.w / 2.0,
+        rect.y + rect.h / 2.0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        vec![root.path().join("normal.txt")],
+        None
+    ));
+    assert!(c.pending_drop.is_none());
+    assert!(root.path().join("normal.txt").exists());
+}
+
+#[test]
+fn vista_profunda_doble_clic_usa_indice_visible_filtrado() {
+    use naygo_core::fs_model::{Entry, EntryKind};
+    let root = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let hidden = root.path().join("hidden");
+    let visible = root.path().join("visible");
+    std::fs::create_dir(&hidden).unwrap();
+    std::fs::create_dir(&visible).unwrap();
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    c.config.settings.show_hidden = false;
+    let pane = c.active_id().unwrap();
+    c.deep_start(pane);
+    let mk = |path: PathBuf, hidden| Entry {
+        name: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path,
+        kind: EntryKind::Directory,
+        size: None,
+        modified: None,
+        created: None,
+        hidden,
+        system: false,
+    };
+    *c.deep_job.as_mut().unwrap().items =
+        vec![(mk(hidden, true), 0), (mk(visible.clone(), false), 0)];
+    assert!(c.on_row_middle_clicked(pane, 0));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, visible);
+    assert!(c.on_row_double_clicked(pane, 0));
+    assert_eq!(c.ws.active_files().unwrap().current_dir, visible);
+}
+
 /// Verifica el ciclo completo: deep_start → is_deep_active → deep_poll → deep_items →
 /// deep_cancel → ya no activo ni con ítems.
 #[test]
@@ -4292,6 +6341,147 @@ fn on_key_con_rename_activo_es_noop_y_no_gatilla_typeahead() {
     );
     // Y la sesión sigue viva: nada la cerró por debajo.
     assert!(c.rename_active.is_some());
+}
+
+#[test]
+fn cerrar_panel_de_rename_cancela_sesion_y_libera_teclado() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let original_path = dir.path().join("alpha.txt");
+    std::fs::write(&original_path, b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let original = c.ws.active_id().unwrap();
+    c.on_row_clicked(original, 0, false, false, std::time::Instant::now());
+    c.op_rename();
+    let request = c.take_rename_request().unwrap();
+    c.add_pane_split_dir(naygo_core::workspace::layout::SplitDir::Horizontal, false);
+    let other = c.ws.active_id().unwrap();
+    assert_ne!(original, other);
+    c.close_pane(original);
+    assert!(c.ws.pane(original).is_none());
+    assert!(c.rename_active.is_none());
+    assert!(!c.rename_commit(original, request.session, "changed.txt"));
+    c.on_key("x", false, false, false);
+    assert_eq!(
+        c.typeahead, "x",
+        "el panel restante vuelve a recibir teclas"
+    );
+    assert!(original_path.exists());
+    assert!(!dir.path().join("changed.txt").exists());
+}
+
+#[test]
+fn rename_pendiente_en_otro_panel_permite_navegar_y_preserva_sesion() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["alpha.txt", "beta.txt"] {
+        std::fs::write(dir.path().join(name), b"x").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let first = c.active_id().unwrap();
+    c.on_row_clicked(first, 0, false, false, std::time::Instant::now());
+    c.op_rename();
+    let request = c.take_rename_request().unwrap();
+    c.add_pane_split_dir(naygo_core::workspace::layout::SplitDir::Horizontal, false);
+    let second = c.active_id().unwrap();
+    assert!(drain(&mut c));
+    c.on_row_clicked(second, 0, false, false, std::time::Instant::now());
+    let down: slint::SharedString = slint::platform::Key::DownArrow.into();
+    c.on_key(down.as_str(), false, false, false);
+    assert_eq!(
+        c.ws.active_files().unwrap().focused,
+        Some(1),
+        "flecha navega en el otro panel"
+    );
+    assert!(c.rename_session_is_active(first, request.session));
+    c.op_rename();
+    assert_eq!(c.active_id(), Some(first), "F2 vuelve al editor pendiente");
+    assert!(c.rename_session_is_active(first, request.session));
+    assert!(
+        c.take_rename_request().is_none(),
+        "el borrador no se reinicializa"
+    );
+}
+
+#[test]
+fn f2_en_otra_pestana_revela_pestana_con_rename_pendiente() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("alpha.txt"), b"x").unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().join("settings"));
+    assert!(drain(&mut c));
+    let original = c.active_id().unwrap();
+    c.ws.active_files_mut().unwrap().select_single(0);
+    c.op_rename();
+    let session = c.take_rename_request().unwrap().session;
+    c.add_pane_split_dir(naygo_core::workspace::layout::SplitDir::Horizontal, false);
+    let other = c.active_id().unwrap();
+    c.stack_into(other, original);
+    c.op_rename();
+    assert_eq!(c.active_id(), Some(original));
+    let groups = c.tab_groups();
+    assert!(
+        groups
+            .iter()
+            .any(|(members, index)| members.get(*index) == Some(&original)),
+        "el panel del editor debe ser la pestaña visible"
+    );
+    assert!(c.rename_session_is_active(original, session));
+}
+
+#[test]
+fn navegar_panel_de_rename_cancela_sesion_pero_refrescar_la_conserva() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("alpha.txt"), b"x").unwrap();
+    let dest = tmp.path().join("destino");
+    std::fs::create_dir(&dest).unwrap();
+    let mut c = WorkspaceCtrl::new_in(tmp.path().to_path_buf(), tmp.path().join("settings"));
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    let pos = active_pos_of(&c, "alpha.txt").unwrap();
+    c.ws.active_files_mut().unwrap().select_single(pos);
+    c.op_rename();
+    let req = c.take_rename_request().unwrap();
+    c.start_listing(pane, tmp.path().to_path_buf());
+    assert!(
+        c.rename_session_is_active(pane, req.session),
+        "refresh conserva edición"
+    );
+    c.open_in_pane(pane, dest);
+    assert!(
+        c.rename_active.is_none(),
+        "navegar cancela la edición anterior"
+    );
+    assert!(!c.rename_commit(pane, req.session, "changed.txt"));
+    assert!(tmp.path().join("alpha.txt").exists());
+    assert!(!tmp.path().join("changed.txt").exists());
+}
+
+#[test]
+fn rename_encadenado_sin_fuente_visible_no_adivina_siguiente_fila() {
+    let cfg = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["alpha.txt", "beta.txt"] {
+        std::fs::write(dir.path().join(name), b"x").unwrap();
+    }
+    let mut c = WorkspaceCtrl::new_in(dir.path().to_path_buf(), cfg.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_id().unwrap();
+    c.ws.active_files_mut().unwrap().select_single(0);
+    c.op_rename();
+    let request = c.take_rename_request().unwrap();
+    let files = c.ws.active_files_mut().unwrap();
+    files.entries.retain(|entry| entry.path != request.source);
+    files.entries_changed();
+    assert_eq!(
+        c.rename_chain(pane, request.session, &request.name, 1),
+        None
+    );
+    assert!(c.rename_active.is_none());
+    assert!(c.take_rename_request().is_none());
+    assert!(request.source.exists());
+    assert!(dir.path().join("beta.txt").exists());
 }
 
 /// Filtro visual por tipeo: tipear marca (solo visual) las filas que CONTIENEN el texto

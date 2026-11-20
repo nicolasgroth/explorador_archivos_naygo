@@ -106,6 +106,25 @@ pub fn preview(
     existing_names: &[String],
     utc_offset_secs: i64,
 ) -> Vec<PreviewRow> {
+    let parent = items
+        .first()
+        .and_then(|item| item.path.parent())
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let paths: Vec<_> = existing_names
+        .iter()
+        .map(|name| parent.join(name))
+        .collect();
+    preview_with_paths(items, spec, &paths, utc_offset_secs)
+}
+
+/// Variante para varios directorios: los nombres ocupados se identifican por ruta completa.
+/// La numeración sigue el orden global de `items`; no consulta el filesystem.
+pub fn preview_with_paths(
+    items: &[BatchItem],
+    spec: &BatchSpec,
+    existing_paths: &[PathBuf],
+    utc_offset_secs: i64,
+) -> Vec<PreviewRow> {
     // Regex compilada una vez; inválida → todas las filas Invalid con el motivo.
     let regex = if spec.use_regex && !spec.find.is_empty() {
         match regex::Regex::new(&spec.find) {
@@ -168,7 +187,7 @@ pub fn preview(
         })
         .collect();
 
-    mark_collisions(&mut rows, existing_names);
+    mark_path_collisions(&mut rows, existing_paths);
     rows
 }
 
@@ -401,17 +420,17 @@ fn title_case(s: &str) -> String {
     out
 }
 
-/// Clave de comparación de nombres en Windows (case-insensitive).
-fn key(name: &str) -> String {
-    name.to_lowercase()
-}
-
-/// Conjunto de nombres ocupados al inicio: los existentes del directorio + los
-/// nombres viejos del lote (por si la UI pasó un listado desactualizado).
-fn occupied_from(rows: &[PreviewRow], existing: &[String]) -> std::collections::HashSet<String> {
-    let mut occ: std::collections::HashSet<String> = existing.iter().map(|n| key(n)).collect();
+/// Rutas ocupadas al inicio, incluyendo fuentes que falten en el snapshot de la UI.
+fn occupied_from(
+    rows: &[PreviewRow],
+    existing: &[PathBuf],
+) -> std::collections::HashSet<crate::path_identity::PathIdentityKey> {
+    let mut occ: std::collections::HashSet<_> = existing
+        .iter()
+        .map(|path| crate::path_identity::key(path))
+        .collect();
     for r in rows {
-        occ.insert(key(&r.old_name));
+        occ.insert(crate::path_identity::key(&r.path));
     }
     occ
 }
@@ -423,7 +442,7 @@ fn occupied_from(rows: &[PreviewRow], existing: &[String]) -> std::collections::
 fn simulate(
     rows: &[PreviewRow],
     changed: &[usize],
-    occupied: &std::collections::HashSet<String>,
+    occupied: &std::collections::HashSet<crate::path_identity::PathIdentityKey>,
 ) -> (Vec<usize>, Vec<usize>) {
     let mut occ = occupied.clone();
     let mut pending: Vec<usize> = changed.to_vec();
@@ -431,8 +450,11 @@ fn simulate(
     loop {
         let mut progressed = false;
         pending.retain(|&i| {
-            let new_k = key(&rows[i].new_name);
-            let old_k = key(&rows[i].old_name);
+            let old_k = crate::path_identity::key(&rows[i].path);
+            let Some(parent) = rows[i].path.parent() else {
+                return true;
+            };
+            let new_k = crate::path_identity::key(&parent.join(&rows[i].new_name));
             if !occ.contains(&new_k) || new_k == old_k {
                 occ.remove(&old_k);
                 occ.insert(new_k);
@@ -451,7 +473,7 @@ fn simulate(
 }
 
 /// Marca `Collision` en las filas que la simulación no pudo ejecutar.
-fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
+fn mark_path_collisions(rows: &mut [PreviewRow], existing: &[PathBuf]) {
     let changed: Vec<usize> = (0..rows.len())
         .filter(|&i| rows[i].status == RowStatus::Ok)
         .collect();
@@ -460,6 +482,16 @@ fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
     for i in stuck {
         rows[i].status = RowStatus::Collision;
     }
+}
+
+#[cfg(test)]
+fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
+    let parent = rows
+        .first()
+        .and_then(|row| row.path.parent())
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let paths: Vec<_> = existing.iter().map(|name| parent.join(name)).collect();
+    mark_path_collisions(rows, &paths);
 }
 
 #[cfg(test)]
@@ -626,6 +658,56 @@ mod tests {
         assert_eq!(rows[0].status, RowStatus::Ok);
         assert_eq!(rows[1].status, RowStatus::Collision);
         assert!(!can_apply(&rows));
+    }
+
+    #[test]
+    fn carpetas_distintas_admiten_nombres_iguales_y_aislan_colisiones() {
+        let a = BatchItem {
+            path: PathBuf::from("D:/a/original.txt"),
+            modified_epoch_secs: None,
+        };
+        let b = BatchItem {
+            path: PathBuf::from("D:/b/original.txt"),
+            modified_epoch_secs: None,
+        };
+        let items = vec![a, b];
+        let existing = vec![items[0].path.clone(), items[1].path.clone()];
+        let rows = preview_with_paths(&items, &spec("mismo"), &existing, 0);
+        assert!(rows.iter().all(|row| row.status == RowStatus::Ok));
+        assert_eq!(names(&rows), vec!["mismo.txt", "mismo.txt"]);
+        let mut occupied = existing;
+        occupied.push(PathBuf::from("D:/a/mismo.txt"));
+        let rows = preview_with_paths(&items, &spec("mismo"), &occupied, 0);
+        assert_eq!(rows[0].status, RowStatus::Collision);
+        assert_eq!(rows[1].status, RowStatus::Ok);
+        let rows = preview_with_paths(&items, &spec("nuevo{n}"), &[], 0);
+        assert_eq!(names(&rows), vec!["nuevo1.txt", "nuevo2.txt"]);
+    }
+
+    #[test]
+    fn dependencias_se_resuelven_en_cada_directorio_sin_mezclar_nombres() {
+        let items = vec![
+            BatchItem {
+                path: PathBuf::from("D:/a/foto1.jpg"),
+                modified_epoch_secs: None,
+            },
+            BatchItem {
+                path: PathBuf::from("D:/a/foto2.jpg"),
+                modified_epoch_secs: None,
+            },
+            BatchItem {
+                path: PathBuf::from("D:/b/foto1.jpg"),
+                modified_epoch_secs: None,
+            },
+        ];
+        let mut s = spec("foto{n}");
+        s.counter_start = 2;
+        let existing: Vec<_> = items.iter().map(|item| item.path.clone()).collect();
+        let rows = preview_with_paths(&items, &s, &existing, 0);
+        assert!(can_apply(&rows));
+        let order = execution_order(&rows);
+        assert!(order.iter().position(|i| *i == 1) < order.iter().position(|i| *i == 0));
+        assert_eq!(order.len(), 3);
     }
 
     #[test]

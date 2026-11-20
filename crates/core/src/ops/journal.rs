@@ -238,6 +238,7 @@ pub fn resume_plan(journal: &OpJournal) -> ResumePlan {
             steps,
             total_bytes,
             total_files,
+            allow_directory_rename: false,
             pre_delete: if restart_replacement {
                 journal.plan.pre_delete.clone()
             } else {
@@ -270,6 +271,7 @@ mod tests {
                 steps: vec![step],
                 total_bytes: 4,
                 total_files: 1,
+                allow_directory_rename: false,
                 pre_delete: Vec::new(),
             },
             src,
@@ -426,6 +428,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
             total_bytes: 9,
             total_files: 3,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let mut j = OpJournal::new("p1".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
@@ -464,6 +467,7 @@ mod tests {
             ],
             total_bytes: 7,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: vec![destination_root.clone()],
         };
         let mut journal = OpJournal::new(
@@ -505,6 +509,7 @@ mod tests {
             steps: vec![mk("a", 2), mk("b", 3)],
             total_bytes: 5,
             total_files: 2,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p2".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
@@ -529,6 +534,7 @@ mod tests {
             steps: vec![mk],
             total_bytes: 2,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p3".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);
@@ -559,6 +565,7 @@ mod tests {
             steps: vec![dir_step, file_step],
             total_bytes: 2,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let j = OpJournal::new("p4".into(), OpKind::Copy, ConflictPolicy::Overwrite, plan);

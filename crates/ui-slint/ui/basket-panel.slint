@@ -18,8 +18,24 @@ component BasketIconButton inherits Rectangle {
     in property <bool> show-label: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    in property <int> restore-revision: 0;
+    in property <bool> restore-focus: false;
     callback clicked();
     callback hover-tip(string, length, length);
+    callback focus-changed(bool);
+    callback focus-restored(bool);
+    changed restore-revision => { if root.restore-focus { restore-timer.running = true; } }
+    restore-timer := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.restore-focus {
+                if root.enabled { button-focus.focus(); root.focus-restored(true); }
+                else { root.focus-restored(false); }
+            }
+        }
+    }
     width: 30px;
     height: 28px;
     accessible-role: button;
@@ -46,6 +62,7 @@ component BasketIconButton inherits Rectangle {
     }
     button-focus := FocusScope {
         enabled: root.enabled;
+        changed has-focus => { root.focus-changed(self.has-focus); }
         key-pressed(ev) => {
             if ev.text == Key.Return || ev.text == " " { root.clicked(); return accept; }
             reject
@@ -66,6 +83,44 @@ export component BasketPanel inherits Rectangle {
     in property <bool> show-labels: false;
     property <bool> secondary-open: false;
     in property <bool> active;
+    // La lista recupera el teclado solo si ella lo tenía antes del overlay. Los botones
+    // mantienen su propio foco y no se debe activar un panel que dejó de estar activo.
+    in property <bool> focus-blocked: false;
+    property <bool> restore-list-focus: false;
+    property <int> focused-action: -1;
+    property <int> restore-action: -1;
+    property <int> action-restore-revision: 0;
+    changed focus-blocked => {
+        if root.focus-blocked {
+            if root.active && root.focused-action >= 0 { root.restore-action = root.focused-action; }
+            else if root.active && scope.has-focus { root.restore-list-focus = true; }
+        } else if !root.active {
+            root.restore-list-focus = false;
+            root.restore-action = -1;
+        } else if root.restore-list-focus || root.restore-action >= 0 {
+            restore-list-timer.running = true;
+        }
+    }
+    changed active => {
+        if !root.active && !root.focus-blocked {
+            root.restore-list-focus = false;
+            root.restore-action = -1;
+        }
+    }
+    restore-list-timer := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.active && !root.focus-blocked {
+                if root.restore-action >= 0 { root.action-restore-revision += 1; }
+                else if root.restore-list-focus {
+                    root.restore-list-focus = false;
+                    scope.focus();
+                }
+            }
+        }
+    }
     in property <[BasketRowVm]> rows;
     in property <int> focused-row: -1;
     in property <int> selected-count;
@@ -114,6 +169,9 @@ export component BasketPanel inherits Rectangle {
     border-color: root.active ? Theme.active-pane-border : Theme.divider;
 
     scope := FocusScope {
+    changed has-focus => {
+        if !self.has-focus && root.active && root.focus-blocked { root.restore-list-focus = true; }
+    }
     key-released(ev) => { root.key-release(ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt); reject }
     key-pressed(ev) => {
         if root.rows.length > 0 && !ev.modifiers.control && !ev.modifiers.alt
@@ -152,6 +210,20 @@ export component BasketPanel inherits Rectangle {
                 y: floor(i / action-bar.columns) * 33px;
                 icon: action.icon; glyph: action.glyph; tooltip: action.tooltip;
                 enabled: action.enabled; danger: action.danger;
+                restore-revision: root.action-restore-revision;
+                restore-focus: root.active && !root.focus-blocked && root.restore-action == i;
+                focus-changed(has) => {
+                    if has { root.focused-action = i; }
+                    else if root.focused-action == i {
+                        if root.active && root.focus-blocked { root.restore-action = i; }
+                        root.focused-action = -1;
+                    }
+                }
+                focus-restored(ok) => {
+                    root.restore-action = -1;
+                    root.restore-list-focus = false;
+                    if !ok && root.active && !root.focus-blocked { scope.focus(); }
+                }
                 clicked => {
                     if i == 0 { root.copy(); }
                     else if i == 1 { root.move-files(); }

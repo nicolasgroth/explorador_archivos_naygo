@@ -9,6 +9,18 @@ export component PathEditor inherits Rectangle {
     in property <int> session;
     in property <int> caret: -1;
     in property <int> caret-revision;
+    // Petición diferida tras cerrar un overlay; no vuelve a seleccionar ni modifica el texto.
+    in property <int> focus-revision: 0;
+    in property <bool> allow-refocus: true;
+    changed focus-revision => { resume-focus.running = true; }
+    resume-focus := Timer {
+        interval: 0ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.allow-refocus { input.focus(); }
+        }
+    }
     in property <int> suggestion-index: -1;
     in property <string> error;
     out property <bool> has-focus: input.has-focus;

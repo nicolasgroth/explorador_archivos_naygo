@@ -93,6 +93,7 @@ impl SyncPlan {
             steps,
             total_bytes,
             total_files,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         }
     }

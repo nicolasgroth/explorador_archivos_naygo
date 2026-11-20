@@ -25,6 +25,27 @@ impl WorkspaceCtrl {
         if let Some(info) = self.basket_inspector_info() {
             return info;
         }
+        let files_id = self
+            .ws
+            .active_id()
+            .filter(|id| {
+                self.ws
+                    .pane(*id)
+                    .is_some_and(|pane| pane.purpose == PanePurpose::Files)
+            })
+            .or(self.last_active_files);
+        if let Some(id) = files_id.filter(|id| self.is_deep_active(*id)) {
+            return self
+                .focused_entry_of(id)
+                .map(|entry| {
+                    crate::bridge::inspector_entry(
+                        entry,
+                        self.config.settings.date_format,
+                        naygo_platform::time::local_utc_offset_secs(),
+                    )
+                })
+                .unwrap_or_default();
+        }
         inspector_info(
             self.ws.active_files(),
             self.config.settings.date_format,

@@ -4,6 +4,709 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
+## Naygo 0.5.6 — 2026-11-20
+
+Esta versión reúne las mejoras de foco al volver de diálogos, navegación por árbol, filtros y
+orden por hermanos en vista profunda, posición tras renombrar y arrastre en el mismo panel.
+El árbol termina la revelación si el listado de un ancestro concluye sin el tramo solicitado.
+La prueba de borrado ahora restaura su archivo temporal con el nombre original.
+
+Una prueba de lectura sobre OneDrive real en una unidad secundaria verificó la navegación
+entre una carpeta interior y la raíz, el refresco y el regreso con árbol común y dedicado.
+Usó un perfil temporal. Falta la aceptación visual con mouse y teclado en la aplicación
+instalada y la comprobación con OneDrive desconectado. La medición sintética de 10.000 y 100.000
+filas está en [benchmarks](BENCHMARKS.md). Queda pendiente medir el frame Release.
+
+Gate supervisado con 1.665 pruebas aprobadas y 12 ignoradas. Clippy y formato correctos.
+La prueba automatizada de OneDrive y el benchmark se ejecutaron aparte. El gate alcanzó
+7,08 GiB y la compilación Release tardó 28m31s con un pico de 10,92 GiB.
+El portable pasó 7-Zip y su ejecutable coincide con el binario Release 0.5.6. Setup sin firma.
+
+- Setup: SHA-256 `37dcde40328385718b0a93ab70144a86515a59b73e65fe02d6307a33a0e57a46`.
+- Portable: SHA-256 `fa4ef681c81ca38d0214e0800b2159bbda0f35cbc2fbf1502eb1e8e370ce3da5`.
+- Ejecutable Release/ZIP: SHA-256 `535b6a84f3423ad0680f177b16ed53020a0e87928091e3f66b5eab90049444ea`.
+
+## Distribución local de avance — 2026-11-20, arrastre dentro del mismo panel
+
+El arrastre OLE interno usa la posición de soltado y comprueba la identidad de la fila
+visible. Los archivos y carpetas pueden moverse a una subcarpeta del mismo panel.
+Con un destino libre y del mismo volumen, el trabajador mueve el directorio como una
+unidad y su recibo permite deshacerlo junto a otros elementos del lote. Queda pendiente
+el deshacer general para movimientos con fusión y entre volúmenes.
+
+La prueba con el controlador confirmó movimiento y deshacer para un lote mixto. El
+Shell de Windows restauró una fixture con su nombre original. En la prueba se usaron
+archivos temporales. Queda pendiente probar el gesto con mouse en la instalación.
+
+Gate supervisado con 1.664 pruebas aprobadas, 11 ignoradas, Clippy y formato correctos.
+Pico de 6,05 GiB en la verificación. El release compiló en 29m41s con un pico de 10,92 GiB.
+El portable pasó 7-Zip y su `naygo.exe` coincide con el binario Release. Instalador sin firma.
+
+- Setup: SHA-256 `1cdc3e46a195783c9af196823fea45197e508397d5aa7168994257005c188209`.
+- Portable: SHA-256 `b5b17f6ad99a28fa1c292ecd03163d6f88ce2a67ae8bea8be698dea8c51f3d56`.
+- Ejecutable Release/ZIP: SHA-256 `fe325d308c6e173f45d47caa2b17ee2c4e0a7c1ce1d68b6257e5b5cc47e47925`.
+
+## Distribución local de avance — 2026-11-20, foco, árbol y vista profunda
+
+Los controles de operaciones conservan el foco por identidad. El selector de carpeta de inicio
+usa Configuración como propietaria. El árbol actualiza por tramos y verifica scroll con el
+modelo real. OLE invalida el destino capturado cuando el panel inicia otra visita. La vista
+profunda aplica los filtros de columna y ordena por hermanos. Teclado, selección, destino
+de arrastre y exportación usan el mismo conjunto de filas visibles.
+
+Gate de 1.662 pruebas aprobadas, 11 ignoradas, Clippy y formato correctos. Pico de 11,51 GiB
+en pruebas y de 10,91 GiB en el release. Compilación optimizada en 32m04s. Portable verificado
+con 7-Zip. Quedan la aceptación nativa y el caso real de navegación de OneDrive en otra unidad.
+
+- Setup: SHA-256 `b0f2c3f0dceed2fc5f7bfdaf1a97165cd71f9ae410b4e4dd44b376f5d929767d`.
+- Portable: SHA-256 `075fb086ebc70a982aff461509e3b1f97d1e2eb94e164cccd699767c5f4dabab`.
+- Ejecutable Release: SHA-256 `cfbeb986e614cbc4e3a0d10d41bfb7babab0ab6bb085ea3543113a9136cb3599`.
+
+## Distribución local de avance — 2026-11-20, posición tras renombrar
+
+F2 y el renombrado por lotes mantienen las filas, el foco y la selección. El listado normal
+restaura el scroll por identidad y reordena con F5 o por columna. Los archivos nuevos quedan al
+final hasta reordenar cuando la opción de Avanzado está activa. Viene activa en configuraciones
+nuevas y las instalaciones existentes conservan la preferencia guardada.
+
+Las pruebas de controlador cubren F2, lote con reutilización de nombre, aviso del watcher,
+scroll, recién llegados, F5 y orden por columna. La vista profunda conserva las filas durante
+la reconciliación y espera el snapshot antes de habilitar otra operación sobre la selección.
+Queda pendiente la aceptación interactiva en Windows.
+
+Gate supervisado con 1.660 pruebas aprobadas, 11 ignoradas, Clippy y formato correctos. La
+verificación alcanzó un pico de 10,49 GiB. El release compiló en 28m12s con un pico de 10,91 GiB.
+7-Zip validó el portable y el SHA-256 de su ejecutable coincide con el binario Release.
+
+- Setup: SHA-256 `52a117fb9d5575656e32c69f81b12f6cad85dd5cd249b820ccacf71f6eddd275`.
+- Portable: SHA-256 `7bb5a445dfa29f790fd563d5b70a483cc0cd4c0e1b8949b53c04d8a2af18ce41`.
+- Ejecutable Release/ZIP: SHA-256 `9b19fa41abfe76ab29a7b8180d6958a9bc7507df38ed0952df97eb3b89cebd11`.
+
+## Distribución local de avance — 2026-11-20, foco del historial de Operaciones
+
+El enlace de detalle de archivos admite Tab, Enter y espacio y recupera foco por identidad de
+operación. Prueba headless de panel y modal reales aprobada; falta aceptación nativa. No se instaló
+esta build.
+
+Gate supervisado repetido: 1.658 aprobadas, 11 ignoradas (incluye benchmarks manuales), Clippy y
+formato correctos; pico 0,73 GiB. Release supervisado: compilación 27m52s, pico 10,91 GiB; ZIP
+verificado con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `5e7509021cfa9d6833ecf130f453dd70a92666ffddec4be623332eb4174c2a5a`.
+- Portable: SHA-256 `0f1ed0dc4fc7ebd67f3565fe4cb237b2974b06e6b3cfea49e0e42b7ea72a7732`.
+- Ejecutable Release/ZIP: SHA-256 `569034828f01e7033d192277d6f25ff2bc5a16c360e7e3cdd1c0001942e36410`.
+
+## Distribución local de avance — 2026-11-15, marcas parciales profundas
+
+La actualización parcial de foco y selección requiere contexto estable; cambios amplios, del
+listado, presentación o edición F2 usan la reconciliación completa. Pruebas dirigidas y medición
+sintética debug no sustituyen aceptación nativa; datos y límites en `BENCHMARKS.md`. No se instaló.
+
+Gate supervisado: 1.657 aprobadas, 11 ignoradas (incluye benchmarks manuales), Clippy y formato
+correctos; pico 8,74 GiB. Release supervisado: compilación 30m16s, pico 10,91 GiB; ZIP verificado
+con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `de98920fec515d99352c605300a6c8c52cee3af4e109e1871de833ce41af26ac`.
+- Portable: SHA-256 `cfbf435b49ab560704bf0debbfdceae7232660b269e6554c1bed72c5d1e45ee8`.
+- Ejecutable Release/ZIP: SHA-256 `378f3f4fcb8596cd91f245ff86504e67dcd745610b8a3e569de1ecc3d3a111b8`.
+
+## Distribución local de avance — 2026-11-15, foco en Operaciones
+
+El botón «Cancelar todo» recupera foco tras el diálogo, con overlays superpuestos y cambio de
+panel. Prueba headless del panel y modal aprobada; aceptación Windows y demás controles pendientes.
+No se instaló esta build.
+
+Gate supervisado: 1.657 aprobadas, 10 ignoradas (incluye benchmark manual), Clippy y formato
+correctos; pico 11,04 GiB. Release supervisado: compilación 27m11s, pico 10,90 GiB; ZIP verificado
+con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `106d3e24c5e63bf2d4c9cc98e7dd46ee27f0a714e47c7b79ba1d64e5310ec4e1`.
+- Portable: SHA-256 `70f784cbf311b62123073ce231d8a705e4626a761decec79863ca41c56181ef8`.
+- Ejecutable Release/ZIP: SHA-256 `ed6aa70983a230eff9b86e23f5e706dfbe9161c2ee99a89f24eefcb2234c221f`.
+
+## Distribución local de avance — 2026-11-15, pie de vista profunda
+
+Contadores cacheados con invalidación por entradas, selección y visibilidad. El benchmark
+sintético debug y sus límites están en `BENCHMARKS.md`; una invalidación aún requiere un recorrido
+completo. Faltan medición y aceptación nativas. No se instaló esta build.
+
+Gate supervisado: 1.656 aprobadas, 10 ignoradas (incluye benchmark manual), Clippy y formato
+correctos; pico 8,55 GiB. Release supervisado: compilación 27m16s, pico 10,90 GiB; ZIP verificado
+con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `3c3972b0ae24bda7195aba1341aa707f422bb7dffb3c6a221a69fdea5c8cd76b`.
+- Portable: SHA-256 `cacf29842e01b39d01d62543770b236e3d85807a5cfa8c127522fa360aab7589`.
+- Ejecutable Release/ZIP: SHA-256 `c647ddfcbe79b01dd25eeece1f992bfdb01d781ceb39eb31e89a6e9d14a6293f`.
+
+## Distribución local de avance — 2026-11-15, firma de vista profunda
+
+La firma de filas usa identidad y revisión del recorrido, con invalidación ante mutaciones.
+La medición sintética debug y sus límites están en `BENCHMARKS.md`; siguen pendientes filas, pie
+y medición nativa. No se instaló esta build.
+
+Gate supervisado: 1.655 aprobadas, 10 ignoradas (incluye el benchmark manual), Clippy y formato
+correctos; pico 11,27 GiB. Release supervisado: compilación 28m20s, pico 10,89 GiB; ZIP verificado
+con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `e3089d33276ca317558bebad68fc653b4e4bbfc6eafe35013e8d44dc46d9b32d`.
+- Portable: SHA-256 `aa13f9a1a97fa72aae1c838874196cd30902234c3ef0bf8dc2c894729abfb0f8`.
+- Ejecutable Release/ZIP: SHA-256 `ad43c330dbc88bb05be737d607e48e28edd7cd35b467adbab98f4076d8bd2408`.
+
+## Distribución local de avance — 2026-11-15, navegación profunda
+
+Las flechas de vista profunda evitan recorridos redundantes y mantienen la identidad por ruta.
+La medición sintética debug del controlador y sus límites están en `BENCHMARKS.md`; faltan
+aceptación y medición nativas, y optimizar filas, firma y pie. No se instaló esta build.
+
+Gate supervisado: 1.654 aprobadas, 10 ignoradas (incluye el benchmark manual), Clippy y formato
+correctos; pico 6,39 GiB. Release supervisado: compilación 27m42s, pico 10,91 GiB; ZIP verificado
+con 7-Zip, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `ff6981bbe551ced02209753a98c224604440c27dbbdb6f88c4188a596f468455`.
+- Portable: SHA-256 `f7cdbe0e63d8297e1f6a0f1aac3eb2688ddebcaada691163c3ef5a013f08f26c`.
+- Ejecutable Release/ZIP: SHA-256 `c348f07267f01507b2e8ce71166aad95b17dc0f525da5ab6f4a507e92ca12f15`.
+
+## Distribución local de avance — 2026-11-15, destino externo en vista profunda
+
+La captura OLE admite una carpeta profunda acreditada por hover y comprueba la identidad de la
+fila; después de la preparación comprueba que el panel y la carpeta sigan disponibles. Pruebas
+de controlador cubren coordenadas obsoletas, reordenamiento, navegación y copia real; una prueba
+OLE simulada comprueba el orden de captura y limpieza. Falta aceptación nativa con orígenes OLE
+reales; no se instaló esta build.
+
+Gate supervisado: 1.653 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,91 GiB.
+Release supervisado: compilación 27m20s, pico 10,91 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `ddca1f59adebec27da21f28bc9a4258a354383e0769d562d513d1d99bd91ba8f`.
+- Portable: SHA-256 `35f3edd72096e425b289a2793beaaaaefcc1c3f8343b830e1e21acce434daa66`.
+- Ejecutable Release/ZIP: SHA-256 `a71e924c95324506ba2aef1314b14c4123467f6f6f0e18fbbb58ad9682df10e6`.
+
+## Distribución local de avance — 2026-11-15, compresión entre carpetas
+
+La compresión de selecciones profundas de distintos padres conserva rutas relativas a la raíz del
+panel; rechaza enlaces simbólicos y errores de inventario antes de crear el ZIP. La creación
+exclusiva evita sobrescribir un destino creado por otro proceso. La cancelación se revisa también
+durante el inventario. Pruebas del núcleo y controlador cubren ZIP real, rutas, colisiones,
+cancelación y destino ocupado. Falta aceptación nativa; no se instaló esta build.
+
+Gate supervisado: 1.651 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,86 GiB.
+Release supervisado: compilación 28m13s, pico 10,90 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `d255a51b8919c56c2b8a04c5683bc6f4bc78915c5f1ed671aa9b8e35d88d5082`.
+- Portable: SHA-256 `c5407e73b43632ef9ad2b6b2cf2dff639a104e170e832e27358d2e5b5e2c52ff`.
+- Ejecutable Release/ZIP: SHA-256 `4395b856a39fb88b6ff650e6cf518a15693f1619f37a7e7f0620360bd20f8855`.
+
+## Distribución local de avance — 2026-11-15, renombrado entre carpetas
+
+La vista profunda admite lotes de carpetas distintas y muestra su ubicación en la vista previa;
+el núcleo comprueba colisiones por ruta completa. Pruebas dirigidas cubren colisiones por carpeta,
+trabajo real sobre temporales, reconciliación y presentación en Slint headless. Falta aceptación
+nativa y medir rendimiento con listados grandes. No se instaló esta build.
+
+Gate supervisado: 1.650 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 10,96 GiB.
+Release supervisado: compilación 29m02s, pico 10,90 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `93ced90cd76f4861842062104a28808d72d1b12f63f95f2836745b8a24e7f163`.
+- Portable: SHA-256 `af2093192895993f9f52dc99cf895f640572bc4ba0036eb7280e727eb2fc6eb0`.
+- Ejecutable Release/ZIP: SHA-256 `5c289fb7026a9eb3c6afc2ebafc63d468afa1ff05992eee2e091c4589d53307e`.
+
+## Distribución local de avance — 2026-11-14, exportación de vista normal
+
+La exportación normal comparte el worker y el diálogo cancelable de la vista profunda. La captura
+usa los índices visibles ya materializados y copia entradas en fragmentos, conservando selección,
+orden, filtros, columnas y hora local. Si cambian el menú o la vista durante el diálogo, o se
+invalida la vista o la selección utilizada durante la captura, se informa y no se reemplaza el archivo. Pruebas
+de controlador cubren CSV, orden, filtros, invalidaciones y destino anterior; una prueba Slint
+headless comprueba Esc y recuperación del foco en ambas vistas. No se probaron el selector ni el
+portapapeles reales. Quedan pendientes aceptación nativa y medición de rendimiento con listados
+grandes. No se instaló esta build.
+
+Gate supervisado: 1.646 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,20 GiB. El
+primer intento detectó una prueba de filtro con estado artificial; corregida y repetida la suite.
+Release supervisado: compilación 28m17s, pico 10,88 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `c5a44679958f3192b24659e57760525beea649338849c0c8ba377ac627959873`.
+- Portable: SHA-256 `60c397990907f328413321e79e03dbfb83761b31aeab1f2408ed5c46c10c134a`.
+- Ejecutable Release/ZIP: SHA-256 `71e630a557835acd4af167f2d3572ad02831780ecb857b3096af6d84c5e82fd4`.
+
+## Distribución local de avance — 2026-11-14, exportación de vista profunda
+
+La vista profunda exporta la selección o, si no hay, las filas visibles a CSV o portapapeles.
+Requiere un recorrido completo; captura en fragmentos acotados, detecta cambios de recorrido o
+selección y genera el CSV en un worker cancelable. El archivo temporal se confirma al terminar;
+si la cancelación llega después del guardado, el aviso informa que ya se guardó. El diálogo
+admite Esc y devuelve el teclado al panel. Pruebas sobre temporales cubren selección, cancelación,
+colisiones de destino, limpieza y cambios de recorrido; una prueba Slint headless cubre foco.
+No se usó el portapapeles real ni el selector nativo. Faltan aceptación Windows/OLE y medición
+de rendimiento en listados grandes; la exportación normal todavía serializa en UI. No se instaló.
+
+Gate supervisado: 1.643 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,55 GiB.
+Release supervisado: compilación 27m57s, pico 10,88 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `d14c0eed447a1c6ee6db769adc173ce5329a47b85bca7b04e67118ac617c099b`.
+- Portable: SHA-256 `f5ce6b2336f60b2a41a99e0d8afa98d25bf8ab146c18e5cc25b8eb72d78604dc`.
+- Ejecutable Release/ZIP: SHA-256 `af2fc32a39fd0d9a872e9bf705cb4021fdc0ae913e5c620f588473aebf7fdc16`.
+
+## Distribución local de avance — 2026-11-14, transformación de texto en vista profunda
+
+La transformación admite el lote capturado del menú contextual profundo, incluso de carpetas
+distintas. Tras completar el worker se vuelve a recorrer la vista para actualizar metadatos;
+si se cierra el diálogo durante el trabajo, se conserva el seguimiento hasta el terminal de
+cancelación. Reabrir durante esa espera informa al usuario. Una prueba con archivos temporales
+verifica la transformación y el lote; otra simula el terminal de cancelación y la reconciliación.
+Cancelar no revierte archivos ya terminados y no hay deshacer de esta operación. Pendientes
+aceptación nativa y exportación profunda sin bloqueo de UI. No se instaló esta build.
+
+Gate supervisado: 1.639 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 10,11 GiB.
+Release supervisado: compilación 28m02s, pico 10,88 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `d51e9d09bebe4b3f15a12b47052c9bff347c1ddfa5553a7f00111fd2e3cba6a9`.
+- Portable: SHA-256 `b2938670ad46a0d09591792f43cd5f96a44b6820bd1af5cf6123421ae54d727d`.
+- Ejecutable Release/ZIP: SHA-256 `7ea72ada62a23cb7447513897aa981500b269c7e096673c2c8332d81440d287d`.
+
+## Distribución local de avance — 2026-11-13, renombrado en lote en vista profunda
+
+El renombrado en lote acepta selección profunda de un mismo padre cuando el recorrido terminó
+sin errores; la vista previa incluye todos los nombres del directorio. Se rechazan selecciones
+de padres distintos y recorridos incompletos. Al terminar, el foco y las marcas se reconcilian
+con los destinos realmente informados por el motor, también ante resultado parcial. Una prueba
+de controlador ejecuta un worker real sobre temporales y cubre lote, colisiones, selección y foco;
+simula además la desconexión del recorrido. Falta aceptación nativa y renombrado entre
+directorios. No se instaló esta build.
+
+Gate supervisado: 1.637 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,06 GiB.
+Release supervisado: compilación 28m26s, pico 10,88 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `8dec0a2a5530f646b529255b2a793ccce85e10fa0a5de767b39f1da88599a216`.
+- Portable: SHA-256 `fdce47cddd78714e18b7580024d702824f5dc44022eaab9e75bc39c667fc284b`.
+- Ejecutable Release/ZIP: SHA-256 `341b20b19ca64a23fa64786ce014bc6de6608ee63204be863950c89362d88241`.
+
+## Distribución local de avance — 2026-11-13, arrastre interno a vista profunda
+
+Un arrastre interno puede dirigirse a una carpeta visible en vista profunda. La identidad de
+carpeta capturada bajo el puntero se verifica de nuevo al soltar; si la fila cambió o el puntero
+se movió sin una nueva acreditación, se rechaza. Se mantienen confirmación, verificación de
+conflictos y rechazo de carpeta sobre sí misma. Una prueba de controlador con copia real a una
+carpeta temporal cubre estos casos; falta aceptación nativa Windows/OLE y destino profundo para
+arrastres externos. No se instaló esta build para no interrumpir Naygo abierto.
+
+Gate supervisado: 1.636 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,65 GiB.
+Release supervisado: compilación 29m30s, pico 10,88 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `a6477ad98a376be03d29702585c5abde4e4f6b52dbeb33232c14fd867e36b209`.
+- Portable: SHA-256 `1ad519e94841cf56cd0b7c59c1ae809a97c848a0a4f1070b43bd4de4c16664a9`.
+- Ejecutable Release/ZIP: SHA-256 `2f721f283c8717d775312fb27b05a2b1c011df457e1bac7576bbba013229756d`.
+
+## Distribución local de avance — 2026-11-13, selección y operaciones en vista profunda
+
+Selección por ruta con teclado, ratón y rangos; copiar, cortar, borrar, duplicar, transferir,
+Bandeja, menú contextual, ZIP de una carpeta y extracción usan las rutas profundas. Se rechazan
+lotes ocultos o con carpeta y descendiente; la creación protege Enter durante la actualización.
+Inspector, preview y tamaño usan el foco profundo. Las pruebas incluyen operaciones reales sobre
+temporales; quedan pendientes aceptación nativa Windows/OLE, arrastre hacia vista profunda,
+compresión de carpetas distintas, batch rename, exportación y transformación, y rendimiento.
+No se instaló esta build para no interrumpir Naygo abierto.
+
+Gate supervisado: 1.635 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,40 GiB.
+Release supervisado: compilación 36m48s, pico 10,87 GiB; ZIP verificado con 7-Zip, cuatro
+archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `6778ab8fbcc74566c891eb55f082cd1dc6da3d766374a4584e5b9784954fa144`.
+- Portable: SHA-256 `57c327400ecbb5b2c70fd8c9e0488a919cdd55a6cb27ed9f8ad6b8e60b570377`.
+- Ejecutable Release/ZIP: SHA-256 `779cd69c129b66f6cf095eb6304f227c6d75ab415ad606922a0085b9d9bf47f6`.
+
+## Distribución local de avance — 2026-11-13, F2 en vista profunda
+
+F2 usa la ruta enfocada en la vista profunda y reconcilia el editor al reordenar filas; si la
+fuente falta temporalmente conserva el borrador. Tras completarse el rename se reinicia el
+recorrido en worker y se usa el destino reportado por el motor. Se evita encadenar hacia un
+hijo de la carpeta que se está renombrando, y se invalida una sesión cuya ruta quedó obsoleta.
+Pruebas de controlador y ventana headless cubren borrador, reordenamiento, callbacks tardíos,
+nombre ocupado y renombrado real de una carpeta anidada. Pendiente aceptación nativa, selección
+múltiple, las otras operaciones y drops; build no instalada para no interrumpir Naygo abierto.
+
+Gate supervisado: 1.628 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,52 GiB.
+Release: compilación 38m19s, pico 10,88 GiB; ZIP probado con 7-Zip, cuatro archivos sin PDB,
+EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `9e496a45402af0ff29c710e95514e367d5e3b0693dc84b1b2c24853c57debbd5`.
+- Portable: SHA-256 `68617730c389c47ce45aa8b51f5a164d884d5cc80d22d2da723335c76f8b2678`.
+- Ejecutable Release/ZIP: SHA-256 `56e8d0d2b44cd284b2253bfc5fe48bf89218b3f5178a2272523de4bbd8c7d99c`.
+
+## Distribución local de avance — 2026-11-13, cursor en vista profunda
+
+El cursor profundo conserva la identidad por ruta y permite clic, flechas, Inicio/Fin, avance
+de página y Enter. Prueba de controlador cubre reordenamiento y evita abrir otra fila cuando
+la enfocada queda filtrada. Selección múltiple, F2, operaciones sobre selección y drops hacia
+la vista siguen bloqueados; falta implementarlos y medir rendimiento con listados grandes.
+No se instaló ni se realizó aceptación nativa Windows/Winit; se observó una instancia instalada
+abierta y no se interfirió con ella.
+
+Gate supervisado: 1.625 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,60 GiB.
+Release: compilación 33m20s, pico 10,88 GiB; ZIP probado con 7-Zip, cuatro archivos sin PDB,
+EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `69f48378014aac1f64cd21085066456334bf3f855c7795fcc7bab1fb934fb3cc`.
+- Portable: SHA-256 `3c89805e2cebaf910fbbc22ddfc099a794ceead558fc81024f7cc1a5e666793d`.
+- Ejecutable Release/ZIP: SHA-256 `46ce2fa5e3728660e873fe9b93405d093d6adaa72d2bc878a56c2f27859cdfa8`.
+
+## Distribución local de avance — 2026-11-12, foco inicial en Favoritos
+
+El cuadro de nombre de Favoritos enfoca el campo al abrirse. Una prueba Slint headless abre el
+menú de un grupo, crea un subgrupo mediante teclado y verifica el nombre y el padre. La build
+incluye también la protección de vista profunda descrita a continuación. Pendientes aceptación
+nativa Windows/Winit y revisión del resto de controles y paneles; esta build no se instaló.
+
+Gate supervisado: 1.624 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 11,03 GiB.
+Release: compilación 26m53s, pico 10,87 GiB; ZIP probado con 7-Zip, cuatro archivos sin PDB,
+EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `3e59e68458f827f763f62d12efe6b53c944bf016572b401d436b928008378224`.
+- Portable: SHA-256 `21e8c29cf837583c915c883b6224e054f79649941b439e18059f44312000bb13`.
+- Ejecutable Release/ZIP: SHA-256 `bb3220e63cfcfa3860ce4a73fca090160e5aaa69f7174019ab634ebac93c5e33`.
+
+## Distribución local de avance — 2026-11-12, protección de vista profunda
+
+La vista profunda ya no interpreta la selección ni los destinos de arrastre usando filas de
+la vista normal: esas operaciones quedan temporalmente bloqueadas. El doble clic y el clic
+central usan la fila visible tras aplicar los filtros de visibilidad. Se cancela F2 anterior al
+entrar en vista profunda. Pruebas de controlador cubren selección obsoleta, F2, Supr, menú,
+drop y activación con ocultos. Pendiente implementar selección y operaciones propias, revisar
+Favoritos y realizar aceptación nativa Windows/Winit. Build no instalado ni probado en vivo.
+
+Gate supervisado: 1.623 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,67 GiB.
+Release: compilación 30m32s, pico 10,87 GiB; ZIP probado con 7-Zip, cuatro archivos sin PDB,
+EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `0d08ef87f64eb933f3d10261fd2df1e9090fb1af68a02b76fa1a161494ac1b36`.
+- Portable: SHA-256 `7b7e666a22c3919049f67cc73c37ee63298e01f9cc5b77760def7cdd92d8600a`.
+- Ejecutable Release/ZIP: SHA-256 `1e4d5a16533885a8d29a4cb3c46a61ed8d47e2506e4e412bbe03283827e28d53`.
+
+## Distribución local de avance — 2026-11-12, foco en Bandeja
+
+La Bandeja temporal recupera el foco de la lista o del botón de acciones que lo tenía tras cerrar
+el último overlay, si sigue siendo el panel activo. Una prueba Slint headless cubre flechas, botón,
+diálogos superpuestos y cambio de panel. Falta aceptación nativa y revisar otros controles y paneles.
+Incluye también la corrección de reordenamiento F2 descrita en la entrega anterior.
+
+Gate supervisado: 1.621 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 10,90 GiB.
+Release: compilación 26m39s, pico 10,87 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. Esta build no se ha instalado ni probado
+interactivamente.
+
+- Setup: SHA-256 `adaaadc5c4bd8975e9bc0c4f476a684704a993eca79d1e4feb213182f24cff61`.
+- Portable: SHA-256 `2a8ff4e0d4792a0e11f931a41fef896710474a47390165420729eecb01bb8edd`.
+- Ejecutable Release/ZIP: SHA-256 `1ebdaea19d1fc7b1ff59c8de0a634fd3c7849c2ec896231224470ca97a67dd86`.
+
+## Distribución local anterior — 2026-11-12, reordenamiento durante F2
+
+En la lista normal el editor F2 sigue la ruta de origen cuando cambian las filas o su orden. Si
+la ruta falta temporalmente, se conserva la vista y el borrador hasta recuperarla o cerrar la
+edición; callbacks antiguos se invalidan y las filas/metadatos diferidos se reconcilian al salir.
+Una prueba headless con ventana/controlador cubre inserción, reordenamiento con igual longitud,
+ausencia/retorno, escritura y cancelación. La misma prueba genera un conflicto de copia real con
+el worker en carpetas temporales, lo omite y conserva el archivo de destino. No equivale a
+aceptación nativa Windows/Winit. La vista profunda queda pendiente por usar otra fuente de filas.
+
+Gate supervisado: 1.620 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 11,00 GiB.
+Release: compilación 45m11s, pico 10,86 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. Esta build no se ha instalado ni probado
+interactivamente.
+
+- Setup: SHA-256 `ae5c3a532e3e6cce43a82beff674c65eb7b1d369dc3d13bf2081e8bd5f87fb3d`.
+- Portable: SHA-256 `abd3ed1dbe130145d0e0364492709d197ec028fa8a2ced81962ff8e8671fe69b`.
+- Ejecutable Release/ZIP: SHA-256 `34ea392e000191944471b09a7f3dc0547ad90cc67f4fbcae551df52b865a2c42`.
+
+## Distribución local anterior — 2026-11-12, lote F2
+
+F2 repetido conserva el borrador y selecciona sobre su texto actual. Una pestaña agrupada vuelve
+a mostrarse con su editor pendiente sin reseleccionar el borrador; navegar su panel a otra carpeta
+cancela la sesión y refrescar la misma la conserva. Pruebas de controlador y ventana Slint headless
+cubren estos casos, incluyendo Unicode, carpetas, diálogo inyectado y confirmaciones tardías.
+No se ha ejecutado aceptación Windows/Winit ni un conflicto real del worker. La posición visual
+del editor ante un reordenamiento del listado sigue pendiente; la operación conserva la ruta de
+origen. Foco-1 y los bloques posteriores permanecen abiertos.
+
+Gate supervisado: 1.619 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,21 GiB.
+Release: compilación 38m05s, pico 10,86 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. Esta build no se ha instalado ni probado
+interactivamente.
+
+- Setup: SHA-256 `0146b5cb062509ad3df09fdae94f6826c66f1b5b1448914e4f4269cd73a59d07`.
+- Portable: SHA-256 `49e439af099457b9fd87bae1340e1416c2af6d750046ab4a2efc41f9b5c85422`.
+- Ejecutable Release/ZIP: SHA-256 `50ced09be011f60d5ba93bb5914eea467cb7f56ca95f0a5a5c1ff71e98490fda`.
+
+## Distribución local anterior — 2026-11-12, cambio de panel durante F2
+
+La guarda de teclado de F2 se limita al panel que conserva el editor. Si un diálogo deja otro
+panel activo, se puede navegar en él; pedir F2 vuelve al editor pendiente sin reemplazar su
+borrador. Pruebas de controlador y de ventana headless con diálogo inyectado comprueban flechas,
+retorno, edición y Escape. No se probó con el worker real ni con Winit; siguen pendientes las
+pestañas agrupadas y navegación del panel original por otras vías.
+
+Gate supervisado: 1.617 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,31 GiB.
+Release: compilación 41m11s, pico 10,84 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. Esta build no se ha instalado ni probado
+interactivamente.
+
+- Setup: SHA-256 `ac3a9fc32ffc9c62a631dff3787bda653e94aabb03d3b40511a2b3806873f3fa`.
+- Portable: SHA-256 `b37432fdc701db9747094cd70bad7b3d55e4474f45125dede56099fc5403c764`.
+- Ejecutable Release/ZIP: SHA-256 `8c5e7f5a22ba03a2dd70d85506a9e81e15dfbf541614ee58a51b1b036b8e2d67`.
+
+## Distribución local anterior — 2026-11-12, cierre de panel durante F2
+
+La prueba headless `conflict_during_inline_rename_survives_real_sync_and_controller` pasó con
+ventana, controlador, sincronización y callbacks F2 de producción: conflicto inyectado sin I/O,
+continuación del borrador y cancelación por Escape, sin panic de préstamos. No simula el worker ni
+Winit. Al cerrar el panel donde estaba F2, ahora se invalida la sesión y se retira el editor sin
+confirmar el borrador; una prueba comprueba que el panel restante recibe teclas y que un callback
+tardío no renombra el archivo. La guarda global de teclado y la sustitución de sesión al iniciar
+otro F2 dejan pendiente analizar el cambio de panel sin cierre; detalle en el plan de foco.
+
+Gate supervisado: 1.616 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,34 GiB.
+Release: compilación 34m23s, pico 10,83 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. Esta build no se ha instalado ni probado
+interactivamente.
+
+- Setup: SHA-256 `d0aad8bc469b500a1d4006185e47ab7d0d396f654cf1275d26adc15585dfbed2`.
+- Portable: SHA-256 `de422a4b4a67d37565bdcd64311b4fe1a98b5bd916d9e02a31365196df317b78`.
+- Ejecutable Release/ZIP: SHA-256 `cd1bd14dd1b0b5ad969d3346ee487a4deb31bca12a538f50844008d16fc95b62`.
+
+## Distribución local anterior — 2026-11-11, renombrado y diálogos
+
+El editor F2 conserva el borrador al aparecer un diálogo superpuesto y recupera el teclado al
+cerrarlo. Prueba headless de conflicto, paleta, reconstrucción de filas, Enter, clic fuera, Escape
+y encadenamiento aprobada; no se ha validado la secuencia completa controlador/UI ni la aceptación
+nativa. Al reconstruir una fila se restaura la posición almacenada, que no siempre es el cursor real;
+el cambio de panel con una sesión activa queda pendiente. Foco-1 sigue abierto.
+
+Gate supervisado: 1.614 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,24 GiB.
+Release: compilación 28m23s, pico 10,86 GiB; ZIP verificado con 7-Zip, cuatro archivos sin PDB y
+EXE idéntico al Release. Setup sin firma Authenticode. La nueva build no se ha instalado ni probado
+interactivamente; Nicolás sí confirmó la selección múltiple con la build anterior.
+
+- Setup: SHA-256 `c4c0527c12ad9ea72566d191a9b151e6f0faa8ed1cc87a785b06f157c4a57570`.
+- Portable: SHA-256 `77e6cb3eb59ab1c443de94e55b1b08836b3086f20bdf01db1070ba9e1ad40b16`.
+- Ejecutable Release/ZIP: SHA-256 `1cdb62993ec91c8344809e495177d87f76d95a8dd924ff6529919304994617a6`.
+
+## Distribución local anterior — 2026-11-11, selección múltiple y menú Shell
+
+El clic derecho conserva el lote si la fila elegida ya está seleccionada; sobre otra fila lo
+reemplaza. Las rutas capturadas se resuelven todas a PIDL y se comprueba que compartan padre Shell:
+si falta alguna o difieren los padres, se rechaza con aviso localizado. Prueba Slint de gesto,
+pruebas de controlador y prueba Windows de `IContextMenu` con dos archivos aprobadas; esta última
+no muestra menú ni invoca comandos. Nicolás informó que instaló la nueva build y que al seleccionar
+varios archivos y pulsar botón derecho ahora obtiene varias opciones para la selección; el hash del
+ejecutable instalado no se midió independientemente. No se ha comprobado la creación ni el contenido
+de un comprimido. Sigue pendiente auditar costo y submenús de extensiones del Shell en el hilo UI.
+
+Gate supervisado: 1.613 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos, pico 8,69 GiB;
+paridad de 1.262 claves en diez idiomas. Release: 43m11s, pico 10,84 GiB; ZIP pasó `7z t`, contiene
+cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `fcf3effcab31719ba664fd228067fe277a02013d77da4f3552220351c12d590d`.
+- Portable: SHA-256 `647cddc47176ddf5a2ae764be87ea21e0901d1463df43fc7db4b5453bd790628`.
+- Ejecutable Release/ZIP: SHA-256 `48ad5bf2f3c9a7243fcf8bab819f9fc244e00fcde19ce1afc02313cee31914e3`.
+
+## Continuación organizada — 2026-11-11
+
+Plan de trabajo y estimaciones relativas en [foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
+La prueba headless observó un commit de F2 al aparecer un aviso; se corrigió el caso de overlay y
+se mantuvo el contrato de clic fuera. Falta validar el flujo completo en la app y el cambio de panel.
+La distribución más reciente consta al inicio de este documento.
+
+## Distribución local anterior — 2026-11-11, editores de ruta
+
+Se reprodujo y corrigió que el editor de ruta del panel y el de la barra superior perdían el foco
+al cerrar la paleta. Las pruebas Slint verifican texto y posición del cursor en medio; las pruebas
+del editor y la barra también pasaron. Gate supervisado: 1.609 aprobadas, 9 ignoradas, Clippy y
+formato correctos, pico 11,12 GiB. `graphify update .` completado.
+
+El primer build Release supervisado se detuvo preventivamente al caer la memoria libre a 7,66 GiB,
+bajo el mínimo de 8 GiB. Tras liberar memoria se reintentó y completó: compilación en 56m56s, pico
+10,84 GiB. ZIP pasó `7z t`, cuatro archivos sin PDB y EXE idéntico al Release. Setup sin firma
+Authenticode. No se instaló ni se aceptó visualmente; renombrado, paneles auxiliares y diálogos
+nativos siguen pendientes. Hashes también en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `8ad0290df701a5cc58346e6de61a9ff222145a459520f69671b914a62854d759`.
+- Portable: SHA-256 `dd7c0755a60d7d531d21a95591bf2b352411332ed0c5f1869f4ceb76bc70cf24`.
+- Ejecutable Release/ZIP: SHA-256 `7a30a61b0de51778402d800794afc67280d2e0fb8656d6162a7d6105ea5fd72f`.
+
+## Distribución local anterior — 2026-11-11, foco en más diálogos
+
+ZIP y setup 0.5.5 regenerados con la coordinación de foco de overlays de la ventana y el foco
+inicial del detalle de operación. Pruebas Slint con componentes reales cubren paleta, reintento,
+destinos, espacios, consultas, recetas, comparaciones, entregas y detalle, incluyendo un cambio
+de panel y reintento superpuesto. No se instaló ni se realizó aceptación visual nativa. La
+recuperación de editores de ruta/rename superpuestos, paneles auxiliares y diálogos nativos sigue
+pendiente; no se afirma cobertura universal.
+
+Gate supervisado: 1.609 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 11,04 GiB.
+Release: compilación en 32m01s, pico 10,84 GiB; ZIP pasó `7z t`, cuatro archivos sin PDB y EXE
+idéntico al Release. Setup sin firma Authenticode; hashes en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `962807a8178a4a73c4b44f69195fd3427b4a1d195f4b5dd0ee1e0759221e4112`.
+- Portable: SHA-256 `670dd73b24e9c62a491f86b93326927c18adbf4a9539d97ae2df3c75d40f8386`.
+- Ejecutable Release/ZIP: SHA-256 `795cc9eb83a9c1cdc270d4a2bc0ee2a1e8778e042510cda9f6ebcf2f2edcb603`.
+
+## Distribución local anterior — 2026-11-11, foco y submenú contextual
+
+ZIP y setup 0.5.5 regenerados con restauración del foco del panel activo tras cerrar diálogos de
+operaciones/avisos y submenú contextual Abrir accesible al puntero, que se abre a la izquierda
+si falta espacio. Pruebas Slint reprodujeron ambos problemas antes del cambio y cubren confirmar,
+cancelar, árbol, diálogos superpuestos y clic en ambos lados. Nicolás confirmó previamente que
+crear carpeta y navegar con Enter/flechas funciona. Esta distribución no fue instalada ni
+aceptada visualmente; otros diálogos con gestores propios aún necesitan revisión.
+
+Gate supervisado: 1.609 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 11,05 GiB.
+Release: compilación en 33m09s, pico 10,84 GiB; ZIP pasó `7z t`, cuatro archivos sin PDB y EXE
+idéntico al Release. Setup sin firma Authenticode; hashes en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `62fe18571ce3516b752a67f5e2742a21a485aa3e11f8ab2621a04e0db69b0073`.
+- Portable: SHA-256 `884a141c619229b6346888b0c9b68f35cbe268682995d5a85f28acb83152b1ea`.
+- Ejecutable Release/ZIP: SHA-256 `f96d477776ecb7ed07ffc2f8c7553832933ce425f3489b2565b699397acf163a`.
+
+## Distribución local anterior — 2026-11-11, terminal y Explorador asíncronos
+
+ZIP y setup 0.5.5 regenerados con las mejoras anteriores y apertura de terminal o Explorador
+en un worker de una plaza. Conserva el destino capturado, valida el directorio fuera de UI,
+inicializa COM STA en Windows y despierta la interfaz al completar. Una petición adicional se
+rechaza con aviso. La llamada bloqueada al sistema no se interrumpe y la comprobación de la ruta
+no es atómica con el lanzamiento; aceptación nativa y rutas remotas pendientes. No se instaló.
+
+Gate supervisado: 1.608 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 10,92 GiB.
+Release: compilación en 41m21s, pico 10,83 GiB; ZIP pasó `7z t`, contiene cuatro archivos sin
+PDB y su EXE coincide con Release. Setup sin firma Authenticode; hashes en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `07d113b62154e03c40b49cef3a6fddf34dd1bbddf4b96c6565542c05320f6b2a`.
+- Portable: SHA-256 `ecf49677a40299508e17cc900e1665e5b3f240783a8a97ade6983a5e2d13aa99`.
+- Ejecutable Release/ZIP: SHA-256 `ba3d62f542c81e6382a141c2d721b2976e124c6156dbb2f1cfebd1ebc70341da`.
+
+## Distribución local anterior — 2026-11-11, menú contextual de carpeta
+
+ZIP y setup 0.5.5 regenerados con las mejoras anteriores y el menú contextual de zona vacía
+sin consulta de disco en UI. Una prueba reproduce que la carpeta del panel ya no existe: el
+menú conserva la ruta y el worker informa el error de creación sin recrear la base. Terminal y
+Explorador mantienen su validación/ejecución síncrona y requieren corrección independiente.
+No se instaló ni se realizó aceptación visual nativa de esta distribución.
+
+Gate supervisado: 1.604 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 6,31 GiB.
+Release: compilación en 34m35s, pico 10,85 GiB; ZIP pasó `7z t`, contiene cuatro archivos sin
+PDB y el EXE coincide con Release. Setup sin firma Authenticode; hashes en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `38f0618f81be09ce7cd0fd769db4a5adc1de8ae5c4f642bcba1694511c409af6`.
+- Portable: SHA-256 `e2ec3eeaa124e87a6842ea6f09762fe953f2010cbc1aab8e4c3ed917ee6a032d`.
+- Ejecutable Release/ZIP: SHA-256 `3218f7c1b163ec1128cee5b1aced2a809897e3d768da59aa163f959b52bda296`.
+
+## Distribución local anterior — 2026-11-11, estabilidad del árbol
+
+ZIP y setup 0.5.5 regenerados con todas las mejoras de creación descritas abajo y el ajuste que
+evita recentrar el árbol cuando cambia el índice de una ruta activa que sigue siendo la misma.
+La prueba Slint cubre scroll, inserción/eliminación, reemplazo completo, altura, nueva ruta y llegada
+tardía. No demuestra conservación de la fila visual en reconstrucciones arbitrarias ni reproduce el
+caso real de OneDrive en otra unidad. No se instaló ni se realizó aceptación visual nativa de esta distribución.
+
+Gate supervisado: 1.603 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; pico 10,99 GiB.
+Release: compilación en 35m08s, pico 10,84 GiB; ZIP pasó `7z t`, tiene cuatro archivos sin PDB y
+su EXE coincide con Release. Setup sin firma Authenticode. Checksums también en `dist/SHA256SUMS.txt`.
+
+- Setup: SHA-256 `06bfeac7b43d84a99afc934541ff2ceba58379a7af1f7a213c8cff5a6852d403`.
+- Portable: SHA-256 `09bbc4c2d45b231a26db993908d217ebd34c7502b64ec34a23cf572a98fa5d84`.
+- Ejecutable Release/ZIP: SHA-256 `f50f8a8412a08e3e4001bed2765b9721096bfaffeb1dd71d6035d4200b545da4`.
+
+## Distribución local anterior — 2026-11-11, creación sin I/O en UI
+
+Intento de aceptación aislada posterior: el inventario de aplicaciones informó Naygo instalado
+como no ejecutándose, pero tras lanzar el portable con una fixture sintética se encontró una
+instancia instalada preexistente (iniciada el 2026-11-09). El portable terminó por instancia única;
+es posible que haya enviado la ruta sintética a esa instancia. El archivo temporal de solicitud
+ya no estaba, de modo que no se pudo confirmar la recepción ni el estado del panel. No se interactuó
+con la instancia ni se cerró; no se realizó ninguna prueba visual. Fixture bajo `target/agent-out`.
+
+ZIP y setup 0.5.5 regenerados con el retiro de la consulta de disco al abrir Nueva carpeta desde
+Files, comprobación de la base en el worker y conservación del destino contextual del árbol o
+breadcrumb sin fallback a otro panel. La consulta bloqueada no es interrumpible: al retornar se
+comprueba cancelación antes de crear. La comprobación y la escritura no son atómicas frente a
+cambios concurrentes. El menú de zona vacía y terminales aún tienen consultas síncronas propias.
+Esta distribución no fue instalada ni aceptada en una ventana nativa.
+
+Gate: 1.602 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos, pico supervisado 7,43 GiB.
+Release: 36m59s de compilación, pico 10,84 GiB; setup y ZIP generados. ZIP pasó `7z t`, no incluye
+PDB y contiene el mismo EXE que Release. Setup sin firma Authenticode. Las mejoras de selección,
+aviso localizado y su límite de 4.096 destinos descritas abajo también están incluidas.
+
+- Setup: SHA-256 `d1a0736f4355b07fd7f8ce451edecdc8aa76c8b4409a75ebf64e538ff7483198`.
+- Portable: SHA-256 `1fac4c3cf27497cf4caf547b1240f622b3091dc87215eb428173c1c5c7c0bd8b`.
+- Ejecutable Release/ZIP: SHA-256 `187283799a11090ba2d42118a1b152ab528ef9050049b4f03b410a53122340f7`.
+
+## Distribución local anterior — 2026-11-11, selección durante creación
+
+Se regeneraron ZIP y setup 0.5.5 con la protección ante apertura accidental, preservación de una
+selección explícita frente a resultados y avisos del watcher de la última creación y aviso localizado
+si Enter queda bloqueado. Los paquetes aún no se instalaron ni se aceptaron en una ventana nativa;
+la instalación anterior declara la misma versión pero es otro build. Seguimiento por panel: hasta
+4.096 destinos; sobre ese límite se preserva conservadoramente la selección frente a llegadas de la
+carpeta hasta navegar o iniciar otra creación. Quedan pendientes creaciones separadas superpuestas,
+otros intercalados del watcher y revisión editorial de las traducciones.
+
+Gate final: 1.595 pruebas aprobadas, 9 ignoradas, Clippy y formato correctos; paridad de diez
+catálogos i18n. Pico supervisado del gate 10,70 GiB. Compilación Release en 36m31s, pico 10,83 GiB;
+setup y ZIP generados, ZIP comprobado con `7z t`, sin PDB y con EXE idéntico a Release. Setup sin
+firma Authenticode.
+
+- Setup: SHA-256 `39af0a98bc6e409156c7b6dac1c87dc761ab32cd35f1462fa09101b1ba553766`.
+- Portable: SHA-256 `354f6520059ef31fdcf2fd20b98910a7695f1685468cc128740079f7d4c9d71f`.
+- Ejecutable Release/ZIP: SHA-256 `9253c43f960d6b77be9f9ace17c49cf1f4c5d23e53b5c76350378df8247201d8`.
+
+## Distribución local anterior — 2026-11-10, protección ante refresco
+
+ZIP y setup 0.5.5 regenerados con protección de Enter frente al refresco que restaura una fila
+anterior durante la creación. La distribución anterior de ese mismo día, descrita abajo, tenía
+la carrera reproducida; la nueva sigue sin instalación ni aceptación interactiva nativa. Enter
+no queda en cola ni muestra aviso específico mientras espera la reconciliación. Selecciones
+explícitas liberan la protección. Otros intercalados de watcher y resultados tardíos siguen abiertos.
+
+Gate supervisado: 1.587 aprobadas, 9 ignoradas, Clippy y formato correctos; pico 8,51 GiB.
+Release: compilación en 36m34s, pico supervisado 10,83 GiB; ZIP pasó `7z t`, no incluye PDB y
+contiene un EXE idéntico al Release. El setup no tiene firma Authenticode.
+
+- Setup: SHA-256 `2960a13f7275ee058eb032b32d9bde1d517d596c5cb41bd143630f86b622b3df`.
+- Portable: SHA-256 `51483a9f850a4ae8f8f1500f31d6043e0cccf2fd01d9ab67e5407b3fe0c2b8c1`.
+- Ejecutable Release/ZIP: SHA-256 `e6d6eca65ff8d38d7569d31164bbbd9a4f6ad8c1fcb9490085f1c08d31328695`.
+
+## Distribución local de avance — 2026-11-10
+
+**Advertencia histórica:** se reprodujo una carrera en esta distribución anterior: un refresco iniciado
+antes de crear puede restaurar la fila anterior; Enter antes de reconciliar la creación puede abrirla.
+La corrección se empaquetó después en la distribución descrita arriba. No confundir las pruebas
+verdes de esta sección histórica con cobertura de esa intercalación.
+
+Se regeneraron ZIP y setup 0.5.5 con la corrección del foco al cerrar el modal de carpetas y
+el atajo configurable para crear desde el nodo enfocado del árbol. Esta distribución aún no se
+instaló ni validó de forma interactiva; la instalación registrada más abajo corresponde a la
+build anterior, aunque ambas declaren 0.5.5. Gate final: 1.578 pruebas aprobadas, 9 ignoradas,
+Clippy y formato correctos; diez catálogos i18n correctos. Pico del gate: 10,88 GiB. Release
+supervisado: 54m41s de compilación, pico 10,84 GiB; setup y ZIP generados. El ZIP pasó `7z t`,
+no contiene PDB y su ejecutable coincide con Release. Setup sin firma Authenticode.
+
+- Setup: SHA-256 `115a896db0a25320601ef6343b8bcdcfd9abf378a858a9395a061ae436f6b736`.
+- Portable: SHA-256 `f3a90bb0777b9e97f1c14cd079921c2e38949df979c6348866cc54626bd3e28c`.
+- Ejecutable Release/ZIP: SHA-256 `e5337ec279f4610eb7a0e180006e3fc919ddb36a94fe2f1de51f077017ae2479`.
+
+La prueba de Slint reproduce la pérdida de flechas y verifica el foco de Files/árbol tras el modal
+y el envío del atajo. Dos pruebas del controlador cubren el destino del árbol y Enter inmediato
+antes y después de completar una creación. No prueban intercalados arbitrarios de watcher ni
+reemplazan la aceptación con ventana real. No se modificó el comportamiento Enter/Ctrl+Enter del
+editor. Detalle: [plan de usabilidad](plans/2026-11-09-usabilidad-confiabilidad-windows.md).
+
 ## Distribución local instalada — 2026-11-08
 
 Naygo Windows 0.5.5 está instalada y abierta (proceso 38940, responde). El gate supervisado pasó
