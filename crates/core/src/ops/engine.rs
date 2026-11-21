@@ -1704,6 +1704,35 @@ fn exec_copy_step(
         }
     };
 
+    // Los enlaces (symlink/junction) nunca se copian por contenido ni se borran a través de ellos:
+    // un Move los renombra como enlace y, si no se puede (otro volumen), el paso falla y el
+    // enlace queda en el origen. Un Copy no recrea enlaces (backlog): falla el paso.
+    // Excepción: en Copy, un enlace a ARCHIVO (p. ej. el origen seleccionado, que se sigue una vez)
+    // se copia leyendo su contenido: leer a través de él no puede borrar nada.
+    if let Ok(meta) = std::fs::symlink_metadata(&from) {
+        let copia_de_enlace_a_archivo = !is_move
+            && std::fs::metadata(&from)
+                .map(|m| m.is_file())
+                .unwrap_or(false);
+        if super::plan::is_link_like(&meta) && !copia_de_enlace_a_archivo {
+            let outcome = if is_move {
+                if let Some(parent) = step.to.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match no_replace_rename.rename_noreplace(&from, &step.to) {
+                    Ok(()) => OpOutcome::Done,
+                    Err(error) => OpOutcome::Failed(format!(
+                        "enlace no movido entre volúmenes: {}: {error}",
+                        from.display()
+                    )),
+                }
+            } else {
+                OpOutcome::Failed(format!("enlace no copiado: {}", from.display()))
+            };
+            return (step.to.clone(), outcome, 0, true);
+        }
+    }
+
     // Resolver el destino según la política de conflictos. Con `Ask` (ops-B), si el
     // destino existe se consulta a la UI por ítem: emite `OpMsg::Conflict` y bloquea
     // esperando una `ConflictDecision` por `conflict_rx`. Con "aplicar a todos", la acción
@@ -2223,6 +2252,50 @@ mod tests {
         drop(tx);
         let msgs: Vec<OpMsg> = rx.into_iter().collect();
         (msgs, summary)
+    }
+
+    #[test]
+    fn move_entre_volumenes_no_borra_a_traves_de_junction() {
+        struct SiempreOtroVolumen;
+        impl NoReplaceRename for SiempreOtroVolumen {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("T");
+        fs::create_dir(&t).unwrap();
+        fs::write(t.join("f.txt"), b"real").unwrap();
+        let a = dir.path().join("A");
+        fs::create_dir(&a).unwrap();
+        fs::write(a.join("propio.txt"), b"mio").unwrap();
+        let j = a.join("j");
+        if !super::super::make_junction(&j, &t) {
+            return;
+        }
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(true, vec![a.clone()], dest);
+        let plan = plan(&request).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+            &SiempreOtroVolumen,
+        );
+        assert_eq!(fs::read(t.join("f.txt")).unwrap(), b"real");
+        assert!(
+            fs::symlink_metadata(&j).is_ok(),
+            "el enlace sigue en el origen"
+        );
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
     }
 
     #[test]

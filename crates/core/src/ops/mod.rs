@@ -422,6 +422,29 @@ pub enum OpMsg {
     Failed(String),
 }
 
+/// Helper de tests: crea un enlace de directorio (junction en Windows, symlink en Unix).
+/// Devuelve `false` si no se pudo crear; el test debe retornar temprano.
+#[cfg(test)]
+pub(crate) fn make_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        // `mklink /J` no exige privilegios ni Developer Mode.
+        std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod folder_conflict_tests {
     use super::plan::plan;

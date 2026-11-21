@@ -219,6 +219,7 @@ pub(super) fn plan_duplicate_with(
             sink,
             cancelled,
             false,
+            true,
         )?;
     }
     Ok(OpPlan {
@@ -275,7 +276,11 @@ pub(super) fn plan_transfer_with(
 ) -> Result<OpPlan, PlanError> {
     let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
     for src in &req.sources {
-        if src.is_dir() && is_inside(&dest, src) {
+        // `symlink_metadata`: un enlace a carpeta no cuenta como carpeta contenedora.
+        let src_is_dir = std::fs::symlink_metadata(src)
+            .map(|m| m.is_dir() && !is_link_like(&m))
+            .unwrap_or(false);
+        if src_is_dir && is_inside(&dest, src) {
             return Err(PlanError::DestInsideSource);
         }
     }
@@ -304,6 +309,7 @@ pub(super) fn plan_transfer_with(
             sink,
             cancelled,
             is_move,
+            !is_move,
         )?;
     }
     Ok(OpPlan {
@@ -398,6 +404,24 @@ fn map_directory_entry<T>(entry: std::io::Result<T>, directory: &Path) -> Result
     entry.map_err(|_| PlanError::SourceUnreadable(directory.to_path_buf()))
 }
 
+/// `true` si los metadatos (sin seguir el enlace) describen un symlink o un junction. En
+/// Windows `is_symlink()` no cubre los junctions (son puntos de reanálisis de tipo mount point).
+pub(super) fn is_link_like(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.is_dir() && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn expand(
     src: &Path,
@@ -408,13 +432,35 @@ fn expand(
     sink: &mut dyn FnMut(usize, u64),
     cancelled: &dyn Fn() -> bool,
     directories_postorder: bool,
+    follow_root_link: bool,
 ) -> Result<(), PlanError> {
     // Cortar limpio si se canceló a mitad del recorrido (el worker emitirá `Cancelled`).
     if cancelled() {
         return Ok(());
     }
-    let meta =
-        std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
+    // Nunca se atraviesan enlaces (symlink o junction): recorrerlos haría que un Move entre
+    // volúmenes borrara archivos reales del destino del enlace. Solo el origen seleccionado de
+    // un Copy se sigue (una vez), porque el usuario lo eligió; lo anidado en él no.
+    let link_meta = std::fs::symlink_metadata(src)
+        .map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
+    let is_link = is_link_like(&link_meta);
+    if is_link && !follow_root_link {
+        // El enlace viaja como un paso de archivo sin bytes; el motor decide qué hacer con él.
+        steps.push(OpStep {
+            from: Some(src.to_path_buf()),
+            to: to.to_path_buf(),
+            bytes: 0,
+            is_dir: false,
+        });
+        *total_files += 1;
+        sink(*total_files, *total_bytes);
+        return Ok(());
+    }
+    let meta = if is_link {
+        std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?
+    } else {
+        link_meta
+    };
     if meta.is_dir() {
         if !directories_postorder {
             steps.push(OpStep {
@@ -442,6 +488,7 @@ fn expand(
                 sink,
                 cancelled,
                 directories_postorder,
+                false,
             )?;
         }
         if directories_postorder {
@@ -680,6 +727,57 @@ mod tests {
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.steps[0].to, link);
         assert!(!plan.steps[0].is_dir);
+    }
+
+    #[test]
+    fn plan_copy_no_recorre_junction_anidado() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("T");
+        fs::create_dir(&t).unwrap();
+        fs::write(t.join("f.txt"), b"x").unwrap();
+        let a = dir.path().join("A");
+        fs::create_dir(&a).unwrap();
+        let j = a.join("j");
+        if !super::super::make_junction(&j, &t) {
+            return;
+        }
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let plan = plan(&req(OpKind::Copy, vec![a.clone()], Some(dest))).unwrap();
+        let paso_j = plan
+            .steps
+            .iter()
+            .find(|s| s.from.as_deref() == Some(j.as_path()))
+            .expect("paso para el enlace");
+        assert!(!paso_j.is_dir);
+        assert!(plan.steps.iter().all(|s| {
+            s.from
+                .as_deref()
+                .map(|f| !f.starts_with(&t) && !f.starts_with(&j) || f == j)
+                .unwrap_or(true)
+        }));
+    }
+
+    #[test]
+    fn plan_copy_sigue_origen_enlace_seleccionado() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("T");
+        fs::create_dir(&t).unwrap();
+        fs::write(t.join("f.txt"), b"x").unwrap();
+        let j = dir.path().join("j");
+        if !super::super::make_junction(&j, &t) {
+            return;
+        }
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let plan = plan(&req(OpKind::Copy, vec![j.clone()], Some(dest))).unwrap();
+        assert!(
+            plan.steps
+                .iter()
+                .any(|s| s.from.as_deref() == Some(j.join("f.txt").as_path())),
+            "{:?}",
+            plan.steps
+        );
     }
 
     #[test]
