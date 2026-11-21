@@ -1827,7 +1827,7 @@ fn exec_copy_step(
     // Closure que arma y envía el progreso por bytes durante la copia. `this_file`
     // son los bytes de ESTE archivo copiados hasta ahora; se suman a los bytes de
     // los archivos ya terminados (`prev_bytes`) para el total acumulado de la op.
-    let on_bytes = |this_file: u64| {
+    let mut on_bytes = |this_file: u64| {
         let _ = tx.send(OpMsg::Progress(OpProgress {
             bytes_done: progress.prev_bytes + this_file,
             bytes_total: progress.bytes_total,
@@ -1837,10 +1837,19 @@ fn exec_copy_step(
         }));
     };
 
-    match copy_buffered(&from, &to, overwrite_destination, token, on_bytes, || {}) {
+    // Un Move entre volúmenes borra el origen justo después de publicar: la copia debe ser
+    // durable (en disco) antes de eso, o un corte de luz perdería ambos lados.
+    match no_replace_rename.copy_and_publish(
+        &from,
+        &to,
+        overwrite_destination,
+        is_move,
+        token,
+        &mut on_bytes,
+    ) {
         Ok(true) => {
             if is_move {
-                // Borrar el origen tras una copia exitosa (fin del move cross-volume).
+                // Borrar el origen solo tras una copia publicada (fin del move cross-volume).
                 if let Err(e) = std::fs::remove_file(&from) {
                     return (
                         to,
@@ -1898,16 +1907,23 @@ fn remove_empty_move_source(from: &Path) -> std::io::Result<()> {
 /// con throttle (cada ~100 ms, no por bloque) durante la copia y una vez al final
 /// con el total del archivo; así una copia larga emite progreso en vivo sin inundar
 /// el canal. El llamador arma el `OpProgress` sumando los bytes de archivos previos.
+///
+/// Antes de publicar copia las fechas del origen (modificación y acceso; creación en Windows)
+/// y, si `durable`, fuerza el contenido a disco (`sync_all`). Los permisos se aplican antes de
+/// publicar en Unix (modo POSIX) y después en Windows, porque `persist` de tempfile resetea los
+/// atributos del temporal a `NORMAL` y borraría el solo lectura.
 fn copy_buffered(
     from: &Path,
     to: &Path,
     overwrite: bool,
+    durable: bool,
     token: &CancellationToken,
     mut on_bytes: impl FnMut(u64),
     mut after_chunk: impl FnMut(),
 ) -> std::io::Result<bool> {
     let mut reader = std::fs::File::open(from)?;
-    let source_permissions = std::fs::metadata(from)?.permissions();
+    let source_metadata = reader.metadata()?;
+    let source_permissions = source_metadata.permissions();
     let parent = to
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -1940,8 +1956,14 @@ fn copy_buffered(
     if token.is_cancelled() {
         return Ok(false);
     }
+    // Fechas después de la última escritura (escribir actualiza la de modificación).
+    writer.as_file().set_times(source_times(&source_metadata))?;
+    if durable {
+        writer.as_file().sync_all()?;
+    }
+    #[cfg(not(windows))]
     std::fs::set_permissions(writer.path(), source_permissions)?;
-    // Publicar sólo después de copiar y aplicar permisos: persist reemplaza atómicamente cuando
+    // Publicar sólo después de copiar y aplicar metadatos: persist reemplaza atómicamente cuando
     // se autorizó Overwrite; persist_noclobber vuelve a validar el destino al final y no puede
     // pisar una ruta que apareció durante la copia. El temporal comparte filesystem con `to`.
     let persisted = if overwrite {
@@ -1949,12 +1971,59 @@ fn copy_buffered(
     } else {
         writer.persist_noclobber(to)
     };
-    if let Err(error) = persisted {
-        return Err(error.error);
+    let published = match persisted {
+        Ok(file) => file,
+        Err(error) => return Err(error.error),
+    };
+    if durable {
+        sync_parent_dir(to);
     }
+    drop(published);
+    // Windows: persist dejó el archivo con atributos NORMAL. `Permissions` de Windows guarda los
+    // atributos del origen (solo lectura, oculto, sistema, archivo) y `set_permissions` los
+    // reaplica todos con SetFileAttributesW.
+    #[cfg(windows)]
+    std::fs::set_permissions(to, source_permissions).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("copiado pero no se aplicaron los atributos del origen: {error}"),
+        )
+    })?;
     // Emisión final sólo después de que la publicación tuvo éxito.
     on_bytes(copied);
     Ok(true)
+}
+
+/// Fechas del origen a aplicar a la copia. Las que la plataforma no informa se omiten (el
+/// filesystem deja la actual) en vez de fallar la copia entera.
+fn source_times(metadata: &std::fs::Metadata) -> std::fs::FileTimes {
+    let mut times = std::fs::FileTimes::new();
+    if let Ok(modified) = metadata.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    #[cfg(windows)]
+    if let Ok(created) = metadata.created() {
+        use std::os::windows::fs::FileTimesExt;
+        times = times.set_created(created);
+    }
+    times
+}
+
+/// Unix: tras el rename, sincroniza el directorio para que la entrada nueva también sea durable
+/// antes de que un Move borre el origen. Best-effort: algunos filesystems no lo admiten. En
+/// Windows NTFS registra el rename en su journal; no hay equivalente portable vía `std`.
+fn sync_parent_dir(to: &Path) {
+    #[cfg(unix)]
+    if let Some(parent) = to.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = to;
 }
 
 /// Abstrae la operación de renombrado rápido de Move para mantener Win32 fuera de `core`.
@@ -1962,6 +2031,33 @@ fn copy_buffered(
 /// de `core` queda para consumidores autónomos; en Windows la UI inyecta el adaptador de `platform`.
 pub trait NoReplaceRename: Send + Sync {
     fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+
+    /// Copia `from` a un temporal junto a `to` y lo publica en `to` solo al terminar.
+    ///
+    /// - `overwrite`: la publicación reemplaza un `to` existente; si es `false`, un destino que
+    ///   aparezca durante la copia hace fallar la publicación (`AlreadyExists`) sin pisarlo.
+    /// - `durable`: el contenido llega a disco antes de publicar (lo pide un Move entre
+    ///   volúmenes, que borra el origen justo después).
+    /// - `on_bytes`: bytes de ESTE archivo copiados hasta ahora, con throttle (~100 ms) y una
+    ///   emisión final tras publicar.
+    ///
+    /// Devuelve `Ok(true)` si publicó, `Ok(false)` si se canceló (sin parcial ni temporal) y
+    /// `Err` ante un error de I/O (el temporal se borra; un destino previo queda intacto).
+    ///
+    /// La implementación por defecto es la copia por buffers de `core` (fechas, permisos y
+    /// solo lectura preservados); `platform` la reemplaza en Windows por `CopyFile2`, que además
+    /// preserva atributos y flujos alternativos (ADS).
+    fn copy_and_publish(
+        &self,
+        from: &Path,
+        to: &Path,
+        overwrite: bool,
+        durable: bool,
+        token: &CancellationToken,
+        on_bytes: &mut dyn FnMut(u64),
+    ) -> std::io::Result<bool> {
+        copy_buffered(from, to, overwrite, durable, token, on_bytes, || {})
+    }
 }
 
 /// Implementación autónoma del core: atómica en Linux y best-effort en Windows/otros targets.
@@ -4073,6 +4169,7 @@ mod tests {
             &source,
             &destination,
             true,
+            false,
             &token,
             |_| {},
             || {
@@ -4109,6 +4206,7 @@ mod tests {
         let result = copy_buffered(
             &source,
             &destination,
+            false,
             false,
             &token,
             |_| {},
@@ -4250,6 +4348,7 @@ mod tests {
             &source,
             &destination,
             false,
+            false,
             &CancellationToken::new(),
             |_| {},
             || {},
@@ -4261,6 +4360,196 @@ mod tests {
             fs::metadata(destination).unwrap().permissions().mode() & 0o777,
             0o751
         );
+    }
+
+    /// Fecha fija y antigua (2023-11-14) para que una copia que la pierda sea evidente.
+    fn fecha_antigua() -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
+    }
+
+    fn fijar_modificacion(path: &Path, t: std::time::SystemTime) {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn copia_preserva_fecha_de_modificacion() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fecha.txt");
+        fs::write(&source, b"contenido con fecha").unwrap();
+        fijar_modificacion(&source, fecha_antigua());
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        let (_messages, summary) = run(super::super::transfer(
+            false,
+            vec![source.clone()],
+            dest.clone(),
+        ));
+
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(
+            fs::metadata(dest.join("fecha.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            fecha_antigua(),
+            "la copia conserva la fecha de modificación del origen"
+        );
+    }
+
+    #[test]
+    fn copia_preserva_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("protegido.txt");
+        fs::write(&source, b"no tocar").unwrap();
+        let mut permissions = fs::metadata(&source).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&source, permissions).unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        let (_messages, summary) = run(super::super::transfer(
+            false,
+            vec![source.clone()],
+            dest.clone(),
+        ));
+
+        let copied = dest.join("protegido.txt");
+        let copied_readonly = fs::metadata(&copied)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(false);
+        // Limpiar el solo-lectura antes de afirmar: en Windows un archivo de solo lectura no se
+        // puede borrar y el TempDir quedaría con basura si el test falla.
+        for path in [&source, &copied] {
+            if let Ok(meta) = fs::metadata(path) {
+                let mut p = meta.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = fs::set_permissions(path, p);
+            }
+        }
+        assert_eq!(summary.count_done(), 1);
+        assert!(
+            copied_readonly,
+            "la copia conserva el atributo solo lectura"
+        );
+    }
+
+    #[test]
+    fn copiar_dos_veces_con_saltar_identicos_salta_todo() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources: Vec<_> = (0..3)
+            .map(|i| {
+                let path = dir.path().join(format!("f{i}.txt"));
+                fs::write(&path, format!("contenido {i}")).unwrap();
+                // Fecha antigua: si la copia no la preserva, la segunda pasada ve fechas distintas.
+                fijar_modificacion(&path, fecha_antigua());
+                path
+            })
+            .collect();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        // Primera pasada: destino vacío, sin conflictos.
+        let (_messages, first) = run(super::super::transfer(false, sources.clone(), dest.clone()));
+        assert_eq!(first.count_done(), 3);
+
+        // Segunda pasada con Ask: el primer conflicto responde "Saltar idénticos" para todos; si
+        // algún par difiere el motor vuelve a preguntar y el test responde Overwrite (→ Done).
+        let req = super::super::transfer(false, sources, dest.clone());
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let prompts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompts2 = prompts.clone();
+        let resp = std::thread::spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    let n = prompts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let action = if n == 0 {
+                        ConflictAction::SkipIdentical
+                    } else {
+                        ConflictAction::Overwrite
+                    };
+                    let _ = ctx.send(ConflictDecision {
+                        action,
+                        apply_all: n == 0,
+                    });
+                }
+            }
+        });
+        let second = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+
+        assert_eq!(second.count_done(), 0, "nada se recopia");
+        assert_eq!(second.count_skipped(), 3, "todos idénticos → Skipped");
+        assert_eq!(
+            prompts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "solo el primer conflicto pregunta"
+        );
+    }
+
+    #[test]
+    fn move_cross_volume_pide_copia_durable() {
+        struct OtroVolumenRegistraDurable(std::sync::Mutex<Vec<bool>>);
+        impl NoReplaceRename for OtroVolumenRegistraDurable {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                self.0.lock().unwrap().push(durable);
+                NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        let dest = dir.path().join("dest");
+        fs::write(&source, b"payload").unwrap();
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(true, vec![source.clone()], dest.clone());
+        let plan = plan(&request).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_conflict_tx, conflict_rx) = mpsc::channel();
+        let copier = OtroVolumenRegistraDurable(std::sync::Mutex::new(Vec::new()));
+
+        let summary = run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            None,
+            &copier,
+        );
+
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(
+            *copier.0.lock().unwrap(),
+            vec![true],
+            "el move entre volúmenes copia en modo durable antes de borrar el origen"
+        );
+        assert!(!source.exists(), "se retira el origen tras publicar");
+        assert_eq!(fs::read(dest.join("source.txt")).unwrap(), b"payload");
     }
 
     // Confirma la causa raíz del bug "pegar+sobrescribir copió solo unos MB de un archivo
