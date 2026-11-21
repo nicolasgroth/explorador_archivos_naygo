@@ -73,13 +73,16 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-guarded.ps1
 ```
 
 Invoca el mismo `build-release.ps1`, sin sobreescribir el perfil declarado en Cargo.toml.
-Release usa ThinLTO/16 unidades, `debug = "line-tables-only"` (el `.pdb` conserva nombres de
-función y archivo:línea para el backtrace del panic handler, según la documentación de rustc,
-sin tipos ni variables) y optimización de tamaño. Medido con ese perfil (2026-11-21): 39m33s,
-pico 6,68 GiB WS / 7,20 GiB privada; ver `BENCHMARKS.md`. El perfil `diag` (sin LTO) y un
-`cargo build --release` manual no pasan por el empaquetador: muestran `+build.dev`. En dev,
-`naygo-ui-gen` se compila sin debuginfo para bajar el pico del enlazado. Validado en build 202609142135: pico contable 10,44 GiB
-bajo límite de 12 GiB, con instalador y portable verificados. No es un techo de memoria
+Release usa ThinLTO/16 unidades, `debug = "line-tables-only"` y optimización de tamaño. El
+`.pdb` debería conservar nombres de función y archivo:línea para el backtrace del panic handler,
+según la documentación de rustc; esto es lo esperado, no se verificó con un panic real en el
+perfil `diag`. Medido con este perfil (2026-11-21): 39m33s, pico 6,68 GiB WS / 7,20 GiB
+privada (ver `BENCHMARKS.md`). Los builds que no pasan por `scripts/build-release.ps1` (dev,
+`diag`, `cargo build --release` manual) muestran `+build.dev`: solo el empaquetador fija
+`NAYGO_BUILD_ID`. En dev, `naygo-ui-gen` se compila sin debuginfo para bajar el pico del enlazado.
+
+Histórico, medido con `debug = true`: build 202609142135, pico contable 10,44 GiB bajo límite
+de 12 GiB, con instalador y portable verificados. No es un techo de memoria
 de Naygo ni garantiza igual consumo en otros equipos/toolchains; conservar la supervisión.
 Usa un solo trabajo, prioridad baja y un Job Windows que limita la memoria comprometida
 del árbol de compilación a 12 GiB. Comprueba cada dos segundos que queden al menos
