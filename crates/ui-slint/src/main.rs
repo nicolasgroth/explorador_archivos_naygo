@@ -88,16 +88,15 @@ slint::include_modules!();
 /// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
-/// Versión completa mostrada al usuario: `X.Y.Z+build.YYYYMMDDHHMM`. El sufijo `+build.<id>` es el
-/// metadato de build de semver (no altera la versión semver base); lo estampa `build.rs` en
-/// `NAYGO_BUILD_ID` en cada compilación, así cada build es identificable sin ambigüedad al probar.
-/// Si el id es "unknown" (no se pudo leer la hora en el build), se muestra solo la versión base.
+/// Versión completa mostrada al usuario: `X.Y.Z+build.<id>`. El sufijo `+build.<id>` es el
+/// metadato de build de semver (no altera la versión semver base). `build.rs` estampa
+/// `NAYGO_BUILD_ID`: el empaquetador (`scripts/build-release.ps1`) lo fija a la fecha-hora
+/// `YYYYMMDDHHMM`, así cada distribución es identificable; los builds de desarrollo muestran
+/// `X.Y.Z+build.dev`.
 fn naygo_full_version() -> String {
     let base = env!("CARGO_PKG_VERSION");
-    match option_env!("NAYGO_BUILD_ID") {
-        Some(id) if id != "unknown" && !id.is_empty() => format!("{base}+build.{id}"),
-        _ => base.to_string(),
-    }
+    let id = option_env!("NAYGO_BUILD_ID").unwrap_or("dev");
+    format!("{base}+build.{id}")
 }
 
 /// Offset del huso local en minutos (positivo al este de UTC). Delega en
