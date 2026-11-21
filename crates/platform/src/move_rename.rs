@@ -25,6 +25,22 @@ impl naygo_core::ops::NoReplaceRename for PlatformNoReplaceRename {
             naygo_core::ops::NativeNoReplaceRename.rename_noreplace(from, to)
         }
     }
+
+    /// Windows: `CopyFile2` preserva fechas, atributos y flujos alternativos (incluida la marca
+    /// de la web) y aprovecha el offload de copia en SMB. Fuera de Windows rige la copia por
+    /// defecto de `core`.
+    #[cfg(windows)]
+    fn copy_and_publish(
+        &self,
+        from: &Path,
+        to: &Path,
+        overwrite: bool,
+        durable: bool,
+        token: &naygo_core::cancel::CancellationToken,
+        on_bytes: &mut dyn FnMut(u64),
+    ) -> std::io::Result<bool> {
+        crate::copy_file::copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+    }
 }
 
 #[cfg(windows)]
@@ -58,7 +74,7 @@ fn rename_noreplace_windows(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-fn windows_error_to_io(error: windows::core::Error) -> std::io::Error {
+pub(crate) fn windows_error_to_io(error: windows::core::Error) -> std::io::Error {
     // Win32 APIs return HRESULT_FROM_WIN32(GetLastError()); keep the underlying Win32 code so
     // `ERROR_NOT_SAME_DEVICE` is recognized by core as CrossesDevices and triggers its fallback.
     let code = error.code().0 as u32;
