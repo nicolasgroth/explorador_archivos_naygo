@@ -2,6 +2,17 @@
 // metadatos del ejecutable.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
+/// Manifest de aplicación con únicamente `longPathAware`.
+#[cfg(windows)]
+const LONG_PATH_MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
+"#;
+
 fn main() {
     // El compilador de la UI declarativa supera el stack principal de 1 MiB de MSVC.
     // Esta reserva sólo existe durante el build; no aumenta el stack/RAM de Naygo.
@@ -45,6 +56,9 @@ fn main() {
         println!("cargo:rerun-if-changed={ico}");
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico);
+        // Manifest mínimo: solo declara longPathAware (rutas > MAX_PATH en APIs que lo respetan,
+        // si el sistema tiene LongPathsEnabled). No toca DPI, comctl ni trustInfo.
+        res.set_manifest(LONG_PATH_MANIFEST);
         res.set("ProductName", "Naygo");
         res.set("FileDescription", "Naygo — explorador de archivos");
         res.set("CompanyName", "ISGroth — Nicolás Groth <ngroth@gmail.com>");

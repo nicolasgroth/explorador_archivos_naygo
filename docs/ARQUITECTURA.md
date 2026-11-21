@@ -113,6 +113,10 @@ ni lanza un hilo nuevo. Fallo/desconexión/cancelación terminan hasta Reintenta
 `platform/window::content_visible` distingue WS_VISIBLE de ventana minimizada (IsIconic).
 No se exige foco de foreground. Al ocultar, la vista/escena se libera y el trabajo recibe
 cancelación cooperativa; las plazas de quienes siguen bloqueados permanecen ocupadas.
+Rutas largas: el manifest del `.exe` (`ui-slint/build.rs`) declara `longPathAware`, que solo
+surte efecto si el sistema tiene `LongPathsEnabled`. Las llamadas Win32 propias de Naygo
+(copia y rename) usan rutas `\\?\` (`platform/long_path::to_verbatim`), así que funcionan
+aunque esa opción esté apagada.
 El hook winit existente en `path_window_events.rs` conserva AltGr y difiere un wake puntual
 ante foco/tamaño/ocultación, para restaurar desde la barra de tareas aun con el tick dormido.
 Gestos 3D presentan frames de la escena vigente mientras preparan la última cámara;
