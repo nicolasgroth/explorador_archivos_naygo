@@ -73,8 +73,12 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-guarded.ps1
 ```
 
 Invoca el mismo `build-release.ps1`, sin sobreescribir el perfil declarado en Cargo.toml.
-Desde el ajuste del 14 de septiembre, release usa ThinLTO/16 unidades, conserva símbolos
-completos y optimización de tamaño. Validado en build 202609142135: pico contable 10,44 GiB
+Release usa ThinLTO/16 unidades, `debug = "line-tables-only"` (el `.pdb` conserva nombres de
+función y archivo:línea para el backtrace del panic handler, según la documentación de rustc,
+sin tipos ni variables) y optimización de tamaño. Medido con ese perfil (2026-11-21): 39m33s,
+pico 6,68 GiB WS / 7,20 GiB privada; ver `BENCHMARKS.md`. El perfil `diag` (sin LTO) y un
+`cargo build --release` manual no pasan por el empaquetador: muestran `+build.dev`. En dev,
+`naygo-ui-gen` se compila sin debuginfo para bajar el pico del enlazado. Validado en build 202609142135: pico contable 10,44 GiB
 bajo límite de 12 GiB, con instalador y portable verificados. No es un techo de memoria
 de Naygo ni garantiza igual consumo en otros equipos/toolchains; conservar la supervisión.
 Usa un solo trabajo, prioridad baja y un Job Windows que limita la memoria comprometida

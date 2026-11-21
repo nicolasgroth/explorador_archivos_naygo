@@ -3,6 +3,37 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### Compilación — perfiles con line-tables-only, 2026-11-21
+
+Mismo método y equipo (`scripts/measure-build.ps1`, `CARGO_BUILD_JOBS=1`, `rustc 1.96.0`) sobre
+`086030c2` más los cambios de perfil. Dev: `[profile.dev.package.naygo-ui-gen]` probado con
+`debug = "line-tables-only"` y con `debug = false`; se conserva `false` (menor pico). Release:
+`debug = "line-tables-only"` (antes `true`), resto igual (`opt-level="s"`, thin LTO, 16 unidades).
+
+| Escenario (dev) | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| tocar `keys.rs`, ui-gen `line-tables-only` | 15,3 s | 4,78 | 2,71 |
+| tocar `app-window.slint`, ui-gen `line-tables-only` | 1m02s | 4,77 | 4,70 |
+| tocar `keys.rs`, ui-gen `debug = false` (vigente) | 13,6 s | 4,49 | 2,60 |
+
+Delta dev vs la medición anterior (debuginfo completa, `keys.rs`: 18,9 s, 6,39 / 3,59 GiB): pico WS
+-1,9 GiB, privada -1,0 GiB. El calentamiento tras cambiar el perfil costó 6m57s y 5m43s.
+
+| Escenario (release) | Tiempo | Pico WS (GiB) | Pico privada (GiB) | `naygo.exe` | `naygo.pdb` |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `cargo build --release -p naygo-ui-slint --locked`, build completo | 39m33s | 6,68 | 7,20 | 45.468.160 B | 176.869.376 B |
+
+Delta vs la línea base documentada (29m18s, pico 10,92 GiB, commit `82db92d5`): el pico baja
+unos 3,7 GiB (privada 7,20) y el `.pdb` pasa de 473.083.904 B (build previo con `debug = true`,
+sin tocar) a 176.869.376 B; el `.exe` casi no cambia (45.369.856 → 45.468.160 B). El tiempo
+SUBE (+10m), pero la línea base viene de otra sesión/commit y la comparación no es directa (la
+máquina pudo estar con otra carga); queda sin explicar, no se asume causa.
+
+`CARGO_BUILD_JOBS=2` NO se probó: el pico con 1 trabajo (6,68 GiB WS / 7,20 privada) ya supera
+los 6 GiB, así que dos trabajos se acercarían al límite de 8 GiB; se mantiene el valor 1. Dividir
+ConfigWindow/Splash no se evalúa: el cuello medido en dev (link.exe) ya bajó con la debuginfo y
+no hay dato de que `ui-gen` domine el pico de release.
+
 ### Compilación — tras separar naygo-ui-gen, 2026-11-21
 
 Mismo método y equipo que la línea base (abajo), sobre el commit `d9085170`
