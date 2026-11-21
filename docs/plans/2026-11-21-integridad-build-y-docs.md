@@ -42,7 +42,7 @@ Fase 1 se verificaron a mano en el código antes de escribir este plan.
 
 ## Fase 1 — Integridad de datos (prioridad máxima)
 
-### T1. El plan de copiar/mover no atraviesa enlaces
+### Task 1: El plan de copiar/mover no atraviesa enlaces
 
 **Decisión:** los enlaces (symlink o junction) anidados nunca se recorren. Si un **origen
 seleccionado** es un enlace y la operación es Copiar, se sigue una sola vez, porque el usuario lo
@@ -65,7 +65,7 @@ privilegio o Developer Mode; queda en el backlog).
 - [ ] Tests en verde: `cargo test -p naygo-core --locked ops::`.
 - [ ] Commit `fix(ops): copiar/mover no atraviesa symlinks ni junctions`.
 
-### T2. Identidad real de archivo antes de sobrescribir o mover
+### Task 2: Identidad real de archivo antes de sobrescribir o mover
 
 **Archivos:** `crates/core/Cargo.toml` (+`same-file = "1"`, ya está en el lock), `plan.rs`,
 `engine.rs`.
@@ -78,7 +78,7 @@ privilegio o Developer Mode; queda en el backlog).
 - [ ] `exec_copy_step`: si `step.to` existe y `same_file::is_same_file(&from, &step.to)` es `Ok(true)`, devolver `Skipped` antes de `resolve_action`. `plan_transfer_with`: mismo chequeo para `base_to` frente a `src`.
 - [ ] Tests en verde. Commit `fix(ops): detectar el mismo archivo por identidad, no por texto`.
 
-### T3. Copia que preserva metadatos y es durable al mover
+### Task 3: Copia que preserva metadatos y es durable al mover
 
 **Decisión:** el trait inyectado `NoReplaceRename` gana un método con implementación por defecto
 (se evita renombrar el trait en este lote):
@@ -101,7 +101,7 @@ Pasos:
 - [ ] La UI ya inyecta `PlatformNoReplaceRename`; verificar con grep que todos los `spawn*` de producción la usan.
 - [ ] Commit `fix(ops): copias con CopyFile2, metadatos preservados y move durable`.
 
-### T4. Rutas largas
+### Task 4: Rutas largas
 
 - [ ] `platform/src/long_path.rs` (nuevo): `pub fn to_verbatim(path: &Path) -> PathBuf`. `C:\x` → `\\?\C:\x`; `\\srv\sh\x` → `\\?\UNC\srv\sh\x`; si ya es verbatim o relativa, no se toca. Tests unitarios de cada caso.
 - [ ] Usarla en `move_rename.rs` y `copy_file.rs`.
@@ -109,7 +109,7 @@ Pasos:
 - [ ] `ui-slint/build.rs`: embeber un manifest con `<longPathAware>true</longPathAware>` vía `winresource::set_manifest`. Solo agrega ese setting; no cambia DPI ni comctl. Nota en ARQUITECTURA: depende de `LongPathsEnabled` del sistema; el `\\?\` cubre las llamadas propias aunque esté apagado.
 - [ ] Commit `fix(platform): soporte de rutas largas en rename y copia`.
 
-### T5. Clasificación de enlaces y placeholders de nube
+### Task 5: Clasificación de enlaces y placeholders de nube
 
 - [ ] `sizing.rs`, `search.rs`, `search_many.rs`: reemplazar "cualquier `FILE_ATTRIBUTE_REPARSE_POINT`" por `file_type().is_symlink()` (std ya cubre symlinks y junctions, que son name-surrogate; los placeholders de OneDrive/Dropbox no lo son). Corregir el comentario errado de `sizing.rs:124`.
 - [ ] Tests: `sizing_no_entra_en_junction` (sigue en verde) y `sizing_cuenta_carpeta_normal`.
@@ -117,7 +117,7 @@ Pasos:
 - [ ] Validación manual: tamaño de una carpeta de OneDrive en este PC antes y después. Anotar el resultado en ESTADO-ACTUAL.
 - [ ] Commit `fix(core): los placeholders de nube no se tratan como enlaces`.
 
-### T6. Carrera al restaurar de la Papelera
+### Task 6: Carrera al restaurar de la Papelera
 
 - [ ] `trash.rs:790,871`: no confiar en el chequeo previo más `FOF_NOCONFIRMATION`. Restaurar con `FOF_RENAMEONCOLLISION`, o verificar de nuevo justo antes y abortar si apareció un destino. Test con fixture que crea el destino entre el chequeo y la restauración (hook de test).
 - [ ] Commit. **Cierre de fase:** gate completo + `graphify update .`.
@@ -126,24 +126,24 @@ Pasos:
 
 Línea base actual: release de ~29 min con pico de 10,9 GiB; `app-window.rs` generado de 33 MB.
 
-### T7. Medir la línea base
+### Task 7: Medir la línea base
 
 - [ ] Con `scripts/build-release-guarded.ps1` (ya mide el pico), registrar en `docs/BENCHMARKS.md`: release limpio, release tras tocar solo un `.rs` de `ui-slint/src`, y `cargo test -p naygo-ui-slint` incremental. Hora, pico y tamaño del exe.
 
-### T8. build.rs deja de invalidar todo
+### Task 8: build.rs deja de invalidar todo
 
 - [ ] `rerun-if-changed` solo para `ui/` y el `.ico` (Cargo ya rastrea src y dependencias).
 - [ ] `NAYGO_BUILD_ID`: lo fija el empaquetador (`build-release*.ps1` exporta la variable, con `rerun-if-env-changed`). En builds de desarrollo vale `dev`. La versión mostrada queda `X.Y.Z+build.dev` fuera de dist (decisión: distinguir builds importa en dist, que es lo que prueba Nicolás).
 - [ ] Medir de nuevo el caso "tocar un .rs".
 
-### T9. UI generada en su propio crate
+### Task 9: UI generada en su propio crate
 
 - [ ] Crear `crates/ui-gen` (`naygo-ui-gen`, lib): se mueven `ui/` y la parte Slint de `build.rs`; `lib.rs` hace `slint::include_modules!();`. `ui-slint` depende de él y re-exporta con `pub use naygo_ui_gen::*;` en `main.rs`, así las rutas existentes no cambian.
 - [ ] Mover también las features de Slint (`backend-winit`, `renderer-software`, `accessibility`, …) al crate nuevo o dejarlas unificadas por workspace.
 - [ ] Verificar: tocar un `.rs` de ui-slint ya no recompila el código generado (medir).
 - [ ] Actualizar ARQUITECTURA, CLAUDE.md y AGENTS.md (4 crates).
 
-### T10. Perfil release
+### Task 10: Perfil release
 
 - [ ] `debug = "line-tables-only"`: medir pico y tiempo; comprobar que el backtrace del panic handler sigue mostrando nombres de función (provocar un panic en build `diag`).
 - [ ] Probar `CARGO_BUILD_JOBS=2` con el pico medido. Subir el valor por defecto solo si el pico queda bajo 8 GiB.
@@ -152,39 +152,39 @@ Línea base actual: release de ~29 min con pico de 10,9 GiB; `app-window.rs` gen
 
 ## Fase 3 — Memoria y CPU en ejecución, robustez de UI
 
-### T11. Línea base de memoria en ejecución
+### Task 11: Línea base de memoria en ejecución
 
 - [ ] Con `capture-w07-process.ps1`, medir RSS/Private Bytes: arranque en bandeja, ventana idle, carpeta de 100k entradas, tras 20 previews, panel de operaciones con historial y 10 min idle. Registrar en BENCHMARKS. Esto define qué de T12/T13 se ataca primero.
 
-### T12. Modelos persistentes en `sync_rows`
+### Task 12: Modelos persistentes en `sync_rows`
 
 - [ ] `sync.rs:1111-1126` (ops), `:1154` (historial de portapapeles), `:443` (favoritos y grupos) y `:1403` (ayuda): guardar `Rc<VecModel<_>>` en un struct `PersistentModels` del sync. Actualizar con `set_row_data` cuando el largo no cambia, y con `set_vec` solo cuando cambia la firma del contenido. La ayuda solo al cambiar el idioma.
 - [ ] Test headless: dos `sync_rows` sin cambios devuelven el mismo `ModelRc` (`ModelRc` comparado por puntero) y no emiten notificaciones.
 - [ ] `windows_terminal_available()`: se calcula una vez en un worker al arrancar y se cachea.
 
-### T13. Listados grandes sin costo O(n) por fila
+### Task 13: Listados grandes sin costo O(n) por fila
 
 - [ ] Benchmark existente (`w10c_headless_sync_measurement`): "actualizar una fila" 28,5 ms y "anexar una fila" 22,3 ms con 100k. Meta: < 3 ms.
 - [ ] Reemplazar `apply_rows_incremental_by` (remove/insert por elemento) por un `RowsModel` propio (`impl Model`) sobre `Vec<RowData>`, con notificaciones por rango (`row_added(i, n)` / `row_removed(i, n)`) y sin `reset` (el `reset` mata la rueda; ver gotcha set_vec).
 - [ ] Construir la fila completa (incluido el `VecModel` anidado de celdas) solo para las filas cambiadas.
 
-### T14. Bloqueos en el hilo de UI
+### Task 14: Bloqueos en el hilo de UI
 
 - [ ] `navigation.rs:1088` `is_dir()`: quitarlo; el worker de vista profunda ya reporta una carpeta inexistente.
 - [ ] `ShellExecute` (navigation.rs:222, context.rs:433/442, input.rs:680): correr en un hilo con COM STA propio y reportar errores por canal.
 - [ ] Test: abrir con un handler que tarda (fake) no bloquea el tick.
 
-### T15. Shares caídos no bloquean lo local
+### Task 15: Shares caídos no bloquean lo local
 
 - [ ] `workspace_ctrl/mod.rs:918`: dos pools de permisos, local (8) y remoto (4; UNC o unidad `DRIVE_REMOTE`).
 - [ ] Test con un lister falso que bloquea: 8 listados remotos colgados y 1 local que termina.
 - [ ] Planes de copia: una subcarpeta ilegible ya no aborta todo; se registra como paso `Failed` (`plan.rs:397`).
 
-### T16. Menú contextual completo
+### Task 16: Menú contextual completo
 
 - [ ] `context_menu.rs:225-253`: reenviar `WM_INITMENUPOPUP`, `WM_DRAWITEM`, `WM_MEASUREITEM` y `WM_MENUCHAR` a `IContextMenu3::HandleMenuMsg2` (o `IContextMenu2`) mientras `TrackPopupMenu` está activo (subclass temporal del HWND). Validación manual: "Enviar a", "Abrir con" y "Nuevo" muestran sus entradas e íconos.
 
-### T17. i18n pendiente
+### Task 17: i18n pendiente
 
 - [ ] Claves para `packs.rs:282,469`, `batch_delete.rs:70,193` (sin `{:?}`), `splash.slint:43` y `color-picker.slint:22-23`, en los 10 idiomas.
 - [ ] Test que recorre las propiedades del global `Tr` y exige un setter en `i18n_keys.rs`.
