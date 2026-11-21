@@ -26,7 +26,7 @@ Delta dev vs la medición anterior (debuginfo completa, `keys.rs`: 18,9 s, 6,39 
 Delta vs la línea base documentada (29m18s, pico 10,92 GiB, commit `82db92d5`): esa cifra viene
 de un build supervisado (`docs/ESTADO-ACTUAL.md`, "pico" sin más detalle, probablemente el contador
 de compromiso del Job, no WS), así que la métrica no es idéntica. Comparada con WS el pico baja
-unos 4,2 GiB (10,92 → 6,68); con privada, unos 3,7 GiB (10,92 → 7,20). y el `.pdb` pasa de 473.083.904 B (build previo con `debug = true`,
+unos 4,2 GiB (10,92 → 6,68); con privada, unos 3,7 GiB (10,92 → 7,20). El `.pdb` pasa de 473.083.904 B (build previo con `debug = true`,
 sin tocar) a 176.869.376 B; el `.exe` casi no cambia (45.369.856 → 45.468.160 B). El tiempo
 SUBE (+10m), pero la línea base viene de otra sesión/commit y la comparación no es directa (la
 máquina pudo estar con otra carga); queda sin explicar, no se asume causa.
