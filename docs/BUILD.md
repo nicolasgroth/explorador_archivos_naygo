@@ -141,6 +141,10 @@ actualizan al producir la siguiente distribución funcional.
 | `Naygo-<versión>-portable.zip` | Versión portable: descomprimir y ejecutar, sin instalar. |
 | `Naygo-<versión>-setup.exe` | Instalador (asistente, accesos directos, desinstalador). |
 
+## Pruebas con varias instancias
+
+`NAYGO_DEBUG_MULTI_INSTANCE=1` (valor exacto `1`) desactiva la instancia única, para lanzar un exe de prueba junto a un Naygo ya vivo (smoke, repro, mediciones) sin que se reenvíe a ese; con la variable activa `--shutdown` no apaga la instancia de otro proceso.
+
 ## Troubleshooting
 
 - **"ISCC.exe no encontrado"**: Inno Setup no está instalado o no está en el `PATH`.

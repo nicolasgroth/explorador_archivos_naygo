@@ -210,17 +210,40 @@ fn main() -> Result<(), slint::PlatformError> {
     // crear cualquier ventana (ni el splash ni la AppWindow deben llegar a parpadear). El guard
     // vive hasta el final de main(); su hilo vigilante se arranca más abajo, cuando existe el
     // waker del loop de UI (`si_guard.watch`).
-    let si_guard = match naygo_platform::single_instance::acquire() {
-        naygo_platform::single_instance::Instance::AlreadyRunning => {
-            logging::log_line("instancia única: ya hay un Naygo corriendo; se le avisa y salimos");
-            if cli_args.shutdown {
-                naygo_platform::single_instance::notify_shutdown();
-            } else {
-                naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
-            }
+    //
+    // Excepción de depuración/medición: con `NAYGO_DEBUG_MULTI_INSTANCE=1` esta instancia NO
+    // participa de la instancia única (sin mutex, evento, watcher ni spool). Sirve para correr un
+    // exe de prueba junto a un Naygo ya vivo sin que se reenvíe a ese y salga. Sin la variable
+    // el comportamiento no cambia.
+    let multi_instance =
+        multi_instance_override(std::env::var_os("NAYGO_DEBUG_MULTI_INSTANCE").as_deref());
+    let si_guard = if multi_instance {
+        logging::log_line(
+            "NAYGO_DEBUG_MULTI_INSTANCE=1: se omite la instancia única (modo depuración)",
+        );
+        if cli_args.shutdown {
+            // `--shutdown` apuntaría a la instancia viva de OTRO proceso: no se toca.
+            logging::log_line(
+                "--shutdown ignorado: no se apaga otra instancia en modo multi-instancia",
+            );
             return Ok(());
         }
-        naygo_platform::single_instance::Instance::Primary(guard) => guard,
+        None
+    } else {
+        match naygo_platform::single_instance::acquire() {
+            naygo_platform::single_instance::Instance::AlreadyRunning => {
+                logging::log_line(
+                    "instancia única: ya hay un Naygo corriendo; se le avisa y salimos",
+                );
+                if cli_args.shutdown {
+                    naygo_platform::single_instance::notify_shutdown();
+                } else {
+                    naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
+                }
+                return Ok(());
+            }
+            naygo_platform::single_instance::Instance::Primary(guard) => Some(guard),
+        }
     };
     // Si no había una instancia primaria, `--shutdown` ya cumplió su objetivo: no abrir una nueva.
     if cli_args.shutdown {
@@ -558,11 +581,13 @@ fn main() -> Result<(), slint::PlatformError> {
     // Naygo" con la app ya corriendo), la abre en un panel nuevo.
     let si_show_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let si_shutdown_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    si_guard.watch(
-        si_show_requested.clone(),
-        si_shutdown_requested.clone(),
-        waker.clone(),
-    );
+    if let Some(guard) = &si_guard {
+        guard.watch(
+            si_show_requested.clone(),
+            si_shutdown_requested.clone(),
+            waker.clone(),
+        );
+    }
 
     // Hotkey global: handler que despierta el loop de UI en cada pulsación. Sin esto, con la app
     // dormida (reposo/bajo consumo) la pulsación quedaba encolada hasta el próximo wake por otra
@@ -1164,6 +1189,31 @@ pub(crate) fn theme_text_rgb(
     }
     let t = themes.get(&settings.theme);
     (t.text.r, t.text.g, t.text.b)
+}
+
+/// `true` solo si `NAYGO_DEBUG_MULTI_INSTANCE` vale exactamente `"1"`. Función pura para poder
+/// testear la decisión sin tocar el entorno del proceso.
+fn multi_instance_override(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+#[cfg(test)]
+mod multi_instance_tests {
+    use super::multi_instance_override;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn solo_el_valor_uno_exacto_activa_el_modo() {
+        assert!(multi_instance_override(Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn ausente_o_cualquier_otro_valor_no_lo_activa() {
+        assert!(!multi_instance_override(None));
+        for v in ["0", "", "true", " 1", "11"] {
+            assert!(!multi_instance_override(Some(OsStr::new(v))), "{v:?}");
+        }
+    }
 }
 
 #[cfg(test)]
