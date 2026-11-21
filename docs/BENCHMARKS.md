@@ -3,6 +3,31 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### Compilación — tras separar naygo-ui-gen, 2026-11-21
+
+Mismo método y equipo que la línea base (abajo), sobre el commit `d9085170`
+(`rustc 1.96.0`), perfil `dev`, `CARGO_BUILD_JOBS=1`, una pasada por escenario tras un build de
+calentamiento. El código Slint generado (`app-window.rs`, 33.436.439 bytes) vive ahora en
+`naygo-ui-gen` y `ui-slint/build.rs` ya no se re-ejecuta por cambios de código.
+
+| Escenario | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| `cargo build -p naygo-ui-slint --locked`, sin cambios | 2,2 s | 0,12 | 0,10 |
+| `cargo build`, tras tocar `crates/ui-slint/src/keys.rs` | 18,9 s | 6,39 | 3,59 |
+| `cargo build`, tras tocar `crates/core/src/listing.rs` | 49,2 s | 6,39 | 3,59 |
+| `cargo build`, tras tocar `crates/ui-gen/ui/app-window.slint` | 1m27s | 6,40 | 4,80 |
+| `cargo check -p naygo-ui-slint --locked`, tras tocar `keys.rs` | 4,4 s | 0,33 | 0,78 |
+
+Delta vs línea base: tocar un `.rs` de `ui-slint` baja de 1m01s a 18,9 s (privada 6,06 → 3,59
+GiB) y `cargo check` de 41,4 s a 4,4 s; tocar un `.slint` sube de 1m02s a 1m27s (se recompilan
+`ui-gen` y luego `ui-slint`).
+
+Notas: una repetición de "tocar `keys.rs`" dio 17,4 s / 6,39 / 3,59. El pico de WS de ~6,4 GiB
+que queda es de `link.exe` (6,17 GiB WS, 3,41 GiB privada, muestreado por proceso) al enlazar la
+debuginfo del código generado; `rustc` no pasa de 3,35 GiB privada. El `cargo check` se midió con
+la caché de check caliente: el primer check tras tocar un `.slint` regenera también `ui-gen` en
+modo check (2m13s, 3,98 / 4,38 GiB en la pasada encadenada).
+
 ### Compilación — línea base de desarrollo, 2026-11-21
 
 Medido con `scripts/measure-build.ps1` (suma el WorkingSet y la memoria privada de los procesos
