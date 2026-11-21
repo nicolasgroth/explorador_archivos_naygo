@@ -3,6 +3,65 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### Memoria en ejecución — línea base, 2026-11-21
+
+Commit medido: `aad0ac9f` (rama `fix/integridad-build-0.5.7`, versión 0.5.6), release con
+`debuginfo = "line-tables-only"`, render por software. Máquina: AMD Ryzen 7 1700X (8 núcleos, 16
+hilos), 63,9 GiB de RAM, Windows 10 Home 19045; en el mismo PC corría el Naygo instalado del autor,
+que no se tocó. El exe se copió a `target/bench-runtime/app/` (config portable aislada) y se lanzó
+siempre con `NAYGO_DEBUG_MULTI_INSTANCE=1`. Captura con `scripts/capture-w07-process.ps1` sobre el PID
+lanzado (ventanas de 20 s, observación cada 2 s); se reportan solo los campos del proceso raíz
+(`working_set_mib`, `private_mib`). Fixture: 100 000 archivos vacíos con nombres variados más 20
+subcarpetas (la UI reportó 100 020 elementos).
+
+| # | Escenario | Working set (MiB) | Private Bytes (MiB) | Muestras |
+|---|-----------|-------------------|---------------------|----------|
+| 1 | Arranque `--tray`, sin ventana | 46,5–46,6 | 20,9–21,0 | 3 ventanas, ~25 s tras arrancar |
+| 2 | Ventana idle en carpeta home | 59,2 | 27,9 | 5 ventanas (3 + 2), ~30 s a ~2 min tras arrancar |
+| 3 | 100k recién listada y estable | 183,6–185,1 (pico 239–252 durante el listado) | 166,1–167,1 (pico 229–241) | 2 corridas independientes, ventana estable de 20 s cada una |
+| 4 | La misma tras 10 min idle | 186,8 | 167,6 | 3 ventanas, ~10 min después de la estable |
+| 5 | Tras 20 previews | no medido de forma fiable | no medido de forma fiable | ver nota |
+| 6 | Panel de operaciones con historial | no medido | no medido | ver nota |
+
+Detalle de las corridas (WS / Private al inicio→fin de cada ventana): escenario 3, corrida 1:
+252,2→231,5 / 240,9→221,5, luego 231,4→185,1 / 221,6→167,1, luego 185,1 / 167,1 estable. Corrida 2
+(escenario 4, primera captura): 239,1→204,5, 229,9→183,6, 183,6 / 166,1 estable. Escenario 4, tras
+~10 min: 186,8 / 167,6 en las tres ventanas. Handles 336–342 e hilos 17–21 en todos los escenarios
+con ventana; 318–323 handles en `--tray`. JSON crudos en `target/bench-runtime/raw/` (sin versionar).
+
+Escenario 5 (intento, no concluyente): se abrió `crates/ui-slint/src` y se seleccionaron 20 archivos
+`.rs` por UI Automation (`SelectionItemPattern`), porque Bitdefender bloquea el envío de teclas. El WS
+raíz pasó de 60,9 a 74,1 MiB y el Private de 29,4 a 32,5 MiB, pero no se pudo confirmar que la
+selección vía UIA dispare la carga real del preview (hay un panel «Vista previa», sin contenido
+legible por UIA) y la propia sesión UIA puede inflar la memoria. Esas cifras son solo orientativas;
+no se atribuyen a los previews. Escenario 6: no medido; copiar 50 archivos entre paneles exige
+selección + portapapeles/atajos o arrastre, que no se pudo automatizar de forma fiable con teclas
+bloqueadas y sin una acción UIA equivalente.
+
+Tiempos de listado con `NAYGO_PERF_METRICS=1`: no se obtuvo nada. `metrics.rs` solo agrupa los trabajos
+`preview`, `path_validation` y `pack`, y vuelca el resumen al cerrar; el listado no está instrumentado
+y el proceso se terminó con `Stop-Process` (el cierre de ventana lo envía a la bandeja). Lo único
+observable del listado es el CPU: unos 18–19 s de CPU del proceso en los primeros ~40 s tras abrir las
+100 020 entradas.
+
+Notas de calidad de la medición:
+
+- El campo `tree_*` y `process_count` del script no son fiables en esta máquina: con PIDs reutilizados
+  por Windows el árbol incluyó procesos ajenos (un IDE) y sumó >2 GiB. Por eso solo se usan los campos
+  del proceso raíz. En los escenarios 1–4 el conteo fue 1 proceso.
+- Aparecen ráfagas de CPU de 5–7,5 s dentro de una ventana de 20 s con memoria plana (p. ej. escenario 2,
+  y una ventana a los 10 min en el escenario 4); las demás ventanas marcan ~0. No se investigó la causa.
+- El Naygo instalado del autor corría en paralelo (hotkey global ocupado, tolerado por la segunda
+  instancia), por lo que hubo ruido de fondo de la máquina.
+
+Conclusión (solo con estos datos): el arranque en bandeja cuesta ~21 MiB privados y abrir la ventana
+sube a ~28 MiB, así que el piso es bajo. Lo que domina es el tamaño de la carpeta: 100 020 entradas
+agregan ~139 MiB privados (~1,4 KiB por fila) y ~126 MiB de WS sobre la ventana idle, mientras que el
+pico durante el listado (~240–250 MiB) supera en ~70–80 MiB al valor estable. En idle no hay
+crecimiento en 10 min (167,1→167,6 MiB privados), así que no se ve fuga a esa escala; los previews y
+el historial de operaciones quedan sin cuantificar. Primer objetivo para T12/T13: costo por fila y
+pico transitorio del listado.
+
 ### Compilación — perfiles con line-tables-only, 2026-11-21
 
 Mismo método y equipo (`scripts/measure-build.ps1`, `CARGO_BUILD_JOBS=1`, `rustc 1.96.0`) sobre
