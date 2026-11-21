@@ -276,10 +276,15 @@ pub(super) fn plan_transfer_with(
 ) -> Result<OpPlan, PlanError> {
     let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
     for src in &req.sources {
-        // `symlink_metadata`: un enlace a carpeta no cuenta como carpeta contenedora.
-        let src_is_dir = std::fs::symlink_metadata(src)
-            .map(|m| m.is_dir() && !is_link_like(&m))
-            .unwrap_or(false);
+        // Igual que `follow_root_link`: en Copy un origen enlace se sigue una vez (cuenta como
+        // carpeta); en Move se evalúa el enlace en sí (moverlo dentro de su destino es inocuo).
+        let src_is_dir = if matches!(&req.kind, OpKind::Move) {
+            std::fs::symlink_metadata(src)
+                .map(|m| m.is_dir() && !is_link_like(&m))
+                .unwrap_or(false)
+        } else {
+            std::fs::metadata(src).map(|m| m.is_dir()).unwrap_or(false)
+        };
         if src_is_dir && is_inside(&dest, src) {
             return Err(PlanError::DestInsideSource);
         }
@@ -795,6 +800,21 @@ mod tests {
         let dest = src.join("sub");
         fs::create_dir(&dest).unwrap();
         let e = plan(&req(OpKind::Copy, vec![src], Some(dest))).unwrap_err();
+        assert_eq!(e, PlanError::DestInsideSource);
+    }
+
+    #[test]
+    fn copy_enlace_carpeta_seleccionado_dentro_de_si_mismo_es_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("T");
+        fs::create_dir(&t).unwrap();
+        let j = dir.path().join("j");
+        if !super::super::make_junction(&j, &t) {
+            return;
+        }
+        let dest = j.join("sub");
+        fs::create_dir(&dest).unwrap();
+        let e = plan(&req(OpKind::Copy, vec![j], Some(dest))).unwrap_err();
         assert_eq!(e, PlanError::DestInsideSource);
     }
 
