@@ -27,6 +27,10 @@ fn hash(
     before: &fs::Metadata,
     token: &CancellationToken,
 ) -> Result<Option<String>, SpaceError> {
+    // Placeholder de nube sin contenido local: no se hashea (descargaría) → brecha de cobertura.
+    if crate::listing::is_cloud_placeholder_offline(before) {
+        return Ok(None);
+    }
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return Ok(None),

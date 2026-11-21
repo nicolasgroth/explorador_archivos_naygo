@@ -214,6 +214,13 @@ pub(crate) fn contains(
     if size > MAX_CONTENT_FILE_BYTES {
         return None;
     }
+    // Placeholder de nube sin contenido local: no se lee (descargaría); cuenta como omitido.
+    if std::fs::symlink_metadata(path)
+        .map(|m| crate::listing::is_cloud_placeholder_offline(&m))
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let mut file = std::fs::File::open(path)
         .ok()?
         .take(MAX_CONTENT_FILE_BYTES + 1);

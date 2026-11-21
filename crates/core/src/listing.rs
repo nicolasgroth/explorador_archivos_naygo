@@ -369,6 +369,28 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     list_into_filtered(dir, token, &mut TestListingSink { tx }, ListingFilter::All);
 }
 
+/// ¿Los atributos de Windows indican un placeholder de nube sin contenido local (leerlo
+/// lo descargaría)? RECALL_ON_DATA_ACCESS (0x400000) o RECALL_ON_OPEN (0x40000).
+pub(crate) fn attrs_need_recall(attrs: u32) -> bool {
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+    attrs & (FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+}
+
+/// Placeholder de nube sin contenido local: las lecturas de contenido masivas (búsqueda,
+/// recetas, huella de puntos de comparación) deben omitirlo para no disparar descargas.
+/// Nombres y tamaños siguen disponibles. Fuera de Windows siempre `false`.
+#[cfg(windows)]
+pub(crate) fn is_cloud_placeholder_offline(meta: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    attrs_need_recall(meta.file_attributes())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_cloud_placeholder_offline(_meta: &Metadata) -> bool {
+    false
+}
+
 /// Lee los atributos "oculto" y "de sistema" de la metadata de Windows.
 /// Devuelve `(hidden, system)`. Si no hay metadata, ambos son `false`.
 /// `file_attributes()` es de `std::os::windows::fs::MetadataExt` (std puro,
@@ -407,18 +429,17 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
     // Un enlace (symlink/junction) llega con metadata sin seguir: no es ni carpeta ni
     // archivo. Para que una carpeta-enlace sea navegable se resuelve su destino con una
     // sola `stat` extra (solo por enlace, no por entrada). Destino roto → `Other`.
-    // Quien recorre recursivamente (tamaño, búsqueda, ops) decide por `is_symlink()`,
-    // no por `EntryKind`, así que esto no habilita recursión sobre enlaces.
-    let followed;
-    let metadata = match metadata {
-        Some(m) if m.file_type().is_symlink() => {
-            followed = std::fs::metadata(path).ok();
-            followed.as_ref().or(Some(m))
-        }
-        other => other,
+    // Del destino se toman SOLO `kind` y `size`; oculto/sistema/fechas son los del enlace
+    // mismo (como el Explorador): p. ej. `Documents and Settings` es un junction
+    // oculto+sistema cuyo destino no lo es. Quien recorre recursivamente (tamaño, búsqueda,
+    // ops) decide por `is_symlink()`, no por `EntryKind`.
+    let followed = match metadata {
+        Some(m) if m.file_type().is_symlink() => std::fs::metadata(path).ok(),
+        _ => None,
     };
+    let kind_meta = followed.as_ref().or(metadata);
 
-    let kind = match metadata {
+    let kind = match kind_meta {
         Some(m) if m.is_dir() => EntryKind::Directory,
         Some(m) if m.is_file() => EntryKind::File,
         Some(_) => EntryKind::Other,
@@ -426,7 +447,7 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
     };
 
     let size = match (metadata, kind) {
-        (Some(m), EntryKind::File) => Some(m.len()),
+        _ if kind == EntryKind::File => kind_meta.map(|m| m.len()),
         _ => None,
     };
 
@@ -548,6 +569,51 @@ pub fn apply_dir_events_with_row_deltas(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn attrs_need_recall_detecta_los_dos_bits() {
+        assert!(attrs_need_recall(0x0040_0000));
+        assert!(attrs_need_recall(0x0004_0000 | 0x20));
+        assert!(!attrs_need_recall(0x20));
+        assert!(!attrs_need_recall(0x0000_0400 | 0x2));
+        assert!(!attrs_need_recall(0));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enlace_oculto_sigue_oculto() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        let ok = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("attrib")
+            .arg("+h")
+            .arg("+s")
+            .arg("/L")
+            .arg(&link)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut found = None;
+        while let Ok(entry) = rx.try_recv_entry() {
+            if entry.name == "link" {
+                found = Some(entry);
+            }
+        }
+        let entry = found.unwrap();
+        assert_eq!(entry.kind, EntryKind::Directory);
+        assert!(entry.hidden && entry.system);
+    }
 
     #[test]
     fn junction_a_carpeta_se_lista_como_carpeta_navegable() {

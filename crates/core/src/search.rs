@@ -261,7 +261,10 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() || meta.len() > MAX_CONTENT_FILE_BYTES {
+    if !meta.is_file()
+        || meta.len() > MAX_CONTENT_FILE_BYTES
+        || crate::listing::is_cloud_placeholder_offline(&meta)
+    {
         return false;
     }
     let Ok(bytes) = std::fs::read(path) else {
