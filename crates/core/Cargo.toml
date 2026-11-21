@@ -49,6 +49,9 @@ lopdf.workspace = true
 unicode-normalization = "0.1"
 # Copias transaccionales: prepara el archivo junto al destino y publica con replace/no-clobber.
 tempfile.workspace = true
+# Identidad real de archivo (hard links, prefijos \?\, unidades mapeadas) antes de sobrescribir
+# o mover. Unlicense/MIT; ya estaba en el lock transitivamente.
+same-file = "1"
 # Deps del generador de íconos (solo bajo feature gen-icons, no se incluyen en la app).
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }

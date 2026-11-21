@@ -1738,6 +1738,11 @@ fn exec_copy_step(
     // esperando una `ConflictDecision` por `conflict_rx`. Con "aplicar a todos", la acción
     // elegida se memoriza en `applied_all` y los choques siguientes no vuelven a preguntar.
     let mut overwrite_destination = false;
+    // Identidad real: si destino y origen son el mismo archivo (hard link, `\?\`, unidad
+    // mapeada vs UNC, nombre 8.3), publicar y luego borrar el origen destruiría el único contenido.
+    if step.to.exists() && same_file::is_same_file(&from, &step.to).unwrap_or(false) {
+        return (step.to.clone(), OpOutcome::Skipped, 0, true);
+    }
     let to = if step.to.exists() {
         let effective: ConflictAction = resolve_action(
             conflict,
@@ -3307,6 +3312,80 @@ mod tests {
             fs::read(origen.join("a.txt")).unwrap(),
             b"datos-importantes"
         );
+    }
+
+    /// Ejecuta un único paso de archivo con `Overwrite` y devuelve el resumen.
+    fn run_single_overwrite_step(kind: OpKind, from: PathBuf, to: PathBuf) -> OpSummary {
+        let plan = OpPlan {
+            steps: vec![OpStep {
+                from: Some(from),
+                to,
+                bytes: 1,
+                is_dir: false,
+            }],
+            total_bytes: 1,
+            total_files: 1,
+            allow_directory_rename: false,
+            pre_delete: vec![],
+        };
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        run_plan(
+            &plan,
+            &kind,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        )
+    }
+
+    #[test]
+    fn mover_sobre_hard_link_del_mismo_archivo_no_pierde_datos() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_dir = dir.path().join("a");
+        let b_dir = dir.path().join("b");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        let a = a_dir.join("a.txt");
+        let b = b_dir.join("b.txt");
+        fs::write(&a, b"contenido-unico").unwrap();
+        fs::hard_link(&a, &b).unwrap();
+
+        let summary = run_single_overwrite_step(OpKind::Move, a.clone(), b.clone());
+
+        assert_eq!(summary.items.len(), 1);
+        assert_eq!(summary.items[0].outcome, OpOutcome::Skipped);
+        assert_eq!(fs::read(&b).unwrap(), b"contenido-unico");
+        assert!(
+            a.exists(),
+            "el origen no debe borrarse: es el mismo archivo"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn copiar_sobre_si_mismo_con_otra_ortografia_es_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let a = src_dir.join("a.txt");
+        fs::write(&a, b"intacto").unwrap();
+        let abs = fs::canonicalize(&a).unwrap();
+        // `canonicalize` ya devuelve `\\?\C:\...`; se normaliza a la forma verbatim explícita.
+        let plain = abs
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string();
+        let verbatim = PathBuf::from(format!(r"\\?\{plain}"));
+
+        let summary = run_single_overwrite_step(OpKind::Copy, a.clone(), verbatim);
+
+        assert_eq!(summary.items.len(), 1);
+        assert_eq!(summary.items[0].outcome, OpOutcome::Skipped);
+        assert_eq!(fs::read(&a).unwrap(), b"intacto");
     }
 
     #[test]

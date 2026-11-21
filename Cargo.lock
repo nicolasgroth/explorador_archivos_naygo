@@ -3558,6 +3558,7 @@ dependencies = [
  "regex",
  "resvg",
  "rustix 1.1.4",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",

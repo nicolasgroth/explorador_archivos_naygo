@@ -305,6 +305,11 @@ pub(super) fn plan_transfer_with(
         if paths_eq_ci(&base_to, src) {
             continue;
         }
+        // Misma identidad real con otra ortografía (hard link, prefijo `\?\`, unidad mapeada,
+        // nombre 8.3): sobrescribir o mover borraría el único contenido. No-op.
+        if base_to.exists() && same_file::is_same_file(&base_to, src).unwrap_or(false) {
+            continue;
+        }
         expand(
             src,
             &base_to,
@@ -512,6 +517,21 @@ fn expand(
     Ok(())
 }
 
+/// Comparación case-insensitive al estilo NTFS: cada char se pasa a mayúscula solo cuando
+/// `to_uppercase` produce exactamente un char; si produce más (p. ej. `ß` → `SS`) se conserva
+/// el original, porque NTFS no expande. Así `Árbol` == `ÁRBOL` pero `ß` != `SS`.
+#[cfg(windows)]
+fn eq_ignore_case_ntfs(a: &str, b: &str) -> bool {
+    fn fold(c: char) -> char {
+        let mut up = c.to_uppercase();
+        match (up.next(), up.next()) {
+            (Some(u), None) => u,
+            _ => c,
+        }
+    }
+    a.chars().map(fold).eq(b.chars().map(fold))
+}
+
 /// ¿`a` y `b` son la misma ruta según la identidad léxica de la plataforma?
 /// Windows conserva su comparación case-insensitive histórica; Unix compara componentes
 /// nativos con sensibilidad a mayúsculas y sin convertir bytes no UTF-8 a texto.
@@ -521,9 +541,10 @@ pub(super) fn paths_eq_ci(a: &Path, b: &Path) -> bool {
     let cb: Vec<_> = b.components().collect();
     ca.len() == cb.len()
         && ca.iter().zip(&cb).all(|(x, y)| {
-            x.as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
+            eq_ignore_case_ntfs(
+                &x.as_os_str().to_string_lossy(),
+                &y.as_os_str().to_string_lossy(),
+            )
         })
 }
 
@@ -540,9 +561,10 @@ pub(super) fn path_starts_with_ci(child: &Path, ancestor: &Path) -> bool {
     let ca: Vec<_> = ancestor.components().collect();
     cc.len() >= ca.len()
         && ca.iter().zip(&cc).all(|(x, y)| {
-            x.as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
+            eq_ignore_case_ntfs(
+                &x.as_os_str().to_string_lossy(),
+                &y.as_os_str().to_string_lossy(),
+            )
         })
 }
 
@@ -1074,6 +1096,15 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[cfg(windows)]
+    #[test]
+    fn paths_eq_ci_ignora_mayusculas_unicode() {
+        assert!(paths_eq_ci(Path::new("D:\\Árbol"), Path::new("D:\\ÁRBOL")));
+        assert!(paths_eq_ci(Path::new("D:\\árbol"), Path::new("D:\\ÁRBOL")));
+        // NTFS no expande ß a SS.
+        assert!(!paths_eq_ci(Path::new("D:\\ß"), Path::new("D:\\SS")));
+    }
+
     #[test]
     fn path_starts_with_ci_contiene_case_insensitive() {
         // Hijo bajo un ancestro con otra capitalización → contenido.
