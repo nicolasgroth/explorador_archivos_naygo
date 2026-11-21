@@ -3,6 +3,28 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### Compilación — línea base de desarrollo, 2026-11-21
+
+Medido con `scripts/measure-build.ps1` (suma el WorkingSet y la memoria privada de los procesos
+`cargo`, `rustc`, `build-script-build*` y `link` descendientes del comando, muestreo cada 500 ms)
+sobre el commit `13fceb06`, perfil `dev`, una pasada por escenario con cachés calientes.
+Equipo: 16 hilos lógicos, 64 GB de RAM, `CARGO_BUILD_JOBS=1`.
+
+| Escenario | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| `cargo build -p naygo-ui-slint --locked`, sin cambios | 2,1 s | 0,13 | 0,11 |
+| `cargo build`, tras tocar `crates/ui-slint/src/keys.rs` | 1m01s | 6,35 | 6,06 |
+| `cargo build`, tras tocar `crates/core/src/listing.rs` | 1m06s | 6,35 | 5,99 |
+| `cargo build`, tras tocar `crates/ui-slint/ui/app-window.slint` | 1m02s | 6,35 | 6,08 |
+| `cargo check -p naygo-ui-slint --locked`, tras tocar `keys.rs` | 41,4 s | 2,71 | 3,46 |
+
+El `app-window.rs` generado por Slint en `target/debug/build/naygo-ui-slint-*/out/` pesa
+33.436.455 bytes (31,9 MiB). Cualquier cambio en `ui-slint` recompila ese archivo completo, lo que
+explica el costo fijo de ~1 minuto y ~6 GiB incluso para un cambio trivial.
+
+Referencia release documentada: 29m18s, pico 10,92 GiB (commit `82db92d5`, `docs/ESTADO-ACTUAL.md`);
+no se repitió en esta medición.
+
 ### W-07 y vista profunda — perfil Release 0.5.6, 2026-11-21
 
 Se compiló el banco de pruebas del commit `79b99963` con el supervisor (27m26s, pico 9,36 GiB).
