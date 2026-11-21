@@ -13,6 +13,7 @@ distinguen en el [plan](plans/2026-09-09-rutas-preview-y-configuracion.md).
 | --- | --- |
 | `crates/core` | Modelos, listado incremental, motores de operaciones, búsqueda, configuración/temas, reglas de preview y formatos de trabajo. No depende de Slint ni Windows. |
 | `crates/platform` | Shell/COM/OLE, Papelera, portapapeles, unidades, vigilancia nativa, ventanas, instancia única y arranque. |
+| `crates/ui-gen` | Sólo los `.slint` de `ui/` y su código Rust generado (`AppWindow`, ventanas, structs y globals). Sin lógica: `build.rs` compila `ui/app-window.slint` y `lib.rs` hace `include_modules!`. |
 | `crates/ui-slint` | Presentación Slint y coordinación: `workspace_ctrl/`, `ops_ctrl/`, `config_ctrl.rs`, callbacks, `tick.rs` y `sync.rs`. Winit y renderer por software. |
 
 Los workers publican resultados por canales. La UI drena e invalida respuestas obsoletas,
@@ -209,8 +210,14 @@ son otra preferencia.
 ## Construcción, diagnóstico y comentarios
 
 Slint compila en un hilo de build con stack de 8 MiB; no es memoria reservada al ejecutar Naygo.
-La versión sale de `Cargo.toml`; el build ID se genera en `ui-slint/build.rs` y el empaquetador
-renueva su nonce. `Cargo.lock` fija dependencias, mientras `rust-toolchain.toml` selecciona
+El código generado (~32 MiB de Rust) vive en `naygo-ui-gen` para que tocar un `.rs` de
+`ui-slint`, `core` o `platform` no lo recompile: sólo se reconstruye al cambiar `ui/`.
+`ui-slint` lo re-exporta (`pub use naygo_ui_gen::*;` en `main.rs`), así `crate::AppWindow` y
+demás rutas no cambian. Las features de `slint` se definen una sola vez en
+`[workspace.dependencies]`. El `build.rs` de `ui-slint` sólo embebe ícono/manifest/metadatos y
+estampa el build ID; se re-ejecuta por el `.ico`, `Cargo.toml` o `NAYGO_BUILD_ID`.
+La versión sale de `Cargo.toml`; el build ID lo fija el empaquetador (`NAYGO_BUILD_ID`,
+`YYYYMMDDHHMM`) y en desarrollo vale `dev` (`X.Y.Z+build.dev`). `Cargo.lock` fija dependencias, mientras `rust-toolchain.toml` selecciona
 `stable`, no una versión numérica inmutable: registrar `rustc --version` al medir/validar.
 
 Comentar el porqué de identidad, límites, ownership, cancelación y compatibilidad junto al código.

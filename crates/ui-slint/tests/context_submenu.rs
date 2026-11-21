@@ -11,7 +11,7 @@ use slint::{
 use std::{cell::Cell, rc::Rc};
 
 slint::slint! {
-    import { ContextMenu } from "../ui/context-menu.slint";
+    import { ContextMenu } from "../../ui-gen/ui/context-menu.slint";
     export component ContextProbe inherits Window {
         width: 800px; height: 700px;
         in property <length> menu-x: 100px;

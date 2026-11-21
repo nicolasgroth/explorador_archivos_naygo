@@ -11,11 +11,11 @@ use slint::{
 use std::rc::Rc;
 
 slint::slint! {
-    import { BreadcrumbBar } from "../ui/breadcrumb-bar.slint";
-    import { BasketPanel } from "../ui/basket-panel.slint";
-    import { BasketRowVm } from "../ui/types.slint";
+    import { BreadcrumbBar } from "../../ui-gen/ui/breadcrumb-bar.slint";
+    import { BasketPanel } from "../../ui-gen/ui/basket-panel.slint";
+    import { BasketRowVm } from "../../ui-gen/ui/types.slint";
     export { BasketRowVm }
-    export { Tr } from "../ui/i18n.slint";
+    export { Tr } from "../../ui-gen/ui/i18n.slint";
     export component LayoutProbe inherits Window {
         in property <int> probe-width: 900;
         in property <bool> labels: false;

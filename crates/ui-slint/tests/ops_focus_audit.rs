@@ -12,11 +12,11 @@ use slint::{
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
-    import { OpsPanel } from "../ui/ops-panel.slint";
-    import { OpRowVm } from "../ui/types.slint";
+    import { OpsPanel } from "../../ui-gen/ui/ops-panel.slint";
+    import { OpRowVm } from "../../ui-gen/ui/types.slint";
     export { OpRowVm }
-    import { MessageModal } from "../ui/message-modal.slint";
-    import { CommandPalette } from "../ui/command-palette.slint";
+    import { MessageModal } from "../../ui-gen/ui/message-modal.slint";
+    import { CommandPalette } from "../../ui-gen/ui/command-palette.slint";
     import { LineEdit } from "std-widgets.slint";
     export component OpsFocusProbe inherits Window {
         width: 400px; height: 300px;

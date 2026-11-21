@@ -1,5 +1,5 @@
-// Naygo — compila los .slint de la capa UI Slint y, en Windows, embebe el ícono y los
-// metadatos del ejecutable.
+// Naygo — estampa el ID de build y, en Windows, embebe el ícono y los metadatos del
+// ejecutable. Los .slint se compilan en el crate naygo-ui-gen.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 /// Manifest de aplicación con únicamente `longPathAware`.
@@ -14,17 +14,6 @@ const LONG_PATH_MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com:a
 "#;
 
 fn main() {
-    // El compilador de la UI declarativa supera el stack principal de 1 MiB de MSVC.
-    // Esta reserva sólo existe durante el build; no aumenta el stack/RAM de Naygo.
-    std::thread::Builder::new()
-        .name("slint-compiler".into())
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| slint_build::compile("ui/app-window.slint").expect("compilar app-window.slint"))
-        .expect("iniciar compilador Slint")
-        .join()
-        .expect("compilador Slint");
-    println!("cargo:rerun-if-changed=ui");
-
     emit_build_id();
 
     // Las versiones del .exe salen de Cargo.toml. Cargo ya rastrea `src/` y las dependencias;

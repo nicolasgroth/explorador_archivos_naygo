@@ -23,6 +23,11 @@ cargo run -p naygo-ui-slint    # corre Naygo (binario `naygo`)
 cargo test --workspace --locked # tests reproducibles desde Cargo.lock
 ```
 
+Los builds de desarrollo muestran la versión `X.Y.Z+build.dev`: el build ID sólo lo estampa el
+empaquetador. Para simular uno, exporta `NAYGO_BUILD_ID` con 12 dígitos (`YYYYMMDDHHMM`); cualquier
+otro valor cuenta como `dev`. Los `.slint` viven en `crates/ui-gen/ui/` (crate `naygo-ui-gen`):
+tocarlos recompila el código generado; tocar un `.rs` de `ui-slint`, `core` o `platform`, no.
+
 ## Estado del port Linux
 
 El código de arranque ya resuelve XDG para Linux sin consultar el filesystem: la configuración va
@@ -109,7 +114,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-guarded.ps1 -W07I
 ## Artefactos (en `dist\`, no versionado)
 
 Ejecutar el empaquetador SOLO, sin otra compilación pesada: release usa ThinLTO, 16 unidades
-y un solo trabajo Cargo. El build ID se renueva mediante un nonce del script. Se genera `naygo.pdb`
+y un solo trabajo Cargo. El script fija `NAYGO_BUILD_ID` con la fecha-hora local
+(`YYYYMMDDHHMM`), así cada distribución muestra `X.Y.Z+build.<id>`. Se genera `naygo.pdb`
 junto al EXE; el instalador lo ofrece opcional/desmarcado y el ZIP no lo incluye (T-3).
 El script genera `SHA256SUMS.txt`. Si se configura un certificado Authenticode autorizado,
 firma y verifica `naygo.exe` antes de incluirlo en el ZIP/instalador, y firma/verifica el instalador

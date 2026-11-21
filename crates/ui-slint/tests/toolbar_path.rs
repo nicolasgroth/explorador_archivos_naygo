@@ -14,7 +14,7 @@ use std::{
 };
 
 slint::slint! {
-    import { ToolbarPath } from "../ui/toolbar-path.slint";
+    import { ToolbarPath } from "../../ui-gen/ui/toolbar-path.slint";
     export component ToolbarProbe inherits Window {
         in property <int> probe-width: 420;
         width: root.probe-width * 1px; height: 220px;

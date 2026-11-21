@@ -13,10 +13,10 @@ use std::{
     rc::Rc,
 };
 slint::slint! {
-    import { FilePanel } from "../ui/file-panel.slint";
-    import { OpDialogs } from "../ui/op-dialogs.slint";
-    import { CommandPalette } from "../ui/command-palette.slint";
-    import { RowData } from "../ui/types.slint";
+    import { FilePanel } from "../../ui-gen/ui/file-panel.slint";
+    import { OpDialogs } from "../../ui-gen/ui/op-dialogs.slint";
+    import { CommandPalette } from "../../ui-gen/ui/command-palette.slint";
+    import { RowData } from "../../ui-gen/ui/types.slint";
     export { RowData }
     export component Probe inherits Window {
         width: 800px; height: 600px;

@@ -82,7 +82,9 @@ use workspace_ctrl::WorkspaceCtrl;
 /// Callback compartido que se instala después de construir todos los controladores.
 pub(crate) type DeferredCallback = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
-slint::include_modules!();
+// Código generado desde los .slint (crate naygo-ui-gen): re-exportado para que `crate::AppWindow`
+// y demás rutas sigan iguales.
+pub use naygo_ui_gen::*;
 
 /// CHANGELOG embebido en build time: fuente de la sección "Novedades" del Acerca de.
 /// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.

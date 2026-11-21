@@ -41,7 +41,7 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   Cero regalías.
 - Build: `cargo` desde terminal.
 
-## Arquitectura (3 crates — ver spec)
+## Arquitectura (4 crates — ver spec)
 
 - **`core`** (`naygo-core`): lógica pura, sin UI ni Windows. Testeable al 100%.
   Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
@@ -53,6 +53,11 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
   `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
   `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
+- **`ui-gen`** (`naygo-ui-gen`): solo los `.slint` (`ui/`) y el código Rust que
+  Slint genera desde ellos (`AppWindow`, structs, globals). Crate aparte para que
+  tocar un `.rs` no recompile ese código (~32 MiB); `ui-slint` lo re-exporta con
+  `pub use naygo_ui_gen::*;`. Las features de `slint` se definen una vez en el
+  `[workspace.dependencies]`.
 - **`ui-slint`** (`naygo-ui-slint`, binario **`naygo`**): la UI oficial en Slint,
   sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
   core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`

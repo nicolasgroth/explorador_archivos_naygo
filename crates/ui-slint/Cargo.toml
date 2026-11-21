@@ -15,16 +15,10 @@ path = "src/main.rs"
 [dependencies]
 naygo-core = { path = "../core" }
 naygo-platform = { path = "../platform" }
-slint = { version = "1.16", default-features = false, features = [
-    "compat-1-2",
-    "std",
-    "backend-winit",
-    "renderer-software",
-    # Exporta el árbol Slint a los lectores de pantalla del sistema (AccessKit).
-    "accessibility",
-    # Acceso al handle nativo de la ventana (HWND) para el menú contextual del Shell.
-    "raw-window-handle-06",
-] }
+# UI generada desde los .slint (crate aparte para no recompilarla al tocar código Rust).
+naygo-ui-gen = { path = "../ui-gen" }
+# Features definidas una sola vez en [workspace.dependencies].
+slint.workspace = true
 # Backend winit explícito: forzamos el renderizador por SOFTWARE en código (no por variable de
 # entorno) para que Naygo nunca dependa de GPU. En VMs/equipos sin GPU el backend acelerado
 # producía geometría degenerada (ventana 0x0 → panic en euclid::cast). Mismo crate/versión que
@@ -54,7 +48,6 @@ lopdf.workspace = true
 tempfile.workspace = true
 
 [build-dependencies]
-slint-build = "1.16"
 # Embebe el ícono y los metadatos (producto/versión/autor) en naygo.exe en Windows.
 winresource = "0.1"
 

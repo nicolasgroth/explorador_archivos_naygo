@@ -11,12 +11,12 @@ use slint::{
 use std::rc::Rc;
 
 slint::slint! {
-    import { FilePanel } from "../ui/file-panel.slint";
-    import { ToolbarPath } from "../ui/toolbar-path.slint";
-    import { OpButton } from "../ui/ops-panel.slint";
-    import { Theme } from "../ui/theme.slint";
+    import { FilePanel } from "../../ui-gen/ui/file-panel.slint";
+    import { ToolbarPath } from "../../ui-gen/ui/toolbar-path.slint";
+    import { OpButton } from "../../ui-gen/ui/ops-panel.slint";
+    import { Theme } from "../../ui-gen/ui/theme.slint";
     export { Theme }
-    export { Tr } from "../ui/i18n.slint";
+    export { Tr } from "../../ui-gen/ui/i18n.slint";
     export component ThemeProbe inherits Window {
         width: 800px; height: 400px; background: Theme.panel-bg;
         in property <string> name;
@@ -188,7 +188,7 @@ fn all_factory_themes_render_real_panels_and_independent_icon_color() {
 
 #[test]
 fn appearance_keeps_one_icon_catalog_and_stable_category_and_token_ids() {
-    let source = include_str!("../ui/config-window.slint");
+    let source = include_str!("../../ui-gen/ui/config-window.slint");
     assert_eq!(source.matches("in root.vm.icon-set-cards:").count(), 1);
     assert!(source.contains("label: Tr.icons-open-settings;"));
     assert!(source

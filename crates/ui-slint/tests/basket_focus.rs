@@ -13,9 +13,9 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     import { LineEdit } from "std-widgets.slint";
-    import { BasketPanel } from "../ui/basket-panel.slint";
-    import { OpDialogs } from "../ui/op-dialogs.slint";
-    import { CommandPalette } from "../ui/command-palette.slint";
+    import { BasketPanel } from "../../ui-gen/ui/basket-panel.slint";
+    import { OpDialogs } from "../../ui-gen/ui/op-dialogs.slint";
+    import { CommandPalette } from "../../ui-gen/ui/command-palette.slint";
     export component BasketFocusProbe inherits Window {
         width: 600px; height: 400px;
         in-out property <int> focused: 0;

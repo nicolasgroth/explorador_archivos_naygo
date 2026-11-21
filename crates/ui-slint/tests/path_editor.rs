@@ -12,7 +12,7 @@ use slint::{
 use std::{cell::Cell, rc::Rc};
 
 slint::slint! {
-    import { PathEditor } from "../ui/path-editor.slint";
+    import { PathEditor } from "../../ui-gen/ui/path-editor.slint";
     export component PathProbe inherits Window {
         in property <int> probe-width: 420;
         width: root.probe-width * 1px; height: 80px; background: #0e1622;

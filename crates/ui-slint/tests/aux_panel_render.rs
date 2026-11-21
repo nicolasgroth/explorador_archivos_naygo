@@ -12,16 +12,16 @@ use slint::{
 use std::rc::Rc;
 
 slint::slint! {
-    import { InspectorPanel } from "../ui/inspector-panel.slint";
-    import { PreviewPanel } from "../ui/preview-panel.slint";
-    import { FavoritesPanel } from "../ui/favorites-panel.slint";
-    import { BasketPanel } from "../ui/basket-panel.slint";
-    import { HistoryPanel } from "../ui/history-panel.slint";
-    import { TreePanel } from "../ui/tree-panel.slint";
-    import { RecentsPanel } from "../ui/recents-panel.slint";
-    import { OpsPanel } from "../ui/ops-panel.slint";
-    export { Theme } from "../ui/theme.slint";
-    export { Tr } from "../ui/i18n.slint";
+    import { InspectorPanel } from "../../ui-gen/ui/inspector-panel.slint";
+    import { PreviewPanel } from "../../ui-gen/ui/preview-panel.slint";
+    import { FavoritesPanel } from "../../ui-gen/ui/favorites-panel.slint";
+    import { BasketPanel } from "../../ui-gen/ui/basket-panel.slint";
+    import { HistoryPanel } from "../../ui-gen/ui/history-panel.slint";
+    import { TreePanel } from "../../ui-gen/ui/tree-panel.slint";
+    import { RecentsPanel } from "../../ui-gen/ui/recents-panel.slint";
+    import { OpsPanel } from "../../ui-gen/ui/ops-panel.slint";
+    export { Theme } from "../../ui-gen/ui/theme.slint";
+    export { Tr } from "../../ui-gen/ui/i18n.slint";
     export component AuxProbe inherits Window {
         width: 800px; height: 320px;
         InspectorPanel { x: 0px; y: 0px; width: 200px; height: 160px; }

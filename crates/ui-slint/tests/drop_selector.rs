@@ -12,7 +12,7 @@ use slint::{
 use std::{cell::Cell, rc::Rc};
 
 slint::slint! {
-    import { DestinationRadar } from "../ui/destination-radar.slint";
+    import { DestinationRadar } from "../../ui-gen/ui/destination-radar.slint";
     export component Probe inherits Window {
         width: 640px; height: 480px;
         callback chosen(int);

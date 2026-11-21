@@ -1,0 +1,17 @@
+# Naygo — código Rust generado desde los .slint de la UI (AppWindow, ventanas, structs y globals).
+# Vive en su propio crate para que tocar un .rs de naygo-ui-slint, core o platform no recompile
+# el código generado (~32 MiB): solo se reconstruye cuando cambia algo en ui/.
+# Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
+[package]
+name = "naygo-ui-gen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Features definidas una sola vez en [workspace.dependencies] (compartidas con naygo-ui-slint).
+slint.workspace = true
+
+[build-dependencies]
+slint-build = "1.16"

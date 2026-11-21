@@ -15,8 +15,8 @@ mod tree_rows_model;
 use tree_rows_model::TreeRowsModel;
 
 slint::slint! {
-    import { TreePanel } from "../ui/tree-panel.slint";
-    import { TreeRow } from "../ui/types.slint";
+    import { TreePanel } from "../../ui-gen/ui/tree-panel.slint";
+    import { TreeRow } from "../../ui-gen/ui/types.slint";
     export { TreeRow }
     export component TreeScrollProbe inherits Window {
         width: 420px; height: 300px;
