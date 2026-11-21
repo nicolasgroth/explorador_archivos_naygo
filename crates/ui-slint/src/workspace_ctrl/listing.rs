@@ -304,7 +304,7 @@ impl WorkspaceCtrl {
         if let Some(dir) = self.pane_current_dir(id) {
             self.cancel_deep_if_navigating(id);
             self.start_listing(id, dir.clone());
-            self.sync_trees_for_files(id, dir);
+            self.retry_trees_for_files(id, dir);
         }
     }
 

@@ -10,6 +10,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [0.5.6] — 2026-11-20
 
 ### Usabilidad
+- Al pulsar «Reintentar» cuando vuelve una carpeta, el listado y el árbol recuperan la ruta
+  sin iniciar otra visita en el historial.
 - El árbol deja de esperar una carpeta ausente cuando terminan los listados de sus ramas,
   preservando la ruta y el aviso del panel de archivos.
 - Arrastrar un archivo o carpeta a una subcarpeta del mismo panel usa la fila que está bajo el

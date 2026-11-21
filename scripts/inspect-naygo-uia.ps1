@@ -8,7 +8,8 @@ param(
     [ValidateRange(1, 20)]
     [int] $MaxDepth = 8,
     [ValidateRange(20, 5000)]
-    [int] $MaxElements = 1200
+    [int] $MaxElements = 1200,
+    [long] $WindowHandle = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,19 +17,29 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-if ($ProcessId -gt 0) {
-    $process = Get-Process -Id $ProcessId -ErrorAction Stop
+if ($WindowHandle -ne 0) {
+    # Cuando la ventana principal está en la bandeja, MainWindowHandle puede señalar
+    # el receptor de eventos de Winit. Un HWND explícito permite inspeccionar la real.
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
+    $ownerId = $root.Current.ProcessId
+    $process = Get-Process -Id $ownerId -ErrorAction Stop
+    if ($process.ProcessName -ne 'naygo' -or ($ProcessId -gt 0 -and $ProcessId -ne $ownerId)) {
+        throw 'El HWND indicado no pertenece a la instancia de Naygo solicitada.'
+    }
 } else {
-    $process = Get-Process -Name 'naygo' -ErrorAction Stop |
-        Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
-        Select-Object -First 1
+    if ($ProcessId -gt 0) {
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+    } else {
+        $process = Get-Process -Name 'naygo' -ErrorAction Stop |
+            Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+            Select-Object -First 1
+    }
+    if ($null -eq $process -or $process.MainWindowHandle -eq [IntPtr]::Zero) {
+        throw 'No se encontro una ventana principal de Naygo para inspeccionar.'
+    }
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 }
 
-if ($null -eq $process -or $process.MainWindowHandle -eq [IntPtr]::Zero) {
-    throw 'No se encontro una ventana principal de Naygo para inspeccionar.'
-}
-
-$root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 $pending = [System.Collections.Generic.Queue[object]]::new()
 $pending.Enqueue([pscustomobject]@{ Element = $root; Depth = 0 })
@@ -152,7 +163,7 @@ while ($pending.Count -gt 0) {
 }
 
 if ($descendants -eq 0) {
-    throw 'UI Automation no expone controles descendientes de la ventana principal de Naygo.'
+    throw 'UI Automation no encontro descendientes de la ventana inspeccionada. Si Naygo esta en la bandeja, indica el HWND de su ventana con -WindowHandle.'
 }
 
 [pscustomobject]@{

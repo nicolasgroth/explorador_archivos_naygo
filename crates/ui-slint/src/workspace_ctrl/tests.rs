@@ -284,6 +284,65 @@ fn tree_reveal_termina_si_falta_un_ancestro_tras_listar() {
     assert!(c.pending_listing_error.is_some());
 }
 
+#[test]
+fn reintentar_carpeta_recuperada_revela_sus_ancestros_en_el_arbol() {
+    let root = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let destination = root.path().join("proveedor").join("carpeta");
+    let mut c = WorkspaceCtrl::new_in(root.path().to_path_buf(), config.path().to_path_buf());
+    assert!(drain(&mut c));
+    let pane = c.active_files_id().unwrap();
+    let tree = c.ws.add_pane(PanePurpose::Tree, PathBuf::new());
+    let mut roots = DirTree::default();
+    roots.roots.push(naygo_core::tree::TreeNode::folder(
+        root.path().to_path_buf(),
+    ));
+    c.trees.insert(tree, roots);
+    let drain_tree = |c: &mut WorkspaceCtrl| {
+        for _ in 0..2000 {
+            if c.pump_tree() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("el árbol debía terminar de listar");
+    };
+
+    assert!(c.navigate_tree_to(tree, destination.clone()));
+    assert!(drain(&mut c));
+    assert!(drain_missing(&mut c));
+    drain_tree(&mut c);
+    assert!(c.pane_dir_missing(pane));
+    assert_eq!(c.tree_reveal_row(tree), -1);
+    let visit =
+        c.ws.pane(pane)
+            .unwrap()
+            .files
+            .as_ref()
+            .unwrap()
+            .navigation_revision;
+
+    std::fs::create_dir_all(&destination).unwrap();
+    let file = destination.join("recuperado.txt");
+    std::fs::write(&file, b"fixture").unwrap();
+    c.missing_folder_retry(pane);
+    assert!(drain(&mut c));
+    assert!(drain_missing(&mut c));
+    drain_tree(&mut c);
+    let files = c.ws.pane(pane).unwrap().files.as_ref().unwrap();
+    assert_eq!(files.navigation_revision, visit);
+    assert!(files.entries.iter().any(|entry| entry.path == file));
+    assert!(!c.pane_dir_missing(pane));
+    assert_eq!(
+        c.tree_cursor_of(tree).as_deref(),
+        Some(destination.as_path())
+    );
+    assert!(
+        c.tree_reveal_row(tree) >= 0,
+        "el árbol debe revelar la carpeta recuperada"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "validación de lectura con una carpeta OneDrive real y perfil temporal"]

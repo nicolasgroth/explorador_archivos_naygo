@@ -4,6 +4,31 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
+## Naygo 0.5.6 — recuperación de carpetas, 2026-11-21
+
+**Reintentar** recarga el ancestro cacheado que falta en los árboles que siguen al panel.
+La prueba con directorios temporales reprodujo que el listado volvía y el árbol no
+revelaba la carpeta. Tras el arreglo, los archivos y el nodo reaparecen sin una nueva
+visita en el historial. La prueba de navegación en OneDrive activo se repitió y pasó.
+
+Se comprobó el hash de la instalación previa y coincidió con el ejecutable del
+commit `79b99963`. UI Automation leyó la ventana real mientras Naygo estaba en la
+bandeja. Reportó 978 descendientes, 237/237 controles enfocables con nombre, 112
+patrones Invoke y ningún botón sin ese patrón. Se agregó `-WindowHandle` al inspector
+para apuntar a esa ventana con validación del proceso. Esta evidencia es de solo lectura.
+
+Las mediciones Release headless del corte anterior están en [benchmarks](BENCHMARKS.md).
+Quedan la aceptación visual con mouse y teclado en la instalación, el caso con OneDrive
+desconectado y las mediciones de latencia Winit y presentación.
+
+Gate supervisado con 1.666 pruebas aprobadas y 12 ignoradas, Clippy y formato correctos.
+Pico de 5,99 GiB en la verificación. Compilación Release de 29m18s y pico de 10,92 GiB.
+Portable verificado con 7-Zip y binario Release coincidente. Instalador sin firma.
+
+- Setup: SHA-256 `0c9670ea70a89af86006014414abfebcb84bd48807c01b384f5f42dc713f15be`.
+- Portable: SHA-256 `78dd622055d55ac6cb4e8d7d8e0f3339fd9ab3b647b3cca2f96c0df85d766340`.
+- Ejecutable Release/ZIP: SHA-256 `8bd87516153ad828d79108b273054ed75bdf65372c3d26a4e7bd2809e317ab26`.
+
 ## Naygo 0.5.6 — 2026-11-20
 
 Esta versión reúne las mejoras de foco al volver de diálogos, navegación por árbol, filtros y

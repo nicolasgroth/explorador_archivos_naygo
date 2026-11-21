@@ -50,6 +50,9 @@ debe usar los tamaños completos y correrse contra la entrega verificada en una 
 Para comprobar que la ventana instalada expone controles a UI Automation, ejecutar
 `powershell -ExecutionPolicy Bypass -File scripts/inspect-naygo-uia.ps1`. Es una inspección
 de solo lectura: informa conteos y tipos de controles, pero no registra etiquetas ni rutas.
+Si Naygo está en la bandeja, Windows puede identificar una ventana auxiliar como principal.
+Pasa el HWND de la ventana de la aplicación mediante `-WindowHandle <entero>` para inspeccionarla
+sin abrirla. Puedes combinarlo con `-ProcessId` para comprobar a qué instancia pertenece.
 Un árbol con descendientes es condición técnica necesaria; la aceptación de Narrador, foco,
 lectura de controles y navegación por teclado sigue siendo manual dentro de W-13.
 

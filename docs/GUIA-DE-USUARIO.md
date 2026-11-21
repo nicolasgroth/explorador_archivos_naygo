@@ -153,6 +153,7 @@ puedes cerrarlos sin que Naygo elimine automáticamente ninguno.
   centrarla automáticamente; al navegar a otra ruta intenta mostrarla.
   Si un proveedor ya no muestra un tramo de la ruta al terminar de listar, el árbol deja de
   esperarlo y el panel conserva la carpeta solicitada y su aviso, desde donde puedes reintentar.
+  Cuando vuelva a estar disponible, el panel y el árbol recuperan la carpeta al pulsar **Reintentar**.
 - El menú contextual de la zona vacía utiliza la ruta del panel incluso si la carpeta deja de
   estar disponible. Las acciones pueden informar un error si ya no es posible operar en ella.
 - **Arrastra la barra de título** de un panel sobre otro para reacomodar (los bordes

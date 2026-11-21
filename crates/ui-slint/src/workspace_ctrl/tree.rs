@@ -54,10 +54,14 @@ impl WorkspaceCtrl {
     /// Navega desde un árbol. Los árboles dedicados operan exclusivamente sobre su Files;
     /// los comunes conservan el comportamiento clásico sobre el último Files activo.
     pub fn navigate_tree_to(&mut self, tree: PaneId, dir: PathBuf) -> bool {
-        let Some(files) = self.ws.linked_files(tree).or(self.last_active_files) else {
+        let Some(files) = self.files_for_tree(tree) else {
             return false;
         };
         self.navigate_files_to(files, dir)
+    }
+
+    fn files_for_tree(&self, tree: PaneId) -> Option<PaneId> {
+        self.ws.linked_files(tree).or(self.last_active_files)
     }
 
     fn navigate_files_to(&mut self, active_files_id: PaneId, dir: PathBuf) -> bool {
@@ -127,10 +131,7 @@ impl WorkspaceCtrl {
             .trees
             .keys()
             .copied()
-            .filter(|tree| match self.ws.linked_files(*tree) {
-                Some(target) => target == files,
-                None => self.last_active_files == Some(files),
-            })
+            .filter(|tree| self.files_for_tree(*tree) == Some(files))
             .collect();
         for id in &ids {
             if let Some(t) = self.trees.get_mut(id) {
@@ -144,6 +145,34 @@ impl WorkspaceCtrl {
             self.reveal_targets.insert(*id, dir.clone());
         }
         self.pump_reveal();
+    }
+
+    /// Al reintentar una carpeta ausente, el árbol puede conservar un listado hecho durante
+    /// la desconexión. Actualiza el ancestro cacheado más cercano en los árboles que siguen el panel
+    /// antes de pedir el reveal habitual. El resto de las ramas sigue usando su caché.
+    pub(super) fn retry_trees_for_files(&mut self, files: PaneId, dir: PathBuf) {
+        let branches: Vec<_> = self
+            .trees
+            .iter()
+            .filter(|(id, tree)| {
+                self.files_for_tree(**id) == Some(files) && tree.node_at(&dir).is_none()
+            })
+            .filter_map(|(id, tree)| {
+                tree.reveal_chain(&dir)
+                    .into_iter()
+                    .rev()
+                    .find(|path| {
+                        tree.node_at(path)
+                            .is_some_and(|node| node.children.is_some())
+                    })
+                    .map(|path| (*id, path))
+            })
+            .collect();
+        for (id, path) in branches {
+            self.schedule_tree_branch_refresh(id, &path);
+        }
+        self.pump_tree_refresh();
+        self.sync_trees_for_files(files, dir);
     }
 
     /// Alterna entre árbol común y dedicado. Al enlazar usa el último Files activo, que es
@@ -403,39 +432,41 @@ impl WorkspaceCtrl {
     /// Invalidar sólo la rama afectada y conservar sus descendientes expandidos.
     /// También recarga nodos cerrados ya cacheados para no reaparecer con hijos viejos.
     pub(super) fn refresh_tree_directory(&mut self, dir: &std::path::Path) {
-        for tree in self.trees.values_mut() {
-            if let Some(node) = tree.node_at_mut(dir) {
-                if !node.expanded {
-                    node.children = None;
-                }
-            }
-        }
-        let ids: Vec<_> = self
-            .trees
-            .iter()
-            .filter_map(|(id, tree)| tree.node_at(dir).filter(|n| n.expanded).map(|_| *id))
-            .collect();
+        let ids: Vec<_> = self.trees.keys().copied().collect();
         for id in ids {
-            let tree = &self.trees[&id];
-            let mut paths: Vec<_> = tree
-                .flat_paths()
-                .into_iter()
-                .filter(|p| p.starts_with(dir) && tree.node_at(p).is_some_and(|n| n.expanded))
-                .collect();
-            paths.push(dir.to_path_buf());
-            for path in &paths {
-                self.pending_tree_listings.remove(&(id, path.clone()));
-                if let Some(job) = self.tree_listings.remove(&(id, path.clone())) {
-                    job.cancel();
-                }
-            }
-            let pending = self.tree_refresh_pending.entry(id).or_default();
-            pending.extend(paths);
-            pending.sort();
-            pending.dedup();
-            pending.sort_by_key(|p| p.components().count());
+            self.schedule_tree_branch_refresh(id, dir);
         }
         self.pump_tree_refresh();
+    }
+
+    fn schedule_tree_branch_refresh(&mut self, id: PaneId, dir: &Path) {
+        let Some(tree) = self.trees.get_mut(&id) else {
+            return;
+        };
+        let Some(node) = tree.node_at_mut(dir) else {
+            return;
+        };
+        if !node.expanded {
+            node.children = None;
+            return;
+        }
+        let mut paths: Vec<_> = tree
+            .flat_paths()
+            .into_iter()
+            .filter(|p| p.starts_with(dir) && tree.node_at(p).is_some_and(|n| n.expanded))
+            .collect();
+        paths.push(dir.to_path_buf());
+        for path in &paths {
+            self.pending_tree_listings.remove(&(id, path.clone()));
+            if let Some(job) = self.tree_listings.remove(&(id, path.clone())) {
+                job.cancel();
+            }
+        }
+        let pending = self.tree_refresh_pending.entry(id).or_default();
+        pending.extend(paths);
+        pending.sort();
+        pending.dedup();
+        pending.sort_by_key(|p| p.components().count());
     }
 
     /// Restaurar de padre a hijo conforme llegan nodos. Recargar todos de golpe borraba

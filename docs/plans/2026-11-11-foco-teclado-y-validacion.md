@@ -215,6 +215,14 @@ un ancestro. Este cierre de árbol y validación se acotó a 3 puntos provisiona
 recorrido visual Winit con mouse y teclado, OneDrive desconectado y la medición de Release.
 La ejecución sintética de orden y filtro figura en [benchmarks](../BENCHMARKS.md).
 
+Seguimiento del 2026-11-21. Una prueba con carpetas temporales reprodujo que **Reintentar**
+recuperaba los archivos, pero el árbol seguía sin mostrar la carpeta. Se actualiza la rama
+cacheada de los árboles que siguen ese panel. La regresión verifica la fila y que la visita del
+historial se conserve. Este cambio y su prueba se estimaron en 2 puntos. OneDrive activo volvió
+a pasar. En la 0.5.6 instalada antes del arreglo, UI Automation encontró 237 controles enfocables
+con nombre. La medición Release headless de listado, teclado y vista profunda queda en
+[benchmarks](../BENCHMARKS.md). Faltan OneDrive realmente desconectado y aceptación visual/Winit.
+
 ## Puertas de entrega
 
 Trabajar por bloques; agrupar cambios relacionados antes del build. Ejecutar pruebas dirigidas y

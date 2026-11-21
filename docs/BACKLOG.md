@@ -5,6 +5,14 @@
 > Plan de ejecución priorizado: [cierre Windows y arrastre interoperable](plans/2026-11-02-cierre-windows-arrastre-y-validacion.md).
 > Plan vigente: [usabilidad y confiabilidad Windows](plans/2026-11-09-usabilidad-confiabilidad-windows.md).
 > Continuación priorizada de foco, aceptación y pendientes: [plan de foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
+> Seguimiento 0.5.6, 2026-11-21. Se reprodujo que Reintentar recuperaba los archivos de una
+> carpeta que volvía a estar disponible, pero dejaba su rama ausente en el árbol. La regresión
+> pasa al refrescar el ancestro cacheado pertinente y conservar la visita. OneDrive activo
+> volvió a pasar con perfil temporal. La inspección pasiva de la instalación previa usó el HWND
+> real y encontró 237 controles enfocables con nombre. El benchmark Release headless está en
+> [BENCHMARKS.md](BENCHMARKS.md). Quedan entrada física, presentación Winit y OneDrive desconectado.
+> Gate con 1.666 pruebas aprobadas y 12 ignoradas, Clippy y formato correctos. Paquetes 0.5.6
+> regenerados y verificados. Hashes en [estado actual](ESTADO-ACTUAL.md).
 > Cierre 0.5.6, 2026-11-20. La prueba de lectura en OneDrive real pasó con árbol común y dedicado,
 > refresco y regreso por historial. Corregida la espera del árbol cuando el listado termina sin
 > un ancestro. Se midió vista profunda a 10.000 y 100.000 entradas sintéticas en debug. Falta

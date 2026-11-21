@@ -3,6 +3,28 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### W-07 y vista profunda — perfil Release 0.5.6, 2026-11-21
+
+Se compiló el banco de pruebas del commit `79b99963` con el supervisor (27m26s, pico 9,36 GiB).
+`w10c_headless_sync_measurement` y `benchmark_vista_profunda_navegacion_y_filas` se repitieron
+tres veces por separado con entradas sintéticas. Se informa la mediana de las tres pasadas.
+
+| Listado normal | Sync inicial (ms) | Sync sin cambios (ms) | Actualizar una fila (ms) | Anexar una fila (ms) | Raster software (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 10.000 | 28,27 | 0,153 | 2,80 | 2,17 | 1,530 |
+| 100.000 | 286,34 | 1,617 | 28,54 | 22,26 | 1,563 |
+
+| Vista profunda | Orden por nombre (ms) | Filtro (ms) | Flecha abajo (ms) | Construcción de filas (ms) |
+| ---: | ---: | ---: | ---: | ---: |
+| 10.000 | 8,40 | 2,23 | 0,85 | 11,16 |
+| 100.000 | 84,97 | 20,55 | 11,48 | 113,65 |
+
+El rasterizado aislado usa la ventana Slint headless de 1280×800, filas virtualizadas y búfer
+software. El benchmark de vista profunda mide sólo el controlador. El callback Slint de teclado
+también pasó en Release con 256 invocaciones, listado vacío y sincronización de prueba vacía
+(p50 7,8 µs, máximo 98,6 µs). Estas mediciones dejan pendiente la latencia de entrada física y
+presentación Winit, el recorrido completo con árboles reales y los casos local/UNC de W-07.
+
 ### Vista profunda 0.5.6 — orden y filtros, 2026-11-20
 
 Repetición de `benchmark_vista_profunda_navegacion_y_filas` en perfil de pruebas sin símbolos,
