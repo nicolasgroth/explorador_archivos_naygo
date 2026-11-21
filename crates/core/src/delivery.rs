@@ -181,13 +181,7 @@ pub fn checkpoint(token: &CancellationToken) -> Result<(), DeliveryError> {
 }
 
 fn linked(metadata: &Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
-            return true;
-        }
-    }
+    // `is_symlink()` cubre symlinks y junctions; los placeholders de nube no son enlaces.
     metadata.file_type().is_symlink()
 }
 

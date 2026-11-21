@@ -17,16 +17,10 @@ fn modified(meta: &fs::Metadata) -> Option<u64> {
         .try_into()
         .ok()
 }
+/// Enlace (symlink/junction): `is_symlink()` cubre las etiquetas "name surrogate"; los
+/// placeholders de nube no lo son y se tratan como archivos normales.
 fn link(meta: &fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        meta.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        meta.file_type().is_symlink()
-    }
+    meta.file_type().is_symlink()
 }
 fn hash(
     path: &Path,

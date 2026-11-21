@@ -305,33 +305,16 @@ fn make_entry(path: &Path, is_dir: bool) -> Entry {
     }
 }
 
-/// ¿La metadata corresponde a un reparse point de Windows (symlink O junction)? Igual criterio
-/// que `sizing`: en Windows miramos `FILE_ATTRIBUTE_REPARSE_POINT`; en otras plataformas
-/// `is_symlink()` ya cubre los enlaces.
-#[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
-    false
-}
-
 /// Lista un directorio del FS real para la búsqueda. `None` si no se puede leer (parcial).
-/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles.
+/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles
+/// (los placeholders de nube no son enlaces: se recorren).
 pub(crate) fn fs_lister(dir: &Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
     for ent in rd.flatten() {
         let path = ent.path();
         let (is_dir, is_symlink) = match std::fs::symlink_metadata(&path) {
-            Ok(m) => (
-                m.is_dir(),
-                m.file_type().is_symlink() || is_reparse_point(&m),
-            ),
+            Ok(m) => (m.is_dir(), m.file_type().is_symlink()),
             // Entrada ilegible: la representamos como archivo no-symlink (no descenderá y se
             // intentará emparejar su nombre igual; su metadata se resolverá en make_entry).
             Err(_) => (false, false),

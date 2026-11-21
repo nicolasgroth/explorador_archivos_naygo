@@ -404,6 +404,20 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         .map(crate::path_display::display_os_str)
         .unwrap_or_default();
 
+    // Un enlace (symlink/junction) llega con metadata sin seguir: no es ni carpeta ni
+    // archivo. Para que una carpeta-enlace sea navegable se resuelve su destino con una
+    // sola `stat` extra (solo por enlace, no por entrada). Destino roto → `Other`.
+    // Quien recorre recursivamente (tamaño, búsqueda, ops) decide por `is_symlink()`,
+    // no por `EntryKind`, así que esto no habilita recursión sobre enlaces.
+    let followed;
+    let metadata = match metadata {
+        Some(m) if m.file_type().is_symlink() => {
+            followed = std::fs::metadata(path).ok();
+            followed.as_ref().or(Some(m))
+        }
+        other => other,
+    };
+
     let kind = match metadata {
         Some(m) if m.is_dir() => EntryKind::Directory,
         Some(m) if m.is_file() => EntryKind::File,
@@ -534,6 +548,25 @@ pub fn apply_dir_events_with_row_deltas(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn junction_a_carpeta_se_lista_como_carpeta_navegable() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut kinds = std::collections::HashMap::new();
+        while let Ok(entry) = rx.try_recv_entry() {
+            kinds.insert(entry.name, entry.kind);
+        }
+        assert_eq!(kinds["target"], EntryKind::Directory);
+        assert_eq!(kinds["link"], EntryKind::Directory);
+    }
 
     #[test]
     fn preflight_del_worker_termina_antes_de_emitir_las_filas() {
