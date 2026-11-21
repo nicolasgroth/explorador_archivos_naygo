@@ -1096,7 +1096,6 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[cfg(windows)]
     #[test]
     fn paths_eq_ci_ignora_mayusculas_unicode() {
         assert!(paths_eq_ci(Path::new("D:\\Árbol"), Path::new("D:\\ÁRBOL")));
@@ -1105,6 +1104,7 @@ mod tests {
         assert!(!paths_eq_ci(Path::new("D:\\ß"), Path::new("D:\\SS")));
     }
 
+    #[cfg(windows)]
     #[test]
     fn path_starts_with_ci_contiene_case_insensitive() {
         // Hijo bajo un ancestro con otra capitalización → contenido.
