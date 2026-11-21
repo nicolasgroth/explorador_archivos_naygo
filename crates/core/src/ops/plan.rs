@@ -404,22 +404,13 @@ fn map_directory_entry<T>(entry: std::io::Result<T>, directory: &Path) -> Result
     entry.map_err(|_| PlanError::SourceUnreadable(directory.to_path_buf()))
 }
 
-/// `true` si los metadatos (sin seguir el enlace) describen un symlink o un junction. En
-/// Windows `is_symlink()` no cubre los junctions (son puntos de reanálisis de tipo mount point).
+/// `true` si los metadatos (sin seguir el enlace) describen un symlink o un junction.
+/// `file_type().is_symlink()` basta: std en Windows lo marca para las etiquetas de reanálisis
+/// "name surrogate" (symlink y mount point/junction). NO se debe mirar solo el atributo
+/// REPARSE_POINT: los placeholders de nube (OneDrive/Dropbox) lo llevan y no son enlaces, así
+/// que se rechazarían por error.
 pub(super) fn is_link_like(meta: &std::fs::Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        meta.is_dir() && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    meta.file_type().is_symlink()
 }
 
 #[allow(clippy::too_many_arguments)]
