@@ -36,14 +36,23 @@ slint = { version = "1.16", default-features = false, features = [
     "raw-window-handle-06",
 ] }
 
+# Perfil dev: el código Slint generado (naygo-ui-gen, ~32 MiB) no se depura a mano y su
+# debuginfo completa dominaba el pico de memoria de link.exe. Medido (CARGO_BUILD_JOBS=1,
+# tocar un .rs de ui-slint): completa 6,39 GiB WS; "line-tables-only" 4,78; sin debuginfo
+# 4,49. Se deja sin debuginfo solo para ese crate; el resto del workspace (incluido
+# naygo-ui-slint) conserva la debuginfo completa.
+[profile.dev.package.naygo-ui-gen]
+debug = false
+
 # Perfil de release optimizado para distribución: binario chico, pensado para correr
 # en máquinas con pocos recursos. La velocidad es la prioridad del proyecto, así que
 # opt-level="s" (tamaño sin sacrificar tanto rendimiento como "z") y panic=unwind
 # (default) para poder recuperar de un panic en un worker sin que la app caiga; el
-# panic handler igual loguea. `debug = true` genera el naygo.pdb con los símbolos:
-# en MSVC los símbolos viven en el .pdb y el .exe solo guarda un puntero a él, así
-# que el exe casi no crece, y el backtrace del panic handler muestra nombres de
-# función reales en vez de `<unknown>`. El .pdb es opcional en el instalador y no
+# panic handler igual loguea. `debug = "line-tables-only"` genera el naygo.pdb con
+# nombres de función y archivo:línea (suficiente para el backtrace del panic handler,
+# según la documentación de rustc) pero sin la información de tipos y variables que
+# inflaba el enlazado; en MSVC los símbolos viven en el .pdb y el .exe solo guarda un
+# puntero a él, así que el exe casi no crece. El .pdb es opcional en el instalador y no
 # se incluye en el ZIP portable. ThinLTO evita unir toda la app en un único módulo
 # gigante; 16 unidades reducen el tamaño del trabajo individual. Mantener un solo
 # trabajo Cargo al empaquetar y supervisar memoria; no es un techo de RSS del producto.
@@ -52,12 +61,12 @@ slint = { version = "1.16", default-features = false, features = [
 opt-level = "s"
 lto = "thin"
 codegen-units = 16
-debug = true
+debug = "line-tables-only"
 
 # Perfil de DIAGNÓSTICO: mismo código que release pero compilado RÁPIDO (sin LTO y con
 # codegen-units=16), para cazar una caída sin esperar el build
 # completo. Los símbolos ya no lo diferencian (release también los genera desde que
-# se agregó `debug = true` arriba). Build: `cargo build --profile diag -p naygo-ui-slint`.
+# se agregó la debuginfo arriba). Build: `cargo build --profile diag -p naygo-ui-slint`.
 # El .exe queda en target/diag/. NO es el binario de distribución; solo para cazar caídas.
 [profile.diag]
 inherits = "release"
