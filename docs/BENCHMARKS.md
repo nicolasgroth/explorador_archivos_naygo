@@ -3,6 +3,46 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### T12 — después de modelos persistentes, 2026-11-21
+
+Causa de las ráfagas de CPU en idle de la línea base (abajo): cada archivo nuevo o modificado en una
+carpeta abierta (en la carpeta personal, el `.claude.json` que otra app reescribe cada ~15–25 s)
+activa el resaltado de 8 s, y durante ese tiempo el tick de 30 ms sigue vivo. En cada tick
+`sync_rows` creaba `ModelRc` nuevos; como `ModelRc` se compara por puntero, `ColumnMenuVm` y
+`BatchRenameVm` (overlays de ventana completa) cambiaban siempre y los paneles Propiedades y Vista
+previa se re-asignaban sin condición, así que el renderer por software repintaba la ventana en cada
+tick. Evidencia: el CPU era 100 % del hilo `main` (muestreo por hilo, ráfagas de 2,0 s de CPU cada 2 s
+durante ~8 s), cada ráfaga empezaba en el segundo en que cambiaba el `.claude.json`, y con
+contadores temporales (build dev) el tick en sí sumaba ~60–160 ms por cada 5 s: el resto era render.
+Al apagar esos tres orígenes en el build de diagnóstico, el CPU tras un evento bajó de 8,3 s a 0,8 s por
+cada 12 s; cada uno por separado bastaba para saturar el núcleo.
+
+Método: mismo equipo; release `75f2c09c`+`83cf3638` (después) contra el exe de la línea base `aad0ac9f`
+(antes), los dos lanzados uno tras otro con la misma configuración portable (disposición clásica:
+árbol, dos Files, Propiedades, Vista previa) y `NAYGO_DEBUG_MULTI_INSTANCE=1`. Captura con
+`scripts/capture-w07-process.ps1`, ventanas de 20 s, campos del proceso raíz. Los eventos controlados
+crean un archivo en la carpeta abierta y miden el CPU del proceso en los 12 s siguientes. Fixture de
+100k: 100 000 archivos vacíos + 20 carpetas (100 020 elementos).
+
+| Escenario | CPU antes (s por ventana) | CPU después (s por ventana) | WS antes → después (MiB) | Private antes → después (MiB) |
+| :--- | :--- | :--- | ---: | ---: |
+| 2. Ventana idle en home, 5 ventanas de 20 s | 5,33 · 2,14 · 1,86 · 0 · 4,47 | 0,66 · 0,72 · 0,02 · 0,02 · 0,64 | 56,0 → 55,1 | 24,9 → 23,8 |
+| 3. 100k en un panel y home en el otro, 4 ventanas de 20 s tras 60 s | 12,20 (listado) · 0 · 5,55 · 0 | 8,45 (listado) · 1,25 · 0,03 · 0,02 | 186,7 → 181,5 | 170,1 → 163,5 |
+| Evento en una carpeta de 40 archivos, 3 eventos de 12 s | 6,38 · 5,33 · 5,00 | 0,69 · 0,55 · 0,38 | 55,4 → 56,1 | 24,3 → 25,3 |
+| Evento en la carpeta de 100k, 2 eventos de 12 s | 11,67 · 12,06 | 11,70 · 12,05 | 252,7 → 251,7 | 245,4 → 244,3 |
+
+Notas:
+
+- Las ventanas de los escenarios 2 y 3 no controlan cuándo llega un cambio a home, así que comparan la
+  forma (ráfagas de 2–5,5 s antes, <1,3 s después) y no un valor exacto. Los eventos controlados sí
+  son comparables uno a uno: ~10× menos CPU tras un cambio en una carpeta chica.
+- La memoria no cambia de forma apreciable: las diferencias de 1–7 MiB caen dentro de la variación entre
+  corridas de la línea base.
+- Pendiente: un cambio dentro de una carpeta de 100k sigue costando un núcleo completo durante el
+  resaltado. Con el resaltado vigente la firma de filas no cachea (`rows_signature` devuelve `None`) y
+  cada tick reconstruye las 100 020 filas, aunque `highlight` es un `bool` que no cambia hasta que vence.
+  No es de modelos: queda para una tarea posterior.
+
 ### Memoria en ejecución — línea base, 2026-11-21
 
 Commit medido: `aad0ac9f` (rama `fix/integridad-build-0.5.7`, versión 0.5.6), release con
