@@ -267,6 +267,8 @@ pub struct WorkspaceCtrl {
     /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
     /// su worker y se cancela al cerrar o cambiar opciones.
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
+    /// Contador de planificaciones del asistente (ver `SyncAssistantState::generation`).
+    sync_generation: u64,
     /// Modal/job de transformación de texto. El diagnóstico y la escritura corren en workers.
     pub text_transform: Option<text_transform::TextTransformState>,
     /// Worker cancelado al cerrar el diálogo, conservado hasta su mensaje terminal.
@@ -959,6 +961,7 @@ impl WorkspaceCtrl {
             search_context: false,
             delivery_results: Default::default(),
             sync_assistant: None,
+            sync_generation: 0,
             text_transform: None,
             retired_text_transform: None,
             pending_pick: None,

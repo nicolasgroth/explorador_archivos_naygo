@@ -484,13 +484,22 @@ pub(crate) fn fill_preview_state(
 }
 
 pub(crate) fn to_row_data(r: bridge::PlainRow) -> RowData {
+    let name = SharedString::from(r.name.as_str());
+    // La celda de la columna Nombre repite el nombre: compartir el mismo `SharedString`
+    // (contador de referencias) ahorra una asignación por fila.
     let cells: Vec<SharedString> = r
         .cells
         .iter()
-        .map(|c| SharedString::from(c.as_str()))
+        .map(|c| {
+            if *c == r.name {
+                name.clone()
+            } else {
+                SharedString::from(c.as_str())
+            }
+        })
         .collect();
     RowData {
-        name: SharedString::from(r.name.as_str()),
+        name,
         cells: ModelRc::from(Rc::new(VecModel::from(cells))),
         is_dir: r.is_dir,
         drop_folder: r.drop_folder.into(),

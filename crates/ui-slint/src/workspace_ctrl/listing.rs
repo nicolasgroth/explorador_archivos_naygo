@@ -1026,11 +1026,14 @@ impl WorkspaceCtrl {
                 icons,
                 ..
             } = self;
+            // Las rutas frescas son pocas: se consultan con un probe por nombre en vez de
+            // recorrer la lista de frescas (o hashear la ruta) en cada una de las n filas.
+            let fresh = PathProbe::new(watchers.fresh_paths(id.0, highlight_secs, now));
             match ws.pane(id).and_then(|p| p.files.as_ref()) {
                 Some(f) => rows_from_view(
                     f,
                     &|p| ops.is_cut(p),
-                    &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                    &|p| fresh.contains(p),
                     &mut |e| icons.get_for_entry(e),
                     size_format,
                     date_format,
@@ -1096,11 +1099,12 @@ impl WorkspaceCtrl {
                 ..
             } = self;
             let f = ws.pane(id)?.files.as_ref()?;
+            let fresh = PathProbe::new(watchers.fresh_paths(id.0, highlight_secs, now));
             rows_from_view_positions(
                 f,
                 positions.iter().copied(),
                 &|path| ops.is_cut(path),
-                &|path| watchers.is_fresh_ro(id.0, path, highlight_secs, now),
+                &|path| fresh.contains(path),
                 &mut |entry| icons.get_for_entry(entry),
                 size_format,
                 date_format,
@@ -1140,15 +1144,12 @@ impl WorkspaceCtrl {
         &self,
         id: PaneId,
         previous_revision: u64,
-        highlight_secs: u64,
-        now: Instant,
     ) -> Option<Vec<usize>> {
         if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
             return None;
         }
-        if self.fresh_active_in_pane(id, highlight_secs, now) {
-            return None;
-        }
+        // El resaltado fresco ya no obliga a reconstruir todo: el llamador solo usa este delta si
+        // el conjunto fresco aplicado no cambió (ver `AppliedRowsSource::fresh` en `sync.rs`).
         let files = self.ws.pane(id)?.files.as_ref()?;
         if !files.table.filters.is_empty()
             || !matches!(files.sort.key, SortKey::Name | SortKey::Extension)
@@ -1159,15 +1160,16 @@ impl WorkspaceCtrl {
         if changed_paths.is_empty() {
             return None;
         }
-        let changed_paths: std::collections::HashSet<&std::path::Path> =
-            changed_paths.iter().map(PathBuf::as_path).collect();
+        // Probe por nombre final: descarta cada fila comparando pocos bytes, sin hashear las n
+        // rutas (con 100k filas, el `HashSet<&Path>` costaba ~25 ms en release).
+        let wanted = PathProbe::new(changed_paths.iter().map(PathBuf::as_path));
         let view = files.view_indices_shared();
         let mut positions = Vec::new();
         for (position, &real) in view.iter().enumerate() {
             if files
                 .entries
                 .get(real)
-                .is_some_and(|entry| changed_paths.contains(entry.path.as_path()))
+                .is_some_and(|entry| wanted.contains(&entry.path))
             {
                 positions.push(position);
             }
@@ -1274,7 +1276,7 @@ impl WorkspaceCtrl {
         highlight_secs: u64,
         now: std::time::Instant,
     ) -> Option<u64> {
-        self.rows_signature_impl(id, highlight_secs, now, true, true)
+        self.rows_signature_impl(id, highlight_secs, now, true, true, true)
     }
 
     /// Firma global sin la revisión de entradas. El sync la combina con deltas explícitos del
@@ -1288,7 +1290,7 @@ impl WorkspaceCtrl {
         if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
             return None;
         }
-        self.rows_signature_impl(id, highlight_secs, now, false, true)
+        self.rows_signature_impl(id, highlight_secs, now, false, true, false)
     }
 
     /// Contexto de filas profundas sin foco ni selección, para aplicar solo esos cambios.
@@ -1296,7 +1298,7 @@ impl WorkspaceCtrl {
         if !self.is_deep_active(id) {
             return None;
         }
-        self.rows_signature_impl(id, 0, now, true, false)
+        self.rows_signature_impl(id, 0, now, true, false, false)
     }
 
     fn rows_signature_impl(
@@ -1306,6 +1308,7 @@ impl WorkspaceCtrl {
         now: std::time::Instant,
         include_entries_revision: bool,
         include_deep_selection: bool,
+        include_fresh: bool,
     ) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let f = self.ws.pane(id).and_then(|p| p.files.as_ref())?;
@@ -1393,41 +1396,120 @@ impl WorkspaceCtrl {
             f.group_new_at_end.hash(&mut h);
         }
 
-        // --- Resaltado "fresco": si hay alguna fila vigente, NO cachear (el fundido cambia cada
-        // tick por diseño). Se evalúa AL FINAL para no pagar el costo si total ya rebota.
-        if self.fresh_active_in_pane(id, highlight_secs, now) {
-            return None;
+        // --- Resaltado "fresco": entra el CONJUNTO de rutas frescas vigentes, que solo cambia al
+        // empezar o vencer un resaltado. Antes se devolvía `None` (no cachear) mientras hubiera
+        // alguna, y cada tick de 30 ms reconstruía las n filas aunque `highlight` (un bool) no
+        // cambiara. O(k) con k = rutas frescas; no recorre la vista.
+        if include_fresh {
+            self.fresh_signature_of(id, highlight_secs, now)
+                .hash(&mut h);
         }
 
         Some(h.finish())
     }
 
-    /// ¿El panel `id` tiene alguna ruta VISIBLE todavía "fresca" (resaltada)? Si la hay, la fila
-    /// se pinta resaltada y el resaltado se desvanece con el tiempo (`is_fresh_ro` depende de
-    /// `now`), así que la firma no debe cachearse: el llamador reconstruye cada tick. Recorre solo
-    /// la vista (no todas las entries) y corta al primer acierto.
-    fn fresh_active_in_pane(
+    /// Firma del conjunto de rutas frescas vigentes del panel (0 si no hay). La vista profunda no
+    /// pinta el resaltado del watcher, así que no depende de él. Incluye rutas que quizás no estén
+    /// visibles: a lo sumo provoca una reconciliación de más, nunca una de menos.
+    pub(crate) fn fresh_signature_of(&self, id: PaneId, highlight_secs: u64, now: Instant) -> u64 {
+        if self.is_deep_active(id) {
+            return 0;
+        }
+        self.watchers.fresh_signature(id.0, highlight_secs, now)
+    }
+
+    /// Claves (identidad + contenido) de las filas de la vista normal en `positions`, o de todas
+    /// con `None`. Con ellas `sync_rows` reconcilia comparando enteros y construye solo las filas
+    /// que cambiaron. El contenido cubre lo que lee `rows_at`: entry (nombre, ruta, tipo, tamaño,
+    /// fechas, atributos), formato de celdas, columnas, set de íconos, selección, foco, cortado,
+    /// resaltado (fresco y de visita) y comparación. Devuelve `None` donde `rows_at` no aplica
+    /// (vista profunda o filtro por tipeo): ahí sigue el camino completo.
+    pub(crate) fn row_keys(
         &self,
         id: PaneId,
+        positions: Option<&[usize]>,
         highlight_secs: u64,
-        now: std::time::Instant,
-    ) -> bool {
-        if highlight_secs == 0 {
-            return false;
+        now: Instant,
+    ) -> Option<Vec<crate::rows_model::RowKey>> {
+        use crate::rows_model::{KeyHasher, RowKey};
+        use std::hash::{Hash, Hasher};
+        if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
+            return None;
         }
-        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
-            return false;
+        let f = self.ws.pane(id)?.files.as_ref()?;
+        // Estado común a todas las filas: entra como semilla del contenido de cada una.
+        let global = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            f.current_dir.hash(&mut h);
+            std::mem::discriminant(&self.config.settings.size_format).hash(&mut h);
+            std::mem::discriminant(&self.config.settings.date_format).hash(&mut h);
+            naygo_platform::time::local_utc_offset_secs().hash(&mut h);
+            for c in f.table.visible_columns() {
+                c.kind.hash(&mut h);
+            }
+            self.icons.signature().hash(&mut h);
+            h.finish()
         };
-        if self.is_deep_active(id) {
-            // Las filas profundas no muestran resaltado de watcher (rows_of usa false).
-            return false;
-        }
-        f.view_indices().iter().any(|&real| {
-            f.entries.get(real).is_some_and(|e| {
-                self.watchers
-                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
+        let view = f.view_indices_shared();
+        // Selección chica (lo común): búsqueda lineal, sin hashear cada posición.
+        let selected_set: Option<std::collections::HashSet<usize>> =
+            (f.selected.len() > 16).then(|| f.selected.iter().copied().collect());
+        let is_selected = |position: usize| match &selected_set {
+            Some(set) => set.contains(&position),
+            None => f.selected.contains(&position),
+        };
+        let fresh = PathProbe::new(self.watchers.fresh_paths(id.0, highlight_secs, now));
+        let marks = self.comparison.get(&id).filter(|marks| !marks.is_empty());
+        let visits = self
+            .visit_highlights
+            .get(&id)
+            .filter(|visits| !visits.is_empty());
+        let any_cut = !self.ops.cut_set.is_empty();
+        let key_at = |position: usize| -> Option<RowKey> {
+            let e = f.entries.get(*view.get(position)?)?;
+            let mut idh = KeyHasher::new(0);
+            idh.add_bytes(e.path.as_os_str().as_encoded_bytes());
+            let id = idh.finish();
+            let mut h = KeyHasher::new(global);
+            h.add(id);
+            h.add_bytes(e.name.as_bytes());
+            h.add(match e.kind {
+                naygo_core::fs_model::EntryKind::Directory => 1,
+                naygo_core::fs_model::EntryKind::File => 2,
+                naygo_core::fs_model::EntryKind::Other => 3,
+            });
+            match e.size {
+                Some(size) => {
+                    h.add(1);
+                    h.add(size);
+                }
+                None => h.add(0),
+            }
+            add_time_key(&mut h, e.modified);
+            add_time_key(&mut h, e.created);
+            let highlight =
+                fresh.contains(&e.path) || visits.is_some_and(|visits| visits.contains(&e.path));
+            let flags = u64::from(e.hidden)
+                | (u64::from(e.system) << 1)
+                | (u64::from(is_selected(position)) << 2)
+                | (u64::from(f.focused == Some(position)) << 3)
+                | (u64::from(any_cut && self.ops.is_cut(&e.path)) << 4)
+                | (u64::from(highlight) << 5);
+            h.add(flags);
+            h.add(u64::from(
+                marks
+                    .and_then(|marks| marks.get(&e.path).copied())
+                    .unwrap_or(0),
+            ));
+            Some(RowKey {
+                id,
+                content: h.finish(),
             })
-        })
+        };
+        match positions {
+            Some(positions) => positions.iter().map(|&p| key_at(p)).collect(),
+            None => (0..view.len()).map(key_at).collect(),
+        }
     }
 
     /// Huso local en segundos (para formatear/parsear fechas del filtro de fecha).
@@ -1826,6 +1908,98 @@ impl WorkspaceCtrl {
                 l.cancel();
             }
         }
+    }
+}
+
+/// Agrega una fecha opcional a la clave de una fila (sin perder las anteriores a 1970).
+fn add_time_key(h: &mut crate::rows_model::KeyHasher, time: Option<std::time::SystemTime>) {
+    match time.map(|t| t.duration_since(std::time::UNIX_EPOCH)) {
+        None => h.add(0),
+        Some(Ok(d)) => {
+            h.add(1);
+            h.add(d.as_secs());
+            h.add(u64::from(d.subsec_nanos()));
+        }
+        Some(Err(e)) => {
+            h.add(2);
+            h.add(e.duration().as_secs());
+            h.add(u64::from(e.duration().subsec_nanos()));
+        }
+    }
+}
+
+/// Conjunto de pocas rutas para consultarlo una vez por fila de un listado grande. Hashear cada
+/// ruta del listado (`HashSet<&Path>`) o compararla por componentes (`Path == Path` en Windows)
+/// costaba decenas de ms con 100k filas; acá cada fila se descarta comparando los bytes del
+/// nombre final y solo los candidatos se comparan como `Path`. Supone rutas sin separadores
+/// finales ni componentes redundantes (las del listado y del watcher salen de `dir.join(nombre)`).
+pub(crate) struct PathProbe<'a> {
+    /// Pocas rutas: (bytes del nombre final, ruta completa).
+    few: Vec<(&'a [u8], &'a Path)>,
+    /// Muchas rutas (p. ej. una sincronización masiva): índice por nombre final.
+    many: Option<HashMap<&'a [u8], Vec<&'a Path>>>,
+}
+
+impl<'a> PathProbe<'a> {
+    const FEW: usize = 16;
+
+    pub(crate) fn new(paths: impl IntoIterator<Item = &'a Path>) -> PathProbe<'a> {
+        let tail =
+            |p: &'a Path| -> &'a [u8] { p.file_name().unwrap_or(p.as_os_str()).as_encoded_bytes() };
+        let mut few: Vec<(&'a [u8], &'a Path)> = paths.into_iter().map(|p| (tail(p), p)).collect();
+        few.sort_unstable();
+        few.dedup();
+        if few.len() <= Self::FEW {
+            return PathProbe { few, many: None };
+        }
+        let mut many: HashMap<&'a [u8], Vec<&'a Path>> = HashMap::new();
+        for (name, path) in few {
+            many.entry(name).or_default().push(path);
+        }
+        PathProbe {
+            few: Vec::new(),
+            many: Some(many),
+        }
+    }
+
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        if let Some(many) = &self.many {
+            let name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .as_encoded_bytes();
+            return many.get(name).is_some_and(|paths| paths.contains(&path));
+        }
+        if self.few.is_empty() {
+            return false;
+        }
+        let bytes = path.as_os_str().as_encoded_bytes();
+        self.few
+            .iter()
+            .any(|(name, full)| bytes.ends_with(name) && *full == path)
+    }
+}
+
+#[cfg(test)]
+mod path_probe_tests {
+    use super::PathProbe;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn encuentra_solo_rutas_exactas_con_pocas_y_muchas() {
+        let dir = Path::new(r"C:\datos");
+        for count in [1usize, 3, 40] {
+            let wanted: Vec<PathBuf> = (0..count).map(|i| dir.join(format!("f{i}.txt"))).collect();
+            let probe = PathProbe::new(wanted.iter().map(PathBuf::as_path));
+            for path in &wanted {
+                assert!(probe.contains(path), "{count}: {path:?}");
+            }
+            // Mismo nombre final en otra carpeta, y nombre que es sufijo de otro.
+            assert!(!probe.contains(&Path::new(r"C:\otra").join("f0.txt")));
+            assert!(!probe.contains(&dir.join("xf0.txt")));
+            assert!(!probe.contains(&dir.join("nada.txt")));
+        }
+        assert!(!PathProbe::new(std::iter::empty()).contains(Path::new("C:/a")));
     }
 }
 

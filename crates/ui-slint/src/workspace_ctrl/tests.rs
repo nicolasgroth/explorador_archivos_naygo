@@ -1322,15 +1322,37 @@ fn dialogo_sync_replanifica_al_activar_borrado_de_sobrantes() {
     assert!(c.sync_open());
     assert!(drain_sync(&mut c));
     assert_eq!(c.sync_vm().rows.row_count(), 0, "apagado por defecto");
+    let empty_plan = c.sync_rows_fingerprint();
     c.sync_set_delete_extras(true);
     assert!(c.sync_vm().planning, "el cambio dispara un worker nuevo");
+    let planning = c.sync_rows_fingerprint();
+    assert_ne!(
+        planning, empty_plan,
+        "replanificar cambia la huella de filas"
+    );
     assert!(drain_sync(&mut c));
+    let planned = c.sync_rows_fingerprint();
+    assert_ne!(planned, planning, "llegar el plan cambia la huella");
+    assert_eq!(
+        c.sync_rows_fingerprint(),
+        planned,
+        "sin cambios, la huella es estable (las filas no se rearman por tick)"
+    );
     let vm = c.sync_vm();
     assert!(vm.delete_extras);
     assert_eq!(vm.rows.row_count(), 1);
     let row = vm.rows.row_data(0).unwrap();
     assert!(row.enabled && row.selected);
     assert!(vm.can_apply);
+    c.sync_toggle_item(0);
+    assert_ne!(
+        c.sync_rows_fingerprint(),
+        planned,
+        "marcar una fila cambia la huella"
+    );
+    assert!(!c.sync_rows_vm()[0].selected);
+    c.sync_close();
+    assert_eq!(c.sync_rows_fingerprint(), None);
 }
 
 #[test]
@@ -1568,18 +1590,30 @@ fn rows_signature_detecta_cambios_y_es_estable() {
     let s_cut = c.rows_signature(id, secs, now).unwrap();
     assert_ne!(s_pre_cut, s_cut, "cortar una ruta cambia la firma");
 
-    // Resaltado FRESCO vigente → None (no cachear: el fundido cambia cada tick).
+    // Resaltado FRESCO vigente: la firma lo incluye como CONJUNTO (antes era `None` y cada tick
+    // reconstruía todas las filas). Cambia al empezar, es estable mientras dura y vuelve al
+    // valor previo al vencer.
+    let s_pre_fresh = c.rows_signature(id, secs, now).unwrap();
     c.watchers
         .mark_fresh(id.0, vec![work.path().join("a.txt")], now);
-    assert!(
-        c.rows_signature(id, secs, now).is_none(),
-        "con una fila fresca vigente, la firma es None (no cachear)"
+    let s_fresh = c.rows_signature(id, secs, now).unwrap();
+    assert_ne!(s_pre_fresh, s_fresh, "empezar un resaltado cambia la firma");
+    let mid = now + std::time::Duration::from_millis(secs * 500);
+    assert_eq!(
+        c.rows_signature(id, secs, mid),
+        Some(s_fresh),
+        "mientras el resaltado dura, la firma es estable (cacheable)"
     );
-    // Pasado el tiempo de resaltado, vuelve a ser Some (cacheable de nuevo).
+    assert_eq!(
+        c.rows_context_signature(id, secs, now),
+        c.rows_context_signature(id, secs, mid),
+        "el contexto de deltas no depende del resaltado"
+    );
     let later = now + std::time::Duration::from_secs(secs + 1);
-    assert!(
-        c.rows_signature(id, secs, later).is_some(),
-        "vencido el resaltado, vuelve a ser cacheable"
+    assert_eq!(
+        c.rows_signature(id, secs, later),
+        Some(s_pre_fresh),
+        "vencido el resaltado, vuelve la firma previa"
     );
 }
 

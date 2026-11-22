@@ -56,6 +56,8 @@ pub(crate) struct PersistentModels {
     pub(crate) column_exts: Rc<VecModel<ExtRowVm>>,
     pub(crate) batch_rows: Rc<VecModel<BatchRowVm>>,
     pub(crate) sync_rows: Rc<VecModel<SyncRowVm>>,
+    /// Huella con la que se armaron `sync_rows` (`WorkspaceCtrl::sync_rows_fingerprint`).
+    pub(crate) sync_rows_fingerprint: Option<u64>,
     pub(crate) inspector_meta: Rc<VecModel<MetaFieldVm>>,
     pub(crate) search_hits: Rc<VecModel<SearchHitVm>>,
     pub(crate) points: Rc<VecModel<PointRowVm>>,
@@ -79,6 +81,7 @@ impl PersistentModels {
             column_exts: Rc::default(),
             batch_rows: Rc::default(),
             sync_rows: Rc::default(),
+            sync_rows_fingerprint: None,
             inspector_meta: Rc::default(),
             search_hits: Rc::default(),
             points: Rc::default(),

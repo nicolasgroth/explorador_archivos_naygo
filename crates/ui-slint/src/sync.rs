@@ -10,6 +10,7 @@
 
 use crate::models::{purpose_to_int, rects_equal, Models};
 use crate::persistent_models::{model_rc, preview_vm_eq, update_rows, PersistentModels};
+use crate::rows_model::{diff_keys, RowsModel, STALE_CONTENT};
 use crate::vm_builders::*;
 use crate::win_helpers::*;
 use crate::workspace_ctrl::WorkspaceCtrl;
@@ -33,6 +34,10 @@ struct AppliedRowsSource {
     revision: u64,
     entry_count: usize,
     view_indices: std::sync::Arc<[usize]>,
+    /// Firma del conjunto de rutas frescas con que se construyeron las filas. Los deltas
+    /// (alta al final, filas modificadas) solo reconstruyen sus filas: si además empezó o venció
+    /// un resaltado, otras filas cambian y hay que pasar por la reconciliación por claves.
+    fresh: u64,
 }
 
 /// Instantánea pequeña de presentación; selecciones grandes usan la reconciliación completa.
@@ -65,7 +70,7 @@ fn deep_presentation(
 fn apply_deep_presentation(
     ctrl: &WorkspaceCtrl,
     id: PaneId,
-    model: &VecModel<RowData>,
+    model: &RowsModel,
     old: &DeepPresentation,
     new: &DeepPresentation,
 ) -> bool {
@@ -115,7 +120,7 @@ fn apply_deep_presentation(
         }
     }
     for (position, row) in updates {
-        model.set_row_data(position, row);
+        model.set_row(position, row);
     }
     true
 }
@@ -124,12 +129,14 @@ fn applied_rows_source(
     ctrl: &WorkspaceCtrl,
     id: PaneId,
     context: u64,
+    fresh: u64,
 ) -> Option<AppliedRowsSource> {
     Some(AppliedRowsSource {
         context,
         revision: ctrl.entries_revision_of(id)?,
         entry_count: ctrl.row_entry_count(id)?,
         view_indices: ctrl.row_view_indices_shared(id)?,
+        fresh,
     })
 }
 
@@ -145,60 +152,6 @@ fn set_vec_if_changed<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows:
         model.row_count() != rows.len() || model.iter().zip(rows.iter()).any(|(a, b)| a != *b);
     if dirty {
         model.set_vec(rows);
-    }
-}
-
-/// Aplica `rows` al modelo de forma INCREMENTAL cuando el largo cambió (alta/baja de
-/// archivos): en vez de `set_vec` (que re-crea TODOS los delegates del ListView), calcula
-/// el prefijo y el sufijo que ya coinciden y solo quita/inserta el tramo del medio que
-/// cambió. Los delegates fuera del tramo sobreviven (hover, scroll y el editor de rename
-/// intactos); el trabajo es O(cambio) en vez de O(todo el modelo). Caso típico: un archivo
-/// nuevo en una carpeta "viva" (Dropbox) → un insert, no un remontaje completo.
-#[cfg(test)]
-fn apply_rows_incremental<T: PartialEq + Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
-    apply_rows_incremental_by(model, rows, |left, right| left == right);
-}
-
-fn apply_rows_incremental_by<T: Clone + 'static>(
-    model: &VecModel<T>,
-    rows: Vec<T>,
-    same: impl Fn(&T, &T) -> bool,
-) {
-    let old_n = model.row_count();
-    let new_n = rows.len();
-    // Prefijo común (filas idénticas al inicio).
-    let mut prefix = 0;
-    while prefix < old_n.min(new_n)
-        && model
-            .row_data(prefix)
-            .as_ref()
-            .zip(rows.get(prefix))
-            .is_some_and(|(old, new)| same(old, new))
-    {
-        prefix += 1;
-    }
-    // Sufijo común (filas idénticas al final, sin solapar el prefijo).
-    let mut suffix = 0;
-    while suffix < (old_n - prefix).min(new_n - prefix)
-        && model
-            .row_data(old_n - 1 - suffix)
-            .as_ref()
-            .zip(rows.get(new_n - 1 - suffix))
-            .is_some_and(|(old, new)| same(old, new))
-    {
-        suffix += 1;
-    }
-    // El tramo del medio se reemplaza: quita lo viejo e inserta lo nuevo en `prefix`.
-    for _ in 0..(old_n - prefix - suffix) {
-        model.remove(prefix);
-    }
-    for (k, row) in rows
-        .into_iter()
-        .skip(prefix)
-        .take(new_n - prefix - suffix)
-        .enumerate()
-    {
-        model.insert(prefix + k, row);
     }
 }
 
@@ -533,12 +486,14 @@ pub(crate) fn build_sync(
                             };
                             let row_count = c.row_source_count(id);
                             let current_revision = c.entries_revision_of(id);
+                            let current_fresh = c.fresh_signature_of(id, hl_secs, hl_now);
                             let previous_source = match (row_context, current_revision) {
                                 (Some(context), Some(_)) => row_sources
                                     .borrow()
                                     .get(&id.0)
                                     .filter(|source| {
                                         source.context == context
+                                            && source.fresh == current_fresh
                                             && pm.rows.row_count() == source.view_indices.len()
                                     })
                                     .cloned(),
@@ -551,7 +506,7 @@ pub(crate) fn build_sync(
                             // final. Además exigimos que su revisión/rango coincidan y que los
                             // índices visibles ya aplicados sigan siendo un prefijo exacto. Así
                             // un sort que intercale archivos, un refresh o un filtro/contexto
-                            // distinto cae en la reconciliación normal.
+                            // distinto cae en la reconciliación por claves.
                             let appended_rows = previous_source.as_ref().and_then(|source| {
                                 let end =
                                     c.rows_appended_since(id, source.revision, source.entry_count)?;
@@ -571,25 +526,40 @@ pub(crate) fn build_sync(
                                     let _metric = crate::metrics::span("ui.rows_build");
                                     c.rows_at(id, &positions, hl_secs, hl_now)?
                                 };
-                                Some((view, plain_rows))
+                                Some((view, positions, plain_rows))
                             });
                             let changed_positions = previous_revision.and_then(|revision| {
-                                c.dirty_row_positions(id, revision, hl_secs, hl_now)
+                                c.dirty_row_positions(id, revision)
                                     .filter(|positions| positions.len() <= pm.rows.row_count() / 4)
                             });
+                            // Fila bajo edición inline (rename) en este panel, si la hay. Un
+                            // `set_row` sobre ella RE-MONTA el delegate y destruye el `LineEdit`
+                            // (se llevaba el texto tipeado: bug del "_" que borraba todo). Se
+                            // congela mientras se edita (el editor la tapa) y se reconcilia al
+                            // terminar vía `deferred_rename_rows`.
+                            let rename_row = c
+                                .rename_active
+                                .as_ref()
+                                .filter(|r| r.pane == id)
+                                .map(|r| r.pos);
+                            let keys_known = pm.rows.keys().is_some();
 
                             if deep_updated {
                                 // Ya se actualizaron solo las marcas afectadas.
-                            } else if let Some((view, plain_rows)) = appended_rows {
+                            } else if let Some((view, positions, plain_rows)) = appended_rows {
+                                let keys = if keys_known {
+                                    c.row_keys(id, Some(&positions), hl_secs, hl_now)
+                                } else {
+                                    None
+                                };
                                 let rows: Vec<RowData> = {
                                     let _metric = crate::metrics::span("ui.rows_convert");
                                     plain_rows.into_iter().map(to_row_data).collect()
                                 };
                                 {
                                     let _metric = crate::metrics::span("ui.rows_model_apply");
-                                    for row in rows {
-                                        pm.rows.push(row);
-                                    }
+                                    // Un solo aviso `row_added(i, n)` para todo el lote.
+                                    pm.rows.append(rows, keys);
                                 }
                                 if let (Some(context), Some(entry_count)) =
                                     (row_context, c.row_entry_count(id))
@@ -602,6 +572,7 @@ pub(crate) fn build_sync(
                                                 revision,
                                                 entry_count,
                                                 view_indices: view,
+                                                fresh: current_fresh,
                                             },
                                         );
                                     }
@@ -613,6 +584,11 @@ pub(crate) fn build_sync(
                                         let _metric = crate::metrics::span("ui.rows_build");
                                         c.rows_at(id, positions, hl_secs, hl_now)
                                     };
+                                    let keys = if keys_known {
+                                        c.row_keys(id, Some(positions), hl_secs, hl_now)
+                                    } else {
+                                        None
+                                    };
                                     if let Some(plain_rows) = plain_rows {
                                         rows_built = true;
                                         let rows: Vec<RowData> = {
@@ -620,20 +596,36 @@ pub(crate) fn build_sync(
                                             plain_rows.into_iter().map(to_row_data).collect()
                                         };
                                         let _metric = crate::metrics::span("ui.rows_model_apply");
-                                        for (position, row) in positions.iter().copied().zip(rows) {
-                                            if c.rename_active.as_ref().is_some_and(|rename| {
-                                                rename.pane == id && rename.pos == position
-                                            }) {
+                                        for (k, (position, row)) in
+                                            positions.iter().copied().zip(rows).enumerate()
+                                        {
+                                            let key = keys.as_ref().and_then(|keys| keys.get(k));
+                                            if rename_row == Some(position) {
+                                                if let Some(key) = key {
+                                                    pm.rows.set_key(
+                                                        position,
+                                                        crate::rows_model::RowKey {
+                                                            id: key.id,
+                                                            content: STALE_CONTENT,
+                                                        },
+                                                    );
+                                                }
+                                                deferred_rename_rows.borrow_mut().insert(id.0);
                                                 continue;
                                             }
                                             if pm
                                                 .rows
-                                                .row_data(position)
-                                                .as_ref()
-                                                .is_none_or(|old| !row_data_eq(old, &row))
+                                                .with_row(position, |old| !row_data_eq(old, &row))
+                                                .unwrap_or(false)
                                             {
-                                                pm.rows.set_row_data(position, row);
+                                                pm.rows.set_row(position, row);
                                             }
+                                            if let Some(key) = key {
+                                                pm.rows.set_key(position, *key);
+                                            }
+                                        }
+                                        if keys_known && keys.is_none() {
+                                            pm.rows.invalidate_keys();
                                         }
                                     }
                                 }
@@ -643,7 +635,7 @@ pub(crate) fn build_sync(
                                     if current_revision.is_some() {
                                         if let Some(context) = row_context {
                                             if let Some(source) =
-                                                applied_rows_source(&c, id, context)
+                                                applied_rows_source(&c, id, context, current_fresh)
                                             {
                                                 row_sources.borrow_mut().insert(id.0, source);
                                             } else {
@@ -657,76 +649,147 @@ pub(crate) fn build_sync(
                                     row_sources.borrow_mut().remove(&id.0);
                                 }
                             } else {
-                                let plain_rows = {
-                                    let _metric = crate::metrics::span("ui.rows_build");
-                                    c.rows_of(id, hl_secs, hl_now)
-                                };
-                                let rows: Vec<RowData> = {
-                                    let _metric = crate::metrics::span("ui.rows_convert");
-                                    plain_rows.into_iter().map(to_row_data).collect()
-                                };
-                                // Actualización POR FILA cuando el largo no cambió. `set_vec`
-                                // resetea el modelo ENTERO y el ListView re-crea todas sus filas;
-                                // en una carpeta "en movimiento" (Dropbox sincronizando → eventos
-                                // del watcher → resaltado fresco activo → la firma no cachea) eso
-                                // ocurría en CADA tick de 30 ms: la cadena de hover del puntero se
-                                // invalidaba constantemente y los eventos de RUEDA dejaban de
-                                // llegar al panel (scroll "muerto" justo en esas carpetas), además
-                                // de reconstruir cientos de ítems por tick. Con `set_row_data`
-                                // solo se notifican las filas que de verdad cambiaron: los ítems
-                                // del ListView sobreviven, el hover queda válido y la rueda sigue
-                                // viva. Si el LARGO cambió (alta/baja real de archivos), sí se
-                                // resetea entero — es el caso raro y ahí sí cambia la estructura.
-                                let _metric = crate::metrics::span("ui.rows_model_apply");
-                                if pm.rows.row_count() == rows.len() {
-                                    // Fila bajo edición inline (rename): NO tocarla aunque cambien
-                                    // sus datos (p. ej. expira su resaltado "fresco" o llega un
-                                    // evento del watcher). Un `set_row_data` sobre ella RE-MONTA el
-                                    // delegate y destruye el `LineEdit` del rename (se llevaba el
-                                    // texto tipeado: bug del "_" que borraba todo). La fila queda
-                                    // visualmente "congelada" mientras se edita, lo cual es invisible
-                                    // porque el editor la tapa. Con el draft en `rename-draft` el
-                                    // texto sobrevive incluso al `set_vec` (cambio de largo).
-                                    let rename_row = c
-                                        .rename_active
-                                        .as_ref()
-                                        .filter(|r| r.pane == id)
-                                        .map(|r| r.pos);
-                                    for (i, row) in rows.into_iter().enumerate() {
-                                        // Solo congelar si sigue siendo la misma fila: tras
-                                        // un reordenamiento con igual longitud, la posición
-                                        // nueva puede contener todavía otro nombre en el modelo.
-                                        if rename_row == Some(i) {
-                                            if let Some(old) = pm.rows.row_data(i) {
-                                                if old.name == row.name {
-                                                    if !row_data_eq(&old, &row) {
-                                                        deferred_rename_rows
-                                                            .borrow_mut()
-                                                            .insert(id.0);
-                                                    }
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                        if pm
-                                            .rows
-                                            .row_data(i)
-                                            .as_ref()
-                                            .is_none_or(|old| !row_data_eq(old, &row))
-                                        {
-                                            pm.rows.set_row_data(i, row);
+                                // Reconciliación por claves: identidad + contenido de cada fila
+                                // (enteros, sin cadenas). Solo se construyen (con su `VecModel` de
+                                // celdas) las filas que entran o cambian; altas y bajas se avisan
+                                // por tramo. Con 100k filas un alta en el medio, el vencimiento de
+                                // un resaltado o un cambio de selección cuestan O(n) en enteros +
+                                // O(filas cambiadas) en construcción, en vez de construir y
+                                // comparar las n filas.
+                                let applied_by_keys = 'keys: {
+                                    if !keys_known {
+                                        break 'keys false;
+                                    }
+                                    let Some(new_keys) = ({
+                                        let _metric = crate::metrics::span("ui.rows_keys");
+                                        c.row_keys(id, None, hl_secs, hl_now)
+                                    }) else {
+                                        break 'keys false;
+                                    };
+                                    let diff = {
+                                        let old = pm.rows.keys();
+                                        let Some(old) = old.as_ref() else {
+                                            break 'keys false;
+                                        };
+                                        diff_keys(old, &new_keys)
+                                    };
+                                    if diff.is_noop() {
+                                        // Mismas claves: nada que avisar (p. ej. vencido un
+                                        // resaltado de una ruta que no está en la vista).
+                                        break 'keys true;
+                                    }
+                                    let mut positions = diff.positions_to_build();
+                                    if let Some(rename_pos) = rename_row {
+                                        // La fila editada conserva su identidad (misma ruta) si
+                                        // figura entre los cambios: no se reconstruye.
+                                        if diff.updates.contains(&rename_pos) {
+                                            positions.retain(|&p| p != rename_pos);
+                                            deferred_rename_rows.borrow_mut().insert(id.0);
                                         }
                                     }
-                                } else {
-                                    // El largo cambió (alta/baja real): aplicación INCREMENTAL
-                                    // (prefijo/sufijo intactos; solo el tramo del medio se
-                                    // quita/inserta) en vez de un `set_vec` que re-creaba todos
-                                    // los delegates — ver `apply_rows_incremental`.
-                                    apply_rows_incremental_by(&pm.rows, rows, row_data_eq);
+                                    let built: Vec<(usize, RowData)> = if positions.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        let Some(plain_rows) = ({
+                                            let _metric = crate::metrics::span("ui.rows_build");
+                                            c.rows_at(id, &positions, hl_secs, hl_now)
+                                        }) else {
+                                            break 'keys false;
+                                        };
+                                        if plain_rows.len() != positions.len() {
+                                            break 'keys false;
+                                        }
+                                        let _metric = crate::metrics::span("ui.rows_convert");
+                                        positions
+                                            .iter()
+                                            .copied()
+                                            .zip(plain_rows.into_iter().map(to_row_data))
+                                            .collect()
+                                    };
+                                    let _metric = crate::metrics::span("ui.rows_model_apply");
+                                    pm.rows.apply_diff(&diff, built, new_keys);
+                                    true
+                                };
+                                if !applied_by_keys {
+                                    let plain_rows = {
+                                        let _metric = crate::metrics::span("ui.rows_build");
+                                        c.rows_of(id, hl_secs, hl_now)
+                                    };
+                                    let rows: Vec<RowData> = {
+                                        let _metric = crate::metrics::span("ui.rows_convert");
+                                        plain_rows.into_iter().map(to_row_data).collect()
+                                    };
+                                    // Actualización POR FILA cuando el largo no cambió. `set_vec`
+                                    // resetea el modelo ENTERO y el ListView re-crea todas sus
+                                    // filas; en una carpeta "en movimiento" (Dropbox) la cadena de
+                                    // hover del puntero se invalidaba y la RUEDA dejaba de llegar al
+                                    // panel. Con `set_row` solo se notifican las filas que de
+                                    // verdad cambiaron. Si el LARGO cambió, se reconcilia por tramo
+                                    // (prefijo/sufijo intactos, avisos `row_added/removed(i, n)`).
+                                    let _metric = crate::metrics::span("ui.rows_model_apply");
+                                    let mut frozen = None;
+                                    if pm.rows.row_count() == rows.len() {
+                                        for (i, row) in rows.into_iter().enumerate() {
+                                            // Solo congelar si sigue siendo la misma fila: tras
+                                            // un reordenamiento con igual longitud, la posición
+                                            // nueva puede contener todavía otro nombre.
+                                            if rename_row == Some(i)
+                                                && pm
+                                                    .rows
+                                                    .with_row(i, |old| old.name == row.name)
+                                                    .unwrap_or(false)
+                                            {
+                                                if !pm
+                                                    .rows
+                                                    .with_row(i, |old| row_data_eq(old, &row))
+                                                    .unwrap_or(true)
+                                                {
+                                                    deferred_rename_rows.borrow_mut().insert(id.0);
+                                                }
+                                                frozen = Some(i);
+                                                continue;
+                                            }
+                                            if pm
+                                                .rows
+                                                .with_row(i, |old| !row_data_eq(old, &row))
+                                                .unwrap_or(false)
+                                            {
+                                                pm.rows.set_row(i, row);
+                                            }
+                                        }
+                                    } else {
+                                        pm.rows.reconcile_by(rows, row_data_eq);
+                                    }
+                                    // Claves del estado recién aplicado (bajo el mismo préstamo de
+                                    // `ctrl`): habilitan la reconciliación por claves desde el
+                                    // próximo cambio. `None` en vista profunda o con filtro.
+                                    let keys = {
+                                        let _metric = crate::metrics::span("ui.rows_keys");
+                                        c.row_keys(id, None, hl_secs, hl_now)
+                                    };
+                                    pm.rows.set_keys(keys);
+                                    if let Some(i) = frozen {
+                                        if let Some(id_key) = pm
+                                            .rows
+                                            .keys()
+                                            .as_ref()
+                                            .and_then(|keys| keys.get(i).map(|k| k.id))
+                                        {
+                                            pm.rows.set_key(
+                                                i,
+                                                crate::rows_model::RowKey {
+                                                    id: id_key,
+                                                    content: STALE_CONTENT,
+                                                },
+                                            );
+                                        }
+                                    }
                                 }
                                 if let (Some(context), Some(count)) = (row_context, row_count) {
                                     if count == pm.rows.row_count() {
-                                        if let Some(source) = applied_rows_source(&c, id, context) {
+                                        if let Some(source) =
+                                            applied_rows_source(&c, id, context, current_fresh)
+                                        {
                                             row_sources.borrow_mut().insert(id.0, source);
                                         } else {
                                             row_sources.borrow_mut().remove(&id.0);
@@ -970,10 +1033,15 @@ pub(crate) fn build_sync(
             };
             ui.set_toolbar_path_favorite(path_target.is_some_and(|id| c.is_pane_dir_favorite(id)));
             ui.set_status(SharedString::from(c.status_line().as_str()));
-            // El asistente de sincronización trae hasta 5000 filas: se vuelcan en el modelo
-            // persistente para no re-crear la lista del modal en cada tick.
-            let mut sync_vm = c.sync_vm();
-            update_rows(&wm.sync_rows, sync_vm.rows.iter().collect());
+            // El asistente de sincronización trae hasta 5000 filas: se arman solo cuando cambia
+            // su huella (plan, marcas o idioma) y se vuelcan en el modelo persistente, en vez de
+            // construirlas y compararlas en cada tick con el modal abierto.
+            let mut sync_vm = c.sync_vm_header();
+            let sync_fingerprint = c.sync_rows_fingerprint();
+            if wm.sync_rows_fingerprint != sync_fingerprint {
+                update_rows(&wm.sync_rows, c.sync_rows_vm());
+                wm.sync_rows_fingerprint = sync_fingerprint;
+            }
             sync_vm.rows = model_rc(&wm.sync_rows);
             ui.set_sync_vm(sync_vm);
             ui.set_text_transform_vm(c.text_transform_vm());
@@ -1816,7 +1884,8 @@ mod tests {
             .into_iter()
             .map(to_row_data)
             .collect::<Vec<_>>();
-        let model = VecModel::from(rows);
+        let model = RowsModel::default();
+        model.append(rows, None);
         let mut previous = deep_presentation(&c, id, std::time::Instant::now()).unwrap();
         previous.row_count = model.row_count();
         let mut samples = Vec::new();
@@ -2234,7 +2303,10 @@ mod tests {
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
         pump(&adapter);
-        assert_eq!(ui.get_rename_draft().as_str(), "x.txty");
+        // El alta se avisa como `row_added` de UNA fila: el delegate del archivo editado
+        // sobrevive (solo se desplaza), así que el editor conserva también el cursor (antes se
+        // re-creaba y el cursor saltaba al final: "x.txty").
+        assert_eq!(ui.get_rename_draft().as_str(), "xy.txt");
 
         // Durante un listado parcial sin la fuente se conserva la vista previa; al volver
         // la ruta, se reconcilian los cambios y el editor vuelve a seguirla.
@@ -2254,7 +2326,7 @@ mod tests {
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "z".into() });
         pump(&adapter);
-        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyz");
+        assert_eq!(ui.get_rename_draft().as_str(), "xyz.txt");
         {
             let mut c = ctrl.borrow_mut();
             let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
@@ -2275,7 +2347,7 @@ mod tests {
         (sync.sync_rows)();
         pump(&adapter);
         assert_eq!(ui.get_rename_pos(), 2);
-        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyz");
+        assert_eq!(ui.get_rename_draft().as_str(), "xyz.txt");
         assert_eq!(
             models.borrow().per_pane.get(&id).unwrap().rows.row_count(),
             3
@@ -2319,7 +2391,7 @@ mod tests {
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "w".into() });
         pump(&adapter);
-        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyzw");
+        assert_eq!(ui.get_rename_draft().as_str(), "xyzw.txt");
         {
             let mut c = ctrl.borrow_mut();
             let files = c.ws.pane_mut(id).unwrap().files.as_mut().unwrap();
@@ -2353,7 +2425,7 @@ mod tests {
                 .name,
             "file.txt"
         );
-        assert_eq!(ui.get_rename_draft().as_str(), "x.txtyzw");
+        assert_eq!(ui.get_rename_draft().as_str(), "xyzw.txt");
         let cells_before: Vec<String> = models
             .borrow()
             .per_pane
@@ -2676,58 +2748,79 @@ mod tests {
         assert_eq!(batch.rows.row_data(1).unwrap().parent.as_str(), "carpeta");
     }
 
-    fn to_vec(model: &VecModel<i32>) -> Vec<i32> {
-        model.iter().collect()
+    /// Modelo de filas con un nombre por fila (las reconciliaciones comparan por nombre).
+    fn named_rows(names: &[i32]) -> Vec<RowData> {
+        names
+            .iter()
+            .map(|n| RowData {
+                name: SharedString::from(n.to_string()),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    fn model_of(names: &[i32]) -> RowsModel {
+        let model = RowsModel::default();
+        model.append(named_rows(names), None);
+        model
+    }
+
+    fn reconcile(model: &RowsModel, names: &[i32]) {
+        model.reconcile_by(named_rows(names), |a, b| a.name == b.name);
+    }
+
+    fn to_vec(model: &RowsModel) -> Vec<i32> {
+        model.iter().map(|r| r.name.parse().unwrap()).collect()
     }
 
     #[test]
     fn incremental_agrega_al_final_sin_tocar_prefijo() {
-        let m = VecModel::from(vec![1, 2, 3]);
-        apply_rows_incremental(&m, vec![1, 2, 3, 4]);
+        let m = model_of(&[1, 2, 3]);
+        reconcile(&m, &[1, 2, 3, 4]);
         assert_eq!(to_vec(&m), vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn incremental_inserta_en_el_medio() {
-        let m = VecModel::from(vec![1, 2, 4, 5]);
-        apply_rows_incremental(&m, vec![1, 2, 3, 4, 5]);
+        let m = model_of(&[1, 2, 4, 5]);
+        reconcile(&m, &[1, 2, 3, 4, 5]);
         assert_eq!(to_vec(&m), vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn incremental_quita_en_el_medio() {
-        let m = VecModel::from(vec![1, 2, 3, 4, 5]);
-        apply_rows_incremental(&m, vec![1, 2, 4, 5]);
+        let m = model_of(&[1, 2, 3, 4, 5]);
+        reconcile(&m, &[1, 2, 4, 5]);
         assert_eq!(to_vec(&m), vec![1, 2, 4, 5]);
     }
 
     #[test]
     fn incremental_quita_al_final() {
-        let m = VecModel::from(vec![1, 2, 3, 4]);
-        apply_rows_incremental(&m, vec![1, 2]);
+        let m = model_of(&[1, 2, 3, 4]);
+        reconcile(&m, &[1, 2]);
         assert_eq!(to_vec(&m), vec![1, 2]);
     }
 
     #[test]
     fn incremental_reemplazo_total() {
-        let m = VecModel::from(vec![1, 2, 3]);
-        apply_rows_incremental(&m, vec![7, 8, 9, 10]);
+        let m = model_of(&[1, 2, 3]);
+        reconcile(&m, &[7, 8, 9, 10]);
         assert_eq!(to_vec(&m), vec![7, 8, 9, 10]);
     }
 
     #[test]
     fn incremental_de_vacio_y_a_vacio() {
-        let m = VecModel::from(Vec::<i32>::new());
-        apply_rows_incremental(&m, vec![1, 2]);
+        let m = model_of(&[]);
+        reconcile(&m, &[1, 2]);
         assert_eq!(to_vec(&m), vec![1, 2]);
-        apply_rows_incremental(&m, vec![]);
+        reconcile(&m, &[]);
         assert_eq!(to_vec(&m), Vec::<i32>::new());
     }
 
     #[test]
     fn incremental_mismo_contenido_es_noop() {
-        let m = VecModel::from(vec![1, 2, 3]);
-        apply_rows_incremental(&m, vec![1, 2, 3]);
+        let m = model_of(&[1, 2, 3]);
+        reconcile(&m, &[1, 2, 3]);
         assert_eq!(to_vec(&m), vec![1, 2, 3]);
     }
 
@@ -2862,6 +2955,185 @@ mod tests {
         );
     }
 
+    /// Altas al final y en el medio con un rename inline abierto: el modelo avisa UN tramo por
+    /// alta (sin `reset` ni bajas), el editor conserva su borrador y su cursor (el delegate no
+    /// se re-crea) y la fila seleccionada sigue seleccionada.
+    #[test]
+    fn rename_y_seleccion_sobreviven_a_altas_avisadas_por_tramo() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+            Platform, WindowAdapter, WindowEvent,
+        };
+        use slint::private_unstable_api::re_exports::{
+            ModelChangeListener, ModelChangeListenerContainer,
+        };
+        use std::pin::Pin;
+        use std::time::{Duration, SystemTime};
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+        fn pump(adapter: &MinimalSoftwareWindow) {
+            for _ in 0..5 {
+                slint::platform::update_timers_and_animations();
+                adapter.draw_if_needed(|renderer| {
+                    let mut pixels = vec![slint::Rgb8Pixel::default(); 1280 * 800];
+                    renderer.render(&mut pixels, 1280);
+                });
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        #[derive(Default)]
+        struct Recorder(RefCell<Vec<String>>);
+        impl ModelChangeListener for Recorder {
+            fn row_changed(self: Pin<&Self>, row: usize) {
+                self.0.borrow_mut().push(format!("changed {row}"));
+            }
+            fn row_added(self: Pin<&Self>, index: usize, count: usize) {
+                self.0.borrow_mut().push(format!("added {index}+{count}"));
+            }
+            fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
+                self.0.borrow_mut().push(format!("removed {index}+{count}"));
+            }
+            fn reset(self: Pin<&Self>) {
+                self.0.borrow_mut().push("reset".into());
+            }
+        }
+        fn entry(root: &std::path::Path, name: &str) -> Entry {
+            Entry {
+                name: name.to_owned(),
+                path: root.join(name),
+                kind: EntryKind::File,
+                size: Some(1),
+                modified: Some(SystemTime::UNIX_EPOCH),
+                created: None,
+                hidden: false,
+                system: false,
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        ui.set_panes(ModelRc::from(models.borrow().panes.clone()));
+        ui.set_splits(ModelRc::from(models.borrow().splits.clone()));
+        ui.set_settings_vm(crate::vm_builders::build_settings_vm(&ctrl.borrow().config));
+        let area_of: Rc<dyn Fn() -> Rect> = Rc::new(|| Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 800.0,
+        });
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            area_of.clone(),
+        );
+        let ctx = crate::wire::WireCtx {
+            ctrl: ctrl.clone(),
+            sync_rows: sync.sync_rows.clone(),
+            sync_layout: sync.sync_layout.clone(),
+            start_timer: Rc::new(|| {}),
+            area_of,
+            palette_cmds: Rc::new(RefCell::new(Vec::new())),
+            palette_cmd_indices: Rc::new(RefCell::new(Vec::new())),
+            pending_eject: Rc::new(RefCell::new(None)),
+            pending_eject_panes: Rc::new(RefCell::new(Vec::new())),
+            pending_undo: Rc::new(RefCell::new(None)),
+        };
+        crate::callbacks_rename::wire_rename(&ui, &ctx);
+        (sync.sync_layout)();
+        let id = ctrl.borrow().active_id().unwrap();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries = (0..100)
+                .map(|i| entry(&root, &format!("f{i:03}.txt")))
+                .collect();
+            files.entries_changed();
+            files.select_single(3);
+        }
+        (sync.sync_rows)();
+        ui.show().unwrap();
+        adapter.set_size(slint::PhysicalSize::new(1280, 800));
+        pump(&adapter);
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            let request = c.take_rename_request().unwrap();
+            crate::vm_builders::show_rename_editor(&ui, &request);
+        }
+        pump(&adapter);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "x.txt");
+        assert_eq!(ui.get_rename_pos(), 3);
+
+        let rows = models.borrow().per_pane[&id].rows.clone();
+        let listener = Box::pin(ModelChangeListenerContainer::new(Recorder::default()));
+        rows.model_tracker()
+            .attach_peer(listener.as_ref().model_peer());
+
+        // (1) Alta al final (lote de listado): un solo `row_added` del tramo.
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries.push(entry(&root, "g000.txt"));
+            files.entries.push(entry(&root, "g001.txt"));
+            files.entries_appended(100);
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(*listener.0.borrow(), ["added 100+2"]);
+        assert_eq!(ui.get_rename_pos(), 3);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "y".into() });
+        pump(&adapter);
+        assert_eq!(
+            ui.get_rename_draft().as_str(),
+            "xy.txt",
+            "el editor conserva borrador y cursor"
+        );
+        assert!(rows.row_data(3).unwrap().selected);
+
+        // (2) Alta en el medio, DESPUÉS de la fila editada: un `row_added` de una fila; nada
+        // antes de ella se toca.
+        listener.0.borrow_mut().clear();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries.push(entry(&root, "f050a.txt"));
+            files.entries_appended(102);
+        }
+        (sync.sync_rows)();
+        pump(&adapter);
+        assert_eq!(*listener.0.borrow(), ["added 51+1"]);
+        assert_eq!(rows.row_count(), 103);
+        assert_eq!(rows.row_data(51).unwrap().name, "f050a.txt");
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "z".into() });
+        pump(&adapter);
+        assert_eq!(ui.get_rename_draft().as_str(), "xyz.txt");
+        let row = rows.row_data(3).unwrap();
+        assert!(row.selected && row.name == "f003.txt");
+    }
+
     /// Dos `sync_rows` seguidos sin cambios de estado deben dejar los MISMOS modelos (mismo
     /// puntero) y no emitir ninguna notificación: un modelo nuevo por tick hacía que Slint
     /// re-creara delegates y repintara overlays de ventana completa (100 % de CPU en idle).
@@ -2941,6 +3213,53 @@ mod tests {
         assert!(ctrl.borrow().has_purpose(PanePurpose::Inspector));
         assert!(ctrl.borrow().has_purpose(PanePurpose::Preview));
 
+        // Resaltado fresco VIGENTE en el panel activo: mientras dura no debe haber trabajo por
+        // fila (antes la firma era `None` y cada tick reconstruía todas las filas).
+        let active = ctrl.borrow().active_id().unwrap();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.pane_mut(active).unwrap().files.as_mut().unwrap();
+            for name in ["b.txt", "fresco.txt"] {
+                files.entries.push(naygo_core::fs_model::Entry {
+                    name: name.into(),
+                    path: root.join(name),
+                    kind: naygo_core::fs_model::EntryKind::File,
+                    size: Some(1),
+                    modified: None,
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+            }
+            files.entries_changed();
+            c.watchers.mark_fresh(
+                active.0,
+                vec![root.join("fresco.txt")],
+                std::time::Instant::now(),
+            );
+        }
+        (sync.sync_rows)();
+        let file_rows: Vec<(PaneId, ModelRc<RowData>)> = {
+            let c = ctrl.borrow();
+            let m = models.borrow();
+            m.pane_ids
+                .iter()
+                .filter(|id| c.purpose_of(**id) == Some(PanePurpose::Files))
+                .map(|id| (*id, ModelRc::from(m.per_pane[id].rows.clone())))
+                .collect()
+        };
+        assert!(
+            file_rows
+                .iter()
+                .find(|(id, _)| *id == active)
+                .unwrap()
+                .1
+                .iter()
+                .any(|row| row.name == "fresco.txt" && row.highlight),
+            "la fila fresca se pinta resaltada"
+        );
+        let row_listeners: Vec<_> = file_rows.iter().map(|(_, rows)| listen(rows)).collect();
+
         macro_rules! snapshot {
             () => {
                 (
@@ -3013,6 +3332,13 @@ mod tests {
             0,
             "sync_rows sin cambios re-asignó filas del modelo de paneles"
         );
+        for listener in &row_listeners {
+            assert_eq!(
+                listener.0.get(),
+                0,
+                "con un resaltado vigente, sync_rows sin cambios notificó filas de un panel"
+            );
+        }
         let panes_after: Vec<PaneVm> = models.borrow().panes.iter().collect();
         assert_eq!(panes_before.len(), panes_after.len());
         for (left, right) in panes_before.iter().zip(&panes_after) {
@@ -3271,6 +3597,8 @@ mod tests {
         for count in [10_000usize, 100_000] {
             {
                 let mut workspace = ctrl.borrow_mut();
+                // Sin resaltados de la pasada anterior: cada tamaño parte del mismo estado.
+                workspace.watchers.prune(0, Instant::now());
                 let files = workspace.ws.active_files_mut().unwrap();
                 files.entries.clear();
                 files.entries_changed();
@@ -3337,6 +3665,46 @@ mod tests {
             (sync.sync_rows)();
             let append_ms = start.elapsed().as_secs_f64() * 1_000.0;
 
+            // Alta que el orden por nombre intercala en el medio: reconciliación por claves.
+            let middle_name = format!("entry-{:06}a.dat", count / 2);
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let files = workspace.ws.active_files_mut().unwrap();
+                files.entries.push(Entry {
+                    name: middle_name.clone(),
+                    path: root.join(&middle_name),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                });
+                files.entries_appended(count + 1);
+            }
+            let start = Instant::now();
+            (sync.sync_rows)();
+            let middle_insert_ms = start.elapsed().as_secs_f64() * 1_000.0;
+
+            // Empieza un resaltado fresco (lo que hace el watcher tras el alta) y luego ticks
+            // sin cambios mientras dura: antes cada uno reconstruía las n filas.
+            {
+                let mut workspace = ctrl.borrow_mut();
+                let id = workspace.active_id().unwrap();
+                workspace
+                    .watchers
+                    .mark_fresh(id.0, vec![root.join(&middle_name)], Instant::now());
+            }
+            let start = Instant::now();
+            (sync.sync_rows)();
+            let fresh_start_ms = start.elapsed().as_secs_f64() * 1_000.0;
+            let mut fresh_noop_samples = Vec::with_capacity(5);
+            for _ in 0..5 {
+                let start = Instant::now();
+                (sync.sync_rows)();
+                fresh_noop_samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+            }
+
             // Pide un frame explícito en cada pasada para separar rasterizado software del
             // tiempo de sincronización de modelos medido arriba. El buffer/tamaño y la ventana
             // de prueba son iguales para 10k y 100k; la UI virtualiza las filas fuera del viewport.
@@ -3353,8 +3721,9 @@ mod tests {
             let render_median_ms = median_ms(render_samples);
 
             println!(
-                "W-07/W-10C software rows={count} initial_ms={initial_ms:.3} no_op_median_ms={:.3} one_row_update_ms={one_row_update_ms:.3} append_ms={append_ms:.3} render_median_ms={render_median_ms:.3}",
+                "W-07/W-10C software rows={count} initial_ms={initial_ms:.3} no_op_median_ms={:.3} one_row_update_ms={one_row_update_ms:.3} append_ms={append_ms:.3} middle_insert_ms={middle_insert_ms:.3} fresh_start_ms={fresh_start_ms:.3} fresh_noop_median_ms={:.3} render_median_ms={render_median_ms:.3}",
                 median_ms(no_op_samples),
+                median_ms(fresh_noop_samples),
             );
         }
         ui.hide().unwrap();
