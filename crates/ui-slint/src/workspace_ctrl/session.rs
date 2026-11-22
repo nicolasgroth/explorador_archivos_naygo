@@ -437,6 +437,7 @@ impl WorkspaceCtrl {
         f.preserve_context_for_listing();
         let mut changes = naygo_core::listing::DirEventApply::default();
         f.group_new_at_end = group_new_at_end;
+        let len_before = f.entries.len();
         for event in &filtered {
             match event {
                 DirEvent::Renamed { from, to } if f.rename_entry(from, to) => {
@@ -466,11 +467,20 @@ impl WorkspaceCtrl {
                 .all(|event| matches!(event, DirEvent::Modified(_)))
             && f.table.filters.is_empty()
             && matches!(f.sort.key, SortKey::Name | SortKey::Extension);
+        // Un lote solo de altas agrega al final de `entries` (`apply_dir_events_*` hace `push`):
+        // avisarlo como append deja que la vista intercale las nuevas sin reordenar todo el
+        // listado y que la UI reconcilie solo esas filas.
+        let only_appended = filtered
+            .iter()
+            .all(|event| matches!(event, DirEvent::Created(_)))
+            && f.entries.len() > len_before;
         if can_refresh_rows_only {
             let mut paths = changes.row_only_modified;
             paths.sort();
             paths.dedup();
             f.entries_rows_changed(paths);
+        } else if only_appended {
+            f.entries_appended(len_before);
         } else {
             f.entries_changed();
         }

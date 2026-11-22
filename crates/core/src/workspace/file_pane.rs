@@ -88,6 +88,9 @@ pub struct FilePaneState {
     entries_append_delta: std::cell::RefCell<Option<EntriesAppendDelta>>,
     /// Revisión de selección/foco para evitar hashear selecciones masivas en cada frame.
     presentation_revision: std::cell::Cell<u64>,
+    /// Cantidad de carpetas en `entries`, calculada para una revisión (la pide el footer en
+    /// cada tick; recorrer 100k entries por tick no aporta nada si no cambiaron).
+    dir_count_cache: std::cell::Cell<Option<(u64, usize, usize)>>,
     /// Contador de recomputes de la vista (solo para tests; mide aciertos del caché).
     #[cfg(test)]
     view_recomputes: std::cell::Cell<u32>,
@@ -148,6 +151,7 @@ impl Clone for FilePaneState {
                 self.entries_append_delta.borrow().clone(),
             ),
             presentation_revision: std::cell::Cell::new(self.presentation_revision.get()),
+            dir_count_cache: std::cell::Cell::new(None),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
         }
@@ -206,6 +210,7 @@ impl FilePaneState {
             entries_rows_delta: std::cell::RefCell::new(None),
             entries_append_delta: std::cell::RefCell::new(None),
             presentation_revision: std::cell::Cell::new(1),
+            dir_count_cache: std::cell::Cell::new(None),
             #[cfg(test)]
             view_recomputes: std::cell::Cell::new(0),
         }
@@ -228,6 +233,16 @@ impl FilePaneState {
     /// conservan el mismo inicio para que un tick atrasado pueda recuperar el rango agregado.
     /// La UI aún valida contexto y orden antes de aplicar el append visible.
     pub fn entries_appended(&self, start: usize) {
+        // Vista vigente para las `start` entradas previas, si la hay: se extiende insertando solo
+        // las nuevas (ver `merge_appended_view`) en vez de reordenar todo el listado.
+        let previous_view = self
+            .view_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| {
+                start <= self.entries.len() && cache.signature == self.view_signature_for_len(start)
+            })
+            .map(|cache| Arc::clone(&cache.indices));
         let from_revision = self.entries_revision.get();
         let to_revision = from_revision.wrapping_add(1);
         self.entries_revision.set(to_revision);
@@ -250,7 +265,47 @@ impl FilePaneState {
                 end,
             });
         }
-        *self.view_cache.borrow_mut() = None;
+        drop(delta);
+        let merged = previous_view.and_then(|old| self.merge_appended_view(&old, start));
+        *self.view_cache.borrow_mut() = merged.map(|indices| ViewCache {
+            signature: self.view_signature(),
+            indices: indices.into(),
+        });
+    }
+
+    /// Vista tras agregar `entries[start..]`, a partir de la vista `old` de las entradas previas.
+    /// Equivale a `compute_view_indices` (orden estable: ante empate, el índice menor primero, y
+    /// las nuevas tienen índices mayores que todas las previas): filtra y ordena solo las nuevas
+    /// y las intercala por búsqueda binaria. Con 100k filas y un alta, O(n) en copia de enteros en
+    /// vez de O(n log n) comparaciones de nombres. `None` si el orden depende de estado que no
+    /// cubre la búsqueda binaria (renombres pendientes o "nuevos al final" con llegadas).
+    fn merge_appended_view(&self, old: &[usize], start: usize) -> Option<Vec<usize>> {
+        if !self.renamed_sort_keys.is_empty()
+            || (self.group_new_at_end && !self.arrival_order.is_empty())
+        {
+            return None;
+        }
+        let sort = self.sort;
+        let mut added: Vec<usize> = (start..self.entries.len())
+            .filter(|&i| self.view_allows(&self.entries[i]))
+            .collect();
+        added.sort_by(|&a, &b| crate::sort::cmp_entries(&self.entries[a], &self.entries[b], &sort));
+        let mut merged = Vec::with_capacity(old.len() + added.len());
+        let mut rest = old;
+        for &index in &added {
+            let entry = &self.entries[index];
+            let cut = rest.partition_point(|&previous| {
+                crate::sort::cmp_entries(&self.entries[previous], entry, &sort)
+                    != std::cmp::Ordering::Greater
+            });
+            merged.extend_from_slice(&rest[..cut]);
+            rest = &rest[cut..];
+            merged.push(index);
+        }
+        merged.extend_from_slice(rest);
+        #[cfg(test)]
+        self.view_recomputes.set(self.view_recomputes.get() + 1);
+        Some(merged)
     }
 
     /// Notifica modificaciones de contenido en entradas con identidad, visibilidad y orden
@@ -315,6 +370,20 @@ impl FilePaneState {
                     && expected_start < delta.end
             })
             .map(|delta| delta.end)
+    }
+
+    /// Cantidad de carpetas en `entries` (todas, no solo las visibles). Se recalcula solo si
+    /// cambió la revisión o el largo de `entries`.
+    pub fn dir_count(&self) -> usize {
+        let key = (self.entries_revision.get(), self.entries.len());
+        if let Some((revision, len, count)) = self.dir_count_cache.get() {
+            if (revision, len) == key {
+                return count;
+            }
+        }
+        let count = self.entries.iter().filter(|e| e.is_dir()).count();
+        self.dir_count_cache.set(Some((key.0, key.1, count)));
+        count
     }
 
     pub fn presentation_changed(&self) {
@@ -533,7 +602,7 @@ impl FilePaneState {
         if self.visual_filter == filter {
             return;
         }
-        let old_view = self.view_indices();
+        let old_view = self.view_indices_shared();
         let path_at = |pos: Option<usize>| {
             pos.and_then(|p| old_view.get(p))
                 .and_then(|&real| self.entries.get(real))
@@ -548,7 +617,7 @@ impl FilePaneState {
             .collect();
 
         self.visual_filter = filter;
-        let new_view = self.view_indices();
+        let new_view = self.view_indices_shared();
         let position_of = |path: &PathBuf| {
             new_view.iter().position(|&real| {
                 self.entries
@@ -579,7 +648,7 @@ impl FilePaneState {
     /// tras esconder filas con el menú "ojo"). El foco se clampa al último válido; la
     /// selección descarta posiciones que ya no existen.
     fn clamp_selection_to_view(&mut self) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             self.focused = None;
             self.selected.clear();
@@ -602,9 +671,15 @@ impl FilePaneState {
     /// Firma O(1) de los inputs que determinan la vista. Si no cambia entre llamadas, el
     /// caché es válido. Los cambios estructurales del orden por ruta invalidan entries por revisión.
     fn view_signature(&self) -> u64 {
+        self.view_signature_for_len(self.entries.len())
+    }
+
+    /// Firma de la vista como si `entries` tuviera `len` elementos (para validar la vista previa
+    /// a un append).
+    fn view_signature_for_len(&self, len: usize) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.entries.len().hash(&mut h);
+        len.hash(&mut h);
         // SortSpec deriva Hash: cubre key, ascending y dirs_first.
         self.sort.hash(&mut h);
         // Filtros: el BTreeMap es ordenado, así que el recorrido (y el hash) es estable.
@@ -674,20 +749,11 @@ impl FilePaneState {
     /// clave: así la VISTA, y por tanto las posiciones de selección/foco/teclado, comparten
     /// EXACTAMENTE el conjunto que se pinta y nunca quedan desfasadas por filas ocultas.
     fn compute_view_indices(&self, new_items_at_end: bool) -> Vec<usize> {
-        let has_col_filters = !self.table.filters.is_empty();
         let mut idx: Vec<usize> = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.visibility.allows(e))
-            .filter(|(_, e)| !self.hidden_paths.contains(&e.path))
-            .filter(|(_, e)| !has_col_filters || filter_matches(e, &self.table.filters))
-            .filter(|(_, e)| {
-                self.visual_filter
-                    .as_deref()
-                    .map(|needle| crate::text_match::contains_folded(&e.name, needle))
-                    .unwrap_or(true)
-            })
+            .filter(|(_, e)| self.view_allows(e))
             .map(|(i, _)| i)
             .collect();
         let sort = self.sort;
@@ -722,10 +788,23 @@ impl FilePaneState {
         idx
     }
 
+    /// ¿La entrada entra a la vista? Visibilidad, ocultas por comparación, filtros de columna y
+    /// filtro visual por tipeo, en AND. Única definición para el cálculo completo y el append.
+    fn view_allows(&self, e: &Entry) -> bool {
+        self.visibility.allows(e)
+            && !self.hidden_paths.contains(&e.path)
+            && (self.table.filters.is_empty() || filter_matches(e, &self.table.filters))
+            && self
+                .visual_filter
+                .as_deref()
+                .map(|needle| crate::text_match::contains_folded(&e.name, needle))
+                .unwrap_or(true)
+    }
+
     /// La entrada con foco, donde `focused` es una posición en la VISTA (no en
     /// `entries`). Devuelve la entry real correspondiente.
     pub fn focused_view_entry(&self) -> Option<&Entry> {
-        let view = self.view_indices();
+        let view = self.view_indices_shared();
         let pos = self.focused?;
         view.get(pos).and_then(|&real| self.entries.get(real))
     }
@@ -733,13 +812,13 @@ impl FilePaneState {
     /// La entrada en la posición de VISTA `pos` (filtrada+ordenada). `None` si está fuera de
     /// rango. Reusado por el rename inline para resolver la fila a renombrar.
     pub fn view_entry_at(&self, pos: usize) -> Option<&Entry> {
-        let view = self.view_indices();
+        let view = self.view_indices_shared();
         view.get(pos).and_then(|&real| self.entries.get(real))
     }
 
     /// Cuántas filas tiene la vista actual (filtrada). Para acotar el avance del rename en cadena.
     pub fn view_len(&self) -> usize {
-        self.view_indices().len()
+        self.view_indices_shared().len()
     }
 
     /// Navega a una carpeta nueva: registra en el historial y limpia entries/foco.
@@ -846,7 +925,7 @@ impl FilePaneState {
     }
 
     fn capture_current_nav_context(&mut self) {
-        let view = self.view_indices();
+        let view = self.view_indices_shared();
         let path_at = |position: usize| {
             view.get(position)
                 .and_then(|real| self.entries.get(*real))
@@ -877,7 +956,7 @@ impl FilePaneState {
             self.table = table;
         }
         self.visual_filter = context.visual_filter;
-        let view = self.view_indices();
+        let view = self.view_indices_shared();
         let positions = (context.selected_paths.len() > 8).then(|| {
             view.iter()
                 .enumerate()
@@ -922,7 +1001,7 @@ impl FilePaneState {
 
     /// Posición válida en la vista (clamp a [0, len-1]); None si la vista está vacía.
     fn clamp_pos(&self, pos: usize) -> Option<usize> {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             None
         } else {
@@ -964,7 +1043,7 @@ impl FilePaneState {
             self.select_single(p);
             return;
         };
-        let anchor = anchor.min(self.view_indices().len().saturating_sub(1));
+        let anchor = anchor.min(self.view_indices_shared().len().saturating_sub(1));
         let (lo, hi) = if anchor <= p {
             (anchor, p)
         } else {
@@ -978,7 +1057,7 @@ impl FilePaneState {
 
     /// Rectángulo (rubber-band): reemplaza con `positions`, o suma si `additive`.
     pub fn select_rect(&mut self, positions: &[usize], additive: bool) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         let valid: Vec<usize> = positions.iter().copied().filter(|&p| p < len).collect();
         if additive {
             for p in &valid {
@@ -998,7 +1077,7 @@ impl FilePaneState {
 
     /// Selecciona toda la vista.
     pub fn select_all(&mut self) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         self.selected = (0..len).collect();
         if len > 0 {
             self.focused = Some(len - 1);
@@ -1018,7 +1097,7 @@ impl FilePaneState {
     /// Mueve el foco `delta` (teclado). Con `extend` (Shift) extiende el rango desde el
     /// ancla; sin extend es selección simple del nuevo foco.
     pub fn move_focus_extend(&mut self, delta: isize, extend: bool) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             return;
         }
@@ -1038,7 +1117,7 @@ impl FilePaneState {
     /// `extend` (Shift) extiende el rango desde el ancla; sin extend, selección simple
     /// del nuevo foco. Helper común de la navegación por bloques (página/inicio/fin).
     fn focus_to(&mut self, new: usize, extend: bool) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             return;
         }
@@ -1056,7 +1135,7 @@ impl FilePaneState {
     /// Mueve el foco `delta_pages` páginas (cada página = `rows_per_page` filas). Con
     /// `extend` (Shift+AvPag/RePag) extiende el rango desde el ancla. Clampa a la vista.
     pub fn focus_page(&mut self, delta_pages: isize, rows_per_page: usize, extend: bool) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             return;
         }
@@ -1073,7 +1152,7 @@ impl FilePaneState {
 
     /// Foco al último ítem de la vista (Fin/End). Con `extend`, extiende desde el ancla.
     pub fn focus_end(&mut self, extend: bool) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len > 0 {
             self.focus_to(len - 1, extend);
         }
@@ -1082,7 +1161,7 @@ impl FilePaneState {
     /// Mueve el foco `delta` SIN tocar la selección ni el ancla (Ctrl+↑/↓, estilo
     /// Explorer): solo viaja el cursor punteado por la vista, clampado.
     pub fn move_focus_keep(&mut self, delta: isize) {
-        let len = self.view_indices().len();
+        let len = self.view_indices_shared().len();
         if len == 0 {
             return;
         }
@@ -1749,6 +1828,88 @@ mod tests {
         let mut p = FilePaneState::new(PathBuf::from("C:/"));
         p.entries = (0..n).map(|i| mk(&format!("f{i}.txt"))).collect();
         p
+    }
+
+    /// El append extiende la vista vigente por búsqueda binaria; debe dar EXACTAMENTE lo mismo
+    /// que recalcularla (orden, empates estables, carpetas primero, ocultos y orden inverso).
+    #[test]
+    fn append_intercala_la_vista_igual_que_recalcularla() {
+        use crate::fs_model::{Entry, EntryKind, SortKey};
+        let mk = |name: &str, kind: EntryKind, size: u64, hidden: bool| Entry {
+            name: name.into(),
+            path: PathBuf::from("C:/x").join(name),
+            kind,
+            size: Some(size),
+            modified: None,
+            created: None,
+            hidden,
+            system: false,
+        };
+        let names = [
+            "b.txt", "A.txt", "c", "a.txt", "Zeta", "m.md", "B.TXT", "ñ.txt", "_x", "d", "k.bin",
+        ];
+        for (key, ascending, dirs_first) in [
+            (SortKey::Name, true, true),
+            (SortKey::Name, false, false),
+            (SortKey::Size, true, true),
+            (SortKey::Extension, false, true),
+        ] {
+            let mut pane = FilePaneState::new(PathBuf::from("C:/x"));
+            pane.sort = SortSpec {
+                key,
+                ascending,
+                dirs_first,
+            };
+            for (i, name) in names.iter().enumerate() {
+                let start = pane.entries.len();
+                // Tamaños repetidos fuerzan empates; algunas carpetas y una oculta.
+                let kind = if i % 4 == 2 {
+                    EntryKind::Directory
+                } else {
+                    EntryKind::File
+                };
+                pane.entries.push(mk(name, kind, (i % 3) as u64, i == 5));
+                if i % 3 == 0 {
+                    pane.entries
+                        .push(mk(&format!("extra{i}.txt"), EntryKind::File, 1, false));
+                }
+                // Materializar la vista previa para que el append la extienda.
+                if i % 2 == 0 {
+                    let _ = pane.view_indices_shared();
+                }
+                pane.entries_appended(start);
+                let incremental = pane.view_indices();
+                assert_eq!(
+                    incremental,
+                    pane.compute_view_indices(pane.group_new_at_end),
+                    "{key:?} asc={ascending} dirs={dirs_first} tras {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn append_no_reordena_si_hay_vista_valida() {
+        let mut pane = pane_n(1000);
+        pane.entries_changed();
+        let _ = pane.view_indices_shared();
+        let before = pane.view_recomputes_for_test();
+        pane.entries.push(crate::fs_model::Entry {
+            name: "f500a.txt".into(),
+            path: PathBuf::from("f500a.txt"),
+            kind: crate::fs_model::EntryKind::File,
+            size: Some(1),
+            modified: None,
+            created: None,
+            hidden: false,
+            system: false,
+        });
+        pane.entries_appended(1000);
+        // La vista quedó lista sin pasar por el ordenamiento completo.
+        assert!(pane.cached_view_indices_shared().is_some());
+        assert_eq!(pane.view_recomputes_for_test(), before + 1);
+        let view = pane.view_indices();
+        assert_eq!(view, pane.compute_view_indices(false));
     }
 
     #[test]

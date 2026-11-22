@@ -1297,7 +1297,7 @@ fn footer_inputs_of(
     files: &FilePaneState,
 ) -> (naygo_core::footer::FooterData, Option<std::path::PathBuf>) {
     // Selección: `files.selected` son posiciones de VISTA; se mapean a `entries` vía la vista.
-    let view = files.view_indices();
+    let view = files.view_indices_shared();
     let sel_count = files.selected.len();
     let total_count = view.len();
     let marked_bytes: u64 = files
@@ -1308,7 +1308,7 @@ fn footer_inputs_of(
         .filter_map(|e| e.size)
         .sum();
     // Conteo de archivos/carpetas sobre TODO el listado (no solo la vista filtrada).
-    let dir_count = files.entries.iter().filter(|e| e.is_dir()).count();
+    let dir_count = files.dir_count();
     let file_count = files.entries.len() - dir_count;
     let item_count = file_count + dir_count;
     // Windows obtiene la raíz de unidad (p. ej. `C:\`). En Linux se pasa la carpeta actual:
