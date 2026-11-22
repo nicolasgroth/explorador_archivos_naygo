@@ -7,7 +7,7 @@ use crate::{models::Models, workspace_ctrl::WorkspaceCtrl, AppWindow};
 use slint::ComponentHandle;
 use slint::Model;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -26,6 +26,7 @@ pub(crate) fn build(
         let models = models.clone();
         let ui = ui.clone();
         let weak_timer = Rc::downgrade(&timer);
+        let pending = Rc::new(Cell::new(false));
         timer.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(16),
@@ -49,32 +50,64 @@ pub(crate) fn build(
                 if !visible {
                     c.preview.set_visible(false, now);
                 }
-                // Si `models` está prestado (reentrada del loop modal de arrastre), el frame nuevo
-                // ya avanzó la revisión de la vista y el próximo `sync_rows` lo publica.
+                // Si `models` está prestado (reentrada del loop modal de arrastre), el frame no se
+                // publica en este tick: queda pendiente y el timer sigue vivo para reintentarlo,
+                // igual que cuando `ctrl` está prestado (arriba). Sin esto, el último frame (p. ej.
+                // el mensaje que termina la animación) quedaba sin publicar hasta otra interacción,
+                // porque el tick principal puede estar dormido.
                 if c.preview.poll_animation(now) {
-                    if let Ok(mut m) = models.try_borrow_mut() {
-                        let preview = m.preview_vm.vm(&c);
-                        for (index, id) in m.pane_ids.iter().enumerate() {
-                            if c.ws.pane(*id).is_some_and(|p| {
-                                p.purpose == naygo_core::workspace::PanePurpose::Preview
-                            }) {
-                                if let Some(mut pane) = m.panes.row_data(index) {
-                                    if !crate::persistent_models::preview_vm_eq(
-                                        &pane.preview,
-                                        &preview,
-                                    ) {
-                                        pane.preview = preview.clone();
-                                        m.panes.set_row_data(index, pane);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    pending.set(true);
                 }
-                if !c.preview.animation_tick_needed() {
+                if pending.get() && publish_preview(&c, &models) {
+                    pending.set(false);
+                }
+                if !pending.get() && !c.preview.animation_tick_needed() {
                     timer.stop();
                 }
             },
         );
     })
+}
+
+/// Publica el VM de vista previa en los paneles Preview. Devuelve `false` si `models` está
+/// prestado y hay que reintentar en el próximo tick.
+fn publish_preview(c: &WorkspaceCtrl, models: &RefCell<Models>) -> bool {
+    let Ok(mut m) = models.try_borrow_mut() else {
+        return false;
+    };
+    let preview = m.preview_vm.vm(c);
+    for (index, id) in m.pane_ids.iter().enumerate() {
+        if c.ws
+            .pane(*id)
+            .is_some_and(|p| p.purpose == naygo_core::workspace::PanePurpose::Preview)
+        {
+            if let Some(mut pane) = m.panes.row_data(index) {
+                if !crate::persistent_models::preview_vm_eq(&pane.preview, &preview) {
+                    pane.preview = preview.clone();
+                    m.panes.set_row_data(index, pane);
+                }
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publicar_con_models_prestado_pide_reintento() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctrl = WorkspaceCtrl::new_in(temp.path().to_path_buf(), temp.path().join("settings"));
+        let models = RefCell::new(Models::new());
+        {
+            let _busy = models.borrow();
+            assert!(
+                !publish_preview(&ctrl, &models),
+                "con `models` prestado el frame queda pendiente"
+            );
+        }
+        assert!(publish_preview(&ctrl, &models));
+    }
 }

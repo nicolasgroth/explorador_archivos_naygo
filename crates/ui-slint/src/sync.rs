@@ -3025,6 +3025,108 @@ mod tests {
         }
     }
 
+    /// Contraparte del test anterior: con modelos persistentes, un cambio REAL debe seguir
+    /// llegando a la UI. (a) una vista previa nueva (nueva revisión) se publica en el panel
+    /// Preview; (b) con la ayuda abierta, cambiar el idioma reconstruye sus filas.
+    #[test]
+    fn sync_rows_propaga_cambios_reales_de_preview_y_ayuda() {
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{software_renderer::MinimalSoftwareWindow, Platform, WindowAdapter};
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let adapter = MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+        );
+        slint::platform::set_platform(Box::new(Headless(adapter))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        ctrl.borrow_mut().apply_first_run_layout();
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+        );
+        (sync.sync_layout)();
+        (sync.sync_rows)();
+
+        // (a) Vista previa: nueva revisión de la vista → el PaneVm del panel Preview cambia.
+        let preview_index = {
+            let c = ctrl.borrow();
+            let m = models.borrow();
+            m.pane_ids
+                .iter()
+                .position(|id| c.purpose_of(*id) == Some(PanePurpose::Preview))
+                .expect("la disposición clásica trae un panel Vista previa")
+        };
+        let preview_of = |models: &Rc<RefCell<Models>>| {
+            models
+                .borrow()
+                .panes
+                .row_data(preview_index)
+                .unwrap()
+                .preview
+        };
+        let before = preview_of(&models);
+        let revision = ctrl.borrow().preview.view_revision();
+        ctrl.borrow_mut()
+            .preview
+            .show_message_for_test("vista nueva");
+        assert_ne!(ctrl.borrow().preview.view_revision(), revision);
+        (sync.sync_rows)();
+        let after = preview_of(&models);
+        assert_eq!(after.mode, 3, "la vista de mensaje debe llegar al panel");
+        assert_eq!(after.message.as_str(), "vista nueva");
+        assert!(
+            before.hl_lines != after.hl_lines,
+            "la base nueva debe tener su propio modelo de líneas"
+        );
+
+        // (b) Ayuda abierta + cambio de idioma → filas reconstruidas en el idioma nuevo.
+        ctrl.borrow_mut().help_open = true;
+        (sync.sync_rows)();
+        let labels = |ui: &AppWindow| {
+            ui.get_help_shortcuts()
+                .iter()
+                .map(|row| row.label.to_string())
+                .collect::<Vec<_>>()
+        };
+        let first = labels(&ui);
+        assert!(!first.is_empty(), "al abrir la ayuda se arman sus filas");
+        let current = ctrl.borrow().config.settings.language.0.clone();
+        let target = if current == "en" { "es" } else { "en" };
+        assert!(ctrl
+            .borrow_mut()
+            .config
+            .set_language(naygo_core::i18n::LangId(target.into())));
+        (sync.sync_rows)();
+        let second = labels(&ui);
+        assert_eq!(first.len(), second.len());
+        assert_ne!(
+            first, second,
+            "con la ayuda abierta, cambiar el idioma debe reconstruir sus filas"
+        );
+    }
+
     /// Invoca el callback de teclado generado por Slint, conectado en `wire_nav_keys`.
     /// Es headless: mide el callback de producción, no el dispatch del SO ni Winit.
     #[test]

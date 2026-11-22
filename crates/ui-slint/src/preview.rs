@@ -396,6 +396,12 @@ impl PreviewState {
         self.last_revision
     }
 
+    /// Solo tests: entrega una vista de mensaje como si la hubiera producido el worker.
+    #[cfg(test)]
+    pub(crate) fn show_message_for_test(&mut self, message: &str) {
+        self.set_last(Some(ViewCache::Message(message.to_owned())));
+    }
+
     fn set_last(&mut self, view: Option<ViewCache>) {
         self.last = view;
         self.last_revision = self.last_revision.wrapping_add(1);
