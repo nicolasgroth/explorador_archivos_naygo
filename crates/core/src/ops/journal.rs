@@ -265,6 +265,7 @@ mod tests {
             to,
             bytes: 4,
             is_dir: false,
+            planned_failure: None,
         };
         (
             OpPlan {
@@ -420,6 +421,7 @@ mod tests {
             to: dir.path().join("dst").join(n),
             bytes: b,
             is_dir: false,
+            planned_failure: None,
         };
         for (n, c) in [("a", "aa"), ("b", "bbb"), ("c", "cccc")] {
             fs::write(dir.path().join(n), c.as_bytes()).unwrap();
@@ -457,12 +459,14 @@ mod tests {
                     to: destination_root.clone(),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
                 },
                 OpStep {
                     from: Some(source_file),
                     to: destination_root.join("a.txt"),
                     bytes: 7,
                     is_dir: false,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 7,
@@ -502,6 +506,7 @@ mod tests {
             to: dir.path().join("dst").join(n),
             bytes: b,
             is_dir: false,
+            planned_failure: None,
         };
         fs::write(dir.path().join("a"), b"aa").unwrap();
         fs::write(&src_b, b"bbb").unwrap();
@@ -528,6 +533,7 @@ mod tests {
             to: dir.path().join("dst").join("a"),
             bytes: 2,
             is_dir: false,
+            planned_failure: None,
         };
         fs::write(&src, b"aa").unwrap();
         let plan = OpPlan {
@@ -552,6 +558,7 @@ mod tests {
             to: dir.path().join("dst").join("sub"),
             bytes: 0,
             is_dir: true,
+            planned_failure: None,
         };
         let src = dir.path().join("a");
         fs::write(&src, b"aa").unwrap();
@@ -560,6 +567,7 @@ mod tests {
             to: dir.path().join("dst").join("sub").join("a"),
             bytes: 2,
             is_dir: false,
+            planned_failure: None,
         };
         let plan = OpPlan {
             steps: vec![dir_step, file_step],

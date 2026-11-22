@@ -49,6 +49,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                     to,
                     bytes: 0,
                     is_dir: false,
+                    planned_failure: None,
                 }],
                 total_bytes: 0,
                 total_files: 1,
@@ -81,6 +82,7 @@ pub fn plan(req: &OpRequest) -> Result<OpPlan, PlanError> {
                     to,
                     bytes: 0,
                     is_dir,
+                    planned_failure: None,
                 }],
                 total_bytes: 0,
                 total_files: if is_dir { 0 } else { 1 },
@@ -150,6 +152,7 @@ fn plan_batch_rename(req: &OpRequest, new_names: &[String]) -> Result<OpPlan, Pl
                     to: to.clone(),
                     bytes: 0,
                     is_dir: false,
+                    planned_failure: None,
                 });
                 progressed = true;
                 false
@@ -196,9 +199,7 @@ pub(super) fn plan_duplicate_with(
     sink: &mut dyn FnMut(usize, u64),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<OpPlan, PlanError> {
-    let mut steps = Vec::new();
-    let mut total_bytes = 0u64;
-    let mut total_files = 0usize;
+    let mut expansion = Expansion::new(sink, cancelled, false, &FsDirReader);
     let mut reserved = std::collections::HashSet::<crate::path_identity::PathIdentityKey>::new();
     for src in &req.sources {
         if cancelled() {
@@ -210,22 +211,12 @@ pub(super) fn plan_duplicate_with(
             .ok_or_else(|| PlanError::InvalidName(src.display().to_string()))?;
         let dest = unique_duplicate_path(parent, name, &reserved);
         reserved.insert(crate::path_identity::key(&dest));
-        expand(
-            src,
-            &dest,
-            &mut steps,
-            &mut total_bytes,
-            &mut total_files,
-            sink,
-            cancelled,
-            false,
-            true,
-        )?;
+        expansion.expand_root(src, &dest, true)?;
     }
     Ok(OpPlan {
-        steps,
-        total_bytes,
-        total_files,
+        steps: expansion.steps,
+        total_bytes: expansion.total_bytes,
+        total_files: expansion.total_files,
         allow_directory_rename: false,
         pre_delete: Vec::new(),
     })
@@ -274,6 +265,17 @@ pub(super) fn plan_transfer_with(
     sink: &mut dyn FnMut(usize, u64),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<OpPlan, PlanError> {
+    plan_transfer_with_reader(req, sink, cancelled, &FsDirReader)
+}
+
+/// `plan_transfer_with` con la lectura de directorios inyectada (las pruebas simulan una
+/// subcarpeta ilegible sin depender de ACLs del sistema).
+pub(super) fn plan_transfer_with_reader(
+    req: &OpRequest,
+    sink: &mut dyn FnMut(usize, u64),
+    cancelled: &dyn Fn() -> bool,
+    reader: &dyn PlanDirReader,
+) -> Result<OpPlan, PlanError> {
     let dest = req.dest_dir.clone().ok_or(PlanError::MissingDest)?;
     for src in &req.sources {
         // Igual que `follow_root_link`: en Copy un origen enlace se sigue una vez (cuenta como
@@ -289,10 +291,8 @@ pub(super) fn plan_transfer_with(
             return Err(PlanError::DestInsideSource);
         }
     }
-    let mut steps = Vec::new();
-    let mut total_bytes = 0u64;
-    let mut total_files = 0usize;
     let is_move = matches!(&req.kind, OpKind::Move);
+    let mut expansion = Expansion::new(sink, cancelled, is_move, reader);
     for src in &req.sources {
         if cancelled() {
             break;
@@ -310,22 +310,12 @@ pub(super) fn plan_transfer_with(
         if base_to.exists() && same_file::is_same_file(&base_to, src).unwrap_or(false) {
             continue;
         }
-        expand(
-            src,
-            &base_to,
-            &mut steps,
-            &mut total_bytes,
-            &mut total_files,
-            sink,
-            cancelled,
-            is_move,
-            !is_move,
-        )?;
+        expansion.expand_root(src, &base_to, !is_move)?;
     }
     Ok(OpPlan {
-        steps,
-        total_bytes,
-        total_files,
+        steps: expansion.steps,
+        total_bytes: expansion.total_bytes,
+        total_files: expansion.total_files,
         allow_directory_rename: is_move && !cancelled(),
         pre_delete: Vec::new(),
     })
@@ -402,14 +392,16 @@ fn expand_delete(
         to: path.to_path_buf(),
         bytes,
         is_dir: is_real_dir,
+        planned_failure: None,
     });
     sink(*total_items, *total_bytes);
     Ok(())
 }
 
 /// Convierte los errores que aparecen mientras se consume `ReadDir` en un error tipado con
-/// la carpeta que no pudo enumerarse. No se deben descartar con `flatten()`: en una transferencia
-/// eso produciría un plan parcial antes de que el usuario pueda revisar o cancelar.
+/// la carpeta que no pudo enumerarse. Lo usa el plan de borrado: no se deben descartar con
+/// `flatten()`, porque un borrado parcial silencioso dejaría al usuario creyendo que terminó.
+/// Las transferencias no abortan: registran el fallo como paso (`Expansion::push_failure`).
 fn map_directory_entry<T>(entry: std::io::Result<T>, directory: &Path) -> Result<T, PlanError> {
     entry.map_err(|_| PlanError::SourceUnreadable(directory.to_path_buf()))
 }
@@ -423,98 +415,203 @@ pub(super) fn is_link_like(meta: &std::fs::Metadata) -> bool {
     meta.file_type().is_symlink()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn expand(
-    src: &Path,
-    to: &Path,
-    steps: &mut Vec<OpStep>,
-    total_bytes: &mut u64,
-    total_files: &mut usize,
-    sink: &mut dyn FnMut(usize, u64),
-    cancelled: &dyn Fn() -> bool,
-    directories_postorder: bool,
-    follow_root_link: bool,
-) -> Result<(), PlanError> {
-    // Cortar limpio si se canceló a mitad del recorrido (el worker emitirá `Cancelled`).
-    if cancelled() {
-        return Ok(());
+/// Lectura de directorios durante la planificación de Copy/Move/Duplicate. El camino real usa
+/// `std::fs::read_dir`; las pruebas inyectan un lector que falla en una subcarpeta concreta.
+pub(super) trait PlanDirReader {
+    /// Abre `dir` y entrega la ruta de cada entrada; un `Err` dentro del iterador es una entrada
+    /// que no se pudo leer (la enumeración de esa carpeta queda incompleta).
+    fn read_dir<'a>(
+        &'a self,
+        dir: &Path,
+    ) -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<PathBuf>> + 'a>>;
+}
+
+/// Lector real sobre el sistema de archivos.
+pub(super) struct FsDirReader;
+
+impl PlanDirReader for FsDirReader {
+    fn read_dir<'a>(
+        &'a self,
+        dir: &Path,
+    ) -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<PathBuf>> + 'a>> {
+        let entries = std::fs::read_dir(dir)?;
+        Ok(Box::new(
+            entries.map(|entry| entry.map(|entry| entry.path())),
+        ))
     }
-    // Nunca se atraviesan enlaces (symlink o junction): recorrerlos haría que un Move entre
-    // volúmenes borrara archivos reales del destino del enlace. Solo el origen seleccionado de
-    // un Copy se sigue (una vez), porque el usuario lo eligió; lo anidado en él no.
-    let link_meta = std::fs::symlink_metadata(src)
-        .map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
-    let is_link = is_link_like(&link_meta);
-    if is_link && !follow_root_link {
-        // El enlace viaja como un paso de archivo sin bytes; el motor decide qué hacer con él.
-        steps.push(OpStep {
+}
+
+/// Recorrido de los orígenes de una transferencia: acumula pasos y totales.
+///
+/// Una subcarpeta (o una entrada) ilegible DENTRO de un origen no aborta el plan: queda como un
+/// paso con `planned_failure`, que el motor reporta como `Failed` sin tocar el disco, y el resto
+/// del árbol se sigue planificando. Si lo ilegible es el origen seleccionado mismo, el plan
+/// falla con `PlanError::SourceUnreadable` como siempre: no hay nada que transferir de él.
+struct Expansion<'a> {
+    steps: Vec<OpStep>,
+    total_bytes: u64,
+    total_files: usize,
+    sink: &'a mut dyn FnMut(usize, u64),
+    cancelled: &'a dyn Fn() -> bool,
+    /// Move agrega cada carpeta DESPUÉS de su contenido, para retirarla del origen sólo cuando
+    /// quedó vacía; Copy la agrega antes, para crearla primero.
+    directories_postorder: bool,
+    reader: &'a dyn PlanDirReader,
+}
+
+impl<'a> Expansion<'a> {
+    fn new(
+        sink: &'a mut dyn FnMut(usize, u64),
+        cancelled: &'a dyn Fn() -> bool,
+        directories_postorder: bool,
+        reader: &'a dyn PlanDirReader,
+    ) -> Self {
+        Self {
+            steps: Vec::new(),
+            total_bytes: 0,
+            total_files: 0,
+            sink,
+            cancelled,
+            directories_postorder,
+            reader,
+        }
+    }
+
+    /// Expande un origen seleccionado por el usuario. `follow_root_link`: en Copy/Duplicate un
+    /// origen enlace se sigue una vez (el usuario lo eligió); lo anidado en él nunca.
+    fn expand_root(
+        &mut self,
+        src: &Path,
+        to: &Path,
+        follow_root_link: bool,
+    ) -> Result<(), PlanError> {
+        self.expand(src, to, true, follow_root_link)
+    }
+
+    fn expand(
+        &mut self,
+        src: &Path,
+        to: &Path,
+        is_root: bool,
+        follow_root_link: bool,
+    ) -> Result<(), PlanError> {
+        // Cortar limpio si se canceló a mitad del recorrido (el worker emitirá `Cancelled`).
+        if (self.cancelled)() {
+            return Ok(());
+        }
+        // Nunca se atraviesan enlaces (symlink o junction): recorrerlos haría que un Move entre
+        // volúmenes borrara archivos reales del destino del enlace. Solo el origen seleccionado
+        // de un Copy se sigue (una vez), porque el usuario lo eligió; lo anidado en él no.
+        let link_meta = match std::fs::symlink_metadata(src) {
+            Ok(meta) => meta,
+            Err(_) if is_root => return Err(PlanError::SourceUnreadable(src.to_path_buf())),
+            Err(error) => {
+                self.push_failure(src, to, false, &error);
+                return Ok(());
+            }
+        };
+        let is_link = is_link_like(&link_meta);
+        if is_link && !follow_root_link {
+            // El enlace viaja como un paso de archivo sin bytes; el motor decide qué hacer con él.
+            self.steps.push(OpStep {
+                from: Some(src.to_path_buf()),
+                to: to.to_path_buf(),
+                bytes: 0,
+                is_dir: false,
+                planned_failure: None,
+            });
+            self.total_files += 1;
+            (self.sink)(self.total_files, self.total_bytes);
+            return Ok(());
+        }
+        let meta = if is_link {
+            // Sólo el origen raíz de un Copy llega aquí (`follow_root_link`).
+            std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?
+        } else {
+            link_meta
+        };
+        if !meta.is_dir() {
+            let bytes = meta.len();
+            self.steps.push(OpStep {
+                from: Some(src.to_path_buf()),
+                to: to.to_path_buf(),
+                bytes,
+                is_dir: false,
+                planned_failure: None,
+            });
+            self.total_bytes += bytes;
+            self.total_files += 1;
+            // Avisar el avance tras CADA archivo: el worker lo aprovecha con throttle para no
+            // inundar el canal. El recorrido síncrono pasa un sink vacío (sin costo real).
+            (self.sink)(self.total_files, self.total_bytes);
+            return Ok(());
+        }
+
+        let entries = match self.reader.read_dir(src) {
+            Ok(entries) => entries,
+            Err(_) if is_root => return Err(PlanError::SourceUnreadable(src.to_path_buf())),
+            Err(error) => {
+                // Ni la carpeta destino se crea ni (en Move) se retira nada de esta rama: el
+                // único paso es el fallo. La carpeta padre conserva este hijo, así que el
+                // motor tampoco puede retirarla del origen (sólo borra carpetas vacías).
+                self.push_failure(src, to, true, &error);
+                return Ok(());
+            }
+        };
+        if !self.directories_postorder {
+            self.push_directory(src, to);
+        }
+        for entry in entries {
+            if (self.cancelled)() {
+                return Ok(());
+            }
+            let child = match entry {
+                Ok(child) => child,
+                Err(error) => {
+                    // No se sabe qué entradas quedaron sin enumerar: se reporta la carpeta y no
+                    // se sigue leyendo. Lo no planificado queda intacto en el origen; en Move la
+                    // carpeta conserva esos hijos y por eso tampoco se retira.
+                    self.push_failure(src, to, true, &error);
+                    break;
+                }
+            };
+            let Some(name) = child.file_name() else {
+                continue;
+            };
+            let child_to = to.join(name);
+            self.expand(&child, &child_to, false, false)?;
+        }
+        if self.directories_postorder {
+            self.push_directory(src, to);
+        }
+        Ok(())
+    }
+
+    fn push_directory(&mut self, src: &Path, to: &Path) {
+        self.steps.push(OpStep {
             from: Some(src.to_path_buf()),
             to: to.to_path_buf(),
             bytes: 0,
-            is_dir: false,
+            is_dir: true,
+            planned_failure: None,
         });
-        *total_files += 1;
-        sink(*total_files, *total_bytes);
-        return Ok(());
     }
-    let meta = if is_link {
-        std::fs::metadata(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?
-    } else {
-        link_meta
-    };
-    if meta.is_dir() {
-        if !directories_postorder {
-            steps.push(OpStep {
-                from: Some(src.to_path_buf()),
-                to: to.to_path_buf(),
-                bytes: 0,
-                is_dir: true,
-            });
-        }
-        let entries =
-            std::fs::read_dir(src).map_err(|_| PlanError::SourceUnreadable(src.to_path_buf()))?;
-        for entry in entries {
-            let entry = map_directory_entry(entry, src)?;
-            if cancelled() {
-                return Ok(());
-            }
-            let child = entry.path();
-            let child_to = to.join(entry.file_name());
-            expand(
-                &child,
-                &child_to,
-                steps,
-                total_bytes,
-                total_files,
-                sink,
-                cancelled,
-                directories_postorder,
-                false,
-            )?;
-        }
-        if directories_postorder {
-            steps.push(OpStep {
-                from: Some(src.to_path_buf()),
-                to: to.to_path_buf(),
-                bytes: 0,
-                is_dir: true,
-            });
-        }
-    } else {
-        let bytes = meta.len();
-        steps.push(OpStep {
+
+    /// Registra un paso que el motor reportará como fallido sin ejecutarlo. El motivo es el
+    /// texto del error del sistema (sin cadenas nuevas para traducir).
+    fn push_failure(&mut self, src: &Path, to: &Path, is_dir: bool, error: &std::io::Error) {
+        self.steps.push(OpStep {
             from: Some(src.to_path_buf()),
             to: to.to_path_buf(),
-            bytes,
-            is_dir: false,
+            bytes: 0,
+            is_dir,
+            planned_failure: Some(error.to_string()),
         });
-        *total_bytes += bytes;
-        *total_files += 1;
-        // Avisar el avance tras CADA archivo: el worker lo aprovecha con throttle para no
-        // inundar el canal. El recorrido síncrono pasa un sink vacío (sin costo real).
-        sink(*total_files, *total_bytes);
+        if !is_dir {
+            self.total_files += 1;
+        }
+        (self.sink)(self.total_files, self.total_bytes);
     }
-    Ok(())
 }
 
 /// Comparación case-insensitive al estilo NTFS: cada char se pasa a mayúscula solo cuando
@@ -578,11 +675,202 @@ fn is_inside(inner: &Path, outer: &Path) -> bool {
     path_starts_with_ci(inner, outer)
 }
 
+/// Lector de pruebas: lee el disco real salvo en `unreadable` (abrirla falla con permiso
+/// denegado) y en `broken_listing` (la enumeración falla tras la primera entrada). Portable: no
+/// depende de ACLs. Las entradas se ordenan para que el plan sea determinista.
+#[cfg(test)]
+pub(super) struct FakeDirReader {
+    pub unreadable: Option<PathBuf>,
+    pub broken_listing: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl PlanDirReader for FakeDirReader {
+    fn read_dir<'a>(
+        &'a self,
+        dir: &Path,
+    ) -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<PathBuf>> + 'a>> {
+        if self.unreadable.as_deref() == Some(dir) {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
+        let mut entries = std::fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort();
+        let mut listed: Vec<std::io::Result<PathBuf>> = entries.into_iter().map(Ok).collect();
+        if self.broken_listing.as_deref() == Some(dir) {
+            let at = listed.len().min(1);
+            listed.insert(
+                at,
+                Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+            );
+        }
+        Ok(Box::new(listed.into_iter()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{ConflictPolicy, OpKind, OpRequest};
     use super::*;
     use std::fs;
+
+    fn plan_with(
+        kind: OpKind,
+        source: &Path,
+        dest: &Path,
+        reader: &FakeDirReader,
+    ) -> Result<OpPlan, PlanError> {
+        plan_transfer_with_reader(
+            &req(kind, vec![source.to_path_buf()], Some(dest.to_path_buf())),
+            &mut |_, _| {},
+            &|| false,
+            reader,
+        )
+    }
+
+    /// raiz/{a.txt, mid/{b.txt}, secreta/{s.txt}}
+    fn unreadable_fixture(dir: &Path) -> (PathBuf, PathBuf) {
+        let root = dir.join("raiz");
+        fs::create_dir_all(root.join("mid")).unwrap();
+        fs::create_dir_all(root.join("secreta")).unwrap();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::write(root.join("mid").join("b.txt"), b"bb").unwrap();
+        fs::write(root.join("secreta").join("s.txt"), b"s").unwrap();
+        let secret = root.join("secreta");
+        (root, secret)
+    }
+
+    #[test]
+    fn subcarpeta_ilegible_queda_como_paso_fallido_y_el_resto_se_planifica() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_fixture(dir.path());
+        let dest = dir.path().join("dest");
+        let reader = FakeDirReader {
+            unreadable: Some(secret.clone()),
+            broken_listing: None,
+        };
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let plan = plan_with(kind.clone(), &root, &dest, &reader).unwrap();
+            let failed: Vec<_> = plan
+                .steps
+                .iter()
+                .filter(|step| step.planned_failure.is_some())
+                .collect();
+            assert_eq!(failed.len(), 1, "{kind:?}: {:?}", plan.steps);
+            assert_eq!(failed[0].from.as_deref(), Some(secret.as_path()));
+            assert_eq!(failed[0].to, dest.join("raiz").join("secreta"));
+            assert!(failed[0].is_dir);
+            assert_eq!(failed[0].bytes, 0);
+            // Ni el contenido de la subcarpeta ni un paso normal de carpeta para ella.
+            assert!(plan
+                .steps
+                .iter()
+                .all(|step| step.from.as_deref() != Some(secret.join("s.txt").as_path())));
+            assert_eq!(
+                plan.steps
+                    .iter()
+                    .filter(|step| step.from.as_deref() == Some(secret.as_path()))
+                    .count(),
+                1
+            );
+            assert_eq!(plan.total_files, 2);
+            assert_eq!(plan.total_bytes, 3);
+            assert!(
+                plan.steps
+                    .iter()
+                    .any(|step| step.from.as_deref()
+                        == Some(root.join("mid").join("b.txt").as_path()))
+            );
+        }
+    }
+
+    #[test]
+    fn raiz_ilegible_sigue_abortando_el_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, _) = unreadable_fixture(dir.path());
+        let reader = FakeDirReader {
+            unreadable: Some(root.clone()),
+            broken_listing: None,
+        };
+        for kind in [OpKind::Copy, OpKind::Move] {
+            assert_eq!(
+                plan_with(kind, &root, &dir.path().join("dest"), &reader),
+                Err(PlanError::SourceUnreadable(root.clone()))
+            );
+        }
+        let missing = dir.path().join("no-existe");
+        assert_eq!(
+            plan_with(
+                OpKind::Move,
+                &missing,
+                &dir.path().join("dest"),
+                &FakeDirReader {
+                    unreadable: None,
+                    broken_listing: None,
+                },
+            ),
+            Err(PlanError::SourceUnreadable(missing))
+        );
+    }
+
+    #[test]
+    fn enumeracion_cortada_reporta_la_carpeta_y_no_inventa_el_resto() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, _) = unreadable_fixture(dir.path());
+        let mid = root.join("mid");
+        fs::write(mid.join("c.txt"), b"ccc").unwrap();
+        let reader = FakeDirReader {
+            unreadable: None,
+            broken_listing: Some(mid.clone()),
+        };
+        let plan = plan_with(OpKind::Move, &root, &dir.path().join("dest"), &reader).unwrap();
+        let failed: Vec<_> = plan
+            .steps
+            .iter()
+            .filter(|step| step.planned_failure.is_some())
+            .collect();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].from.as_deref(), Some(mid.as_path()));
+        let planned = |path: PathBuf| {
+            plan.steps
+                .iter()
+                .any(|step| step.planned_failure.is_none() && step.from == Some(path.clone()))
+        };
+        assert!(planned(mid.join("b.txt")), "lo enumerado antes del fallo");
+        assert!(
+            !planned(mid.join("c.txt")),
+            "lo posterior al fallo no se planifica"
+        );
+        assert!(planned(root.join("secreta").join("s.txt")));
+    }
+
+    #[test]
+    fn paso_fallido_planificado_viaja_en_el_journal_y_los_viejos_lo_leen_como_none() {
+        let failed = OpStep {
+            from: Some(PathBuf::from("origen")),
+            to: PathBuf::from("destino"),
+            bytes: 0,
+            is_dir: true,
+            planned_failure: Some("acceso denegado".into()),
+        };
+        let json = serde_json::to_string(&failed).unwrap();
+        assert_eq!(serde_json::from_str::<OpStep>(&json).unwrap(), failed);
+        let normal = OpStep {
+            planned_failure: None,
+            ..failed
+        };
+        assert!(!serde_json::to_string(&normal)
+            .unwrap()
+            .contains("planned_failure"));
+        let previous = r#"{"from":"a","to":"b","bytes":1,"is_dir":false}"#;
+        assert_eq!(
+            serde_json::from_str::<OpStep>(previous)
+                .unwrap()
+                .planned_failure,
+            None
+        );
+    }
 
     fn req(kind: OpKind, sources: Vec<PathBuf>, dest: Option<PathBuf>) -> OpRequest {
         OpRequest {

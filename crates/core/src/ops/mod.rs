@@ -95,6 +95,12 @@ pub struct OpStep {
     pub to: PathBuf,
     pub bytes: u64,
     pub is_dir: bool,
+    /// Motivo por el que la planificación ya sabe que este paso falla (p. ej. una subcarpeta
+    /// que no se pudo enumerar). El motor lo reporta como `Failed(motivo)` sin tocar el disco:
+    /// no crea el destino ni retira el origen. Se persiste en el journal para que un retomar no
+    /// lo convierta en un paso normal; los journals previos lo leen como `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_failure: Option<String>,
 }
 
 /// Plan completo de una operación: pasos + totales.

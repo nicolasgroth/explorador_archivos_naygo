@@ -536,6 +536,7 @@ pub fn execute(
                 to: content.join(&entry.relative),
                 bytes: entry.size(),
                 is_dir: entry.is_dir(),
+                planned_failure: None,
             })
             .collect(),
         total_bytes: plan.total_bytes,

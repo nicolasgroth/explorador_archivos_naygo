@@ -230,6 +230,20 @@ pub fn run_plan_with_no_replace_rename(
             }
         }
         let original_step = &plan.steps[idx];
+        // La planificación ya sabe que este paso falla (p. ej. una subcarpeta ilegible): se
+        // reporta sin tocar el disco. No se crea el destino ni se retira el origen; en Move la
+        // carpeta padre conserva este hijo y `remove_empty_move_source` no puede retirarla.
+        // Levanta la barrera del journal igual que cualquier otro fallo.
+        if let Some(reason) = &original_step.planned_failure {
+            step_item_indices.push(Some(summary.items.len()));
+            summary.items.push(OpItem {
+                dest: original_step.to.clone(),
+                outcome: OpOutcome::Failed(reason.clone()),
+                src: original_step.from.clone(),
+            });
+            barrier_hit = true;
+            continue;
+        }
         let staged = replacements.iter().any(|replacement| {
             super::plan::path_starts_with_ci(&original_step.to, &replacement.destination)
         });
@@ -551,7 +565,11 @@ fn prepare_tree_replacements(
         let source_root = plan
             .steps
             .iter()
-            .find(|step| step.is_dir && super::plan::paths_eq_ci(&step.to, target))
+            .find(|step| {
+                step.is_dir
+                    && step.planned_failure.is_none()
+                    && super::plan::paths_eq_ci(&step.to, target)
+            })
             .and_then(|step| step.from.as_ref());
         let unsafe_target = plan.steps.iter().any(|step| {
             step.from.as_ref().is_some_and(|from| {
@@ -3366,12 +3384,14 @@ mod tests {
                     to: dest_root.clone(),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
                 },
                 OpStep {
                     from: Some(origen.join("a.txt")),
                     to: dest_root.join("a.txt"),
                     bytes: 17,
                     is_dir: false,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 17,
@@ -3418,6 +3438,7 @@ mod tests {
                 to,
                 bytes: 1,
                 is_dir: false,
+                planned_failure: None,
             }],
             total_bytes: 1,
             total_files: 1,
@@ -3503,6 +3524,7 @@ mod tests {
                 to: dest.join("a.txt"),
                 bytes: 1,
                 is_dir: false,
+                planned_failure: None,
             }],
             total_bytes: 1,
             total_files: 1,
@@ -3555,12 +3577,14 @@ mod tests {
                     to: dest_root.clone(),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
                 },
                 OpStep {
                     from: Some(origen.join("a.txt")),
                     to: dest_root.join("a.txt"),
                     bytes: 17,
                     is_dir: false,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 17,
@@ -3708,6 +3732,198 @@ mod tests {
         let (_m, _s) = run(req);
         assert!(!src.exists());
         assert!(dest.join("a.txt").exists());
+    }
+
+    /// raiz/{a.txt, mid/{b.txt, secreta/{s.txt}}}: `secreta` es la subcarpeta ilegible.
+    fn unreadable_tree(dir: &Path) -> (PathBuf, PathBuf) {
+        let root = dir.join("origen").join("raiz");
+        let secret = root.join("mid").join("secreta");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::write(root.join("mid").join("b.txt"), b"bb").unwrap();
+        fs::write(secret.join("s.txt"), b"dato unico").unwrap();
+        (root, secret)
+    }
+
+    fn run_with_unreadable(
+        kind: OpKind,
+        root: &Path,
+        dest: &Path,
+        secret: &Path,
+        rename: &dyn NoReplaceRename,
+    ) -> OpSummary {
+        let request = OpRequest {
+            kind,
+            sources: vec![root.to_path_buf()],
+            dest_dir: Some(dest.to_path_buf()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let reader = super::super::plan::FakeDirReader {
+            unreadable: Some(secret.to_path_buf()),
+            broken_listing: None,
+        };
+        let plan = super::super::plan::plan_transfer_with_reader(
+            &request,
+            &mut |_, _| {},
+            &|| false,
+            &reader,
+        )
+        .expect("una subcarpeta ilegible no aborta el plan");
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+            rename,
+        )
+    }
+
+    fn assert_only_secret_failed(summary: &OpSummary, secret: &Path) {
+        let failed: Vec<_> = summary
+            .items
+            .iter()
+            .filter(|item| matches!(item.outcome, OpOutcome::Failed(_)))
+            .collect();
+        assert_eq!(failed.len(), 1, "{summary:?}");
+        assert_eq!(failed[0].src.as_deref(), Some(secret));
+    }
+
+    #[test]
+    fn copia_con_subcarpeta_ilegible_copia_el_resto_y_reporta_la_subcarpeta() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Copy, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_only_secret_failed(&summary, &secret);
+        let copied = dest.join("raiz");
+        assert_eq!(fs::read(copied.join("a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(copied.join("mid").join("b.txt")).unwrap(), b"bb");
+        assert!(
+            !copied.join("mid").join("secreta").exists(),
+            "el paso fallido no crea el destino"
+        );
+        assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+    }
+
+    fn assert_move_kept_unreadable_branch(root: &Path, secret: &Path, dest: &Path) {
+        let moved = dest.join("raiz");
+        assert_eq!(fs::read(moved.join("a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(moved.join("mid").join("b.txt")).unwrap(), b"bb");
+        assert!(!moved.join("mid").join("secreta").exists());
+        assert!(!root.join("a.txt").exists(), "lo legible se movió");
+        assert!(!root.join("mid").join("b.txt").exists());
+        // La subcarpeta y sus ancestros siguen en el origen, con su contenido intacto.
+        assert!(root.is_dir() && root.join("mid").is_dir());
+        assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+    }
+
+    #[test]
+    fn move_con_subcarpeta_ilegible_mueve_el_resto_y_conserva_la_rama_en_el_origen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Move, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
+    }
+
+    #[test]
+    fn move_entre_volumenes_con_subcarpeta_ilegible_conserva_la_rama_en_el_origen() {
+        struct SiempreOtroVolumen;
+        impl NoReplaceRename for SiempreOtroVolumen {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary = run_with_unreadable(OpKind::Move, &root, &dest, &secret, &SiempreOtroVolumen);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
+    }
+
+    /// Mover una carpeta a una subcarpeta hermana usa el rename del árbol completo: la rama
+    /// ilegible viaja dentro de ese rename atómico, sin enumerarla ni borrar nada.
+    #[test]
+    fn move_por_rename_de_arbol_lleva_la_rama_ilegible_intacta() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("origen").join("hermana");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Move, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_eq!(summary.count_failed(), 0, "{summary:?}");
+        assert!(!root.exists());
+        let moved = dest.join("raiz");
+        assert_eq!(fs::read(moved.join("a.txt")).unwrap(), b"a");
+        assert_eq!(
+            fs::read(moved.join("mid").join("secreta").join("s.txt")).unwrap(),
+            b"dato unico"
+        );
+    }
+
+    /// Lo mismo con una carpeta realmente sin permiso de listado (ACL de denegación).
+    #[cfg(windows)]
+    #[test]
+    fn move_con_carpeta_sin_permiso_real_conserva_la_rama_en_el_origen() {
+        struct DenyList(PathBuf);
+        impl Drop for DenyList {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("icacls")
+                    .arg(&self.0)
+                    .args(["/remove:d", "*S-1-1-0"])
+                    .output();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let denied = std::process::Command::new("icacls")
+            .arg(&secret)
+            .args(["/deny", "*S-1-1-0:(RD)"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let guard = DenyList(secret.clone());
+        if !denied || fs::read_dir(&secret).is_ok() {
+            // Sin icacls o con privilegio de respaldo: la ACL no aplica a este proceso.
+            eprintln!("omitido: no se pudo quitar el permiso de listado con icacls");
+            return;
+        }
+        let request = OpRequest {
+            kind: OpKind::Move,
+            sources: vec![root.clone()],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let plan = plan(&request).expect("la subcarpeta sin permiso no aborta el plan");
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(guard);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
     }
 
     #[test]
@@ -3957,6 +4173,7 @@ mod tests {
             to: dest.join(n),
             bytes: b,
             is_dir: false,
+            planned_failure: None,
         };
         let p = OpPlan {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
@@ -4092,6 +4309,7 @@ mod tests {
             to: target.clone(),
             bytes: 0,
             is_dir: true,
+            planned_failure: None,
         };
         let token = CancellationToken::new();
         token.cancel();
