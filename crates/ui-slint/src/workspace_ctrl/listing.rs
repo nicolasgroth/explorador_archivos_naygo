@@ -1930,9 +1930,9 @@ fn add_time_key(h: &mut crate::rows_model::KeyHasher, time: Option<std::time::Sy
 
 /// Conjunto de pocas rutas para consultarlo una vez por fila de un listado grande. Hashear cada
 /// ruta del listado (`HashSet<&Path>`) o compararla por componentes (`Path == Path` en Windows)
-/// costaba decenas de ms con 100k filas; acá cada fila se descarta comparando los bytes del
-/// nombre final y solo los candidatos se comparan como `Path`. Supone rutas sin separadores
-/// finales ni componentes redundantes (las del listado y del watcher salen de `dir.join(nombre)`).
+/// costaba decenas de ms con 100k filas; acá cada fila se descarta comparando los bytes de su
+/// nombre final (`file_name`, que ya ignora un separador o un `.` al final) y solo los candidatos
+/// se comparan como `Path`, con la misma semántica que `Path ==`.
 pub(crate) struct PathProbe<'a> {
     /// Pocas rutas: (bytes del nombre final, ruta completa).
     few: Vec<(&'a [u8], &'a Path)>,
@@ -1973,10 +1973,13 @@ impl<'a> PathProbe<'a> {
         if self.few.is_empty() {
             return false;
         }
-        let bytes = path.as_os_str().as_encoded_bytes();
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .as_encoded_bytes();
         self.few
             .iter()
-            .any(|(name, full)| bytes.ends_with(name) && *full == path)
+            .any(|(wanted, full)| *wanted == name && *full == path)
     }
 }
 
@@ -2000,6 +2003,26 @@ mod path_probe_tests {
             assert!(!probe.contains(&dir.join("nada.txt")));
         }
         assert!(!PathProbe::new(std::iter::empty()).contains(Path::new("C:/a")));
+    }
+
+    /// Misma semántica que `Path ==`: un separador o un `.` al final no cambian la ruta.
+    #[test]
+    fn separador_o_punto_final_equivalen_como_en_path_eq() {
+        for count in [1usize, 40] {
+            let wanted: Vec<PathBuf> = (0..count)
+                .map(|i| PathBuf::from(format!(r"C:\d\f{i}.txt")))
+                .collect();
+            let probe = PathProbe::new(wanted.iter().map(PathBuf::as_path));
+            for spelled in [r"C:\d\f0.txt\", r"C:\d\f0.txt\.", r"C:/d/f0.txt"] {
+                let candidate = Path::new(spelled);
+                assert_eq!(candidate, wanted[0].as_path(), "premisa: {spelled}");
+                assert!(probe.contains(candidate), "{count}: {spelled}");
+            }
+            // Y al revés: la ruta buscada con separador final encuentra la del listado.
+            let trailing = PathBuf::from(r"C:\d\g.txt\");
+            let probe = PathProbe::new([trailing.as_path()]);
+            assert!(probe.contains(Path::new(r"C:\d\g.txt")));
+        }
     }
 }
 

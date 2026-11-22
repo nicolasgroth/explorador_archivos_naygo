@@ -769,12 +769,15 @@ pub(crate) fn build_sync(
                                     };
                                     pm.rows.set_keys(keys);
                                     if let Some(i) = frozen {
-                                        if let Some(id_key) = pm
+                                        // Leer la clave ANTES de ramificar: en edición 2021 el `Ref`
+                                        // de `keys()` en la condición de un `if let` vive todo el
+                                        // cuerpo y el `borrow_mut` de `set_key` reventaría.
+                                        let id_key = pm
                                             .rows
                                             .keys()
                                             .as_ref()
-                                            .and_then(|keys| keys.get(i).map(|k| k.id))
-                                        {
+                                            .and_then(|keys| keys.get(i).map(|k| k.id));
+                                        if let Some(id_key) = id_key {
                                             pm.rows.set_key(
                                                 i,
                                                 crate::rows_model::RowKey {
@@ -2955,6 +2958,97 @@ mod tests {
         );
     }
 
+    /// Regresión: con un rename inline abierto, salir del filtro por tipeo (o de la vista
+    /// profunda) a igual largo pasa por el camino completo con claves desconocidas y vuelve a
+    /// sembrarlas, congelando la fila editada. Antes el `Ref` de `keys()` seguía vivo dentro del
+    /// `if let` y `set_key` reventaba con "already borrowed".
+    #[test]
+    fn rename_abierto_al_salir_del_filtro_siembra_claves_sin_panic() {
+        use naygo_core::fs_model::{Entry, EntryKind};
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{software_renderer::MinimalSoftwareWindow, Platform, WindowAdapter};
+        use std::time::SystemTime;
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let adapter = MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+        );
+        slint::platform::set_platform(Box::new(Headless(adapter))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+        );
+        (sync.sync_layout)();
+        let id = ctrl.borrow().active_id().unwrap();
+        {
+            let mut c = ctrl.borrow_mut();
+            let files = c.ws.active_files_mut().unwrap();
+            files.entries = (0..20)
+                .map(|i| Entry {
+                    name: format!("f{i:02}.txt"),
+                    path: root.join(format!("f{i:02}.txt")),
+                    kind: EntryKind::File,
+                    size: Some(1),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    hidden: false,
+                    system: false,
+                })
+                .collect();
+            files.entries_changed();
+            files.select_single(3);
+        }
+        (sync.sync_rows)();
+        let rows = models.borrow().per_pane[&id].rows.clone();
+        assert!(rows.keys().is_some(), "vista normal: claves conocidas");
+        {
+            let mut c = ctrl.borrow_mut();
+            c.op_rename();
+            assert!(c.rename_active.as_ref().is_some_and(|r| r.pos == 3));
+            // Filtro visual por tipeo (tiñe, no oculta): el largo no cambia.
+            c.typeahead = "f0".into();
+        }
+        (sync.sync_rows)();
+        assert!(rows.keys().is_none(), "con filtro, sin claves");
+        assert_eq!(rows.row_count(), 20);
+        ctrl.borrow_mut().typeahead.clear();
+        // Camino completo + `set_keys` + fila congelada: no debe reventar.
+        (sync.sync_rows)();
+        let keys = rows.keys();
+        let keys = keys
+            .as_ref()
+            .expect("al salir del filtro se siembran las claves");
+        assert_eq!(keys.len(), 20);
+        assert_eq!(
+            keys[3].content, STALE_CONTENT,
+            "la fila en rename queda pendiente de reconciliar"
+        );
+        assert_ne!(keys[4].content, STALE_CONTENT);
+    }
+
     /// Altas al final y en el medio con un rename inline abierto: el modelo avisa UN tramo por
     /// alta (sin `reset` ni bajas), el editor conserva su borrador y su cursor (el delegate no
     /// se re-crea) y la fila seleccionada sigue seleccionada.
@@ -3258,6 +3352,22 @@ mod tests {
                 .any(|row| row.name == "fresco.txt" && row.highlight),
             "la fila fresca se pinta resaltada"
         );
+        // Con un archivo enfocado, Propiedades pide su metadata a un worker. Su respuesta llega
+        // cuando quiere (bajo la carga de la suite completa, a veces entre los dos syncs medidos)
+        // y cambia el `PaneVm` del Inspector: es un cambio real, no trabajo por tick. Esperar a
+        // que el estado se asiente (un sync sin avisos en `panes`) antes de medir. Si cada sync
+        // re-asignara paneles, el bucle se agota y la aserción de abajo falla igual.
+        {
+            let settle = listen(&ModelRc::from(models.borrow().panes.clone()));
+            for _ in 0..200 {
+                settle.0.set(0);
+                (sync.sync_rows)();
+                if settle.0.get() == 0 && !ctrl.borrow().meta_loading() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         let row_listeners: Vec<_> = file_rows.iter().map(|(_, rows)| listen(rows)).collect();
 
         macro_rules! snapshot {
