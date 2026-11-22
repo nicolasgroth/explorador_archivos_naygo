@@ -1169,6 +1169,10 @@ pub(crate) fn build_sync(
                 .collect();
             update_rows(&wm.clipboard_history, clipboard_rows);
             ui.set_clipboard_history_rows(model_rc(&wm.clipboard_history));
+            // Terminales opcionales: el sondeo del PATH corre en un worker al arrancar; aquí solo se
+            // lee el resultado cacheado (sin I/O en el hilo de UI).
+            ui.set_has_wt(c.windows_terminal_available());
+            ui.set_has_wsl(c.wsl_available());
             // Menú contextual: posición + si hay menú nativo disponible (hay HWND).
             let ctx = match &c.context_menu {
                 Some(cm) if c.active_id() == Some(cm.pane) => ContextMenuVm {

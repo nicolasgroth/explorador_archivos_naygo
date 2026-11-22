@@ -343,10 +343,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ctrl.borrow_mut().apply_first_run_layout();
     }
     ctrl.borrow_mut().mark_startup_session_baseline();
-    // Disponibilidad de terminales opcionales (Windows Terminal / WSL): se consulta una vez al
-    // arranque (escanea el PATH) para decidir qué entradas mostrar en el combo de la toolbar.
-    ui.set_has_wt(ctrl.borrow().windows_terminal_available());
-    ui.set_has_wsl(ctrl.borrow().wsl_available());
+    // Disponibilidad de terminales opcionales (Windows Terminal / WSL): el sondeo del PATH corre
+    // en un worker (`start_terminal_tools_probe`, más abajo, cuando existe el waker) y
+    // `sync_rows` publica `has-wt`/`has-wsl` en cuanto termina. Hasta entonces quedan ocultas.
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
     // Inicializar las etiquetas y mensajes de error del preview con el idioma activo al arranque.
@@ -571,6 +570,7 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     ctrl.borrow_mut().start_startup_load(waker.clone());
+    workspace_ctrl::start_terminal_tools_probe(waker.clone());
     ctrl.borrow_mut().set_folder_shell_waker(waker.clone());
     ctrl.borrow_mut().icons.set_waker(waker.clone());
     let pack_io = Rc::new(RefCell::new(packs::PackIo::new(waker.clone())));

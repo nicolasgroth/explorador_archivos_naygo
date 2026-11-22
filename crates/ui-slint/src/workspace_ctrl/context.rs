@@ -4,6 +4,48 @@
 
 use super::*;
 
+/// Terminales opcionales presentes en el PATH. Detectarlas recorre las carpetas del PATH (I/O
+/// de disco, lento con unidades de red), así que se calcula UNA vez en un worker al arrancar y
+/// el hilo de UI solo lee este resultado. Antes el menú contextual abierto lo recalculaba en
+/// cada tick de `sync_rows`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalTools {
+    windows_terminal: bool,
+    wsl: bool,
+}
+
+static TERMINAL_TOOLS: std::sync::OnceLock<TerminalTools> = std::sync::OnceLock::new();
+
+fn probe_terminal_tools(
+    slot: &std::sync::OnceLock<TerminalTools>,
+    detect_windows_terminal: impl FnOnce() -> bool,
+    detect_wsl: impl FnOnce() -> bool,
+) {
+    let _ = slot.set(TerminalTools {
+        windows_terminal: detect_windows_terminal(),
+        wsl: detect_wsl(),
+    });
+}
+
+/// Lanza el sondeo de terminales en un hilo propio y despierta la UI al terminar, para que el
+/// siguiente `sync_rows` publique el resultado. Si el hilo no se puede crear, las entradas
+/// quedan ocultas (mismo efecto que no tener las herramientas instaladas).
+pub(crate) fn start_terminal_tools_probe(waker: naygo_platform::dir_watch::Waker) {
+    let spawned = std::thread::Builder::new()
+        .name("naygo-terminal-probe".into())
+        .spawn(move || {
+            probe_terminal_tools(
+                &TERMINAL_TOOLS,
+                naygo_platform::open::windows_terminal_available,
+                naygo_platform::open::wsl_available,
+            );
+            waker();
+        });
+    if let Err(error) = spawned {
+        crate::logging::log_line(&format!("no se inició el sondeo de terminales: {error}"));
+    }
+}
+
 impl WorkspaceCtrl {
     pub(crate) fn take_creation_wait_notice(&mut self) -> bool {
         std::mem::take(&mut self.creation_wait_notice)
@@ -552,14 +594,18 @@ impl WorkspaceCtrl {
     }
 
     /// `true` si Windows Terminal (`wt.exe`) está disponible, para decidir si ofrecer la entrada
-    /// "Abrir Windows Terminal aquí" en el menú contextual.
+    /// "Abrir Windows Terminal aquí" en el menú contextual. Lee el resultado del sondeo de
+    /// arranque (`start_terminal_tools_probe`); mientras no termina, vale `false`.
     pub fn windows_terminal_available(&self) -> bool {
-        naygo_platform::open::windows_terminal_available()
+        TERMINAL_TOOLS
+            .get()
+            .is_some_and(|tools| tools.windows_terminal)
     }
 
     /// `true` si WSL (`wsl.exe`) está disponible, para ofrecer la entrada "Abrir WSL aquí".
+    /// Mismo sondeo cacheado que `windows_terminal_available`.
     pub fn wsl_available(&self) -> bool {
-        naygo_platform::open::wsl_available()
+        TERMINAL_TOOLS.get().is_some_and(|tools| tools.wsl)
     }
 
     /// Copiar la ruta del primer objetivo al portapapeles (como texto).
@@ -684,5 +730,25 @@ impl WorkspaceCtrl {
             return false;
         };
         self.open_dir_in_new_pane(dir, area)
+    }
+}
+
+#[cfg(test)]
+mod terminal_tools_tests {
+    use super::*;
+
+    #[test]
+    fn el_sondeo_guarda_el_resultado_una_sola_vez() {
+        let slot = std::sync::OnceLock::new();
+        assert!(slot.get().is_none());
+        probe_terminal_tools(&slot, || true, || false);
+        probe_terminal_tools(&slot, || false, || true);
+        assert_eq!(
+            slot.get(),
+            Some(&TerminalTools {
+                windows_terminal: true,
+                wsl: false
+            })
+        );
     }
 }

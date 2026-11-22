@@ -810,6 +810,7 @@ mod basket;
 mod columns;
 mod comparison_points;
 mod context;
+pub(crate) use context::start_terminal_tools_probe;
 mod deep_selection;
 mod deep_view;
 mod delivery;
