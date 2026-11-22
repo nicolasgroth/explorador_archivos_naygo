@@ -180,9 +180,12 @@ pub struct WorkspaceCtrl {
     startup_pending_theme: Option<String>,
     /// Un listado en curso por panel (la carpeta de cada panel se lista por separado).
     pub listings: HashMap<PaneId, Listing>,
-    /// Admisión común para listados de Files y árbol. El máximo inicial evita un hilo por cada
-    /// expansión rápida; los permisos viven en los workers hasta su salida real.
-    pub(crate) listing_admission: naygo_core::listing::ListingAdmission,
+    /// Admisiones de listados de Files, árbol y sondeo de carpetas ausentes: un cupo local (8) y
+    /// otro remoto (4) para que los shares colgados nunca dejen sin plaza a los discos locales.
+    /// Los máximos evitan un hilo por cada expansión rápida; los permisos viven en los workers
+    /// hasta su salida real. Elegir el cupo usa `drive_snapshot` (sin I/O): ver
+    /// `listing_admission_for`.
+    pub(crate) listing_admissions: naygo_core::listing::ListingAdmissions,
     /// Última navegación pendiente por panel cuando no hay plaza; una tecla rápida reemplaza la
     /// ruta pendiente en vez de acumular un worker por cada destino intermedio.
     pub(crate) pending_file_listings: HashMap<PaneId, PathBuf>,
@@ -918,7 +921,7 @@ impl WorkspaceCtrl {
             startup_warnings: Vec::new(),
             startup_pending_theme: None,
             listings: HashMap::new(),
-            listing_admission: naygo_core::listing::ListingAdmission::new(8),
+            listing_admissions: naygo_core::listing::ListingAdmissions::default(),
             pending_file_listings: HashMap::new(),
             automatic_listings: HashMap::new(),
             file_listing_cursor: 0,

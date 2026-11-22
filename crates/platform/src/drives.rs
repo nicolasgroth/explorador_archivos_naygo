@@ -283,9 +283,89 @@ fn drives_from_mountinfo<R: std::io::BufRead>(reader: R) -> std::io::Result<Vec<
     Ok(by_mount_point.into_values().collect())
 }
 
+/// Clasificador local/remoto sobre una tabla de unidades YA enumerada por el worker de
+/// unidades. No hace syscalls: el tipo (`GetDriveTypeW` en Windows, el sistema de archivos del
+/// montaje en Linux) se obtuvo al enumerar, fuera del hilo de UI. Una ruta cuyo volumen no está
+/// en la tabla queda como desconocida y core la trata como remota.
+pub struct DriveTableLocality<'a>(pub &'a [DriveInfo]);
+
+impl naygo_core::path_locality::VolumeLocality for DriveTableLocality<'_> {
+    fn volume_is_remote(&self, path: &std::path::Path) -> Option<bool> {
+        table_drive_for(self.0, path).map(|drive| drive.kind == DriveKind::Network)
+    }
+}
+
+/// Unidad de la tabla que contiene `path`, comparando letras (también con prefijo `\\?\`).
+#[cfg(windows)]
+fn table_drive_for<'a>(table: &'a [DriveInfo], path: &std::path::Path) -> Option<&'a DriveInfo> {
+    use naygo_core::path_locality::drive_letter;
+    let letter = drive_letter(path)?;
+    table
+        .iter()
+        .find(|drive| drive_letter(&drive.path) == Some(letter))
+}
+
+/// Montaje más profundo de la tabla que contiene `path`.
+#[cfg(not(windows))]
+fn table_drive_for<'a>(table: &'a [DriveInfo], path: &std::path::Path) -> Option<&'a DriveInfo> {
+    table
+        .iter()
+        .filter(|drive| path.starts_with(&drive.path))
+        .max_by_key(|drive| drive.path.components().count())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn tabla_de_unidades_clasifica_letras_de_red_sin_tocar_el_disco() {
+        use naygo_core::path_locality::VolumeLocality;
+        let drive = |root: &str, kind| DriveInfo {
+            path: PathBuf::from(root),
+            label: root.into(),
+            kind,
+        };
+        let table = [
+            drive("C:\\", DriveKind::Fixed),
+            drive("E:\\", DriveKind::Removable),
+            drive("Z:\\", DriveKind::Network),
+        ];
+        let locality = DriveTableLocality(&table);
+        let path = std::path::Path::new;
+        assert_eq!(locality.volume_is_remote(path(r"C:\Users")), Some(false));
+        assert_eq!(
+            locality.volume_is_remote(path(r"\\?\c:\Users")),
+            Some(false)
+        );
+        assert_eq!(locality.volume_is_remote(path(r"E:\fotos")), Some(false));
+        assert_eq!(locality.volume_is_remote(path(r"Z:\equipo")), Some(true));
+        assert_eq!(locality.volume_is_remote(path(r"Q:\otra")), None);
+        assert_eq!(locality.volume_is_remote(path(r"\\srv\share")), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn tabla_de_montajes_usa_el_montaje_mas_profundo() {
+        use naygo_core::path_locality::VolumeLocality;
+        let table = [
+            DriveInfo {
+                path: PathBuf::from("/"),
+                label: "/".into(),
+                kind: DriveKind::Unknown,
+            },
+            DriveInfo {
+                path: PathBuf::from("/mnt/share"),
+                label: "/mnt/share".into(),
+                kind: DriveKind::Network,
+            },
+        ];
+        let locality = DriveTableLocality(&table);
+        let path = std::path::Path::new;
+        assert_eq!(locality.volume_is_remote(path("/home/x")), Some(false));
+        assert_eq!(locality.volume_is_remote(path("/mnt/share/a")), Some(true));
+    }
 
     #[test]
     fn drives_devuelve_al_menos_una_unidad() {

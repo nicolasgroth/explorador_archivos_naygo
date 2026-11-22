@@ -49,6 +49,7 @@ pub mod palette;
 pub mod path_display;
 pub mod path_identity;
 pub mod path_input;
+pub mod path_locality;
 pub mod path_segments;
 pub mod path_wire;
 pub mod preview;

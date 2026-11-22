@@ -196,7 +196,13 @@ impl WorkspaceCtrl {
             .iter()
             .filter_map(|id| self.pane_current_dir(*id).map(|dir| (id.0, dir)))
             .collect();
-        let Some(permit) = self.listing_admission.try_acquire() else {
+        // El sondeo recorre las carpetas en serie: si alguna es remota puede colgarse, así que
+        // toma una plaza del cupo remoto y nunca retiene una local.
+        let admission = self.listing_admissions.for_paths(
+            targets.iter().map(|(_, dir)| dir.as_path()),
+            &naygo_platform::drives::DriveTableLocality(&self.drive_snapshot),
+        );
+        let Some(permit) = admission.try_acquire() else {
             self.missing_probe_refresh_pending = true;
             return;
         };
@@ -433,7 +439,7 @@ impl WorkspaceCtrl {
         self.ejected_panes.remove(&id.0);
         match Listing::try_start(
             dir.clone(),
-            &self.listing_admission,
+            self.listing_admission_for(&dir),
             naygo_core::listing::ListingFilter::All,
         ) {
             Ok(listing) => {
@@ -854,12 +860,18 @@ impl WorkspaceCtrl {
         let mut ids: Vec<_> = self.pending_file_listings.keys().copied().collect();
         ids.sort_by_key(|id| id.0);
         for id in ids {
+            if !self.listing_admissions.any_capacity() {
+                break;
+            }
             let Some(dir) = self.pending_file_listings.remove(&id) else {
                 continue;
             };
+            // Cada pendiente se reclasifica ahora: un cupo remoto lleno no detiene a los locales
+            // que vienen detrás en la cola, y la tabla de unidades pudo llegar desde el intento
+            // anterior.
             match Listing::try_start(
                 dir.clone(),
-                &self.listing_admission,
+                self.listing_admission_for(&dir),
                 naygo_core::listing::ListingFilter::All,
             ) {
                 Ok(listing) => {
@@ -867,7 +879,6 @@ impl WorkspaceCtrl {
                 }
                 Err(naygo_core::listing::ListingStartError::Capacity) => {
                     self.pending_file_listings.insert(id, dir);
-                    break;
                 }
                 Err(naygo_core::listing::ListingStartError::Spawn(error)) => {
                     crate::logging::log_line(&format!(

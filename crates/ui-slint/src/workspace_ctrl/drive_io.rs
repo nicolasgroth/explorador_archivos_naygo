@@ -65,6 +65,20 @@ impl WorkspaceCtrl {
         changed
     }
 
+    /// Cupo de listado (local o remoto) para `path`. Clasifica con la tabla de unidades que ya
+    /// trajo el worker de enumeración: ninguna syscall en el hilo de UI. Mientras esa tabla no
+    /// llega (arranque), las letras cuentan como remotas; un listado pendiente se reclasifica en
+    /// cada reintento, así que pasa al cupo local en cuanto la tabla está disponible.
+    pub(crate) fn listing_admission_for(
+        &self,
+        path: &std::path::Path,
+    ) -> &naygo_core::listing::ListingAdmission {
+        self.listing_admissions.for_path(
+            path,
+            &naygo_platform::drives::DriveTableLocality(&self.drive_snapshot),
+        )
+    }
+
     pub fn drive_roots(&self) -> Vec<(PathBuf, String, DriveKind)> {
         self.drive_snapshot
             .iter()

@@ -63,6 +63,78 @@ impl ListingAdmission {
     }
 }
 
+/// Plazas de listado para discos locales.
+pub const LOCAL_LISTING_SLOTS: usize = 8;
+/// Plazas de listado para shares UNC y unidades de red.
+pub const REMOTE_LISTING_SLOTS: usize = 4;
+
+/// Dos admisiones independientes: una ruta local nunca espera plaza detrás de listados remotos.
+/// Un share caído retiene su hilo (y su permiso) hasta que el sistema desiste; con un solo cupo,
+/// unos pocos shares colgados bloqueaban también los listados de los discos locales.
+#[derive(Clone)]
+pub struct ListingAdmissions {
+    local: ListingAdmission,
+    remote: ListingAdmission,
+}
+
+impl Default for ListingAdmissions {
+    fn default() -> Self {
+        Self::new(LOCAL_LISTING_SLOTS, REMOTE_LISTING_SLOTS)
+    }
+}
+
+impl ListingAdmissions {
+    pub fn new(local_maximum: usize, remote_maximum: usize) -> Self {
+        Self {
+            local: ListingAdmission::new(local_maximum),
+            remote: ListingAdmission::new(remote_maximum),
+        }
+    }
+
+    pub fn local(&self) -> &ListingAdmission {
+        &self.local
+    }
+
+    pub fn remote(&self) -> &ListingAdmission {
+        &self.remote
+    }
+
+    /// Admisión que corresponde a `path` según `locality` (ver [`crate::path_locality`]).
+    pub fn for_path(
+        &self,
+        path: &Path,
+        locality: &dyn crate::path_locality::VolumeLocality,
+    ) -> &ListingAdmission {
+        if crate::path_locality::is_remote_path(path, locality) {
+            &self.remote
+        } else {
+            &self.local
+        }
+    }
+
+    /// Admisión para un trabajo que recorre varias rutas en serie: basta una remota para que el
+    /// trabajo pueda colgarse, así que entonces usa el cupo remoto.
+    pub fn for_paths<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a Path>,
+        locality: &dyn crate::path_locality::VolumeLocality,
+    ) -> &ListingAdmission {
+        if paths
+            .into_iter()
+            .any(|path| crate::path_locality::is_remote_path(path, locality))
+        {
+            &self.remote
+        } else {
+            &self.local
+        }
+    }
+
+    /// `true` si al menos uno de los dos cupos tiene plaza.
+    pub fn any_capacity(&self) -> bool {
+        self.local.has_capacity() || self.remote.has_capacity()
+    }
+}
+
 pub struct ListingPermit(Arc<AtomicUsize>);
 
 impl Drop for ListingPermit {
@@ -734,6 +806,186 @@ mod tests {
         assert!(!worker.join().unwrap());
         assert_eq!(received.try_recv().unwrap().name, "queued");
         assert_eq!(terminal_rx.try_recv(), Ok(ListingOutcome::Cancelled));
+    }
+
+    /// Lister falso: el preflight corre en el worker con el permiso tomado y no vuelve hasta que
+    /// la prueba lo suelta, igual que un `read_dir` sobre un share caído.
+    fn spawn_hung_remote(
+        share: PathBuf,
+        admissions: &ListingAdmissions,
+        entered: mpsc::Sender<()>,
+        release: Arc<std::sync::Mutex<mpsc::Receiver<()>>>,
+    ) -> Result<(ListingReceiver, JoinHandle<()>), ListingStartError> {
+        let admission = admissions.for_path(&share, &AllLocal);
+        try_spawn_listing_filtered_with_preflight(
+            share,
+            CancellationToken::new(),
+            ListingFilter::All,
+            admission,
+            move |_, _| {
+                let _ = entered.send(());
+                let _ = release.lock().unwrap().recv();
+                Err(io::Error::new(io::ErrorKind::TimedOut, "share caído"))
+            },
+        )
+    }
+
+    /// Tabla de unidades de prueba: toda letra es local; solo las rutas UNC son remotas.
+    struct AllLocal;
+
+    impl crate::path_locality::VolumeLocality for AllLocal {
+        fn volume_is_remote(&self, _path: &Path) -> Option<bool> {
+            Some(false)
+        }
+    }
+
+    fn wait_terminal(rx: &ListingReceiver) -> (Vec<String>, ListingOutcome) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut names = Vec::new();
+        loop {
+            while let Ok(entry) = rx.try_recv_entry() {
+                names.push(entry.name);
+            }
+            if let Ok(outcome) = rx.try_recv_terminal() {
+                while let Ok(entry) = rx.try_recv_entry() {
+                    names.push(entry.name);
+                }
+                return (names, outcome);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "el listado no terminó: quedó sin plaza"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn ocho_shares_colgados_no_dejan_sin_plaza_a_un_listado_local() {
+        let admissions = ListingAdmissions::default();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let mut hung = Vec::new();
+        let mut rejected = 0;
+        for index in 0..8 {
+            let share = PathBuf::from(format!(r"\\servidor-caido\recurso{index}"));
+            match spawn_hung_remote(
+                share,
+                &admissions,
+                entered_tx.clone(),
+                Arc::clone(&release_rx),
+            ) {
+                Ok(worker) => hung.push(worker),
+                Err(ListingStartError::Capacity) => rejected += 1,
+                Err(ListingStartError::Spawn(error)) => panic!("spawn: {error}"),
+            }
+        }
+        for _ in 0..hung.len() {
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+        assert_eq!(hung.len(), REMOTE_LISTING_SLOTS);
+        assert_eq!(rejected, 8 - REMOTE_LISTING_SLOTS);
+        assert_eq!(admissions.remote().active(), REMOTE_LISTING_SLOTS);
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("local.txt"), b"ok").unwrap();
+        let local = admissions.for_path(dir.path(), &AllLocal);
+        assert!(std::ptr::eq(local, admissions.local()));
+        let (rx, worker) = try_spawn_listing_filtered(
+            dir.path().to_path_buf(),
+            CancellationToken::new(),
+            ListingFilter::All,
+            local,
+        )
+        .expect("un disco local no espera detrás de los shares colgados");
+        let (names, outcome) = wait_terminal(&rx);
+        worker.join().unwrap();
+        assert_eq!(names, ["local.txt"]);
+        assert_eq!(outcome, ListingOutcome::Complete);
+        assert_eq!(admissions.local().active(), 0);
+        assert_eq!(admissions.remote().active(), REMOTE_LISTING_SLOTS);
+
+        drop(release_tx);
+        for (_, worker) in hung {
+            worker.join().unwrap();
+        }
+        assert_eq!(admissions.remote().active(), 0);
+    }
+
+    #[test]
+    fn cuatro_shares_colgados_dejan_pasar_al_local_y_el_quinto_remoto_espera_su_turno() {
+        let admissions = ListingAdmissions::default();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let mut hung = Vec::new();
+        for index in 0..REMOTE_LISTING_SLOTS {
+            let share = PathBuf::from(format!(r"\\?\UNC\servidor-caido\recurso{index}"));
+            hung.push(
+                spawn_hung_remote(
+                    share,
+                    &admissions,
+                    entered_tx.clone(),
+                    Arc::clone(&release_rx),
+                )
+                .unwrap(),
+            );
+        }
+        for _ in 0..REMOTE_LISTING_SLOTS {
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+
+        // Quinto local: entra de inmediato y termina.
+        let dir = tempfile::tempdir().unwrap();
+        let (rx, worker) = try_spawn_listing_filtered(
+            dir.path().to_path_buf(),
+            CancellationToken::new(),
+            ListingFilter::All,
+            admissions.for_path(dir.path(), &AllLocal),
+        )
+        .unwrap();
+        assert_eq!(wait_terminal(&rx).1, ListingOutcome::Complete);
+        worker.join().unwrap();
+
+        // Quinto remoto: el cupo lo rechaza de forma explícita (la UI lo deja en cola)...
+        let fifth = PathBuf::from(r"\\servidor-lento\quinto");
+        assert!(matches!(
+            try_spawn_listing_filtered(
+                fifth.clone(),
+                CancellationToken::new(),
+                ListingFilter::All,
+                admissions.for_path(&fifth, &AllLocal),
+            ),
+            Err(ListingStartError::Capacity)
+        ));
+        // ...y entra en cuanto un share colgado libera su plaza.
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while admissions.remote().active() == REMOTE_LISTING_SLOTS {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "ninguna plaza se liberó"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let (rx, worker) =
+            spawn_hung_remote(fifth, &admissions, entered_tx, Arc::clone(&release_rx))
+                .expect("el quinto remoto toma la plaza liberada");
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        drop(release_tx);
+        assert!(matches!(wait_terminal(&rx).1, ListingOutcome::Failed(_)));
+        worker.join().unwrap();
+        for (_, worker) in hung {
+            worker.join().unwrap();
+        }
+        assert_eq!(admissions.remote().active(), 0);
     }
 
     #[test]
