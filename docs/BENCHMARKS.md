@@ -3,6 +3,95 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
+### T13 — listados grandes, 2026-11-22
+
+Causa: con una carpeta de 100k abierta, cada cambio dentro de ella costaba un núcleo completo durante
+el resaltado de 8 s. Mientras hubiera una ruta fresca, `rows_signature` devolvía `None` y cada tick
+de 30 ms reconstruía, convertía y comparaba las 100 020 filas, aunque `highlight` es un `bool` que no
+cambia hasta que vence. Además, cualquier alta o baja fuera de los dos deltas existentes construía
+las n filas (cadenas + `VecModel` de celdas por fila) y el modelo se reconciliaba con
+`remove`/`insert` de a una fila.
+
+Cambios (commits `fbaecbcc`, `5cee42f0`):
+
+- La firma de filas incluye el CONJUNTO de rutas frescas vigentes, que solo cambia al empezar o
+  vencer un resaltado. Mientras dura, el tick no reconstruye nada. El tick ya no sigue a 30 ms solo
+  para apagar el resaltado: duerme hasta el próximo vencimiento.
+- `RowsModel` (`impl slint::Model` sobre `Vec<RowData>`) avisa por tramo (`row_added(i, n)` /
+  `row_removed(i, n)`), sin `reset`. Guarda una clave por fila (identidad + contenido, solo enteros).
+  `sync_rows` compara claves y construye solo las filas que entran o cambian.
+- Core: `entries_appended` intercala las entradas nuevas en la vista vigente por búsqueda binaria
+  en vez de reordenar todo. `cmp_name` compara nombres ASCII sin alocar. Un lote del watcher solo de
+  altas se avisa como append.
+- El delta de filas modificadas busca las rutas por nombre final, sin hashear las 100k rutas.
+
+#### `w10c_headless_sync_measurement`, 100k filas, release (ms)
+
+Antes: mediana de tres pasadas de la línea base 0.5.6 (`79b99963`, sección "W-07 y vista profunda"
+de abajo; mismo harness). Después: mediana de tres pasadas de `5cee42f0`.
+
+| Paso | 10k antes | 10k después | 100k antes | 100k después |
+| :--- | ---: | ---: | ---: | ---: |
+| Sync inicial | 28,27 | 29,61 | 286,34 | 311,87 |
+| Sync sin cambios | 0,153 | 0,033 | 1,617 | 0,055 |
+| Actualizar una fila | 2,80 | 0,375 | 28,54 | 3,80 |
+| Anexar una fila | 2,17 | 0,515 | 22,26 | 4,14 |
+| Alta en el medio | — | 1,22 | — | 13,36 |
+| Empieza resaltado | — | 1,34 | — | 12,10 |
+| Tick con resaltado vigente | — | 0,034 | — | 0,053 |
+| Raster software | 1,530 | 1,948 | 1,563 | 1,579 |
+
+Pasadas de 100k (después): una fila 3,80 · 7,77 · 3,36; append 3,93 · 5,40 · 4,14; alta en el medio
+13,01 · 14,53 · 13,36. Crudos: `target/bench-runtime/raw-t13/w10c-release-after.txt`. El test
+release compiló en 15m59s (incremental sobre el release del exe).
+
+Las tres columnas nuevas no existían en el harness anterior. "Alta en el medio" agrega una entrada
+que el orden por nombre intercala en la mitad. "Empieza resaltado" marca esa ruta como fresca, como
+hace el watcher tras un alta. "Tick con resaltado" es la mediana de cinco `sync_rows` seguidos con
+el resaltado vigente.
+
+Antes/después de esas columnas en perfil `test` (debug, mediana de tres pasadas, 100k, mismo
+harness extendido aplicado también sobre la base): alta en el medio 2389 → 196 ms; empieza resaltado
+2429 → 212 ms; tick con resaltado 2082 → 0,48 ms (era una reconstrucción completa por tick). En ese
+mismo perfil: sin cambios 43 → 0,38 ms, una fila 381 → 16 ms y append 128 → 7,8 ms. Crudos:
+`target/bench-runtime/raw-t13/w10c-dev-{before,after}-ext.txt`.
+
+- La meta de < 3 ms en "una fila" y "anexar" a 100k NO se alcanzó: 3,80 y 4,14 ms (antes 28,54 y
+  22,26; ~7× y ~5×). Lo que queda: el delta de filas modificadas recorre la vista buscando la ruta
+  (cada entrada desreferencia su ruta en el heap) y el primer append tras el llenado realoca el
+  `Vec<RowData>` de 100k filas (crece al doble). Ver propuestas en el informe de T13.
+- Alta en el medio y cambio de resaltado cuestan ~12–13 ms con 100k: son O(n) en claves enteras (sin
+  construir filas). Antes eran una reconstrucción completa de las n filas (en debug 2,4 s contra
+  0,17 s).
+- El llenado inicial sube ~9 % (286 → 312 ms) porque además calcula las claves de las 100k filas.
+
+#### Proceso real, release (proceso raíz)
+
+Antes = exe `83cf3638` (T12, sin cambios de filas desde entonces); después = `5cee42f0`. Misma
+configuración portable (disposición clásica), `NAYGO_DEBUG_MULTI_INSTANCE=1`, una instancia tras
+otra. Fixture: 100 000 archivos vacíos + 20 carpetas. Los "antes" corrieron con una compilación
+`cargo test` (1 job) en paralelo. Los "después" corrieron sin compilación en paralelo.
+
+| Escenario | CPU antes | CPU después | WS antes → después (MiB) | Private antes → después (MiB) |
+| :--- | :--- | :--- | ---: | ---: |
+| Crear un archivo en la carpeta de 100k, CPU de los 12 s siguientes (2 eventos) | 8,09 · 11,80 s | 0,22 · 0,22 s | 256,2 → 176,1 | 248,7 → 156,6 |
+| 2. Home idle, 5 ventanas de 20 s | 0,28 · 0,47 · 0,03 · 0,31 · 0,09 s | 0,14 · 0,11 · 0 · 0,05 · 0,05 s | 58,2 → 58,5 | 27,3 → 27,4 |
+| 3. 100k + home, 4 ventanas de 20 s tras 60 s | 15,31 (listado) · 0,97 · 1,38 · 0,02 s | 0,02 · 0,03 · 0,06 · 0,03 s | 182,7 → 174,2 | 165,4 → 155,3 |
+
+Notas:
+
+- El evento en la carpeta de 100k baja de ~12 s de CPU por cada 12 s a 0,22 s (~50×). La memoria
+  tras el evento deja de crecer ~80 MiB: antes cada tick armaba un `Vec` nuevo de 100k filas y el
+  heap quedaba con ese pico. Ahora queda igual que en reposo.
+- En el escenario 3 el listado inicial de 100k ya terminó dentro de los 60 s de espera (antes se
+  comía la primera ventana con 15 s de CPU). Es el append incremental de la vista: cada lote del
+  listado ya no reordena las entradas acumuladas.
+- Memoria por fila (escenario 3 menos escenario 2): ~128 MiB por 100k → ~1,3 KiB por fila (antes
+  ~1,4 KiB). La ganancia viene de compartir el `SharedString` del nombre con su celda y de no
+  re-crear filas. `RowsModel` agrega 16 bytes de clave por fila (1,5 MiB por 100k).
+- Los escenarios 2 y 3 dependen de cuándo otra app escribe en home: comparan la forma, no un valor
+  exacto.
+
 ### T12 — después de modelos persistentes, 2026-11-21
 
 Causa de las ráfagas de CPU en idle de la línea base (abajo): cada archivo nuevo o modificado en una
