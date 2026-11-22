@@ -56,6 +56,7 @@ mod persistent_models;
 mod preview;
 mod preview_animation_tick;
 mod rows_model;
+mod shell_exec;
 mod startup_load;
 mod sync;
 mod theme_apply;

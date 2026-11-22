@@ -1272,20 +1272,6 @@ fn terminal_context_does_not_switch_when_active_panel_path_changes() {
 }
 
 #[test]
-fn folder_shell_rejects_extra_request_while_worker_is_blocked() {
-    let root = tempfile::tempdir().unwrap();
-    let (mut c, _cfg) = ctrl_en(root.path());
-    let (sender, receiver) = mpsc::channel();
-    c.folder_shell_rx = Some(receiver);
-    c.terminal_active(0);
-    assert!(c.folder_shell_rx.is_some());
-    assert!(c.take_shell_error().is_some());
-    sender.send(Ok(())).unwrap();
-    assert!(c.take_shell_error().is_none());
-    assert!(c.folder_shell_rx.is_none());
-}
-
-#[test]
 fn empty_area_context_keeps_missing_panel_directory_for_creation() {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("missing");
@@ -2241,4 +2227,53 @@ fn mark_y_pane_was_ejected() {
         !c.pane_was_ejected(id),
         "navegar limpia el flag de expulsado"
     );
+}
+
+#[test]
+fn deep_start_on_missing_dir_does_no_stat_and_worker_reports_partial() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    let pane = c.active_files_id().unwrap();
+    c.ws.pane_mut(pane)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .current_dir = root.path().join("desaparecida");
+    c.deep_start(pane);
+    // El job se crea sin comprobar la carpeta en el hilo de UI; el error llega del worker.
+    assert!(c.deep_job.is_some());
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let job = c.deep_job.as_ref().unwrap();
+    assert!(job.done && job.partial && job.items.is_empty());
+}
+
+#[test]
+fn shell_job_submit_returns_immediately_even_with_slow_handler() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    c.shell = crate::shell_exec::ShellExecutor::spawn(|| {
+        |_job: naygo_platform::open::ShellJob| {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            Err(naygo_platform::open::ShellError::Failed("lento".into()))
+        }
+    });
+    let start = std::time::Instant::now();
+    c.submit_shell(naygo_platform::open::ShellJob::Open(
+        root.path().join("a.txt"),
+    ));
+    assert!(c.take_shell_error().is_none());
+    assert!(start.elapsed() < std::time::Duration::from_millis(50));
+    for _ in 0..400 {
+        if let Some(error) = c.take_shell_error() {
+            assert_eq!(error, "lento");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("el error del handler lento nunca llegó");
 }

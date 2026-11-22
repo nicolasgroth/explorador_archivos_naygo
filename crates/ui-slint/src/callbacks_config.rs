@@ -1380,10 +1380,14 @@ pub(crate) fn wire_config(
     }
     // Acerca de: abrir el repositorio en el navegador por defecto.
     {
+        let ctrl = ctrl.clone();
         cfg_win.on_open_repo(move || {
-            let _ = naygo_platform::open::open_default(std::path::Path::new(
-                "https://github.com/nicolasgroth/explorador_archivos_naygo",
-            ));
+            ctrl.borrow_mut()
+                .submit_shell_silent(naygo_platform::open::ShellJob::Open(
+                    std::path::PathBuf::from(
+                        "https://github.com/nicolasgroth/explorador_archivos_naygo",
+                    ),
+                ));
         });
     }
     // Acerca de (easter egg): primeros `n` caracteres del mensaje (substring que Slint no ofrece).

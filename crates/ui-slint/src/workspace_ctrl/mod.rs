@@ -412,9 +412,9 @@ pub struct WorkspaceCtrl {
     pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
     /// Error pendiente de una operación Shell; el tick lo convierte en toast localizado.
     pub pending_shell_error: Option<String>,
-    /// Una sola solicitud Shell de carpeta; una llamada del SO bloqueada conserva la plaza.
-    folder_shell_rx: Option<Receiver<Result<(), naygo_platform::open::ShellError>>>,
-    folder_shell_waker: Option<naygo_platform::dir_watch::Waker>,
+    /// Ejecutor único de acciones Shell (abrir, abrir con, runas, carpeta/terminal) en un hilo
+    /// propio: el hilo de UI solo encola y recoge resultados.
+    shell: crate::shell_exec::ShellExecutor,
     /// Error de listado (puede indicar resultados parciales). El tick lo muestra sin modal.
     pub pending_listing_error: Option<String>,
     /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
@@ -1020,8 +1020,7 @@ impl WorkspaceCtrl {
             open_config_requested: false,
             toolbar_menu_requested: None,
             pending_shell_error: None,
-            folder_shell_rx: None,
-            folder_shell_waker: None,
+            shell: crate::shell_exec::ShellExecutor::spawn_system(),
             pending_listing_error: None,
             comparison: HashMap::new(),
             comparison_pair: None,
@@ -1253,6 +1252,21 @@ impl WorkspaceCtrl {
             if overridden {
                 f.update_pending_context_after_selection();
             }
+        }
+    }
+
+    /// Encola una acción Shell sin bloquear; el resultado (y el aviso de error) llegan por
+    /// `pump_folder_shell` cuando el worker termina.
+    pub(super) fn submit_shell(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, true) {
+            self.report_shell_result(Err(error));
+        }
+    }
+
+    /// Como `submit_shell` pero el error no se muestra (botones que históricamente lo ignoraban).
+    pub fn submit_shell_silent(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, false) {
+            crate::logging::log_line(&format!("operación Shell falló: {error}"));
         }
     }
 

@@ -7,7 +7,7 @@
 //! `Result` tipado, nunca tumba el proceso. La política de Naygo es abrir con el SO,
 //! no reproducir/editar.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Error al pedirle al Shell que abra un archivo.
 #[derive(Debug)]
@@ -80,6 +80,69 @@ pub fn open_folder_action(dir: &Path, action: FolderAction) -> Result<(), ShellE
     match action {
         FolderAction::Explorer => open_default(dir),
         FolderAction::Terminal(term) => open_terminal(dir, term),
+    }
+}
+
+/// Orden para el ejecutor de acciones Shell (un hilo worker propio). Todas pueden bloquear
+/// (handlers lentos, shares de red caídos), por eso nunca deben correr en el hilo de UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShellJob {
+    /// Abrir con el programa por defecto (verbo "open").
+    Open(PathBuf),
+    /// Diálogo "Abrir con…" (verbo "openas").
+    OpenWith(PathBuf),
+    /// Ejecutar con elevación UAC (verbo "runas").
+    RunAsAdministrator(PathBuf),
+    /// Acción sobre una carpeta (Explorer o terminal); valida que sea carpeta.
+    Folder { dir: PathBuf, action: FolderAction },
+}
+
+/// Ejecuta una orden en el hilo actual. Debe llamarse desde un worker con COM en STA (ver
+/// [`shell_job_runner`]).
+pub fn run_shell_job(job: ShellJob) -> Result<(), ShellError> {
+    match job {
+        ShellJob::Open(path) => open_default(&path),
+        ShellJob::OpenWith(path) => open_with_dialog(&path),
+        ShellJob::RunAsAdministrator(path) => run_as_administrator(&path),
+        ShellJob::Folder { dir, action } => open_folder_action(&dir, action),
+    }
+}
+
+/// Se invoca DENTRO del hilo worker: inicializa COM en STA (lo exige ShellExecute para las
+/// extensiones del Shell) y devuelve el ejecutor de órdenes. COM se libera cuando el closure
+/// se descarta al terminar el hilo. Si COM falla, cada orden devuelve ese error en vez de
+/// ejecutar el Shell sin STA.
+pub fn shell_job_runner() -> impl FnMut(ShellJob) -> Result<(), ShellError> {
+    #[cfg(windows)]
+    let com_error = {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        hr.is_err().then(|| format!("COM: {hr:?}"))
+    };
+    #[cfg(not(windows))]
+    let com_error: Option<String> = None;
+    let guard = ComGuard(com_error.is_none());
+    move |job| {
+        let _keep = &guard;
+        match &com_error {
+            Some(message) => Err(ShellError::Failed(message.clone())),
+            None => run_shell_job(job),
+        }
+    }
+}
+
+/// Libera COM al descartarse (solo si la inicialización tuvo éxito).
+struct ComGuard(bool);
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.0 {
+            // SAFETY: empareja el CoInitializeEx exitoso hecho en el mismo hilo.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+        #[cfg(not(windows))]
+        let _ = self.0;
     }
 }
 

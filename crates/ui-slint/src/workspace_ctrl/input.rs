@@ -517,8 +517,9 @@ impl WorkspaceCtrl {
                         );
                     }
                     if naygo_platform::open::can_run_as_administrator(&target.path) {
-                        let result = naygo_platform::open::run_as_administrator(&target.path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            target.path.clone(),
+                        ));
                     }
                     return false;
                 }
@@ -531,8 +532,9 @@ impl WorkspaceCtrl {
                         return false;
                     };
                     if naygo_platform::open::can_run_as_administrator(&target.path) {
-                        let result = naygo_platform::open::run_as_administrator(&target.path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            target.path.clone(),
+                        ));
                     }
                     return false;
                 }
@@ -677,8 +679,7 @@ impl WorkspaceCtrl {
                 Action::MoveToOther => return self.basket_request_transfer(true),
                 Action::Activate => {
                     if let Some(path) = self.basket_selected_path() {
-                        let result = naygo_platform::open::open_default(&path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::Open(path));
                     }
                     return true;
                 }
@@ -854,8 +855,9 @@ impl WorkspaceCtrl {
                     );
                 }
                 if naygo_platform::open::can_run_as_administrator(&target.path) {
-                    let result = naygo_platform::open::run_as_administrator(&target.path);
-                    self.report_shell_result(result);
+                    self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                        target.path.clone(),
+                    ));
                 }
                 return false;
             }
@@ -867,8 +869,9 @@ impl WorkspaceCtrl {
                     .map(|e| e.path.clone());
                 if let Some(path) = target {
                     if naygo_platform::open::can_run_as_administrator(&path) {
-                        let result = naygo_platform::open::run_as_administrator(&path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            path.clone(),
+                        ));
                     }
                 }
                 return false;

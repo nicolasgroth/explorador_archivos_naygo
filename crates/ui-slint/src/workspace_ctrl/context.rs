@@ -472,8 +472,7 @@ impl WorkspaceCtrl {
     /// Abrir el primer objetivo con su programa por defecto.
     pub fn ctx_open(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
-            let result = naygo_platform::open::open_default(&p);
-            self.report_shell_result(result);
+            self.submit_shell(naygo_platform::open::ShellJob::Open(p));
         }
         self.close_context_menu();
     }
@@ -481,8 +480,7 @@ impl WorkspaceCtrl {
     /// Abrir-con… (diálogo del Shell) sobre el primer objetivo.
     pub fn ctx_open_with(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
-            let result = naygo_platform::open::open_with_dialog(&p);
-            self.report_shell_result(result);
+            self.submit_shell(naygo_platform::open::ShellJob::OpenWith(p));
         }
         self.close_context_menu();
     }
@@ -491,8 +489,7 @@ impl WorkspaceCtrl {
     pub fn ctx_run_as_administrator(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
             if naygo_platform::open::can_run_as_administrator(&p) {
-                let result = naygo_platform::open::run_as_administrator(&p);
-                self.report_shell_result(result);
+                self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(p));
             }
         }
         self.close_context_menu();
@@ -534,62 +531,21 @@ impl WorkspaceCtrl {
     }
 
     pub(crate) fn set_folder_shell_waker(&mut self, waker: naygo_platform::dir_watch::Waker) {
-        self.folder_shell_waker = Some(waker);
+        self.shell.set_waker(waker);
     }
 
-    /// Una plaza sin cola: no acumular hilos si un proveedor de red o Shell queda bloqueado.
     fn start_folder_shell(&mut self, dir: PathBuf, action: naygo_platform::open::FolderAction) {
-        self.pump_folder_shell();
-        if self.folder_shell_rx.is_some() {
-            self.pending_shell_error = Some(self.config.t("path.edit.busy"));
-            if let Some(waker) = &self.folder_shell_waker {
-                waker();
-            }
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let waker = self.folder_shell_waker.clone();
-        let started = std::thread::Builder::new()
-            .name("naygo-folder-shell".into())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(|| {
-                    naygo_platform::open::open_folder_action(&dir, action)
-                })
-                .unwrap_or_else(|_| {
-                    Err(naygo_platform::open::ShellError::Failed(
-                        "Shell worker failed".into(),
-                    ))
-                });
-                let _ = tx.send(result);
-                if let Some(waker) = waker {
-                    waker();
-                }
-            });
-        match started {
-            Ok(_) => self.folder_shell_rx = Some(rx),
-            Err(error) => {
-                self.pending_shell_error = Some(error.to_string());
-                if let Some(waker) = &self.folder_shell_waker {
-                    waker();
-                }
-            }
-        }
+        self.submit_shell(naygo_platform::open::ShellJob::Folder { dir, action });
     }
 
+    /// Recoge los resultados que el worker Shell ya entregó y reporta los errores.
     pub(super) fn pump_folder_shell(&mut self) {
-        let Some(rx) = &self.folder_shell_rx else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(result) => {
-                self.folder_shell_rx = None;
-                self.report_shell_result(result);
+        for outcome in self.shell.drain() {
+            if outcome.report {
+                self.report_shell_result(outcome.result);
+            } else if let Err(error) = outcome.result {
+                crate::logging::log_line(&format!("operación Shell falló: {error}"));
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.folder_shell_rx = None;
-                self.pending_shell_error = Some("Shell worker disconnected".into());
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
         }
     }
 

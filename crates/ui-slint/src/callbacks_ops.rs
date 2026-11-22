@@ -43,9 +43,13 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         // Botón "abrir con el programa del sistema" del panel de vista previa: ShellExecute
         // sobre la ruta del archivo previsualizado (la app no edita; abre con el editor del SO).
+        let ctrl = ctrl.clone();
         ui.on_preview_open(move |path| {
             if !path.is_empty() {
-                let _ = naygo_platform::open::open_default(std::path::Path::new(path.as_str()));
+                ctrl.borrow_mut()
+                    .submit_shell_silent(naygo_platform::open::ShellJob::Open(
+                        std::path::PathBuf::from(path.as_str()),
+                    ));
             }
         });
     }

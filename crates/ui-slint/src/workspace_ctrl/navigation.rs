@@ -216,12 +216,12 @@ impl WorkspaceCtrl {
                 self.sync_trees_for_files(id, e.path);
                 return true;
             } else {
-                let result = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
-                    naygo_platform::open::run_as_administrator(&e.path)
+                let job = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
+                    naygo_platform::open::ShellJob::RunAsAdministrator(e.path)
                 } else {
-                    naygo_platform::open::open_default(&e.path)
+                    naygo_platform::open::ShellJob::Open(e.path)
                 };
-                self.report_shell_result(result);
+                self.submit_shell(job);
                 return false;
             }
         }
@@ -252,12 +252,12 @@ impl WorkspaceCtrl {
             self.sync_trees_for_files(id, e.path);
             true
         } else {
-            let result = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
-                naygo_platform::open::run_as_administrator(&e.path)
+            let job = if shift && naygo_platform::open::can_run_as_administrator(&e.path) {
+                naygo_platform::open::ShellJob::RunAsAdministrator(e.path)
             } else {
-                naygo_platform::open::open_default(&e.path)
+                naygo_platform::open::ShellJob::Open(e.path)
             };
-            self.report_shell_result(result);
+            self.submit_shell(job);
             false
         }
     }
@@ -729,8 +729,7 @@ impl WorkspaceCtrl {
             };
             self.request_action(PaneAction::OpenDir(hit.entry.path), origin, self.last_area);
         } else {
-            let result = naygo_platform::open::open_default(&hit.entry.path);
-            self.report_shell_result(result);
+            self.submit_shell(naygo_platform::open::ShellJob::Open(hit.entry.path));
         }
     }
 
@@ -1084,8 +1083,9 @@ impl WorkspaceCtrl {
             .pane(id)
             .filter(|p| p.purpose == PanePurpose::Files)
             .and_then(|p| p.files.as_ref())
-            .map(|f| f.current_dir.clone())
-            .filter(|d| d.is_dir());
+            .map(|f| f.current_dir.clone());
+        // Sin `is_dir()` aquí: es un stat en el hilo de UI y se cuelga en shares caídos. El
+        // worker de vista profunda reporta una carpeta inexistente o inaccesible.
         let Some(dir) = dir else { return };
         self.deep_cancel();
         if self
