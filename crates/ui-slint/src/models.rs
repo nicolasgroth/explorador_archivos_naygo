@@ -65,6 +65,8 @@ pub(crate) struct Models {
     pub(crate) groups: Vec<(Vec<PaneId>, usize)>,
     /// Área con la que se construyó la estructura actual (para detectar resize).
     pub(crate) area: Rect,
+    /// VM de la vista previa: lo comparten `sync_rows` y el timer de animación.
+    pub(crate) preview_vm: crate::persistent_models::PreviewVmCache,
 }
 
 impl Models {
@@ -83,6 +85,7 @@ impl Models {
                 w: 0.0,
                 h: 0.0,
             },
+            preview_vm: Default::default(),
         }
     }
 

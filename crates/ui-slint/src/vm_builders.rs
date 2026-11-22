@@ -372,26 +372,12 @@ pub(crate) fn code_lang_label(lang: naygo_core::preview::CodeLang) -> &'static s
     }
 }
 
-pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
-    // Ruta del archivo enfocado (para "abrir con el programa del sistema"); usar `wanted`
-    // primero evita que durante una carga larga se vea el path del archivo anterior.
-    let path: SharedString = c
-        .preview
-        .wanted
-        .as_ref()
-        .or(c.preview.loaded.as_ref())
-        .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
-        .unwrap_or_default();
-    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
-    let meta = meta_fields_model(c);
-    let meta_loading = c.meta_loading();
-    let mesh_interactive = c.preview.mesh_interactive();
-    let mesh_busy = c.preview.busy() && mesh_interactive;
-    let (mesh_color, mesh_surface) = c.preview.mesh_appearance_indices();
-    let loading = c.preview.loading();
-    let can_cancel = c.preview.can_cancel(std::time::Instant::now());
-    let can_retry = c.preview.can_retry();
-    let animation_state = c.preview.animation_state();
+/// Parte pesada del `PreviewVm` (texto, imagen, mensaje y líneas resaltadas) derivada de la
+/// última vista entregada. `PreviewVmCache` la arma una vez por revisión; los campos de estado
+/// los completa `fill_preview_state`. `hl_lines` es SIEMPRE un modelo nuevo (aunque esté vacío):
+/// su puntero identifica la base en `preview_vm_eq`.
+pub(crate) fn preview_base_vm(c: &WorkspaceCtrl) -> PreviewVm {
+    let empty_lines = || ModelRc::from(Rc::new(VecModel::<HlLineVm>::default()));
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
@@ -440,87 +426,61 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 text: SharedString::from(text.as_str()),
                 truncated: *truncated,
                 text_info: SharedString::from(text_info.as_str()),
-                image: slint::Image::default(),
-                message: SharedString::new(),
                 highlighted: is_hl,
                 hl_lines: ModelRc::from(Rc::new(VecModel::from(hl_lines))),
-                path,
-                meta,
-                meta_loading,
-                mesh_interactive,
-                mesh_busy,
-                mesh_color,
-                mesh_surface,
-                loading,
-                can_cancel,
-                can_retry,
-                animation_state,
+                ..PreviewVm::default()
             }
         }
         Some(preview::ViewCache::Image { image, .. }) => PreviewVm {
             mode: 2,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
             image: image.clone(),
-            message: SharedString::new(),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive,
-            mesh_busy,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
         Some(preview::ViewCache::Message(m)) => PreviewVm {
             mode: 3,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
-            image: slint::Image::default(),
             message: SharedString::from(m.as_str()),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive,
-            mesh_busy,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
         None => PreviewVm {
             mode: 0,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
-            image: slint::Image::default(),
-            message: SharedString::new(),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive: false,
-            mesh_busy: false,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
     }
+}
+
+/// Completa los campos baratos del `PreviewVm` (ruta, metadata y estado de carga/3D/animación)
+/// sobre una base de `preview_base_vm`. `meta` es el modelo persistente de metadata.
+pub(crate) fn fill_preview_state(
+    vm: &mut PreviewVm,
+    c: &WorkspaceCtrl,
+    meta: ModelRc<MetaFieldVm>,
+) {
+    // Ruta del archivo enfocado (para "abrir con el programa del sistema"); usar `wanted`
+    // primero evita que durante una carga larga se vea el path del archivo anterior.
+    vm.path = c
+        .preview
+        .wanted
+        .as_ref()
+        .or(c.preview.loaded.as_ref())
+        .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
+        .unwrap_or_default();
+    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
+    vm.meta = meta;
+    vm.meta_loading = c.meta_loading();
+    // Sin vista cargada no hay escena 3D que girar.
+    let mesh_interactive = vm.mode != 0 && c.preview.mesh_interactive();
+    vm.mesh_interactive = mesh_interactive;
+    vm.mesh_busy = c.preview.busy() && mesh_interactive;
+    let (mesh_color, mesh_surface) = c.preview.mesh_appearance_indices();
+    vm.mesh_color = mesh_color;
+    vm.mesh_surface = mesh_surface;
+    vm.loading = c.preview.loading();
+    vm.can_cancel = c.preview.can_cancel(std::time::Instant::now());
+    vm.can_retry = c.preview.can_retry();
+    vm.animation_state = c.preview.animation_state();
 }
 
 pub(crate) fn to_row_data(r: bridge::PlainRow) -> RowData {
@@ -818,18 +778,16 @@ pub(crate) fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
     }
 }
 
-/// Construye el modelo de campos de metadata para un VM, traduciendo cada clave i18n de etiqueta
-/// con `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
-pub(crate) fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
-    let fields: Vec<MetaFieldVm> = c
-        .meta_fields()
+/// Campos de metadata del archivo enfocado, traduciendo cada clave i18n de etiqueta con
+/// `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
+pub(crate) fn meta_fields(c: &WorkspaceCtrl) -> Vec<MetaFieldVm> {
+    c.meta_fields()
         .iter()
         .map(|(label_key, value)| MetaFieldVm {
             label: SharedString::from(c.config.t(label_key)),
             value: SharedString::from(value.as_str()),
         })
-        .collect();
-    ModelRc::from(Rc::new(VecModel::from(fields)))
+        .collect()
 }
 
 #[cfg(test)]

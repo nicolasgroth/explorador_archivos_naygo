@@ -161,7 +161,11 @@ pub struct PreviewState {
     /// Mensajes de error del preview, ya traducidos (los resuelve el hilo de UI con i18n).
     preview_msgs: PreviewMessages,
     /// Última vista entregada (para pintar en cada tick). `None` = nada cargado aún.
+    /// Solo se escribe con `set_last`, que avanza `last_revision`.
     last: Option<ViewCache>,
+    /// Cambia cada vez que se reemplaza `last`. El hilo de UI arma la parte pesada del VM
+    /// (texto, imagen, líneas resaltadas) una vez por revisión en vez de en cada tick.
+    last_revision: u64,
     /// Escena 3D cargada en memoria para que arrastrar el modelo no vuelva a leer STL/3MF desde
     /// disco. `Arc` permite pasarla al worker de rasterización sin copiar sus triángulos.
     mesh_scene: Option<(PathBuf, Arc<RetainedScene>)>,
@@ -205,6 +209,7 @@ impl Default for PreviewState {
             },
             preview_msgs: PreviewMessages::default(),
             last: None,
+            last_revision: 0,
             mesh_scene: None,
             mesh_load_rx: None,
             mesh_render_rx: None,
@@ -318,7 +323,7 @@ impl PreviewState {
         // No conservar el contenido del archivo anterior bajo la ruta recién enfocada: además de
         // ser engañoso, impedía saber que el preview actual llevaba demasiado tiempo cargando.
         self.loaded = None;
-        self.last = None;
+        self.set_last(None);
         true
     }
 
@@ -384,6 +389,16 @@ impl PreviewState {
     /// La última vista entregada, para pintar (None = nada cargado).
     pub fn last_view(&self) -> Option<&ViewCache> {
         self.last.as_ref()
+    }
+
+    /// Revisión de `last_view`: cambia cada vez que la vista se reemplaza.
+    pub fn view_revision(&self) -> u64 {
+        self.last_revision
+    }
+
+    fn set_last(&mut self, view: Option<ViewCache>) {
+        self.last = view;
+        self.last_revision = self.last_revision.wrapping_add(1);
     }
 
     /// ¿Hay que arrancar el worker AHORA? (hay objetivo distinto del cargado, no hay worker
@@ -487,7 +502,7 @@ impl PreviewState {
                 if Some(&path) == self.wanted.as_ref() {
                     self.terminal = matches!(&payload, Payload::Message(_));
                     self.loaded = Some(path);
-                    self.last = Some(match &payload {
+                    let view = match &payload {
                         Payload::Text {
                             text,
                             truncated,
@@ -506,7 +521,8 @@ impl PreviewState {
                             None => return Some(self.fail_resources()),
                         },
                         Payload::Message(m) => ViewCache::Message(m.clone()),
-                    });
+                    };
+                    self.set_last(Some(view));
                     Some(payload)
                 } else {
                     None
@@ -643,7 +659,9 @@ impl PreviewState {
             if let Some(path) = self.wanted.clone() {
                 self.loaded = Some(path);
             }
-            self.last = Some(ViewCache::Message(self.preview_msgs.cancelled.clone()));
+            self.set_last(Some(ViewCache::Message(
+                self.preview_msgs.cancelled.clone(),
+            )));
         }
         active
     }
@@ -785,7 +803,7 @@ impl PreviewState {
                     width: preview.width,
                     height: preview.height,
                 };
-                self.last = Some(match &payload {
+                let view = match &payload {
                     Payload::Image {
                         rgba,
                         width,
@@ -795,7 +813,8 @@ impl PreviewState {
                         None => return Some(self.fail_resources()),
                     },
                     _ => unreachable!(),
-                });
+                };
+                self.set_last(Some(view));
                 Some(payload)
             }
             Ok((_path, Err(error))) => {
@@ -833,7 +852,7 @@ impl PreviewState {
         self.cancel();
         self.terminal = true;
         if let Payload::Message(message) = &payload {
-            self.last = Some(ViewCache::Message(message.clone()));
+            self.set_last(Some(ViewCache::Message(message.clone())));
         }
         payload
     }
@@ -843,7 +862,7 @@ impl PreviewState {
         self.terminal = true;
         self.loaded = self.wanted.clone();
         let message = self.preview_msgs.decode.clone();
-        self.last = Some(ViewCache::Message(message.clone()));
+        self.set_last(Some(ViewCache::Message(message.clone())));
         Payload::Message(message)
     }
 
@@ -852,7 +871,7 @@ impl PreviewState {
         self.terminal = true;
         self.loaded = self.wanted.clone();
         let message = self.preview_msgs.reader_stopped.clone();
-        self.last = Some(ViewCache::Message(message.clone()));
+        self.set_last(Some(ViewCache::Message(message.clone())));
         Payload::Message(message)
     }
 
@@ -867,7 +886,7 @@ impl PreviewState {
         self.terminal = false;
         self.animation = None;
         self.loaded = None;
-        self.last = None;
+        self.set_last(None);
         self.since = Some(now);
         true
     }
@@ -899,7 +918,7 @@ impl PreviewState {
             3 => {
                 self.animation = None;
                 self.loaded = None;
-                self.last = None;
+                self.set_last(None);
                 self.since = Some(now);
                 true
             }
@@ -917,19 +936,21 @@ impl PreviewState {
                 width,
                 height,
             })) => match self.cache_image(&rgba, width, height) {
-                Some(cache) => self.last = Some(cache),
+                Some(cache) => self.set_last(Some(cache)),
                 None => {
                     self.fail_resources();
                 }
             },
             Ok(Some(Payload::Message(message))) => {
                 self.terminal = true;
-                self.last = Some(ViewCache::Message(message));
+                self.set_last(Some(ViewCache::Message(message)));
             }
             Ok(None) => {}
             _ => {
                 self.terminal = true;
-                self.last = Some(ViewCache::Message(self.preview_msgs.reader_stopped.clone()));
+                self.set_last(Some(ViewCache::Message(
+                    self.preview_msgs.reader_stopped.clone(),
+                )));
             }
         }
         true
@@ -947,7 +968,7 @@ impl PreviewState {
             self.terminal = terminal;
             self.loaded = None;
             if !terminal {
-                self.last = None;
+                self.set_last(None);
             }
             self.mesh_scene = None;
         }

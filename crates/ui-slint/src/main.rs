@@ -52,6 +52,7 @@ mod ops_ctrl;
 mod packs;
 mod path_validation;
 mod path_window_events;
+mod persistent_models;
 mod preview;
 mod preview_animation_tick;
 mod startup_load;

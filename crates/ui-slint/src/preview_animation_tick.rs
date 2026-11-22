@@ -49,15 +49,24 @@ pub(crate) fn build(
                 if !visible {
                     c.preview.set_visible(false, now);
                 }
+                // Si `models` está prestado (reentrada del loop modal de arrastre), el frame nuevo
+                // ya avanzó la revisión de la vista y el próximo `sync_rows` lo publica.
                 if c.preview.poll_animation(now) {
-                    let m = models.borrow();
-                    for (index, id) in m.pane_ids.iter().enumerate() {
-                        if c.ws.pane(*id).is_some_and(|p| {
-                            p.purpose == naygo_core::workspace::PanePurpose::Preview
-                        }) {
-                            if let Some(mut pane) = m.panes.row_data(index) {
-                                pane.preview = crate::vm_builders::current_preview_vm(&c);
-                                m.panes.set_row_data(index, pane);
+                    if let Ok(mut m) = models.try_borrow_mut() {
+                        let preview = m.preview_vm.vm(&c);
+                        for (index, id) in m.pane_ids.iter().enumerate() {
+                            if c.ws.pane(*id).is_some_and(|p| {
+                                p.purpose == naygo_core::workspace::PanePurpose::Preview
+                            }) {
+                                if let Some(mut pane) = m.panes.row_data(index) {
+                                    if !crate::persistent_models::preview_vm_eq(
+                                        &pane.preview,
+                                        &preview,
+                                    ) {
+                                        pane.preview = preview.clone();
+                                        m.panes.set_row_data(index, pane);
+                                    }
+                                }
                             }
                         }
                     }

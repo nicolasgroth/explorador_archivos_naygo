@@ -9,6 +9,7 @@
 // sin cambio de comportamiento (refactor por tamaño de archivo).
 
 use crate::models::{purpose_to_int, rects_equal, Models};
+use crate::persistent_models::{model_rc, preview_vm_eq, update_rows, PersistentModels};
 use crate::vm_builders::*;
 use crate::win_helpers::*;
 use crate::workspace_ctrl::WorkspaceCtrl;
@@ -242,8 +243,9 @@ pub(crate) fn build_sync(
         let row_sources = row_sources.clone();
         let deep_presentations = Rc::new(RefCell::new(HashMap::<u64, DeepPresentation>::new()));
         let deferred_rename_rows = Rc::new(RefCell::new(HashSet::<u64>::new()));
-        let search_model = Rc::new(VecModel::<SearchHitVm>::default());
-        let points_model = Rc::new(VecModel::<PointRowVm>::default());
+        // Modelos de nivel ventana creados UNA vez: reemplazarlos en cada tick obligaba a Slint a
+        // re-crear delegates y repintar overlays de ventana completa (ver `persistent_models`).
+        let window_models = RefCell::new(PersistentModels::new());
         move || {
             let _sync_metric = crate::metrics::span("ui.sync_rows");
             let Some(ui) = ui_weak.upgrade() else {
@@ -434,18 +436,24 @@ pub(crate) fn build_sync(
                 Some(path) => c.request_metadata(path),
                 None => c.clear_metadata(),
             }
-            inspector.meta = meta_fields_model(&c);
+            let mut wm = window_models.borrow_mut();
+            update_rows(&wm.inspector_meta, meta_fields(&c));
+            inspector.meta = model_rc(&wm.inspector_meta);
             inspector.meta_loading = c.meta_loading();
             inspector.has_provenance = c.has_provenance();
 
             // Props a nivel de ventana para el menú ▾ de favoritos del toolbar (el árbol jerárquico)
             // y para el submenú "Mover a…" del panel (lista de grupos destino).
-            ui.set_fav_tree(ModelRc::from(Rc::new(VecModel::from(fav_tree.clone()))));
-            ui.set_fav_group_options(ModelRc::from(Rc::new(VecModel::from(
-                fav_group_options.clone(),
-            ))));
+            update_rows(&wm.fav_tree, fav_tree.clone());
+            ui.set_fav_tree(model_rc(&wm.fav_tree));
+            update_rows(&wm.fav_group_options, fav_group_options);
+            ui.set_fav_group_options(model_rc(&wm.fav_group_options));
 
             let mut m = models.borrow_mut();
+            // La vista previa es la misma para todos los paneles Preview: se arma una vez.
+            let preview_vm = c
+                .has_purpose(PanePurpose::Preview)
+                .then(|| m.preview_vm.vm(&c));
             for (i, &id) in m.pane_ids.clone().iter().enumerate() {
                 let purpose = c.purpose_of(id);
                 // Actualiza los modelos de lista que apliquen al tipo, in situ.
@@ -749,33 +757,24 @@ pub(crate) fn build_sync(
                             c.tree_rows(id).into_iter().map(to_tree_row).collect();
                         m.models_for(id).tree.reconcile(rows);
                     }
+                    // Favoritos, recientes e historial: antes `set_vec` en cada tick (re-creaba
+                    // todas las filas del panel visible y mataba el hover); ahora solo las filas
+                    // que cambiaron.
                     Some(PanePurpose::Favorites) => {
-                        m.models_for(id).favs.set_vec(favs.clone());
-                        m.models_for(id).fav_tree.set_vec(fav_tree.clone());
+                        update_rows(&m.models_for(id).favs, favs.clone());
+                        update_rows(&m.models_for(id).fav_tree, fav_tree.clone());
                     }
                     Some(PanePurpose::Recents) => {
-                        m.models_for(id).recents.set_vec(recents.clone());
-                        m.models_for(id)
-                            .frequent_dirs
-                            .set_vec(frequent_dirs.clone());
+                        update_rows(&m.models_for(id).recents, recents.clone());
+                        update_rows(&m.models_for(id).frequent_dirs, frequent_dirs.clone());
                     }
                     Some(PanePurpose::History) => {
-                        m.models_for(id).hist.set_vec(hist.clone());
+                        update_rows(&m.models_for(id).hist, hist.clone());
                     }
                     Some(PanePurpose::Basket) => {
-                        let rows = c.basket_rows();
-                        let model = &m.models_for(id).basket;
                         // set_vec recreaba los TouchArea incluso al activar el panel:
                         // el mouse-up ya no encontraba el mouse-down de esa misma fila.
-                        if model.row_count() != rows.len() {
-                            model.set_vec(rows);
-                        } else {
-                            for (index, row) in rows.into_iter().enumerate() {
-                                if model.row_data(index).as_ref() != Some(&row) {
-                                    model.set_row_data(index, row);
-                                }
-                            }
-                        }
+                        update_rows(&m.models_for(id).basket, c.basket_rows());
                     }
                     _ => {}
                 }
@@ -937,13 +936,20 @@ pub(crate) fn build_sync(
                         }
                     }
                     // Inspector/Preview son structs sueltas: se setean según el tipo.
-                    if purpose == Some(PanePurpose::Inspector) {
+                    // Antes se marcaban como cambiados en CADA tick (con un modelo de metadata
+                    // nuevo): `set_row_data` del panel y repintado completo de Propiedades y
+                    // Vista previa cada 30 ms. Ahora solo si el VM cambió de verdad.
+                    if purpose == Some(PanePurpose::Inspector) && pv.inspector != inspector {
                         pv.inspector = inspector.clone();
                         changed = true;
                     }
-                    if purpose == Some(PanePurpose::Preview) {
-                        pv.preview = current_preview_vm(&c);
-                        changed = true;
+                    if let (Some(PanePurpose::Preview), Some(preview)) =
+                        (purpose, preview_vm.as_ref())
+                    {
+                        if !preview_vm_eq(&pv.preview, preview) {
+                            pv.preview = preview.clone();
+                            changed = true;
+                        }
                     }
                     if changed {
                         m.panes.set_row_data(i, pv);
@@ -964,7 +970,12 @@ pub(crate) fn build_sync(
             };
             ui.set_toolbar_path_favorite(path_target.is_some_and(|id| c.is_pane_dir_favorite(id)));
             ui.set_status(SharedString::from(c.status_line().as_str()));
-            ui.set_sync_vm(c.sync_vm());
+            // El asistente de sincronización trae hasta 5000 filas: se vuelcan en el modelo
+            // persistente para no re-crear la lista del modal en cada tick.
+            let mut sync_vm = c.sync_vm();
+            update_rows(&wm.sync_rows, sync_vm.rows.iter().collect());
+            sync_vm.rows = model_rc(&wm.sync_rows);
+            ui.set_sync_vm(sync_vm);
             ui.set_text_transform_vm(c.text_transform_vm());
             ui.set_delivery_visible(c.delivery.open);
             if c.task_spaces.open && !ui.get_spaces_visible() {
@@ -1018,6 +1029,7 @@ pub(crate) fn build_sync(
                 ui.set_points_exclusions(points.exclusions.clone().into());
                 ui.set_points_recursive(points.recursive);
                 ui.set_points_hashed(points.hashed);
+                let points_model = &wm.points;
                 while points_model.row_count() > points.rows.len() {
                     points_model.remove(points_model.row_count() - 1);
                 }
@@ -1028,7 +1040,7 @@ pub(crate) fn build_sync(
                         points_model.set_row_data(index, row.clone());
                     }
                 }
-                ui.set_points_rows(ModelRc::from(points_model.clone()));
+                ui.set_points_rows(model_rc(points_model));
                 ui.set_points_revision(points.revision);
             }
             ui.set_points_visible(points.open);
@@ -1055,9 +1067,8 @@ pub(crate) fn build_sync(
                 .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
                 .collect();
             // No recrear botones en cada tick: conservar foco y navegación por teclado.
-            if ui.get_spaces_recents().iter().ne(recents.iter().cloned()) {
-                ui.set_spaces_recents(ModelRc::from(Rc::new(VecModel::from(recents))));
-            }
+            update_rows(&wm.spaces_recents, recents);
+            ui.set_spaces_recents(model_rc(&wm.spaces_recents));
             ui.set_spaces_can_update(c.task_spaces.can_update());
             ui.set_spaces_pending(c.task_spaces.has_pending());
             ui.set_spaces_name(c.task_spaces.name().into());
@@ -1108,10 +1119,14 @@ pub(crate) fn build_sync(
             ui.set_op_queued_count(queued.len() as i32);
             ui.set_op_history_count(history.len() as i32);
             ui.set_op_planning_count(planning.len() as i32);
-            ui.set_op_running_rows(ModelRc::from(Rc::new(VecModel::from(running))));
-            ui.set_op_queued_rows(ModelRc::from(Rc::new(VecModel::from(queued))));
-            ui.set_op_history_rows(ModelRc::from(Rc::new(VecModel::from(history))));
-            ui.set_op_planning_rows(ModelRc::from(Rc::new(VecModel::from(planning))));
+            update_rows(&wm.op_running, running);
+            update_rows(&wm.op_queued, queued);
+            update_rows(&wm.op_history, history);
+            update_rows(&wm.op_planning, planning);
+            ui.set_op_running_rows(model_rc(&wm.op_running));
+            ui.set_op_queued_rows(model_rc(&wm.op_queued));
+            ui.set_op_history_rows(model_rc(&wm.op_history));
+            ui.set_op_planning_rows(model_rc(&wm.op_planning));
             // Brillo animado de la barra del panel de ops: solo si el usuario lo activó (default false).
             ui.set_op_animations_enabled(c.config.animations_enabled());
             let resume_rows: Vec<ResumeRowVm> = c
@@ -1123,7 +1138,8 @@ pub(crate) fn build_sync(
                     label: SharedString::from(label.as_str()),
                 })
                 .collect();
-            ui.set_resume_rows(ModelRc::from(Rc::new(VecModel::from(resume_rows))));
+            update_rows(&wm.resume, resume_rows);
+            ui.set_resume_rows(model_rc(&wm.resume));
             let clipboard_rows: Vec<ClipboardHistoryRowVm> = c
                 .ops
                 .clipboard_history()
@@ -1151,7 +1167,8 @@ pub(crate) fn build_sync(
                     }
                 })
                 .collect();
-            ui.set_clipboard_history_rows(ModelRc::from(Rc::new(VecModel::from(clipboard_rows))));
+            update_rows(&wm.clipboard_history, clipboard_rows);
+            ui.set_clipboard_history_rows(model_rc(&wm.clipboard_history));
             // Menú contextual: posición + si hay menú nativo disponible (hay HWND).
             let ctx = match &c.context_menu {
                 Some(cm) if c.active_id() == Some(cm.pane) => ContextMenuVm {
@@ -1226,6 +1243,7 @@ pub(crate) fn build_sync(
                         icon: r.icon,
                     })
                     .collect();
+                let search_model = &wm.search_hits;
                 while search_model.row_count() > hits.len() {
                     search_model.remove(search_model.row_count() - 1);
                 }
@@ -1251,7 +1269,7 @@ pub(crate) fn build_sync(
                     use_wildcards: options.use_wildcards,
                     recursive: options.recursive,
                     running,
-                    hits: ModelRc::from(search_model.clone()),
+                    hits: model_rc(search_model),
                     status: status.into(),
                 });
             }
@@ -1292,9 +1310,14 @@ pub(crate) fn build_sync(
                         text_case: m.text_case,
                         min_draft: SharedString::from(m.min_draft.as_str()),
                         max_draft: SharedString::from(m.max_draft.as_str()),
-                        exts: ModelRc::from(Rc::new(VecModel::from(exts))),
+                        exts: {
+                            update_rows(&wm.column_exts, exts);
+                            model_rc(&wm.column_exts)
+                        },
                     }
                 }
+                // `ColumnMenu` es un overlay de ventana completa: con un modelo `exts` nuevo en
+                // cada tick su VM cambiaba y el renderer repintaba toda la ventana.
                 None => ColumnMenuVm {
                     active: false,
                     x: 0.0,
@@ -1308,7 +1331,10 @@ pub(crate) fn build_sync(
                     text_case: false,
                     min_draft: SharedString::new(),
                     max_draft: SharedString::new(),
-                    exts: ModelRc::from(Rc::new(VecModel::<ExtRowVm>::default())),
+                    exts: {
+                        update_rows(&wm.column_exts, Vec::new());
+                        model_rc(&wm.column_exts)
+                    },
                 },
             };
             ui.set_column_menu(colmenu);
@@ -1369,7 +1395,10 @@ pub(crate) fn build_sync(
                         counter_step: SharedString::from(b.spec.counter_step.to_string()),
                         count: b.items.len() as i32,
                         can_apply: c.batch_can_apply(),
-                        rows: ModelRc::from(Rc::new(VecModel::from(rows))),
+                        rows: {
+                            update_rows(&wm.batch_rows, rows);
+                            model_rc(&wm.batch_rows)
+                        },
                     }
                 }
                 None => BatchRenameVm {
@@ -1385,22 +1414,31 @@ pub(crate) fn build_sync(
                     counter_step: SharedString::new(),
                     count: 0,
                     can_apply: false,
-                    rows: ModelRc::from(Rc::new(VecModel::<BatchRowVm>::default())),
+                    // Overlay de ventana completa, igual que `ColumnMenu`: mismo modelo siempre.
+                    rows: {
+                        update_rows(&wm.batch_rows, Vec::new());
+                        model_rc(&wm.batch_rows)
+                    },
                 },
             };
             ui.set_batch(batch);
 
             // Ayuda (F1): estado + atajos activos (leídos del keymap en vivo).
+            // La lista solo se ve con la ayuda abierta: se arma al abrirla o al cambiar el idioma,
+            // no en cada tick (traducir todo el keymap cada 30 ms era trabajo perdido).
             ui.set_help_open(c.help_open);
-            let help_rows: Vec<HelpRowVm> = c
-                .help_shortcuts()
-                .into_iter()
-                .map(|(label, chord)| HelpRowVm {
-                    label: SharedString::from(label.as_str()),
-                    chord: SharedString::from(chord.as_str()),
-                })
-                .collect();
-            ui.set_help_shortcuts(ModelRc::from(Rc::new(VecModel::from(help_rows))));
+            if wm.help_needs_rebuild(c.help_open, &c.config.settings.language) {
+                let help_rows: Vec<HelpRowVm> = c
+                    .help_shortcuts()
+                    .into_iter()
+                    .map(|(label, chord)| HelpRowVm {
+                        label: SharedString::from(label.as_str()),
+                        chord: SharedString::from(chord.as_str()),
+                    })
+                    .collect();
+                update_rows(&wm.help, help_rows);
+            }
+            ui.set_help_shortcuts(model_rc(&wm.help));
             crate::logging::set_diag_snapshot(c.diag_snapshot());
         }
     });
@@ -1572,7 +1610,7 @@ pub(crate) fn build_sync(
                         horizontal: matches!(h.dir, SplitDir::Horizontal),
                     })
                     .collect();
-                m.splits.set_vec(splits);
+                set_vec_if_changed(&m.splits, splits);
 
                 m.per_pane.retain(|id, _| all_ids.contains(id));
                 m.pane_ids = new_ids;
@@ -1626,7 +1664,7 @@ pub(crate) fn build_sync(
                         horizontal: matches!(h.dir, SplitDir::Horizontal),
                     })
                     .collect();
-                m.splits.set_vec(splits);
+                set_vec_if_changed(&m.splits, splits);
             }
 
             // Selector de panel destino: rect de cada candidato (orden visual) + su número.
@@ -1654,7 +1692,7 @@ pub(crate) fn build_sync(
                     None => Vec::new(),
                 }
             };
-            m.picks.set_vec(picks);
+            set_vec_if_changed(&m.picks, picks);
             let radar_rows: Vec<DestinationRadarRowVm> = ctrl
                 .borrow()
                 .destination_radar
@@ -1672,7 +1710,7 @@ pub(crate) fn build_sync(
                         .collect()
                 })
                 .unwrap_or_default();
-            m.destination_radar.set_vec(radar_rows);
+            set_vec_if_changed(&m.destination_radar, radar_rows);
 
             drop(m);
             sync_rows();
@@ -2818,6 +2856,169 @@ mod tests {
             ["a.txt", "m.txt", "z.txt", "zz.txt"],
             "un append que intercalaría el orden debe reconciliar el listado"
         );
+    }
+
+    /// Dos `sync_rows` seguidos sin cambios de estado deben dejar los MISMOS modelos (mismo
+    /// puntero) y no emitir ninguna notificación: un modelo nuevo por tick hacía que Slint
+    /// re-creara delegates y repintara overlays de ventana completa (100 % de CPU en idle).
+    #[test]
+    fn sync_rows_sin_cambios_conserva_modelos_y_no_notifica() {
+        use naygo_core::workspace::layout::Rect;
+        use slint::platform::{software_renderer::MinimalSoftwareWindow, Platform, WindowAdapter};
+        use slint::private_unstable_api::re_exports::{
+            ModelChangeListener, ModelChangeListenerContainer,
+        };
+        use std::cell::Cell;
+        use std::pin::Pin;
+
+        struct Headless(Rc<MinimalSoftwareWindow>);
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        #[derive(Default)]
+        struct Counter(Cell<usize>);
+        impl ModelChangeListener for Counter {
+            fn row_changed(self: Pin<&Self>, _row: usize) {
+                self.0.set(self.0.get() + 1);
+            }
+            fn row_added(self: Pin<&Self>, _index: usize, _count: usize) {
+                self.0.set(self.0.get() + 1);
+            }
+            fn row_removed(self: Pin<&Self>, _index: usize, _count: usize) {
+                self.0.set(self.0.get() + 1);
+            }
+            fn reset(self: Pin<&Self>) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        type Listener = Pin<Box<ModelChangeListenerContainer<Counter>>>;
+        fn listen<T>(model: &ModelRc<T>) -> Listener {
+            let listener = Box::pin(ModelChangeListenerContainer::new(Counter::default()));
+            model
+                .model_tracker()
+                .attach_peer(listener.as_ref().model_peer());
+            listener
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "hola").unwrap();
+        let adapter = MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+        );
+        slint::platform::set_platform(Box::new(Headless(adapter))).unwrap();
+        let ctrl = Rc::new(RefCell::new(WorkspaceCtrl::new_in(
+            root.clone(),
+            temp.path().join("settings"),
+        )));
+        // Disposición clásica: árbol + dos Files + Propiedades + Vista previa (los paneles que
+        // antes se re-asignaban en cada tick).
+        ctrl.borrow_mut().apply_first_run_layout();
+        let models = Rc::new(RefCell::new(Models::new()));
+        let ui = AppWindow::new().unwrap();
+        let sync = build_sync(
+            ui.as_weak(),
+            ctrl.clone(),
+            models.clone(),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 800.0,
+            }),
+        );
+        (sync.sync_layout)();
+        (sync.sync_rows)();
+        assert!(ctrl.borrow().has_purpose(PanePurpose::Inspector));
+        assert!(ctrl.borrow().has_purpose(PanePurpose::Preview));
+
+        macro_rules! snapshot {
+            () => {
+                (
+                    ui.get_fav_tree(),
+                    ui.get_fav_group_options(),
+                    ui.get_op_running_rows(),
+                    ui.get_op_queued_rows(),
+                    ui.get_op_history_rows(),
+                    ui.get_op_planning_rows(),
+                    ui.get_resume_rows(),
+                    ui.get_clipboard_history_rows(),
+                    ui.get_help_shortcuts(),
+                    ui.get_spaces_recents(),
+                    ui.get_column_menu().exts,
+                    ui.get_batch().rows,
+                    ui.get_sync_vm().rows,
+                    ui.get_search_vm().hits,
+                    ui.get_points_rows(),
+                )
+            };
+        }
+        let before = snapshot!();
+        let panes_before: Vec<PaneVm> = models.borrow().panes.iter().collect();
+        let pane_listener = listen(&ModelRc::from(models.borrow().panes.clone()));
+        let listeners = vec![
+            ("fav_tree", listen(&before.0)),
+            ("fav_group_options", listen(&before.1)),
+            ("op_running", listen(&before.2)),
+            ("op_queued", listen(&before.3)),
+            ("op_history", listen(&before.4)),
+            ("op_planning", listen(&before.5)),
+            ("resume", listen(&before.6)),
+            ("clipboard_history", listen(&before.7)),
+            ("help", listen(&before.8)),
+            ("spaces_recents", listen(&before.9)),
+            ("column_exts", listen(&before.10)),
+            ("batch_rows", listen(&before.11)),
+            ("sync_rows", listen(&before.12)),
+            ("search_hits", listen(&before.13)),
+            ("points", listen(&before.14)),
+        ];
+
+        (sync.sync_rows)();
+        (sync.sync_rows)();
+
+        let after = snapshot!();
+        macro_rules! same_models {
+            ($($index:tt $name:literal),+) => {
+                $(assert!(
+                    before.$index == after.$index,
+                    "sync_rows sin cambios reemplazó el modelo {}",
+                    $name
+                );)+
+            };
+        }
+        same_models!(
+            0 "fav_tree", 1 "fav_group_options", 2 "op_running", 3 "op_queued", 4 "op_history",
+            5 "op_planning", 6 "resume", 7 "clipboard_history", 8 "help", 9 "spaces_recents",
+            10 "column_exts", 11 "batch_rows", 12 "sync_rows", 13 "search_hits", 14 "points"
+        );
+        for (name, listener) in &listeners {
+            assert_eq!(
+                listener.0.get(),
+                0,
+                "el modelo {name} emitió notificaciones"
+            );
+        }
+        assert_eq!(
+            pane_listener.0.get(),
+            0,
+            "sync_rows sin cambios re-asignó filas del modelo de paneles"
+        );
+        let panes_after: Vec<PaneVm> = models.borrow().panes.iter().collect();
+        assert_eq!(panes_before.len(), panes_after.len());
+        for (left, right) in panes_before.iter().zip(&panes_after) {
+            assert!(left.inspector.meta == right.inspector.meta);
+            assert!(left.preview.hl_lines == right.preview.hl_lines);
+            assert!(left.preview.meta == right.preview.meta);
+            assert!(left.rows == right.rows);
+            assert!(left.segments == right.segments);
+            assert!(left.tabs == right.tabs);
+        }
     }
 
     /// Invoca el callback de teclado generado por Slint, conectado en `wire_nav_keys`.
