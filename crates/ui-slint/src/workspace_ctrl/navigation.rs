@@ -1195,6 +1195,7 @@ impl WorkspaceCtrl {
             return false;
         }
         let mut changed = false;
+        let mut incomplete_root = None;
         loop {
             match d.rx.try_recv() {
                 Ok(naygo_core::deep_listing::DeepMsg::Entry(de)) => {
@@ -1211,6 +1212,9 @@ impl WorkspaceCtrl {
                 Ok(naygo_core::deep_listing::DeepMsg::Done { partial }) => {
                     d.done = true;
                     d.partial = partial;
+                    if partial {
+                        incomplete_root = Some(d.root.clone());
+                    }
                     if let Some(mut entries) = d.replacement_items.take() {
                         if !partial {
                             let positions: std::collections::HashMap<_, _> = d
@@ -1260,6 +1264,18 @@ impl WorkspaceCtrl {
                     break;
                 }
             }
+        }
+        if let Some(root) = incomplete_root {
+            // Misma aviso discreto que el listado normal incompleto (toast, sin modal).
+            crate::logging::log_line(&format!(
+                "listado profundo incompleto en {}",
+                root.display()
+            ));
+            self.pending_listing_error = Some(format!(
+                "{}: {}",
+                self.config.t("listing.incomplete"),
+                root.display()
+            ));
         }
         changed
     }

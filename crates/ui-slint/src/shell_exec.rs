@@ -24,6 +24,9 @@ pub struct ShellExecutor {
     tx: Sender<(ShellJob, bool)>,
     rx: Receiver<ShellOutcome>,
     waker: Arc<Mutex<Option<Waker>>>,
+    /// Órdenes encoladas que el worker aún no empezó; evita duplicados por clics repetidos
+    /// mientras un handler está colgado.
+    queued: Arc<Mutex<Vec<ShellJob>>>,
 }
 
 impl ShellExecutor {
@@ -38,11 +41,18 @@ impl ShellExecutor {
         let (results, rx) = mpsc::channel::<ShellOutcome>();
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let waker_for_worker = waker.clone();
+        let queued: Arc<Mutex<Vec<ShellJob>>> = Arc::new(Mutex::new(Vec::new()));
+        let queued_for_worker = queued.clone();
         let started = std::thread::Builder::new()
             .name("naygo-shell".into())
             .spawn(move || {
                 let mut runner = make_runner();
                 while let Ok((job, report)) = jobs.recv() {
+                    if let Ok(mut queued) = queued_for_worker.lock() {
+                        if let Some(pos) = queued.iter().position(|q| *q == job) {
+                            queued.remove(pos);
+                        }
+                    }
                     let result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner(job)))
                             .unwrap_or_else(|_| {
@@ -60,7 +70,12 @@ impl ShellExecutor {
         if let Err(error) = started {
             crate::logging::log_line(&format!("no se pudo crear el hilo Shell: {error}"));
         }
-        Self { tx, rx, waker }
+        Self {
+            tx,
+            rx,
+            waker,
+            queued,
+        }
     }
 
     /// Ejecutor real de producción.
@@ -76,10 +91,20 @@ impl ShellExecutor {
 
     /// Encola la orden y retorna de inmediato (nunca bloquea). Si el worker no existe, el
     /// error vuelve como resultado en el siguiente `drain`.
+    /// Una orden igual a otra ya encolada (sin empezar) se descarta.
     pub fn submit(&self, job: ShellJob, report: bool) -> Result<(), ShellError> {
-        self.tx
-            .send((job, report))
-            .map_err(|_| ShellError::Failed("Shell worker disconnected".into()))
+        let mut queued = self
+            .queued
+            .lock()
+            .map_err(|_| ShellError::Failed("Shell queue poisoned".into()))?;
+        if queued.contains(&job) {
+            return Ok(());
+        }
+        queued.push(job.clone());
+        self.tx.send((job, report)).map_err(|_| {
+            queued.pop();
+            ShellError::Failed("Shell worker disconnected".into())
+        })
     }
 
     /// Recoge, sin bloquear, los resultados ya disponibles.
@@ -123,7 +148,12 @@ mod tests {
             assert!(Instant::now() < deadline, "el resultado nunca llegó");
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(woke.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // El worker envía el resultado antes de llamar al waker: esperar el despertar.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while woke.load(std::sync::atomic::Ordering::SeqCst) < 1 {
+            assert!(Instant::now() < deadline, "el waker nunca se llamó");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -142,5 +172,59 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    fn collect(exec: &ShellExecutor, count: usize) -> Vec<ShellOutcome> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut all = Vec::new();
+        while all.len() < count {
+            all.extend(exec.drain());
+            assert!(Instant::now() < deadline, "faltan resultados");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        all
+    }
+
+    fn failing_with_path() -> impl FnOnce() -> Box<dyn FnMut(ShellJob) -> Result<(), ShellError>> {
+        || {
+            Box::new(|job: ShellJob| {
+                std::thread::sleep(Duration::from_millis(200));
+                match job {
+                    ShellJob::Open(p) => Err(ShellError::Failed(p.display().to_string())),
+                    _ => Ok(()),
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn two_distinct_failures_both_arrive_in_order() {
+        let exec = ShellExecutor::spawn(failing_with_path());
+        exec.submit(ShellJob::Open(PathBuf::from("uno.txt")), true)
+            .unwrap();
+        exec.submit(ShellJob::Open(PathBuf::from("dos.txt")), true)
+            .unwrap();
+        let got = collect(&exec, 2);
+        assert!(got.iter().all(|o| o.report));
+        assert_eq!(got[0].result.as_ref().unwrap_err().to_string(), "uno.txt");
+        assert_eq!(got[1].result.as_ref().unwrap_err().to_string(), "dos.txt");
+    }
+
+    #[test]
+    fn identical_queued_job_is_skipped() {
+        let exec = ShellExecutor::spawn(failing_with_path());
+        // El primero ocupa al worker (200 ms); los repetidos mientras el 2.º espera se omiten.
+        exec.submit(ShellJob::Open(PathBuf::from("a.txt")), true)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..5 {
+            exec.submit(ShellJob::Open(PathBuf::from("b.txt")), true)
+                .unwrap();
+        }
+        let got = collect(&exec, 2);
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(exec.drain().is_empty(), "b.txt se ejecutó más de una vez");
+        assert_eq!(got[0].result.as_ref().unwrap_err().to_string(), "a.txt");
+        assert_eq!(got[1].result.as_ref().unwrap_err().to_string(), "b.txt");
     }
 }

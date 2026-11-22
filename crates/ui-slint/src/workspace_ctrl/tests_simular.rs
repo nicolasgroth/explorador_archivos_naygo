@@ -2277,3 +2277,24 @@ fn shell_job_submit_returns_immediately_even_with_slow_handler() {
     }
     panic!("el error del handler lento nunca llegó");
 }
+
+#[test]
+fn deep_start_on_missing_dir_surfaces_incomplete_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut c, _cfg) = ctrl_en(root.path());
+    let pane = c.active_files_id().unwrap();
+    c.ws.pane_mut(pane)
+        .and_then(|p| p.files.as_mut())
+        .unwrap()
+        .current_dir = root.path().join("desaparecida");
+    c.deep_start(pane);
+    for _ in 0..4000 {
+        c.deep_poll();
+        if c.deep_job.as_ref().is_some_and(|job| job.done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let notice = c.pending_listing_error.take().expect("aviso discreto");
+    assert!(notice.contains("desaparecida"), "{notice}");
+}

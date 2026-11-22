@@ -48,7 +48,8 @@ pub enum FolderAction {
     Terminal(Terminal),
 }
 
-/// Ejecutar solo en un worker: tanto metadata como el Shell pueden bloquear. No se
+/// Ejecutar solo en el worker Shell (COM ya en STA vía [`shell_job_runner`]): tanto metadata
+/// como el Shell pueden bloquear. No se
 /// canonicaliza ni se sustituye la ruta. La comprobación no es atómica con el lanzamiento.
 pub fn open_folder_action(dir: &Path, action: FolderAction) -> Result<(), ShellError> {
     let metadata = std::fs::metadata(dir)
@@ -59,24 +60,6 @@ pub fn open_folder_action(dir: &Path, action: FolderAction) -> Result<(), ShellE
             dir.display()
         )));
     }
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::Com::{
-            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
-        };
-        // Este worker es un hilo nuevo: si COM falla, no ejecutar extensiones Shell sin STA.
-        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        if hr.is_err() {
-            return Err(ShellError::Failed(format!("COM: {hr:?}")));
-        }
-        let result = match action {
-            FolderAction::Explorer => open_default(dir),
-            FolderAction::Terminal(term) => open_terminal(dir, term),
-        };
-        unsafe { CoUninitialize() };
-        result
-    }
-    #[cfg(not(windows))]
     match action {
         FolderAction::Explorer => open_default(dir),
         FolderAction::Terminal(term) => open_terminal(dir, term),
