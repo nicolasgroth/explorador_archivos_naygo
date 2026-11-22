@@ -484,6 +484,20 @@ fn shares_colgados_no_bloquean_lo_local_y_el_remoto_pendiente_no_se_pierde() {
         drive(local_letter, DriveKind::Fixed),
         drive(remote_letter, DriveKind::Network),
     ];
+    // `drain` espera los listados, no el sondeo de "carpeta no encontrada" del arranque, que
+    // también toma una plaza (remota: sin tabla de unidades, la carpeta inicial contaba como
+    // remota) hasta que su hilo termina. Se espera a que ambos cupos queden libres.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while ctrl.listing_admissions.remote().active() > 0
+        || ctrl.listing_admissions.local().active() > 0
+    {
+        ctrl.pump_missing_probe();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el sondeo inicial no terminó"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let hung: Vec<_> = (0..naygo_core::listing::REMOTE_LISTING_SLOTS)
         .map(|_| ctrl.listing_admissions.remote().try_acquire().unwrap())
         .collect();

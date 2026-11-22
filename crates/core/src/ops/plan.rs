@@ -505,6 +505,9 @@ impl<'a> Expansion<'a> {
         let link_meta = match std::fs::symlink_metadata(src) {
             Ok(meta) => meta,
             Err(_) if is_root => return Err(PlanError::SourceUnreadable(src.to_path_buf())),
+            // Un hijo que desapareció entre `read_dir` y el stat (temporales, cachés) ya no
+            // existe: no hay nada que transferir ni que reintentar, así que no deja paso.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
                 self.push_failure(src, to, false, &error);
                 return Ok(());
@@ -558,9 +561,11 @@ impl<'a> Expansion<'a> {
                 return Ok(());
             }
         };
-        if !self.directories_postorder {
+        let preorder_step = (!self.directories_postorder).then(|| {
             self.push_directory(src, to);
-        }
+            self.steps.len() - 1
+        });
+        let mut cut = None;
         for entry in entries {
             if (self.cancelled)() {
                 return Ok(());
@@ -568,10 +573,9 @@ impl<'a> Expansion<'a> {
             let child = match entry {
                 Ok(child) => child,
                 Err(error) => {
-                    // No se sabe qué entradas quedaron sin enumerar: se reporta la carpeta y no
-                    // se sigue leyendo. Lo no planificado queda intacto en el origen; en Move la
-                    // carpeta conserva esos hijos y por eso tampoco se retira.
-                    self.push_failure(src, to, true, &error);
+                    // No se sabe qué entradas quedaron sin enumerar: no se sigue leyendo. Lo no
+                    // planificado queda intacto en el origen.
+                    cut = Some(error);
                     break;
                 }
             };
@@ -581,8 +585,18 @@ impl<'a> Expansion<'a> {
             let child_to = to.join(name);
             self.expand(&child, &child_to, false, false)?;
         }
-        if self.directories_postorder {
-            self.push_directory(src, to);
+        // Una carpeta con la enumeración cortada tiene UN solo paso, el fallido, para que el
+        // resumen no la muestre a la vez como hecha y como fallida. En Copy el paso de carpeta
+        // (preorden) pasa a ser el fallo: los hijos ya planificados crean su carpeta padre al
+        // copiarse. En Move no se agrega el paso de carpeta (postorden), así que el motor nunca
+        // intenta retirarla del origen: conserva lo que no se llegó a enumerar.
+        match (cut, preorder_step) {
+            (Some(error), Some(index)) => {
+                self.steps[index].planned_failure = Some(error.to_string());
+            }
+            (Some(error), None) => self.push_failure(src, to, true, &error),
+            (None, Some(_)) => {}
+            (None, None) => self.push_directory(src, to),
         }
         Ok(())
     }
@@ -679,9 +693,13 @@ fn is_inside(inner: &Path, outer: &Path) -> bool {
 /// denegado) y en `broken_listing` (la enumeración falla tras la primera entrada). Portable: no
 /// depende de ACLs. Las entradas se ordenan para que el plan sea determinista.
 #[cfg(test)]
+#[derive(Default)]
 pub(super) struct FakeDirReader {
     pub unreadable: Option<PathBuf>,
     pub broken_listing: Option<PathBuf>,
+    /// Entrada que el listado de su carpeta padre entrega pero que ya no existe en disco (se
+    /// borró entre `read_dir` y el stat).
+    pub vanished_entry: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -697,6 +715,12 @@ impl PlanDirReader for FakeDirReader {
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
         entries.sort();
+        if let Some(vanished) = &self.vanished_entry {
+            if vanished.parent() == Some(dir) {
+                entries.push(vanished.clone());
+                entries.sort();
+            }
+        }
         let mut listed: Vec<std::io::Result<PathBuf>> = entries.into_iter().map(Ok).collect();
         if self.broken_listing.as_deref() == Some(dir) {
             let at = listed.len().min(1);
@@ -749,6 +773,7 @@ mod tests {
         let reader = FakeDirReader {
             unreadable: Some(secret.clone()),
             broken_listing: None,
+            ..Default::default()
         };
         for kind in [OpKind::Copy, OpKind::Move] {
             let plan = plan_with(kind.clone(), &root, &dest, &reader).unwrap();
@@ -792,6 +817,7 @@ mod tests {
         let reader = FakeDirReader {
             unreadable: Some(root.clone()),
             broken_listing: None,
+            ..Default::default()
         };
         for kind in [OpKind::Copy, OpKind::Move] {
             assert_eq!(
@@ -808,6 +834,7 @@ mod tests {
                 &FakeDirReader {
                     unreadable: None,
                     broken_listing: None,
+                    ..Default::default()
                 },
             ),
             Err(PlanError::SourceUnreadable(missing))
@@ -821,28 +848,63 @@ mod tests {
         let mid = root.join("mid");
         fs::write(mid.join("c.txt"), b"ccc").unwrap();
         let reader = FakeDirReader {
-            unreadable: None,
             broken_listing: Some(mid.clone()),
+            ..Default::default()
         };
-        let plan = plan_with(OpKind::Move, &root, &dir.path().join("dest"), &reader).unwrap();
-        let failed: Vec<_> = plan
-            .steps
-            .iter()
-            .filter(|step| step.planned_failure.is_some())
-            .collect();
-        assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].from.as_deref(), Some(mid.as_path()));
-        let planned = |path: PathBuf| {
-            plan.steps
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let plan = plan_with(kind.clone(), &root, &dir.path().join("dest"), &reader).unwrap();
+            // Un solo paso para la carpeta cortada, y es el fallido: el resumen no puede
+            // mostrarla a la vez como hecha y como fallida.
+            let mid_steps: Vec<_> = plan
+                .steps
                 .iter()
-                .any(|step| step.planned_failure.is_none() && step.from == Some(path.clone()))
+                .filter(|step| step.from.as_deref() == Some(mid.as_path()))
+                .collect();
+            assert_eq!(mid_steps.len(), 1, "{kind:?}: {:?}", plan.steps);
+            assert!(mid_steps[0].is_dir && mid_steps[0].planned_failure.is_some());
+            assert_eq!(
+                plan.steps
+                    .iter()
+                    .filter(|step| step.planned_failure.is_some())
+                    .count(),
+                1
+            );
+            let planned = |path: PathBuf| {
+                plan.steps
+                    .iter()
+                    .any(|step| step.planned_failure.is_none() && step.from == Some(path.clone()))
+            };
+            assert!(planned(mid.join("b.txt")), "lo enumerado antes del fallo");
+            assert!(
+                !planned(mid.join("c.txt")),
+                "lo posterior al fallo no se planifica"
+            );
+            assert!(planned(root.join("secreta").join("s.txt")));
+            assert!(planned(root.clone()), "la raíz sí se enumeró completa");
+        }
+    }
+
+    #[test]
+    fn hijo_que_desaparece_antes_del_stat_no_deja_paso() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, _) = unreadable_fixture(dir.path());
+        let vanished = root.join("mid").join("temporal.tmp");
+        let reader = FakeDirReader {
+            vanished_entry: Some(vanished.clone()),
+            ..Default::default()
         };
-        assert!(planned(mid.join("b.txt")), "lo enumerado antes del fallo");
-        assert!(
-            !planned(mid.join("c.txt")),
-            "lo posterior al fallo no se planifica"
-        );
-        assert!(planned(root.join("secreta").join("s.txt")));
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let plan = plan_with(kind.clone(), &root, &dir.path().join("dest"), &reader).unwrap();
+            assert!(
+                plan.steps
+                    .iter()
+                    .all(|step| step.from.as_deref() != Some(vanished.as_path())
+                        && step.planned_failure.is_none()),
+                "{kind:?}: {:?}",
+                plan.steps
+            );
+            assert_eq!(plan.total_files, 3);
+        }
     }
 
     #[test]

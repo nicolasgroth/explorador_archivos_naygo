@@ -206,11 +206,13 @@ pub struct ActiveOp {
     pub staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
 }
 
-/// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño).
+/// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño). Excluye los
+/// pasos que la planificación ya dio por fallidos: no se sabe si son archivos, y ofrecerlos en
+/// "Reintentar" haría que `retry::review` rechazara el lote entero si resultan ser carpetas.
 fn size_map_of(plan: &OpPlan) -> HashMap<PathBuf, u64> {
     plan.steps
         .iter()
-        .filter(|s| !s.is_dir)
+        .filter(|s| !s.is_dir && s.planned_failure.is_none())
         .filter_map(|s| s.from.clone().map(|from| (from, s.bytes)))
         .collect()
 }
@@ -4421,6 +4423,33 @@ mod tests {
             directory_sources_of(&plan),
             HashSet::from([PathBuf::from("D:/src/sub")])
         );
+    }
+
+    /// Un paso que la planificación ya dio por fallido (stat de un hijo que no se pudo leer)
+    /// no entra al mapa: así nunca se ofrece en "Reintentar", que solo acepta archivos.
+    #[test]
+    fn size_map_of_excluye_los_pasos_fallidos_planificados() {
+        let step = |name: &str, planned_failure: Option<&str>| naygo_core::ops::OpStep {
+            from: Some(PathBuf::from(format!("D:/src/{name}"))),
+            to: PathBuf::from(format!("D:/dst/{name}")),
+            bytes: 0,
+            is_dir: false,
+            planned_failure: planned_failure.map(str::to_owned),
+        };
+        let plan = OpPlan {
+            steps: vec![
+                step("ok.txt", None),
+                step("ilegible", Some("acceso denegado")),
+            ],
+            total_bytes: 0,
+            total_files: 2,
+            allow_directory_rename: false,
+            pre_delete: Vec::new(),
+        };
+        let map = size_map_of(&plan);
+        assert!(map.contains_key(Path::new("D:/src/ok.txt")));
+        assert!(!map.contains_key(Path::new("D:/src/ilegible")));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]

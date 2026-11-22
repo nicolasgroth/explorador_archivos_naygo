@@ -479,8 +479,10 @@ fn local_move_trees(plan: &OpPlan) -> Vec<std::ops::Range<usize>> {
     let mut end = plan.steps.len();
     while end > 0 {
         let root = &plan.steps[end - 1];
+        // Un paso fallido nunca es raíz de un rename de árbol: su carpeta no se enumeró entera.
         let Some(from) = root.from.as_deref().filter(|from| {
             root.is_dir
+                && root.planned_failure.is_none()
                 && from.file_name() == root.to.file_name()
                 && from
                     .parent()
@@ -565,11 +567,9 @@ fn prepare_tree_replacements(
         let source_root = plan
             .steps
             .iter()
-            .find(|step| {
-                step.is_dir
-                    && step.planned_failure.is_none()
-                    && super::plan::paths_eq_ci(&step.to, target)
-            })
+            // Un paso fallido de la raíz (enumeración cortada) también sirve: su origen es el
+            // mismo. El árbol se prepara y, como hay un fallo, nunca se publica.
+            .find(|step| step.is_dir && super::plan::paths_eq_ci(&step.to, target))
             .and_then(|step| step.from.as_ref());
         let unsafe_target = plan.steps.iter().any(|step| {
             step.from.as_ref().is_some_and(|from| {
@@ -3752,23 +3752,43 @@ mod tests {
         secret: &Path,
         rename: &dyn NoReplaceRename,
     ) -> OpSummary {
+        let reader = super::super::plan::FakeDirReader {
+            unreadable: Some(secret.to_path_buf()),
+            ..Default::default()
+        };
+        run_with_reader(kind, root, dest, &reader, None, rename)
+    }
+
+    /// Planifica con un lector falso y ejecuta el plan; `replace` marca ese destino de carpeta
+    /// como "Reemplazar" (igual que la decisión de conflicto de la UI).
+    fn run_with_reader(
+        kind: OpKind,
+        root: &Path,
+        dest: &Path,
+        reader: &super::super::plan::FakeDirReader,
+        replace: Option<&Path>,
+        rename: &dyn NoReplaceRename,
+    ) -> OpSummary {
         let request = OpRequest {
             kind,
             sources: vec![root.to_path_buf()],
             dest_dir: Some(dest.to_path_buf()),
             conflict: ConflictPolicy::Overwrite,
         };
-        let reader = super::super::plan::FakeDirReader {
-            unreadable: Some(secret.to_path_buf()),
-            broken_listing: None,
-        };
-        let plan = super::super::plan::plan_transfer_with_reader(
+        let mut plan = super::super::plan::plan_transfer_with_reader(
             &request,
             &mut |_, _| {},
             &|| false,
-            &reader,
+            reader,
         )
         .expect("una subcarpeta ilegible no aborta el plan");
+        if let Some(target) = replace {
+            super::super::apply_folder_decision(
+                &mut plan,
+                target,
+                super::super::FolderDecision::Replace,
+            );
+        }
         let token = CancellationToken::new();
         let (tx, _rx) = mpsc::channel();
         let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
@@ -3782,6 +3802,105 @@ mod tests {
             None,
             rename,
         )
+    }
+
+    /// Ítems del resumen cuyo origen es `src`.
+    fn items_for<'a>(summary: &'a OpSummary, src: &Path) -> Vec<&'a OpOutcome> {
+        summary
+            .items
+            .iter()
+            .filter(|item| item.src.as_deref() == Some(src))
+            .map(|item| &item.outcome)
+            .collect()
+    }
+
+    #[test]
+    fn enumeracion_cortada_deja_la_carpeta_solo_como_fallida_y_move_la_conserva() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let dir = tempfile::tempdir().unwrap();
+            let (root, _) = unreadable_tree(dir.path());
+            let mid = root.join("mid");
+            fs::write(mid.join("c.txt"), b"ccc").unwrap();
+            let dest = dir.path().join("dest");
+            fs::create_dir(&dest).unwrap();
+            let reader = super::super::plan::FakeDirReader {
+                broken_listing: Some(mid.clone()),
+                ..Default::default()
+            };
+            let summary = run_with_reader(
+                kind.clone(),
+                &root,
+                &dest,
+                &reader,
+                None,
+                &NativeNoReplaceRename,
+            );
+            let outcomes = items_for(&summary, &mid);
+            assert_eq!(outcomes.len(), 1, "{kind:?}: {summary:?}");
+            assert!(matches!(outcomes[0], OpOutcome::Failed(_)));
+            assert_eq!(summary.count_failed(), 1, "{summary:?}");
+            let copied = dest.join("raiz").join("mid");
+            // `b.txt` se enumeró antes del corte; `c.txt` y `secreta` no.
+            assert_eq!(fs::read(copied.join("b.txt")).unwrap(), b"bb");
+            assert!(!copied.join("c.txt").exists());
+            assert_eq!(fs::read(mid.join("c.txt")).unwrap(), b"ccc");
+            assert_eq!(
+                fs::read(mid.join("secreta").join("s.txt")).unwrap(),
+                b"dato unico"
+            );
+            if matches!(kind, OpKind::Move) {
+                assert!(!mid.join("b.txt").exists(), "lo enumerado se movió");
+                assert!(mid.is_dir() && root.is_dir());
+            }
+        }
+    }
+
+    #[test]
+    fn replace_con_subcarpeta_ilegible_no_publica_y_conserva_destino_y_origen() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let dir = tempfile::tempdir().unwrap();
+            let (root, secret) = unreadable_tree(dir.path());
+            let dest = dir.path().join("dest");
+            let previous = dest.join("raiz");
+            fs::create_dir_all(&previous).unwrap();
+            fs::write(previous.join("viejo.txt"), b"contenido anterior").unwrap();
+            let reader = super::super::plan::FakeDirReader {
+                unreadable: Some(secret.clone()),
+                ..Default::default()
+            };
+            let summary = run_with_reader(
+                kind.clone(),
+                &root,
+                &dest,
+                &reader,
+                Some(&previous),
+                &NativeNoReplaceRename,
+            );
+            assert_only_secret_failed(&summary, &secret);
+            assert!(
+                !summary
+                    .items
+                    .iter()
+                    .any(|item| matches!(item.outcome, OpOutcome::Done)),
+                "{kind:?}: nada se da por hecho sin publicar: {summary:?}"
+            );
+            // El destino anterior sigue tal cual y el árbol nuevo no se publicó.
+            assert_eq!(
+                fs::read(previous.join("viejo.txt")).unwrap(),
+                b"contenido anterior"
+            );
+            assert!(!previous.join("a.txt").exists());
+            assert!(!previous.join("mid").exists());
+            let names: Vec<_> = fs::read_dir(&dest)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["raiz"], "sin staging ni respaldo sobrantes");
+            // El origen queda completo, también en Move.
+            assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"a");
+            assert_eq!(fs::read(root.join("mid").join("b.txt")).unwrap(), b"bb");
+            assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+        }
     }
 
     fn assert_only_secret_failed(summary: &OpSummary, secret: &Path) {
