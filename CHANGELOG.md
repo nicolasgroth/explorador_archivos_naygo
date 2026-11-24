@@ -31,12 +31,28 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   solo renombrado dentro del mismo volumen: entonces viaja completa, sin borrar nada). Si la carpeta seleccionada misma no se puede
   leer, la operación no empieza, como antes. Reemplazar una carpeta que contiene una subcarpeta
   ilegible no publica nada: el destino anterior y el origen quedan intactos.
+- Copiar otra vez con «Sobrescribir» sobre archivos de solo lectura ya funciona.
+  Como las copias ahora conservan el solo lectura, la segunda copia de una carpeta `.git` o de un
+  disco óptico fallaba con «Acceso denegado». Con la sobrescritura autorizada, Naygo reemplaza el
+  archivo; sin esa autorización no lo toca.
+- «Reintentar» ya no queda bloqueado por los enlaces que no se copiaron.
+  Antes, una carpeta con un junction hacía que la revisión de reintento rechazara todo, incluso los
+  archivos que sí se podían reintentar; ahora los enlaces quedan fuera y el resto se ofrece.
+- Los avisos de enlace no copiado, enlace no movido y copia que no se pudo guardar se muestran en el idioma de la interfaz.
+- Reemplazar una carpeta que contiene enlaces o subcarpetas ilegibles se rechaza al empezar.
+  Antes se copiaba todo a una carpeta temporal para descartarlo al final; ahora el aviso es
+  inmediato y el destino y el origen quedan intactos.
+- Si no se puede comprobar si el origen y el destino son el mismo archivo, el paso falla sin tocar nada.
 - Restaurar desde la Papelera ya no pisa un elemento que aparece en el destino durante la operación.
   El elemento restaurado queda con otro nombre y el aviso indica dónde.
 
 ### Usabilidad
 - Un junction a carpeta se lista como carpeta y se puede abrir con doble clic o Enter.
-  Conserva sus propios atributos: un junction oculto de sistema sigue oculto.
+  Conserva sus propios atributos: un junction oculto de sistema sigue oculto, también al
+  actualizarse la carpeta en vivo y en la vista profunda.
+- Una carpeta con un enlace a un recurso de red apagado se lista al instante.
+  El listado ya no sigue el enlace para saber si es carpeta, así que no espera el timeout de la
+  red ni deja sin turno a los demás listados locales.
 - La búsqueda por contenido y los puntos de comparación ya no descargan los archivos de OneDrive que están solo en línea.
   La búsqueda los cuenta como omitidos y el punto de comparación, como cobertura incompleta.
 - Calcular el tamaño de un junction seleccionado mide la carpeta a la que apunta.

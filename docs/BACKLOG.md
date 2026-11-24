@@ -25,6 +25,12 @@ el detalle va al CHANGELOG o a `docs/evidencia/`.
 - **Resaltado de cambios en vivo.** Ver en pantalla que el resaltado de un archivo nuevo aparece y
   se apaga a los 8 s, y que un renombrado en curso sobrevive a un archivo que aparece en la misma
   carpeta. Hoy solo lo cubren tests headless.
+- **Abrir archivos desde el hilo del Shell (`ShellExecuteExW` + `SEE_MASK_NOASYNC`).** En el build
+  instalado, con la aplicación destino CERRADA antes de cada caso, doble clic sobre: `.txt`,
+  `.pdf`, `.docx` (Word, asociación DDE), un `.lnk`, un `.jpg` (Fotos, app de la Store) y un
+  `.exe`; luego "Ejecutar como administrador" (aceptar y cancelar el UAC), "Abrir con…", una
+  extensión sin asociación, y abrir carpeta en Explorer y en cada terminal. Cada documento debe
+  abrirse cargado y sin esperas; la terminal, en la carpeta correcta.
 - **Memoria en ejecución, escenarios 5 y 6** de la línea base de
   [BENCHMARKS.md](BENCHMARKS.md): tras 20 previews (medición solo indicativa) y con el panel de
   operaciones con historial (no medido).
@@ -40,7 +46,7 @@ Primero lo que nota el usuario:
   - Copiar un árbol con junctions o symlinks a carpeta informa un fallo por cada enlace. Falta la
     opción de recrear el enlace en el destino (los symlinks exigen privilegio o Modo de
     desarrollador).
-  - Mover un enlace cuyo destino ya existe informa "enlace no movido entre volúmenes" en vez de un
+  - Mover un enlace cuyo destino ya existe informa "no se pudo mover el enlace" en vez de un
     conflicto, y no aplica la política de conflictos.
 - **Mismo archivo por otra ruta.** El aviso de conflicto de carpetas (`ops/mod.rs`,
   `folder_conflicts`) sigue comparando por texto: puede pedir conflicto para el mismo archivo y,
@@ -48,19 +54,24 @@ Primero lo que nota el usuario:
   mismo archivo ahora se omite en vez de crear "x (1)": confirmar que es lo deseado.
 - **Acciones del Shell.** Hay un único hilo para abrir archivos, terminal y Explorador: un
   manejador colgado retrasa las acciones siguientes (la UI no se congela). Posible timeout o pool.
-- **Shares caídos.** Seguir un enlace que apunta a un UNC caído bloquea un worker de listado
-  hasta el timeout. Hasta que llega la primera tabla de unidades, los listados con letra usan el
+- **Shares caídos.** Hasta que llega la primera tabla de unidades, los listados con letra usan el
   cupo remoto.
+- **Cola de acciones del Shell sin límite de edad.** Un manejador colgado (archivo en un share
+  caído) retiene las órdenes siguientes y todas se ejecutan juntas al destrabarse, quizá un minuto
+  después. Falta descartar las órdenes viejas con un aviso, o separar local y remoto.
 - **Papelera.** Si el Shell no informa la ruta de aterrizaje, una restauración con colisión se
   informa como éxito (sin pérdida). Comparar por identidad y no por texto evitaría falsos "otro
   nombre" con rutas 8.3, `subst` o `\\?\`.
-- **Metadatos de copia.** La copia por defecto aplica todos los bits de atributo del origen
-  (incluidos OFFLINE/PINNED de OneDrive); conviene limitarla a solo lectura, oculto, sistema y
-  archivo. La creación no se conserva igual en todos los caminos.
+- **Metadatos de copia.** La copia por defecto de core (hoy solo la usan los tests y los
+  consumidores fuera de Windows: las entregas ya usan el copiador de plataforma) aplica todos los
+  bits de atributo del origen (incluidos OFFLINE/PINNED de OneDrive); conviene limitarla a solo
+  lectura, oculto, sistema y archivo. La creación no se conserva igual en todos los caminos.
 - **Textos sin clave i18n:** unos 20 errores de importar/exportar packs, los detalles técnicos de
   `TrashError::Failed`, "worker de listado desconectado" (`listing.rs`), el aviso "La plantilla …
   no existe" y el diálogo de `--theme`. Los demás `Failed` del motor siguen en español (deuda
-  previa).
+  previa); los de enlace, publicación, identidad y Replace incompleto ya tienen código y clave.
+- **Progreso de una operación con un fallo planificado de archivo:** el total de archivos lo
+  cuenta pero el contador de hechos nunca lo suma, así que la barra no llega al total.
 - **Propuestas de rendimiento (decide Nicolás).**
   - Filas perezosas: guardar solo las claves y armar la fila al pedirla; ~100 MiB menos por cada
     100.000 filas.
@@ -71,6 +82,12 @@ Primero lo que nota el usuario:
 - **Instalador.** 69 MB contra 15 MB del portable: revisar qué lo infla.
 
 Técnico (sin efecto visible):
+
+- Medir un Mover durable de 5.000 archivos pequeños a un USB (`FlushFileBuffers` +
+  `MOVEFILE_WRITE_THROUGH` por archivo) y dejar la cifra en BENCHMARKS.
+- `OpJournal::new` / `JournalWriter::new` corren en el hilo de UI (un `stat` por paso y una
+  escritura JSON síncrona al lanzar o retomar una operación). Preexistente: viola la regla de
+  "el hilo de UI nunca hace I/O".
 
 - Tests inestables bajo carga: `platform::preview_process` (timeout de procesos hijo).
 - Build: medir A/B el tiempo del release (`line-tables-only` contra `debug = true` en el mismo

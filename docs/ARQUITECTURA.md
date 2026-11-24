@@ -74,9 +74,13 @@ un binding inicial no basta después de editar. Los pegados usan segundos y rese
 
 `core/listing.rs` reparte los listados en dos cupos independientes (`ListingAdmissions`):
 `LOCAL_LISTING_SLOTS = 8` y `REMOTE_LISTING_SLOTS = 4`. El permiso vive hasta que el worker sale
-de verdad, así que un `read_dir` colgado en un share caído retiene una plaza remota (salvo un
-enlace que apunta a un UNC caído, que bloquea un worker local hasta el timeout: ver
-[BACKLOG.md](BACKLOG.md)). La clasificación está en `core/path_locality.rs`: el trait `VolumeLocality` se inyecta
+de verdad, así que un `read_dir` colgado en un share caído retiene una plaza remota. El listado
+no sigue enlaces (`core/listing.rs`, `entry_from_path`): en Windows el tipo sale del propio enlace
+(`FileTypeExt::is_symlink_dir` / `is_symlink_file`; un junction lleva el bit de directorio),
+un enlace a archivo queda sin tamaño, y atributos y fechas son los del enlace. Así un enlace a un
+UNC caído dentro de una carpeta local no retiene la plaza local. El watcher, la vista profunda y
+la búsqueda leen igual (`listing::entry_at`, `symlink_metadata`). La clasificación está en
+`core/path_locality.rs`: el trait `VolumeLocality` se inyecta
 (como `NoReplaceRename`); una ruta UNC es remota por sintaxis, una letra se decide con la tabla
 de unidades y lo desconocido cuenta como remoto. `platform/drives.rs` implementa el trait sobre
 la tabla que ya trae el worker de unidades (`DriveTableLocality`, `DriveKind::Network`): el hilo
@@ -120,11 +124,17 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
   `FILE_ATTRIBUTE_REPARSE_POINT`, que también llevan los placeholders de nube). Solo el origen
   seleccionado en Copiar/Duplicar se sigue una vez (`follow_root_link`). En el motor, un enlace en
   Mover se renombra como enlace (`rename_noreplace`) y, si no se puede (entre volúmenes), el paso
-  es `Failed`; en Copiar, un enlace a carpeta es `Failed` y uno a archivo se copia por contenido.
+  es `Failed` (`naygo:link-not-moved`); en Copiar, un enlace a carpeta es `Failed`
+  (`naygo:link-not-copied`) y uno a archivo se copia por contenido. "Reintentar" excluye los
+  fallos de enlace (`ops::is_link_failure`, que también reconoce los textos previos sin código).
+  Un Replace cuyo árbol tiene un enlace que no se copiaría o un `planned_failure` se rechaza en
+  `prepare_tree_replacements` antes de crear staging (`naygo:replace-incomplete`).
   Nunca se borra nada a través de un enlace ni se recorre uno anidado; la única lectura a través
   de un enlace es la copia por contenido de un enlace a archivo.
-- **Identidad.** Antes de resolver conflictos, `same_file::is_same_file(from, to)` convierte el
-  paso en `Skipped`; `plan_transfer_with` hace lo mismo con la raíz. `paths_eq_ci` y
+- **Identidad.** Antes de resolver conflictos, `ops::same_identity(from, to)` (sobre
+  `same_file::is_same_file`) convierte el paso en `Skipped`; `plan_transfer_with` hace lo mismo con
+  la raíz. Es fail-closed: si el destino existe y la identidad no se puede determinar, el paso (o
+  la raíz, como `planned_failure`) falla con `naygo:identity-unknown`. `paths_eq_ci` y
   `path_starts_with_ci` comparan con `eq_ignore_case_ntfs` (mayúsculas Unicode de un solo char;
   aproxima la tabla `$UpCase` de NTFS).
 - **Copia y publicación.** El trait inyectado `NoReplaceRename` tiene `copy_and_publish(from, to,
@@ -132,7 +142,11 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
   El default de core copia por buffers a un temporal `.naygo-copy-…`, aplica fechas, `sync_all`
   si `durable` y permisos. En Windows, `platform/copy_file.rs` usa `CopyFile2` (fechas, atributos,
   ADS) y publica con `MoveFileExW` (`WRITE_THROUGH` si `durable`). `durable` vale `true` en Mover:
-  el origen solo se borra con `Ok(true)`.
+  el origen solo se borra con `Ok(true)`. Con `overwrite`, si publicar da acceso denegado sobre un
+  destino de solo lectura, ambos caminos quitan el atributo y reintentan una vez
+  (`ops::retry_over_readonly_destination`, que lo repone si vuelve a fallar). Un fallo de
+  publicación sale como `naygo:publish-failed`. Las entregas (`core/delivery.rs::execute`) reciben
+  el copiador inyectado; la UI les pasa `PlatformNoReplaceRename`.
 - **Rutas largas.** El manifest del `.exe` (`ui-slint/build.rs`) declara `longPathAware`, que solo
   surte efecto si el sistema tiene `LongPathsEnabled`. Las llamadas Win32 propias de copia y rename
   usan rutas `\\?\` (`platform/long_path::to_verbatim`), así que funcionan aunque esa
@@ -145,8 +159,10 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
   En Mover, `remove_empty_move_source` usa `remove_dir` no recursivo, así que la carpeta que
   contiene la rama ilegible sobrevive; un Replace con fallos no publica. El lector se inyecta con
   `PlanDirReader` para probarlo sin ACL. Para carpetas, el motivo lleva el prefijo
-  `ops::UNREADABLE_FOLDER_FAILURE`, que la UI traduce (`OpDetailTexts::localize`) y que core quita
-  en los textos de entregas (`ops::plain_failure_text`).
+  `ops::UNREADABLE_FOLDER_FAILURE`. Todos los códigos (`naygo:<código>` + U+001F + campos) se leen
+  con `ops::parse_failure` → `OpFailure`; la UI los traduce (`OpDetailTexts::localize`, claves
+  `ops.failed.*`) y core los quita en los textos sin i18n, como los de entregas
+  (`ops::plain_failure_text`). Un texto sin código (journal viejo) se muestra tal cual.
 - **Papelera.** Restaurar usa `FOF_RENAMEONCOLLISION` y un `IFileOperationProgressSink` que
   registra la ruta real de aterrizaje; si difiere del original, se informa el otro nombre en vez de
   pisar el destino.
@@ -155,7 +171,9 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
 
 `ui-slint/src/shell_exec.rs`: `ShellExecutor` con un único hilo `naygo-shell` que inicializa COM
 STA una vez (`platform::open::shell_job_runner`) y ejecuta `ShellJob` (Open, OpenWith,
-RunAsAdministrator, Folder). `submit` nunca bloquea; los resultados vuelven por canal y despiertan
+RunAsAdministrator, Folder). Ese hilo no bombea mensajes, así que `platform/open.rs` llama a
+`ShellExecuteExW` con `SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI`: las activaciones DDE o delegadas
+terminan antes de volver. `submit` nunca bloquea; los resultados vuelven por canal y despiertan
 la UI con un waker compartido. Cada orden corre en `catch_unwind` y una orden idéntica ya encolada
 se descarta. `WorkspaceCtrl::submit_shell` muestra el error por el toast existente. Un manejador
 colgado retrasa las órdenes siguientes, pero la UI no se congela.
